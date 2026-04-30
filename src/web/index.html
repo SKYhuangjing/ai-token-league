@@ -13,7 +13,7 @@
         <div>
           <p class="eyebrow">Public community board</p>
           <h1>AI Token League</h1>
-          <p class="summary">Daily token totals from local collectors. The public view only shows nickname, total tokens, and model totals.</p>
+          <p class="summary">Daily token totals from local collectors. The public view now explains period token composition and optional cost composition without turning into an admin report.</p>
         </div>
         <div class="score-card">
           <span class="label">Ranking metric</span>
@@ -78,6 +78,10 @@
         </div>
         <div id="detail-summary" class="detail-summary"></div>
         <div id="period-detail-panel">
+          <section>
+            <h3>Usage composition</h3>
+            <div id="detail-composition"></div>
+          </section>
           <div id="period-chart" class="detail-chart"></div>
           <div class="detail-grid">
             <section>
@@ -101,7 +105,13 @@
                 <tr>
                   <th>Period</th>
                   <th>Total tokens</th>
+                  <th>Composition</th>
+                  <th>Input</th>
+                  <th>Output</th>
+                  <th>Cache</th>
+                  <th>Reasoning</th>
                   <th class="cost-col" hidden>Est. cost</th>
+                  <th class="cost-col" hidden>Price quality</th>
                   <th>Models</th>
                 </tr>
               </thead>

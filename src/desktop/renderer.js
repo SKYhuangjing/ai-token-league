@@ -1,3 +1,4 @@
+import { costQualityLabel, dominantComposition, tokenCompositionDetails, tokenCompositionSummary } from "../shared/composition.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap } from "../shared/pricing.js";
 import { formatTokenCompact, formatTokenRaw, formatUsd } from "../shared/display.js";
 import { dayToUtcDate, localDay, utcDateToDay } from "../shared/date.js";
@@ -11,6 +12,9 @@ let allUsage = [];
 let latestConfig = null;
 let trendMode = "chart";
 let trendView = "daily";
+let selectedTrendBucketKey = "";
+let trendDrawerBucketKey = "";
+let trendDrawerCloseTimer = null;
 let serverPriceMap = null;
 let pricingSource = "local fallback pricing";
 let latestScanAt = "";
@@ -50,7 +54,10 @@ $("#cursor-token-modal").addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#cursor-token-modal").hidden) closeCursorTokenModal();
+  if (event.key === "Escape" && !$("#trend-drawer").hidden) closeTrendDrawer();
 });
+$("#close-trend-drawer").addEventListener("click", closeTrendDrawer);
+$("#trend-drawer-backdrop").addEventListener("click", closeTrendDrawer);
 $("#settings-source-list").addEventListener("click", (event) => {
   const button = event.target.closest("[data-toggle-source]");
   if (!button) return;
@@ -99,6 +106,7 @@ $("#reset-local-data").addEventListener("click", () => run(resetLocalData));
 function selectSection(section) {
   document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.section === section));
   document.querySelectorAll(".panel").forEach((item) => item.classList.toggle("active", item.id === section));
+  $(".workspace")?.scrollTo({ top: 0, behavior: "auto" });
 }
 
 function selectSettingsTab(tab) {
@@ -247,7 +255,7 @@ function applyUsageScanStatus(status, { force = false } = {}) {
 }
 
 function applyUsageSnapshot(usage) {
-  allUsage = usage.items || [];
+  allUsage = (usage.items || []).map(normalizeUsageTotal);
   latestScanAt = usage.scannedAt || latestScanAt;
   latestUsage = allUsage.filter((item) => item.day === localDay());
   if (usage.health) latestHealth = usage.health;
@@ -255,6 +263,25 @@ function applyUsageSnapshot(usage) {
   renderTrend();
   renderHealth();
   renderAliases();
+}
+
+function normalizeUsageTotal(item) {
+  const inputTokens = positiveInteger(item.inputTokens);
+  const outputTokens = positiveInteger(item.outputTokens);
+  return {
+    ...item,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens: positiveInteger(item.cacheReadTokens),
+    cacheWriteTokens: positiveInteger(item.cacheWriteTokens),
+    reasoningTokens: positiveInteger(item.reasoningTokens),
+    totalTokens: inputTokens + positiveInteger(item.cacheReadTokens) + positiveInteger(item.cacheWriteTokens) + outputTokens
+  };
+}
+
+function positiveInteger(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
 }
 
 async function loadHealth() {
@@ -266,8 +293,12 @@ async function loadHealth() {
 async function syncNow() {
   const button = $("#sync-now");
   button.disabled = true;
-  $("#sync-state").textContent = "Syncing...";
   try {
+    if (!confirmSyncUpload()) {
+      $("#sync-state").textContent = "Sync canceled";
+      return;
+    }
+    $("#sync-state").textContent = "Syncing...";
     const result = await api.syncUsage();
     latestConfig = await api.getConfig();
     renderSyncStatus(latestConfig, result);
@@ -275,6 +306,26 @@ async function syncNow() {
   } finally {
     button.disabled = false;
   }
+}
+
+function confirmSyncUpload() {
+  const config = latestConfig || {};
+  const apiBaseUrl = normalizeApiBaseUrl(config.apiBaseUrl || config.apiConnection?.apiBaseUrl || "");
+  if (!apiBaseUrl) {
+    window.alert("Configure an API base URL in Settings before syncing.");
+    return false;
+  }
+  const rows = allUsage.length || latestUsage.length || 0;
+  const scannedAt = latestScanAt ? formatDateTime(latestScanAt) : "-";
+  return window.confirm([
+    "Upload local aggregate usage to the configured API?",
+    "",
+    `Target: ${apiBaseUrl}`,
+    `Rows: ${rows}`,
+    `Last scan: ${scannedAt}`,
+    "",
+    "No prompts, responses, code, or real paths are uploaded."
+  ].join("\n"));
 }
 
 async function addProviderRoot(providerId) {
@@ -397,6 +448,9 @@ function syncStateLabel(state, { scanned = 0, accepted = 0, rejected = 0, queueP
   if (state === "not_configured") {
     return "API not configured";
   }
+  if (state === "unreachable") {
+    return error ? `API unreachable: ${error}` : "API unreachable";
+  }
   return "Not synced";
 }
 
@@ -405,6 +459,7 @@ function renderToday() {
   const workdirs = groupBy(latestUsage, "workdirDisplayName");
   const models = groupBy(latestUsage, "model");
   const cost = aggregateUsageCost(latestUsage);
+  const composition = aggregateComposition(latestUsage);
 
   $("#today-total").textContent = formatToken(total);
   $("#today-total").title = formatTokenRaw(total);
@@ -412,6 +467,9 @@ function renderToday() {
   $("#today-scan-time").textContent = `Last scan ${latestScanAt ? formatDateTime(latestScanAt) : "-"}`;
   $("#workdir-count").textContent = String(workdirs.length);
   $("#model-count").textContent = String(models.length);
+  $("#today-dominant").textContent = humanDominant(dominantComposition(composition));
+  $("#today-composition-summary").textContent = tokenCompositionSummary(composition) || "No composition";
+  $("#today-composition").innerHTML = renderCompositionTiles(composition);
   $("#today-cost-card").hidden = !latestConfig?.showEstimatedCost;
   $("#today-cost").textContent = renderCostValue(cost);
   $("#today-cost").title = costTitle(cost);
@@ -428,6 +486,9 @@ function renderToday() {
 
 function renderTrend() {
   const rows = groupTrend(allUsage);
+  if (rows.length && !selectedTrendBucketKey) selectedTrendBucketKey = trendBucketKey(rows[0]);
+  if (!rows.some((row) => trendBucketKey(row) === selectedTrendBucketKey)) selectedTrendBucketKey = rows[0] ? trendBucketKey(rows[0]) : "";
+  if (!rows.some((row) => trendBucketKey(row) === trendDrawerBucketKey)) trendDrawerBucketKey = "";
   $("#trend-chart-panel").hidden = trendMode !== "chart";
   $("#trend-table-panel").hidden = trendMode !== "table";
   $("#trend-heading").textContent = trendViewMeta().heading;
@@ -439,14 +500,32 @@ function renderTrend() {
   $("#trend-rows").innerHTML = rows.length
     ? rows
         .map((row) => `<tr>
-          <td>${formatTrendPeriod(row)}</td>
+          <td><button type="button" data-expand-trend="${escapeHtml(trendBucketKey(row))}">${trendDrawerBucketKey === trendBucketKey(row) ? "Hide" : "Show"}</button> ${formatTrendPeriod(row)}</td>
           <td class="numeric" title="${formatTokenRaw(row.totalTokens)}">${formatToken(row.totalTokens)}</td>
+          <td>${escapeHtml(row.compositionSummary || tokenCompositionSummary(row))}</td>
           <td>${renderCompactBreakdown(row.modelBreakdown)}</td>
           <td>${renderCompactBreakdown(row.workdirBreakdown)}</td>
           ${latestConfig?.showEstimatedCost ? `<td class="numeric" title="${escapeHtml(costTitle(row))}">${renderCost(row)}</td>` : ""}
         </tr>`)
         .join("")
-    : `<tr><td colspan="${latestConfig?.showEstimatedCost ? 5 : 4}" class="empty-cell">No local usage found.</td></tr>`;
+    : `<tr><td colspan="${latestConfig?.showEstimatedCost ? 6 : 5}" class="empty-cell">No local usage found.</td></tr>`;
+  $("#trend-selection-panel").hidden = trendMode === "table";
+  $("#trend-selection-panel").innerHTML = trendMode === "chart" && rows.length && selectedTrendBucketKey
+    ? renderTrendSelection(rows.find((row) => trendBucketKey(row) === selectedTrendBucketKey))
+    : "";
+  renderTrendDrawer(rows);
+  document.querySelectorAll("[data-expand-trend]").forEach((button) => {
+    button.addEventListener("click", () => {
+      trendDrawerBucketKey = trendDrawerBucketKey === button.dataset.expandTrend ? "" : button.dataset.expandTrend;
+      renderTrend();
+    });
+  });
+  document.querySelectorAll("[data-select-trend]").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectedTrendBucketKey = button.dataset.selectTrend;
+      renderTrend();
+    });
+  });
 }
 
 function renderAliases() {
@@ -630,9 +709,24 @@ function groupTrend(items) {
         estimatedCostUsd: 0,
         costQuality: "",
         modelMap: {},
-        workdirMap: {}
+        workdirMap: {},
+        modelDetailMap: {}
       };
     const withCost = addCostToUsageItem(item, activePriceMap());
+    const modelDetailKey = `${item.workdirDisplayName || "unknown"}|${item.model || "unknown"}`;
+    const modelDetail = row.modelDetailMap[modelDetailKey] || {
+      workdirDisplayName: item.workdirDisplayName || "unknown",
+      model: item.model || "unknown",
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+      estimatedCostUsd: 0,
+      costQuality: "",
+      pricingVersion: ""
+    };
     row.models.add(item.model || "unknown");
     row.modelMap[item.model || "unknown"] = (row.modelMap[item.model || "unknown"] || 0) + (item.totalTokens || 0);
     row.workdirMap[item.workdirDisplayName || "unknown"] = (row.workdirMap[item.workdirDisplayName || "unknown"] || 0) + (item.totalTokens || 0);
@@ -643,15 +737,25 @@ function groupTrend(items) {
     row.cacheWriteTokens += item.cacheWriteTokens || 0;
     row.totalTokens += item.totalTokens || 0;
     aggregateCost(row, withCost);
+    modelDetail.inputTokens += item.inputTokens || 0;
+    modelDetail.outputTokens += item.outputTokens || 0;
+    modelDetail.reasoningTokens += item.reasoningTokens || 0;
+    modelDetail.cacheReadTokens += item.cacheReadTokens || 0;
+    modelDetail.cacheWriteTokens += item.cacheWriteTokens || 0;
+    modelDetail.totalTokens += item.totalTokens || 0;
+    aggregateCost(modelDetail, withCost);
+    row.modelDetailMap[modelDetailKey] = modelDetail;
     map.set(bucket.key, row);
   }
   return [...map.values()]
     .sort((a, b) => b.periodStart.localeCompare(a.periodStart))
     .map((row) => ({
       ...row,
+      compositionSummary: tokenCompositionSummary(row),
       missingPriceModels: sortedBreakdown(row.missingPriceModels || {}),
       modelBreakdown: sortedBreakdown(row.modelMap || {}),
       workdirBreakdown: sortedBreakdown(row.workdirMap || {}),
+      modelDetails: Object.values(row.modelDetailMap || {}).sort((a, b) => b.totalTokens - a.totalTokens),
       models: [...row.models].sort()
     }));
 }
@@ -684,6 +788,169 @@ function renderBars(items, { showCost = false } = {}) {
     .join("");
 }
 
+function renderCompositionTiles(item) {
+  return tokenCompositionDetails(item)
+    .map((entry) => `<article class="summary-tile composition-tile">
+      <span>${escapeHtml(entry.label)}</span>
+      <strong title="${formatTokenRaw(entry.tokens)}">${formatToken(entry.tokens)}</strong>
+      <small>${Math.round(entry.ratio * 100)}%${latestConfig?.showEstimatedCost ? ` · ${formatUsd(costValueForField(item, entry.field))}` : ""}</small>
+    </article>`)
+    .join("");
+}
+
+function renderTrendSelection(row) {
+  if (!row) return "";
+  return `<section class="section-block">
+    <div class="section-title">
+      <h3>${formatTrendPeriod(row)}</h3>
+      <p>${escapeHtml(row.compositionSummary || tokenCompositionSummary(row))}</p>
+    </div>
+    <div class="detail-summary composition-grid">
+      ${renderCompositionTiles(row)}
+    </div>
+    <div class="detail-grid">
+      <section>
+        <h3>Top models</h3>
+        <div class="breakdown">${renderCompactBreakdown(row.modelBreakdown)}</div>
+      </section>
+      <section>
+        <h3>Top workdirs</h3>
+        <div class="breakdown">${renderCompactBreakdown(row.workdirBreakdown)}</div>
+      </section>
+    </div>
+    ${renderTrendModelDetails(row)}
+    ${latestConfig?.showEstimatedCost ? `<p class="subtle">${escapeHtml(costQualityLabel(row.costQuality))} · ${renderCost(row).replace(/<[^>]+>/g, "")}</p>` : ""}
+  </section>`;
+}
+
+function renderTrendDrawer(rows) {
+  const row = rows.find((item) => trendBucketKey(item) === trendDrawerBucketKey);
+  const open = trendMode === "table" && Boolean(row);
+  if (trendDrawerCloseTimer) clearTimeout(trendDrawerCloseTimer);
+  if (!open) {
+    animateTrendDrawerClosed();
+    return;
+  }
+  $("#trend-drawer").hidden = false;
+  $("#trend-drawer-backdrop").hidden = false;
+  $("#trend-drawer-title").textContent = formatTrendPeriod(row);
+  $("#trend-drawer-body").innerHTML = renderTrendSelection(row);
+  requestAnimationFrame(() => {
+    $("#trend-drawer").classList.add("is-open");
+    $("#trend-drawer-backdrop").classList.add("is-open");
+    document.body.classList.add("trend-drawer-open");
+  });
+}
+
+function closeTrendDrawer() {
+  trendDrawerBucketKey = "";
+  animateTrendDrawerClosed();
+}
+
+function animateTrendDrawerClosed() {
+  $("#trend-drawer").classList.remove("is-open");
+  $("#trend-drawer-backdrop").classList.remove("is-open");
+  document.body.classList.remove("trend-drawer-open");
+  if ($("#trend-drawer").hidden) return;
+  trendDrawerCloseTimer = setTimeout(() => {
+    $("#trend-drawer").hidden = true;
+    $("#trend-drawer-backdrop").hidden = true;
+    $("#trend-drawer-body").innerHTML = "";
+  }, 180);
+}
+
+function renderTrendModelDetails(row) {
+  const details = row.modelDetails || [];
+  if (!details.length) return "";
+  return `<section class="trend-model-details">
+    <div class="section-title">
+      <h3>Model detail</h3>
+      <p>Grouped by workdir and model for this period.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="trend-table model-detail-table">
+        <thead>
+          <tr>
+            <th>Workdir</th>
+            <th>Model</th>
+            <th>Tokens</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Cache</th>
+            <th>Reasoning</th>
+            ${latestConfig?.showEstimatedCost ? "<th>Est. Cost</th>" : ""}
+          </tr>
+        </thead>
+        <tbody>
+          ${details.map((item) => `<tr>
+            <td>${escapeHtml(item.workdirDisplayName)}</td>
+            <td>${escapeHtml(item.model)}</td>
+            <td class="numeric" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
+            <td class="numeric" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)}</td>
+            <td class="numeric" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)}</td>
+            <td class="numeric" title="${formatTokenRaw((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}">${renderAccountingToken((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))}</td>
+            <td class="numeric" title="${formatTokenRaw(item.reasoningTokens)}">${renderAccountingToken(item.reasoningTokens, item.reasoningCostUsd)}</td>
+            ${latestConfig?.showEstimatedCost ? `<td class="numeric" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  </section>`;
+}
+
+function aggregateComposition(items) {
+  return items.reduce((current, item) => ({
+    inputTokens: current.inputTokens + Number(item.inputTokens || 0),
+    outputTokens: current.outputTokens + Number(item.outputTokens || 0),
+    cacheReadTokens: current.cacheReadTokens + Number(item.cacheReadTokens || 0),
+    cacheWriteTokens: current.cacheWriteTokens + Number(item.cacheWriteTokens || 0),
+    reasoningTokens: current.reasoningTokens + Number(item.reasoningTokens || 0),
+    totalTokens: current.totalTokens + Number(item.totalTokens || 0)
+  }), {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0
+  });
+}
+
+function trendBucketKey(row) {
+  return `${row.periodStart}|${row.periodEnd}`;
+}
+
+function humanDominant(value = "") {
+  return {
+    "input-heavy": "Input-heavy",
+    "output-heavy": "Output-heavy",
+    "cache-heavy": "Cache-heavy",
+    "reasoning-heavy": "Reasoning-heavy",
+    "no-usage": "No usage"
+  }[value] || value || "-";
+}
+
+function costValueForField(item, field) {
+  return {
+    inputTokens: item.inputCostUsd,
+    outputTokens: item.outputCostUsd,
+    cacheReadTokens: item.cacheReadCostUsd,
+    cacheWriteTokens: item.cacheWriteCostUsd,
+    reasoningTokens: item.reasoningCostUsd
+  }[field];
+}
+
+function renderAccountingToken(tokens, cost) {
+  const costLine = latestConfig?.showEstimatedCost ? `<small>${formatUsd(cost)}</small>` : "";
+  return `<span class="token-accounting">${formatToken(tokens || 0)}${costLine}</span>`;
+}
+
+function sumKnownCosts(...values) {
+  const known = values.filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)));
+  if (!known.length) return null;
+  return known.reduce((sum, value) => sum + Number(value), 0);
+}
+
 function renderTrendDashboard(rows) {
   const chronological = [...rows].sort((a, b) => a.periodStart.localeCompare(b.periodStart));
   const latest = rows[0];
@@ -696,7 +963,7 @@ function renderTrendDashboard(rows) {
       ${renderTrendMetric("Latest", formatToken(latest.totalTokens), formatTrendPeriod(latest), metricTitle(latest))}
       ${renderTrendMetric("Peak", formatToken(peak.totalTokens), formatTrendPeriod(peak), metricTitle(peak))}
       ${renderTrendMetric("View total", formatToken(total), `${rows.length} ${trendViewMeta().bucketLabel}${rows.length === 1 ? "" : "s"}`, formatTokenRaw(total))}
-      ${latestConfig?.showEstimatedCost ? renderTrendMetric("Cost", renderCost(cost), pricingSource, costTitle(cost)) : renderTrendMetric("Top model", summaryLabel(latest.modelBreakdown), "latest period", summaryTitle(latest.modelBreakdown))}
+      ${latestConfig?.showEstimatedCost ? renderTrendMetric("Cost", renderCost(cost), pricingSource, costTitle(cost)) : renderTrendMetric("Dominant", humanDominant(dominantComposition(latest)), tokenCompositionSummary(latest), metricTitle(latest))}
     </div>
     ${renderTrendTimeline(chronological, latest, peak)}
     <section class="recent-contribution">
@@ -764,7 +1031,7 @@ function renderTrendTimeline(rows, latest, peak) {
     ${rows
         .map((row) => {
           const title = escapeHtml(metricTitle(row));
-          return `<span class="${row === latest ? "latest" : ""} ${row === peak ? "peak" : ""}" style="height:${Math.max(4, (row.totalTokens / max) * 100)}%" title="${title}" data-tooltip="${title}" tabindex="0"></span>`;
+          return `<button type="button" data-select-trend="${escapeHtml(trendBucketKey(row))}" class="${row === latest ? "latest" : ""} ${row === peak ? "peak" : ""} ${selectedTrendBucketKey === trendBucketKey(row) ? "selected" : ""}" style="height:${Math.max(4, (row.totalTokens / max) * 100)}%" title="${title}" data-tooltip="${title}"></button>`;
         })
       .join("")}
   </div>
@@ -809,8 +1076,13 @@ function formatNumber(value) {
 }
 
 function costTitle(item) {
-  const missing = (item.missingPriceModels || []).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
+  const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
   return `${item.costQuality || "unknown_price"} · ${item.pricingVersion || "no pricing version"} · ${pricingSource}${missing ? ` · missing: ${missing}` : ""}`;
+}
+
+function normalizeMissingPriceModels(value) {
+  if (Array.isArray(value)) return value;
+  return sortedBreakdown(value || {});
 }
 
 function renderCost(item) {
@@ -844,16 +1116,19 @@ async function refreshPricing() {
   if (!latestConfig?.showEstimatedCost) return;
   if (!latestConfig?.apiBaseUrl) {
     serverPriceMap = null;
-    pricingSource = "local fallback pricing";
+    pricingSource = "server pricing unavailable";
     return;
   }
   try {
     const data = await api.modelPrices();
-    serverPriceMap = createPriceMap(Object.fromEntries((data?.custom || []).map((item) => [item.model, item])));
-    pricingSource = data?.custom?.length ? "server pricing with custom overrides" : "server builtin pricing";
+    serverPriceMap = createPriceMap(
+      Object.fromEntries((data?.custom || []).map((item) => [item.model, item])),
+      Object.fromEntries((data?.openrouter || []).map((item) => [item.model, item]))
+    );
+    pricingSource = data?.remote?.status ? `server pricing · OpenRouter ${data.remote.status}` : "server pricing";
   } catch (error) {
     serverPriceMap = null;
-    pricingSource = `local fallback pricing; server pricing unavailable: ${error.message}`;
+    pricingSource = `server pricing unavailable: ${error.message}`;
   }
 }
 

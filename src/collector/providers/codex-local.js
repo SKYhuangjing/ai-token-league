@@ -6,7 +6,7 @@ import { dayFromRecord, deepFindString, readJsonLinesAsync, sourceMetadataAsync,
 export const codexLocalProvider = {
   id: "codex_local",
   toolCode: "codex",
-  version: "0.1.1",
+  version: "0.1.2",
 
   roots(config = {}) {
     if (config.providerRootsOnly && config.providerRoots?.codex_local) return normalizeCustomRoots(config.providerRoots.codex_local);
@@ -63,7 +63,7 @@ export const codexLocalProvider = {
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         cacheReadTokens: usage.cacheReadTokens,
-        cacheWriteTokens: 0,
+        cacheWriteTokens: usage.cacheWriteTokens,
         reasoningTokens: usage.reasoningTokens,
         totalTokens,
         ...source
@@ -103,13 +103,18 @@ function extractUsage(row) {
   const usage = info?.last_token_usage || sampleUsage;
   if (!usage) return null;
 
-  const inputTokens = Number(usage.input_tokens || usage.inputTokens || usage.prompt_tokens || 0);
+  const rawInputTokens = Number(usage.input_tokens || usage.inputTokens || usage.prompt_tokens || 0);
   const outputTokens = Number(usage.output_tokens || usage.outputTokens || usage.completion_tokens || 0);
   const cacheReadTokens = Number(usage.cached_input_tokens || usage.cache_read_tokens || usage.cacheReadTokens || 0);
+  const cacheWriteTokens = Number(
+    usage.cache_creation_input_tokens || usage.cacheWriteTokens || usage.cache_write_tokens || usage.cached_input_write_tokens || 0
+  );
   const reasoningTokens = Number(usage.reasoning_output_tokens || usage.reasoning_tokens || usage.reasoningTokens || 0);
+  // Codex local logs can expose gross input plus cache counters. Normalize here so
+  // inputTokens always carries non-cache input.
+  const inputTokens = Math.max(0, rawInputTokens - cacheReadTokens - cacheWriteTokens);
   const directTotal = Number(usage.total_tokens || usage.totalTokens || 0);
-  const summedTotal = inputTokens + outputTokens + cacheReadTokens + reasoningTokens;
-  const total = directTotal || summedTotal;
+  const total = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens || directTotal;
   if (!Number.isFinite(total) || total <= 0) return null;
 
   const isCumulative = Boolean(sampleUsage) && !info?.last_token_usage;
@@ -117,9 +122,10 @@ function extractUsage(row) {
     inputTokens,
     outputTokens,
     cacheReadTokens,
+    cacheWriteTokens,
     reasoningTokens,
     cumulativeTotal: isCumulative ? total : 0,
-    quality: inputTokens || outputTokens ? "exact" : "partial",
+    quality: rawInputTokens || outputTokens ? "exact" : "partial",
     deltaTotal(previousCumulativeTotal) {
       if (!isCumulative) return total;
       if (!previousCumulativeTotal) return total;

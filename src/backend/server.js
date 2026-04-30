@@ -7,6 +7,7 @@ import { verifyPayload } from "../shared/crypto.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
+const SRC_DIR = path.resolve("src");
 const WEB_DIR = path.resolve("src/web");
 const store = await createConfiguredStore();
 
@@ -44,6 +45,10 @@ async function handleApi(req, res) {
   }
   if (req.method === "POST" && req.url === "/api/admin/recalculate-costs") {
     return sendJson(res, 200, await store.recalculateCosts());
+  }
+  if (req.method === "POST" && req.url.startsWith("/api/admin/model-prices/refresh-openrouter")) {
+    const url = new URL(req.url, "http://localhost");
+    return sendJson(res, 200, await store.refreshOpenRouterPrices({ recalculate: includeFlag(url, "recalculate") }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/model-prices")) {
     return sendJson(res, 200, store.listModelPrices());
@@ -144,13 +149,20 @@ async function handleApi(req, res) {
 }
 
 function includeCost(url) {
-  return ["1", "true", "yes"].includes(String(url.searchParams.get("includeCost") || "").toLowerCase());
+  return includeFlag(url, "includeCost");
+}
+
+function includeFlag(url, name) {
+  return ["1", "true", "yes"].includes(String(url.searchParams.get(name) || "").toLowerCase());
 }
 
 function serveStatic(req, res) {
-  const requested = req.url === "/" ? "/index.html" : new URL(req.url, "http://localhost").pathname;
-  const file = path.resolve(WEB_DIR, `.${requested}`);
-  if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+  const requested = req.url === "/" ? "/web/index.html" : new URL(req.url, "http://localhost").pathname;
+  const normalized = requested.startsWith("/web/") || requested.startsWith("/shared/")
+    ? requested
+    : `/web${requested}`;
+  const file = path.resolve(SRC_DIR, `.${normalized}`);
+  if (!file.startsWith(SRC_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     res.writeHead(404);
     res.end("not found");
     return;
@@ -176,11 +188,21 @@ export function createServer() {
 export async function createConfiguredStore() {
   const dbType = String(process.env.DB_TYPE || "json").toLowerCase();
   if (dbType === "mysql") {
-    return MySqlStore.create();
+    const store = await MySqlStore.create();
+    await warmOpenRouterPrices(store);
+    return store;
   }
   const jsonStore = new Store(process.env.DB_PATH || path.resolve("data/db.json"));
   jsonStore.dbType = "json";
+  await warmOpenRouterPrices(jsonStore);
   return jsonStore;
+}
+
+async function warmOpenRouterPrices(targetStore) {
+  if (String(process.env.OPENROUTER_PRICING_AUTO_REFRESH || "true").toLowerCase() === "false") return;
+  const remote = targetStore.db.modelPriceCache?.remote || {};
+  if (remote.status === "fresh" && remote.expiresAt && Date.parse(remote.expiresAt) > Date.now()) return;
+  await targetStore.refreshOpenRouterPrices({ recalculate: false });
 }
 
 async function handle(req, res) {

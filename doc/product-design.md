@@ -263,6 +263,7 @@ Claude Code 第一版支持。
 - 参考 ccusage 的本地日志扫描方式。
 - 读取 Claude Code 本地 project/session 数据。
 - 解析 token usage。
+- 将 `inputTokens` 归一化为 `raw input - cacheReadTokens - cacheWriteTokens`，cache 继续保留在独立字段。
 - 将 project 或 cwd 映射为本地 workdir。
 
 工作目录维护：
@@ -281,6 +282,7 @@ Codex 第一版支持。
 - 参考 ccusage/codex 的本地 session JSONL 扫描方式。
 - 读取 Codex 本地数据目录，默认从用户的 Codex home 识别。
 - 从 session 中的 token 事件计算 token 增量。
+- 将 `inputTokens` 归一化为 `raw input - cacheReadTokens - cacheWriteTokens`，cache 继续保留在独立字段。
 - 按日期、工具、模型、工作目录聚合。
 
 工作目录维护：
@@ -306,6 +308,10 @@ tokenUsage.cacheWriteTokens
 tokenUsage.totalCents
 chargedCents
 ```
+
+口径说明：
+
+- Cursor 保持 dashboard API 当前定义，不额外做 `input-cache` 的本地重写。
 
 鉴权方式：
 
@@ -415,13 +421,14 @@ totalTokens = inputTokens
             + outputTokens
             + cacheReadTokens
             + cacheWriteTokens
-            + reasoningTokens
 ```
 
-如果某个工具无法拆分字段，但能提供总量，则保留：
+reasoning token 保留为 composition/cost 明细，不进入主榜展示和排序 total。
+
+如果某个工具无法拆分 input/output，只能提供旧总量，则该行不进入主榜 total：
 
 ```text
-totalTokens
+totalTokens = 0
 sourceQuality = partial
 ```
 

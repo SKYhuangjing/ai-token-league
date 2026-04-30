@@ -61,7 +61,7 @@
             </div>
           </section>
 
-          <section class="cards cards-three">
+          <section class="cards cards-four">
             <article class="stat-card">
               <span>Workdirs</span>
               <strong id="workdir-count">0</strong>
@@ -70,11 +70,23 @@
               <span>Models</span>
               <strong id="model-count">0</strong>
             </article>
+            <article class="stat-card">
+              <span>Dominant composition</span>
+              <strong id="today-dominant">-</strong>
+            </article>
             <article class="stat-card" id="today-cost-card" hidden>
               <span>Est. cost</span>
               <strong id="today-cost">-</strong>
               <small id="today-cost-note">pricing unavailable</small>
             </article>
+          </section>
+
+          <section class="section-block">
+            <div class="section-title">
+              <h3>Token composition</h3>
+              <p id="today-composition-summary">Today composition is loading.</p>
+            </div>
+            <div id="today-composition" class="detail-summary composition-grid"></div>
           </section>
 
           <section class="section-block">
@@ -126,6 +138,7 @@
                   <tr>
                     <th>Period</th>
                     <th>Total Tokens</th>
+                    <th>Composition</th>
                     <th>Models</th>
                     <th>Workdirs</th>
                     <th id="trend-cost-header" hidden>Est. Cost</th>
@@ -134,7 +147,20 @@
                 <tbody id="trend-rows"></tbody>
               </table>
             </div>
+            <div id="trend-selection-panel" class="trend-selection-panel"></div>
           </section>
+
+          <div class="trend-drawer-backdrop" id="trend-drawer-backdrop" hidden></div>
+          <aside class="trend-drawer" id="trend-drawer" hidden aria-labelledby="trend-drawer-title">
+            <div class="trend-drawer-head">
+              <div>
+                <p class="eyebrow">Trend detail</p>
+                <h3 id="trend-drawer-title">Period detail</h3>
+              </div>
+              <button id="close-trend-drawer" type="button" aria-label="Close trend detail">Close</button>
+            </div>
+            <div id="trend-drawer-body" class="trend-drawer-body"></div>
+          </aside>
         </section>
 
         <section id="settings" class="panel">
@@ -249,6 +275,27 @@
               <h3>System behavior</h3>
               <p>Controls how the desktop app starts on this computer.</p>
             </div>
+            <section class="risk-panel">
+              <h3>Risk controls</h3>
+              <div class="risk-grid">
+                <article>
+                  <strong>Sync upload</strong>
+                  <p>Sync sends local aggregate usage rows to the configured API. The app shows a target and row-count preview before upload.</p>
+                </article>
+                <article>
+                  <strong>Cursor credentials</strong>
+                  <p>Cursor tokens stay on this computer. Add or rotate them from Sources; they are not rendered back after save.</p>
+                </article>
+                <article>
+                  <strong>Profile files</strong>
+                  <p>Import and export move your anonymous profile identity between local files. Keep exported profiles private.</p>
+                </article>
+                <article>
+                  <strong>Reset local data</strong>
+                  <p>Reset clears this app profile, cache, aliases, queue, tokens, and settings. Source app history is not deleted.</p>
+                </article>
+              </div>
+            </section>
             <div class="form-grid">
               <label class="toggle-row">
                 <input id="launchAtLogin" type="checkbox" />

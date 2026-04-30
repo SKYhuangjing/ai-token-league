@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { newId, sha256Hex } from "../shared/crypto.js";
-import { addCostToUsageItem, aggregateCost, createPriceMap, FALLBACK_PRICE_MAP, normalizeModelName, priceToPublic } from "../shared/pricing.js";
-import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertUsageItem, usageKey } from "../shared/schema.js";
+import { compositionRatio, costQualityLabel, dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
+import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, priceToPublic } from "../shared/pricing.js";
+import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertUsageItem, displayTotalTokens, usageKey } from "../shared/schema.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
+import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 
 export const DEFAULT_DB = {
   schemaVersion: STORAGE_SCHEMA_VERSION,
@@ -12,6 +14,10 @@ export const DEFAULT_DB = {
   workdirs: {},
   usageDaily: {},
   modelPrices: {},
+  modelPriceCache: {
+    remote: { source: "openrouter", status: "empty", url: "", fetchedAt: "", expiresAt: "", pricingVersion: "", lastError: "" },
+    prices: {}
+  },
   uploadBatches: {},
   aggregateCache: {}
 };
@@ -25,6 +31,9 @@ export class Store {
     this.db.schemaVersion ||= STORAGE_SCHEMA_VERSION;
     this.db.aggregateCache ||= {};
     this.db.modelPrices ||= {};
+    this.db.modelPriceCache ||= structuredClone(DEFAULT_DB.modelPriceCache);
+    this.db.modelPriceCache.remote ||= structuredClone(DEFAULT_DB.modelPriceCache.remote);
+    this.db.modelPriceCache.prices ||= {};
     if (this.migrateLegacyUsageRows()) this.save();
   }
 
@@ -77,8 +86,9 @@ export class Store {
     }
     let accepted = 0;
     let rejected = 0;
-    for (const raw of input.items || []) {
+    for (const incoming of input.items || []) {
       try {
+        const raw = normalizeUsageTotal(incoming);
         assertUsageItem(raw);
         const workdirId = `${input.participantId}:${raw.workdirHash}`;
         this.db.workdirs[workdirId] = {
@@ -134,10 +144,16 @@ export class Store {
         const withCost = addCostToUsageItem(raw, this.priceMap());
         this.db.usageDaily[key] = {
           ...raw,
+          inputCostUsd: withCost.inputCostUsd,
+          outputCostUsd: withCost.outputCostUsd,
+          cacheReadCostUsd: withCost.cacheReadCostUsd,
+          cacheWriteCostUsd: withCost.cacheWriteCostUsd,
+          reasoningCostUsd: withCost.reasoningCostUsd,
           estimatedCostUsd: withCost.estimatedCostUsd,
           costQuality: withCost.costQuality,
           pricingVersion: withCost.pricingVersion,
           pricingModel: withCost.pricingModel,
+          pricingSource: withCost.pricingSource || "",
           participantId: input.participantId,
           deviceId: input.deviceId,
           workdirId,
@@ -183,11 +199,18 @@ export class Store {
         item.sourceFingerprint = sha256Hex(`legacy|${key}`);
         changed = true;
       }
-      if (!item.costQuality || !item.pricingVersion) {
+      if (!item.costQuality || !item.pricingVersion || item.inputCostUsd === undefined) {
+        Object.assign(item, addCostToUsageItem(item, this.priceMap()));
+        changed = true;
+      }
+      const nextTotalTokens = displayTotalTokens(item);
+      if (item.totalTokens !== nextTotalTokens) {
+        item.totalTokens = nextTotalTokens;
         Object.assign(item, addCostToUsageItem(item, this.priceMap()));
         changed = true;
       }
     }
+    if (changed) this.invalidateAggregateCache();
     return changed;
   }
 
@@ -244,11 +267,21 @@ export class Store {
           participantId: item.participantId,
           nickname: participant.nickname,
           totalTokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
           modelBreakdown: {},
           estimatedCostUsd: 0,
           costQuality: ""
         };
       current.totalTokens += item.totalTokens;
+      current.inputTokens += item.inputTokens || 0;
+      current.outputTokens += item.outputTokens || 0;
+      current.cacheReadTokens += item.cacheReadTokens || 0;
+      current.cacheWriteTokens += item.cacheWriteTokens || 0;
+      current.reasoningTokens += item.reasoningTokens || 0;
       current.modelBreakdown[item.model] = (current.modelBreakdown[item.model] || 0) + item.totalTokens;
       if (includeCost) aggregateCost(current, item);
       byParticipant.set(item.participantId, current);
@@ -260,6 +293,13 @@ export class Store {
         participantId: item.participantId,
         nickname: item.nickname,
         totalTokens: item.totalTokens,
+        inputTokens: item.inputTokens,
+        outputTokens: item.outputTokens,
+        cacheReadTokens: item.cacheReadTokens,
+        cacheWriteTokens: item.cacheWriteTokens,
+        reasoningTokens: item.reasoningTokens,
+        compositionSummary: tokenCompositionSummary(item),
+        dominantComposition: dominantComposition(item),
         models: sortedBreakdown(item.modelBreakdown),
         ...(includeCost ? costFields(item) : {})
       }));
@@ -281,6 +321,11 @@ export class Store {
       isSingleDay: days.length <= 1,
       rank: rankRow?.rank || null,
       totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
       byDay: {},
       byModel: {},
       byWorkdir: {},
@@ -296,13 +341,24 @@ export class Store {
           providerId: item.providerId,
           workdirDisplayName: item.workdirDisplayName,
           model: item.model,
+          inputTokens: item.inputTokens || 0,
+          outputTokens: item.outputTokens || 0,
+          cacheReadTokens: item.cacheReadTokens || 0,
+          cacheWriteTokens: item.cacheWriteTokens || 0,
+          reasoningTokens: item.reasoningTokens || 0,
           totalTokens: item.totalTokens,
+          compositionSummary: tokenCompositionSummary(item),
           ...(includeCost ? costFields(item) : {}),
           sourceQuality: item.sourceQuality
         }))
     };
     for (const item of rows) {
       detail.totalTokens += item.totalTokens;
+      detail.inputTokens += item.inputTokens || 0;
+      detail.outputTokens += item.outputTokens || 0;
+      detail.cacheReadTokens += item.cacheReadTokens || 0;
+      detail.cacheWriteTokens += item.cacheWriteTokens || 0;
+      detail.reasoningTokens += item.reasoningTokens || 0;
       detail.byDay[item.day] = (detail.byDay[item.day] || 0) + item.totalTokens;
       detail.byModel[item.model] = (detail.byModel[item.model] || 0) + item.totalTokens;
       detail.byWorkdir[item.workdirDisplayName] = (detail.byWorkdir[item.workdirDisplayName] || 0) + item.totalTokens;
@@ -313,6 +369,8 @@ export class Store {
     const periodRows = aggregateUsageRows(rows, "day", { participants: this.db.participants, includeCost });
     return {
       ...detail,
+      compositionSummary: tokenCompositionSummary(detail),
+      dominantComposition: dominantComposition(detail),
       ...(includeCost ? costFields(detail) : {}),
       days: sortedBreakdown(detail.byDay),
       periodRows,
@@ -383,6 +441,11 @@ export class Store {
     const totals = {
       rows: rows.length,
       totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
       unknownModelRows: 0,
       unknownWorkdirRows: 0,
       missingSourceFingerprintRows: 0,
@@ -390,12 +453,29 @@ export class Store {
       bySourceQuality: {},
       byProvider: {},
       abnormalDays: [],
-      multiDeviceParticipants: []
+      multiDeviceParticipants: [],
+      pricingCoverage: {
+        knownTokens: 0,
+        missingTokens: 0,
+        rowsByQuality: {
+          exact_price: 0,
+          estimated_price: 0,
+          unknown_price: 0
+        },
+        participants: {},
+        periods: {}
+      }
     };
     const byDay = new Map();
     const devicesByParticipant = new Map();
+    const byBucket = new Map();
     for (const item of rows) {
       totals.totalTokens += item.totalTokens || 0;
+      totals.inputTokens += item.inputTokens || 0;
+      totals.outputTokens += item.outputTokens || 0;
+      totals.cacheReadTokens += item.cacheReadTokens || 0;
+      totals.cacheWriteTokens += item.cacheWriteTokens || 0;
+      totals.reasoningTokens += item.reasoningTokens || 0;
       if (!item.model || item.model === "unknown") totals.unknownModelRows += 1;
       if (!item.workdirDisplayName || item.workdirDisplayName === "unknown") totals.unknownWorkdirRows += 1;
       if (!item.sourceFingerprint) totals.missingSourceFingerprintRows += 1;
@@ -403,6 +483,48 @@ export class Store {
       totals.bySourceQuality[item.sourceQuality || "unknown"] = (totals.bySourceQuality[item.sourceQuality || "unknown"] || 0) + 1;
       totals.byProvider[item.providerId || "unknown"] = (totals.byProvider[item.providerId || "unknown"] || 0) + (item.totalTokens || 0);
       byDay.set(item.day, (byDay.get(item.day) || 0) + (item.totalTokens || 0));
+      const bucket = byBucket.get(item.day) || {
+        day: item.day,
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        participants: new Set()
+      };
+      bucket.totalTokens += item.totalTokens || 0;
+      bucket.inputTokens += item.inputTokens || 0;
+      bucket.outputTokens += item.outputTokens || 0;
+      bucket.cacheReadTokens += item.cacheReadTokens || 0;
+      bucket.cacheWriteTokens += item.cacheWriteTokens || 0;
+      bucket.reasoningTokens += item.reasoningTokens || 0;
+      bucket.participants.add(item.participantId);
+      byBucket.set(item.day, bucket);
+      const coverageRow = addCostToUsageItem(item, this.priceMap());
+      totals.pricingCoverage.rowsByQuality[coverageRow.costQuality || "unknown_price"] += 1;
+      if (coverageRow.estimatedCostUsd === null || coverageRow.estimatedCostUsd === undefined) {
+        totals.pricingCoverage.missingTokens += item.totalTokens || 0;
+      } else {
+        totals.pricingCoverage.knownTokens += item.totalTokens || 0;
+      }
+      const participantCoverage = totals.pricingCoverage.participants[item.participantId] || {
+        participantId: item.participantId,
+        nickname: this.db.participants[item.participantId]?.nickname || item.participantId,
+        totalTokens: 0,
+        missingPriceTokens: 0
+      };
+      participantCoverage.totalTokens += item.totalTokens || 0;
+      if (coverageRow.estimatedCostUsd === null || coverageRow.estimatedCostUsd === undefined) {
+        participantCoverage.missingPriceTokens += item.totalTokens || 0;
+      }
+      totals.pricingCoverage.participants[item.participantId] = participantCoverage;
+      const periodCoverage = totals.pricingCoverage.periods[item.day] || { day: item.day, totalTokens: 0, missingPriceTokens: 0 };
+      periodCoverage.totalTokens += item.totalTokens || 0;
+      if (coverageRow.estimatedCostUsd === null || coverageRow.estimatedCostUsd === undefined) {
+        periodCoverage.missingPriceTokens += item.totalTokens || 0;
+      }
+      totals.pricingCoverage.periods[item.day] = periodCoverage;
       const devices = devicesByParticipant.get(item.participantId) || new Set();
       devices.add(item.deviceId);
       devicesByParticipant.set(item.participantId, devices);
@@ -411,6 +533,29 @@ export class Store {
     const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
     for (const [day, totalTokens] of byDay.entries()) {
       if (average > 0 && totalTokens > average * 3) totals.abnormalDays.push({ day, totalTokens });
+    }
+    const anomalies = [];
+    for (const bucket of byBucket.values()) {
+      const ratioSummary = {
+        inputRatio: compositionRatio(bucket.inputTokens, bucket.totalTokens),
+        outputRatio: compositionRatio(bucket.outputTokens, bucket.totalTokens),
+        cacheRatio: compositionRatio(bucket.cacheReadTokens + bucket.cacheWriteTokens, bucket.totalTokens),
+        reasoningRatio: compositionRatio(bucket.reasoningTokens, bucket.totalTokens)
+      };
+      const anomalyTypes = [];
+      if (ratioSummary.inputRatio >= 0.7) anomalyTypes.push("input-heavy");
+      if (ratioSummary.outputRatio >= 0.45) anomalyTypes.push("output-heavy");
+      if (ratioSummary.cacheRatio >= 0.35) anomalyTypes.push("cache-heavy");
+      if (ratioSummary.reasoningRatio >= 0.25) anomalyTypes.push("reasoning-heavy");
+      if (anomalyTypes.length) {
+        anomalies.push({
+          day: bucket.day,
+          totalTokens: bucket.totalTokens,
+          participantCount: bucket.participants.size,
+          compositionSummary: tokenCompositionSummary(bucket),
+          anomalyTypes
+        });
+      }
     }
     for (const [id, devices] of devicesByParticipant.entries()) {
       if (devices.size > 1) {
@@ -426,6 +571,35 @@ export class Store {
       from: days[0] || "",
       to: days.at(-1) || "",
       ...totals,
+      compositionRatios: {
+        inputRatio: compositionRatio(totals.inputTokens, totals.totalTokens),
+        outputRatio: compositionRatio(totals.outputTokens, totals.totalTokens),
+        cacheRatio: compositionRatio(totals.cacheReadTokens + totals.cacheWriteTokens, totals.totalTokens),
+        reasoningRatio: compositionRatio(totals.reasoningTokens, totals.totalTokens)
+      },
+      anomalies: anomalies.sort((a, b) => b.totalTokens - a.totalTokens),
+      pricingCoverage: {
+        knownTokens: totals.pricingCoverage.knownTokens,
+        missingTokens: totals.pricingCoverage.missingTokens,
+        missingTokenRatio: compositionRatio(totals.pricingCoverage.missingTokens, totals.totalTokens),
+        costExplainability: Object.entries(totals.pricingCoverage.rowsByQuality).map(([name, count]) => ({
+          name,
+          label: costQualityLabel(name),
+          count
+        })),
+        participants: Object.values(totals.pricingCoverage.participants)
+          .sort((a, b) => b.missingPriceTokens - a.missingPriceTokens)
+          .map((item) => ({
+            ...item,
+            missingPriceRatio: compositionRatio(item.missingPriceTokens, item.totalTokens)
+          })),
+        periods: Object.values(totals.pricingCoverage.periods)
+          .sort((a, b) => b.day.localeCompare(a.day))
+          .map((item) => ({
+            ...item,
+            missingPriceRatio: compositionRatio(item.missingPriceTokens, item.totalTokens)
+          }))
+      },
       byProvider: sortedBreakdown(totals.byProvider),
       bySourceQuality: Object.entries(totals.bySourceQuality).map(([name, count]) => ({ name, count }))
     };
@@ -443,16 +617,38 @@ export class Store {
   }
 
   priceMap() {
-    return createPriceMap(this.db.modelPrices);
+    return createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices);
   }
 
   listModelPrices() {
     return {
-      pricingVersion: "custom-overrides",
-      builtin: Object.entries(FALLBACK_PRICE_MAP).map(([model, price]) => priceToPublic(model, price)),
+      pricingVersion: "custom+openrouter",
+      remote: this.db.modelPriceCache?.remote || structuredClone(DEFAULT_DB.modelPriceCache.remote),
+      openrouter: Object.entries(this.db.modelPriceCache?.prices || {}).map(([model, price]) => priceToPublic(model, price)),
       custom: Object.values(this.db.modelPrices || {}).sort((a, b) => a.model.localeCompare(b.model)),
       missingModels: this.missingPriceModels()
     };
+  }
+
+  async refreshOpenRouterPrices({ recalculate = false } = {}) {
+    try {
+      this.db.modelPriceCache = await fetchOpenRouterModelPrices();
+      let recalculated = null;
+      if (recalculate) recalculated = this.recalculateCosts();
+      this.save();
+      return { remote: this.db.modelPriceCache.remote, recalculated };
+    } catch (error) {
+      const previous = this.db.modelPriceCache || structuredClone(DEFAULT_DB.modelPriceCache);
+      previous.remote = {
+        ...(previous.remote || {}),
+        source: "openrouter",
+        status: Object.keys(previous.prices || {}).length ? "stale" : "failed",
+        lastError: error.message
+      };
+      this.db.modelPriceCache = previous;
+      this.save();
+      return { remote: this.db.modelPriceCache.remote, recalculated: null };
+    }
   }
 
   upsertModelPrice(input) {
@@ -465,7 +661,7 @@ export class Store {
       outputCostPerMTok: nonNegativeNumber(input.outputCostPerMTok),
       cacheReadCostPerMTok: nonNegativeNumber(input.cacheReadCostPerMTok),
       cacheWriteCostPerMTok: nonNegativeNumber(input.cacheWriteCostPerMTok),
-      reasoningCostPerMTok: nonNegativeNumber(input.reasoningCostPerMTok),
+      reasoningCostPerMTok: 0,
       source: input.source || "custom",
       notes: input.notes || "",
       updatedAt: now
@@ -660,6 +856,8 @@ function aggregateUsageRows(rows, grain, { includeAdminFields = false, participa
     .sort((a, b) => b.periodStart.localeCompare(a.periodStart) || b.totalTokens - a.totalTokens)
     .map(({ modelsMap, workdirsMap, providersMap, ...item }) => ({
       ...item,
+      compositionSummary: tokenCompositionSummary(item),
+      dominantComposition: dominantComposition(item),
       ...(includeCost ? costFields(item) : {}),
       models: sortedBreakdown(modelsMap),
       workdirs: sortedBreakdown(workdirsMap),
@@ -690,12 +888,25 @@ function sortedBreakdown(obj) {
     .map(([name, totalTokens]) => ({ name, totalTokens }));
 }
 
+function normalizeUsageTotal(item) {
+  return {
+    ...item,
+    totalTokens: displayTotalTokens(item)
+  };
+}
+
 function costFields(item) {
   const hasOnlyMissingPrices = !item.hasKnownPrice && item.missingPriceTokens > 0;
   return {
+    inputCostUsd: hasOnlyMissingPrices ? null : (item.inputCostUsd ?? null),
+    outputCostUsd: hasOnlyMissingPrices ? null : (item.outputCostUsd ?? null),
+    cacheReadCostUsd: hasOnlyMissingPrices ? null : (item.cacheReadCostUsd ?? null),
+    cacheWriteCostUsd: hasOnlyMissingPrices ? null : (item.cacheWriteCostUsd ?? null),
+    reasoningCostUsd: hasOnlyMissingPrices ? null : (item.reasoningCostUsd ?? null),
     estimatedCostUsd: hasOnlyMissingPrices ? null : (item.estimatedCostUsd ?? null),
     costQuality: item.costQuality || "unknown_price",
     pricingVersion: item.pricingVersion || "",
+    pricingSource: item.pricingSource || "",
     missingPriceTokens: item.missingPriceTokens || 0,
     missingPriceModels: sortedBreakdown(item.missingPriceModels || {})
   };
@@ -710,4 +921,8 @@ function nonNegativeNumber(value) {
   const n = Number(value || 0);
   if (!Number.isFinite(n) || n < 0) throw new Error("price fields must be non-negative numbers");
   return n;
+}
+
+function sumRows(rows, field) {
+  return rows.reduce((sum, item) => sum + Number(item[field] || 0), 0);
 }

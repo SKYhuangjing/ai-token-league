@@ -48,6 +48,33 @@ CREATE TABLE IF NOT EXISTS model_prices (
   updatedAt VARCHAR(40) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS model_price_cache (
+  model VARCHAR(190) PRIMARY KEY,
+  inputCostPerToken DECIMAL(24,18) NOT NULL DEFAULT 0,
+  outputCostPerToken DECIMAL(24,18) NOT NULL DEFAULT 0,
+  cacheReadCostPerToken DECIMAL(24,18) NOT NULL DEFAULT 0,
+  cacheWriteCostPerToken DECIMAL(24,18) NOT NULL DEFAULT 0,
+  reasoningCostPerToken DECIMAL(24,18) NOT NULL DEFAULT 0,
+  maxInputTokens BIGINT NOT NULL DEFAULT 0,
+  maxOutputTokens BIGINT NOT NULL DEFAULT 0,
+  source VARCHAR(64) NOT NULL DEFAULT 'openrouter',
+  pricingVersion VARCHAR(128) NOT NULL DEFAULT '',
+  updatedAt VARCHAR(40) NOT NULL,
+  rawJson JSON NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS model_price_cache_meta (
+  source VARCHAR(64) PRIMARY KEY,
+  url TEXT,
+  status VARCHAR(32) NOT NULL DEFAULT 'empty',
+  fetchedAt VARCHAR(40) NOT NULL DEFAULT '',
+  expiresAt VARCHAR(40) NOT NULL DEFAULT '',
+  pricingVersion VARCHAR(128) NOT NULL DEFAULT '',
+  modelCount INT NOT NULL DEFAULT 0,
+  skipped INT NOT NULL DEFAULT 0,
+  lastError TEXT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS usage_daily (
   usageKey VARCHAR(512) PRIMARY KEY,
   day DATE NOT NULL,
@@ -69,6 +96,7 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   costQuality VARCHAR(32) NOT NULL DEFAULT '',
   pricingVersion VARCHAR(128) NOT NULL DEFAULT '',
   pricingModel VARCHAR(190) NOT NULL DEFAULT '',
+  pricingSource VARCHAR(64) NOT NULL DEFAULT '',
   sourceQuality VARCHAR(32) NOT NULL DEFAULT 'unknown',
   rawSourceRef VARCHAR(255) NOT NULL DEFAULT '',
   providerVersion VARCHAR(64) NOT NULL DEFAULT '',

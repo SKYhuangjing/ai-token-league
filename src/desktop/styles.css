@@ -220,6 +220,10 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.cards-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .stat-card,
 .section-block {
   border: 1px solid var(--ink);
@@ -617,6 +621,45 @@ input[type="checkbox"] {
   text-align: center;
 }
 
+.risk-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf7;
+  padding: 14px;
+}
+
+.risk-panel h3 {
+  margin: 0;
+}
+
+.risk-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.risk-grid article {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.risk-grid strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.risk-grid p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 pre {
   min-height: 108px;
   overflow: auto;
@@ -717,15 +760,18 @@ pre {
   padding: 12px;
 }
 
-.trend-timeline span {
+.trend-timeline button {
   position: relative;
   flex: 1;
   min-width: 5px;
+  min-height: 16px;
+  border-radius: 4px;
   border: 1px solid rgba(28, 124, 84, 0.28);
   background: rgba(28, 124, 84, 0.24);
+  padding: 0;
 }
 
-.trend-timeline span::after {
+.trend-timeline button::after {
   position: absolute;
   right: 50%;
   bottom: calc(100% + 10px);
@@ -744,18 +790,71 @@ pre {
   white-space: normal;
 }
 
-.trend-timeline span:hover::after,
-.trend-timeline span:focus::after {
+.trend-timeline button:hover::after,
+.trend-timeline button:focus::after {
   display: block;
 }
 
-.trend-timeline span.latest {
+.trend-timeline button.latest {
   background: rgba(28, 124, 84, 0.48);
 }
 
-.trend-timeline span.peak {
+.trend-timeline button.peak {
   border-color: var(--red);
   background: rgba(199, 36, 52, 0.28);
+}
+
+.trend-timeline button.selected {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.detail-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summary-tile {
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: #fffdf7;
+  padding: 12px;
+}
+
+.summary-tile span,
+.summary-tile small {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.summary-tile span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.summary-tile strong {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 22px;
+}
+
+.summary-tile small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composition-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.expanded-row td {
+  background: #fffdf7;
 }
 
 .timeline-axis {
@@ -797,6 +896,10 @@ pre {
   border-radius: 6px;
   background: #fffdf7;
   padding: 10px;
+}
+
+.trend-selection-panel {
+  margin-top: 22px;
 }
 
 .recent-list header {
@@ -845,6 +948,89 @@ pre {
   text-align: right;
 }
 
+.trend-model-details {
+  display: grid;
+  gap: 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.trend-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  background: rgba(22, 21, 18, 0.28);
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.trend-drawer-backdrop.is-open {
+  opacity: 1;
+}
+
+.trend-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 25;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  width: min(720px, calc(100vw - 64px));
+  height: 100vh;
+  border-left: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: -10px 0 24px rgba(22, 21, 18, 0.16);
+  transform: translateX(100%);
+  transition: transform 180ms ease;
+}
+
+.trend-drawer.is-open {
+  transform: translateX(0);
+}
+
+.trend-drawer-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 24px 24px 20px;
+}
+
+.trend-drawer-head h3 {
+  margin: 8px 0 0;
+  font-size: 28px;
+}
+
+.trend-drawer-head button {
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  background: #fffdf7;
+  color: var(--ink);
+  cursor: pointer;
+  font: 700 14px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 12px 14px;
+}
+
+.trend-drawer-body {
+  overflow: auto;
+  padding: 24px;
+}
+
+.model-detail-table {
+  min-width: 920px;
+}
+
+.token-accounting {
+  display: inline-grid;
+  gap: 4px;
+}
+
+.token-accounting small {
+  color: var(--muted);
+  font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .empty-cell {
   color: var(--muted);
   text-align: center !important;
@@ -877,7 +1063,8 @@ pre {
   .danger-zone,
   .alias-row,
   .trend-summary-grid,
-  .recent-list {
+  .recent-list,
+  .risk-grid {
     grid-template-columns: 1fr;
   }
 
@@ -888,6 +1075,10 @@ pre {
   .panel-actions {
     justify-content: flex-start;
     max-width: none;
+  }
+
+  .trend-drawer {
+    width: 100vw;
   }
 
   .segmented-control {

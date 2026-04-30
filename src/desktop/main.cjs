@@ -526,7 +526,7 @@ async function prepareConfigInput(input = {}, current = null) {
   const previousApiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
   const shouldCheckApi = !current || apiBaseUrl !== previousApiBaseUrl || (apiBaseUrl && !current.apiConnection?.checkedAt);
   if (!shouldCheckApi) return { ...input, apiBaseUrl };
-  const apiConnection = await checkApiConnection(apiBaseUrl);
+  const apiConnection = await checkApiConnectionForConfig(apiBaseUrl);
   const next = {
     ...input,
     apiBaseUrl,
@@ -589,6 +589,21 @@ async function checkApiConnection(apiBaseUrl) {
     throw new Error(`API health check failed: ${reason}`);
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function checkApiConnectionForConfig(apiBaseUrl) {
+  try {
+    return await checkApiConnection(apiBaseUrl);
+  } catch (error) {
+    if (error.message.startsWith("Invalid API base URL:")) throw error;
+    return {
+      ok: false,
+      status: "unreachable",
+      apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl),
+      checkedAt: new Date().toISOString(),
+      message: error.message
+    };
   }
 }
 

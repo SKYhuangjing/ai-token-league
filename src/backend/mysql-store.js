@@ -4,6 +4,7 @@ import mysql from "mysql2/promise";
 import { Store } from "./store.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { localDay } from "../shared/date.js";
+import { displayTotalTokens } from "../shared/schema.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 
@@ -54,6 +55,17 @@ export class MySqlStore extends Store {
     if (String(process.env.MYSQL_AUTO_MIGRATE || "true").toLowerCase() === "false") return;
     const sql = fs.readFileSync(MIGRATION_PATH, "utf8");
     await this.pool.query(sql);
+    await this.ensureMysqlSchema();
+  }
+
+  async ensureMysqlSchema() {
+    const [columns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'usage_daily' AND COLUMN_NAME = 'pricingSource'`
+    );
+    if (!columns.length) {
+      await this.pool.query("ALTER TABLE usage_daily ADD COLUMN pricingSource VARCHAR(64) NOT NULL DEFAULT '' AFTER pricingModel");
+    }
   }
 
   async load() {
@@ -63,13 +75,20 @@ export class MySqlStore extends Store {
     const [usageRows] = await this.pool.query("SELECT * FROM usage_daily");
     const [uploadBatches] = await this.pool.query("SELECT * FROM upload_batches");
     const [modelPrices] = await this.pool.query("SELECT * FROM model_prices");
+    const [modelPriceCache] = await this.pool.query("SELECT * FROM model_price_cache");
+    const [modelPriceCacheMeta] = await this.pool.query("SELECT * FROM model_price_cache_meta WHERE source = 'openrouter'");
     this.db.participants = Object.fromEntries(participants.map((row) => [row.id, normalizeRow(row)]));
     this.db.devices = Object.fromEntries(devices.map((row) => [row.id, normalizeRow(row)]));
     this.db.workdirs = Object.fromEntries(workdirs.map((row) => [row.id, normalizeRow(row)]));
     this.db.usageDaily = Object.fromEntries(usageRows.map((row) => [row.usageKey, usageFromRow(row)]));
     this.db.uploadBatches = Object.fromEntries(uploadBatches.map((row) => [row.payloadHash, normalizeRow(row)]));
     this.db.modelPrices = Object.fromEntries(modelPrices.map((row) => [row.model, priceFromRow(row)]));
+    this.db.modelPriceCache = {
+      remote: modelPriceCacheMeta[0] ? normalizeRow(modelPriceCacheMeta[0]) : this.db.modelPriceCache.remote,
+      prices: Object.fromEntries(modelPriceCache.map((row) => [row.model, cachedPriceFromRow(row)]))
+    };
     this.db.aggregateCache = {};
+    if (this.migrateLegacyUsageRows()) await this.syncUsageDaily();
   }
 
   async registerDevice(input) {
@@ -90,6 +109,13 @@ export class MySqlStore extends Store {
     return result;
   }
 
+  async refreshOpenRouterPrices(input) {
+    const result = await super.refreshOpenRouterPrices(input);
+    await this.syncPriceCache();
+    if (result.recalculated) await this.syncUsageDaily();
+    return result;
+  }
+
   async upsertModelPrice(input) {
     const model = normalizeModelName(input.model || "");
     if (!model) throw new Error("model is required");
@@ -100,7 +126,7 @@ export class MySqlStore extends Store {
       outputCostPerMTok: nonNegativeNumber(input.outputCostPerMTok),
       cacheReadCostPerMTok: nonNegativeNumber(input.cacheReadCostPerMTok),
       cacheWriteCostPerMTok: nonNegativeNumber(input.cacheWriteCostPerMTok),
-      reasoningCostPerMTok: nonNegativeNumber(input.reasoningCostPerMTok),
+      reasoningCostPerMTok: 0,
       source: input.source || "custom",
       notes: input.notes || "",
       updatedAt: now
@@ -134,6 +160,12 @@ export class MySqlStore extends Store {
     });
   }
 
+  async syncPriceCache() {
+    await withTransaction(this.pool, async (conn) => {
+      await replaceModelPriceCache(conn, this.db.modelPriceCache);
+    });
+  }
+
   async syncAllTables() {
     await withTransaction(this.pool, async (conn) => {
       await conn.query("DELETE FROM usage_daily");
@@ -141,6 +173,7 @@ export class MySqlStore extends Store {
       await replaceDevices(conn, Object.values(this.db.devices));
       await replaceWorkdirs(conn, Object.values(this.db.workdirs));
       await replaceModelPrices(conn, Object.values(this.db.modelPrices));
+      await replaceModelPriceCache(conn, this.db.modelPriceCache);
       await insertUsageRows(conn, Object.entries(this.db.usageDaily));
       await replaceUploadBatches(conn, Object.values(this.db.uploadBatches));
     });
@@ -225,6 +258,50 @@ async function replaceModelPrices(conn, rows) {
   );
 }
 
+async function replaceModelPriceCache(conn, cache) {
+  await conn.query("DELETE FROM model_price_cache");
+  await conn.query("DELETE FROM model_price_cache_meta WHERE source = 'openrouter'");
+  const remote = cache?.remote || {};
+  await conn.query(
+    `INSERT INTO model_price_cache_meta
+      (source, url, status, fetchedAt, expiresAt, pricingVersion, modelCount, skipped, lastError)
+     VALUES ?`,
+    [[[
+      "openrouter",
+      remote.url || "",
+      remote.status || "empty",
+      remote.fetchedAt || "",
+      remote.expiresAt || "",
+      remote.pricingVersion || "",
+      remote.modelCount || 0,
+      remote.skipped || 0,
+      remote.lastError || ""
+    ]]]
+  );
+  const rows = Object.values(cache?.prices || {});
+  if (!rows.length) return;
+  await conn.query(
+    `INSERT INTO model_price_cache
+      (model, inputCostPerToken, outputCostPerToken, cacheReadCostPerToken, cacheWriteCostPerToken,
+       reasoningCostPerToken, maxInputTokens, maxOutputTokens, source, pricingVersion, updatedAt, rawJson)
+     VALUES ?`,
+    [rows.map((row) => [
+      row.model,
+      row.input_cost_per_token || row.inputCostPerToken || 0,
+      row.output_cost_per_token || row.outputCostPerToken || 0,
+      row.cache_read_input_token_cost || row.cacheReadCostPerToken || 0,
+      row.cache_creation_input_token_cost || row.cacheWriteCostPerToken || 0,
+      row.reasoning_cost_per_token || row.reasoningCostPerToken || 0,
+      row.max_input_tokens || row.maxInputTokens || 0,
+      row.max_output_tokens || row.maxOutputTokens || 0,
+      row.source || "openrouter",
+      row.pricingVersion || "",
+      row.updatedAt || "",
+      row.rawJson ? JSON.stringify(row.rawJson) : null
+    ])]
+  );
+}
+
 async function replaceUploadBatches(conn, rows) {
   if (!rows.length) return;
   await conn.query(
@@ -250,7 +327,7 @@ async function insertUsageRows(conn, entries) {
     `INSERT INTO usage_daily
       (usageKey, day, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
        model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
-       estimatedCostUsd, costQuality, pricingVersion, pricingModel, sourceQuality,
+       estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
        rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
      VALUES ?`,
     [entries.map(([usageKey, row]) => [
@@ -274,6 +351,7 @@ async function insertUsageRows(conn, entries) {
       row.costQuality || "",
       row.pricingVersion || "",
       row.pricingModel || "",
+      row.pricingSource || "",
       row.sourceQuality || "unknown",
       row.rawSourceRef || "",
       row.providerVersion || "",
@@ -289,6 +367,12 @@ function normalizeRow(row) {
 }
 
 function usageFromRow(row) {
+  const normalizedRow = {
+    ...row,
+    inputTokens: Number(row.inputTokens || 0),
+    outputTokens: Number(row.outputTokens || 0),
+    totalTokens: Number(row.totalTokens || 0)
+  };
   return {
     day: toDayString(row.day),
     participantId: row.participantId,
@@ -304,11 +388,12 @@ function usageFromRow(row) {
     cacheReadTokens: Number(row.cacheReadTokens || 0),
     cacheWriteTokens: Number(row.cacheWriteTokens || 0),
     reasoningTokens: Number(row.reasoningTokens || 0),
-    totalTokens: Number(row.totalTokens || 0),
+    totalTokens: displayTotalTokens(normalizedRow),
     estimatedCostUsd: row.estimatedCostUsd === null ? null : Number(row.estimatedCostUsd),
     costQuality: row.costQuality || "",
     pricingVersion: row.pricingVersion || "",
     pricingModel: row.pricingModel || "",
+    pricingSource: row.pricingSource || "",
     sourceQuality: row.sourceQuality || "unknown",
     rawSourceRef: row.rawSourceRef || "",
     providerVersion: row.providerVersion || "",
@@ -328,6 +413,22 @@ function priceFromRow(row) {
     reasoningCostPerMTok: Number(row.reasoningCostPerMTok || 0),
     source: row.source || "custom",
     notes: row.notes || "",
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt || ""
+  };
+}
+
+function cachedPriceFromRow(row) {
+  return {
+    model: row.model,
+    input_cost_per_token: Number(row.inputCostPerToken || 0),
+    output_cost_per_token: Number(row.outputCostPerToken || 0),
+    cache_read_input_token_cost: Number(row.cacheReadCostPerToken || 0),
+    cache_creation_input_token_cost: Number(row.cacheWriteCostPerToken || 0),
+    reasoning_cost_per_token: Number(row.reasoningCostPerToken || 0),
+    max_input_tokens: Number(row.maxInputTokens || 0),
+    max_output_tokens: Number(row.maxOutputTokens || 0),
+    source: row.source || "openrouter",
+    pricingVersion: row.pricingVersion || "",
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt || ""
   };
 }

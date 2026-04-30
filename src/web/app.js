@@ -1,3 +1,5 @@
+import { costQualityLabel, dominantComposition, tokenCompositionDetails, tokenCompositionSummary } from "/shared/composition.js";
+
 const state = {
   period: "today",
   detailParticipantId: "",
@@ -13,6 +15,7 @@ const tbody = document.querySelector("#leaderboard");
 const statusEl = document.querySelector("#status");
 const detailEl = document.querySelector("#participant-detail");
 const detailBackdrop = document.querySelector("#detail-backdrop");
+let detailCloseTimer = null;
 
 hydratePreferences();
 applyToggleState();
@@ -92,12 +95,17 @@ function render(items) {
 }
 
 async function loadDetail(participantId) {
+  if (detailCloseTimer) clearTimeout(detailCloseTimer);
   state.detailParticipantId = participantId;
   state.detailTab = "period";
   setActive(document.querySelector("[data-detail-tab]"), document.querySelector("[data-detail-tab] [data-value='period']"));
   detailEl.hidden = false;
   detailBackdrop.hidden = false;
-  document.body.classList.add("detail-open");
+  requestAnimationFrame(() => {
+    detailEl.classList.add("is-open");
+    detailBackdrop.classList.add("is-open");
+    document.body.classList.add("detail-open");
+  });
   document.querySelector("#detail-status").textContent = "Loading...";
   const params = new URLSearchParams({ period: state.period });
   if (state.showCost) params.set("includeCost", "1");
@@ -114,13 +122,15 @@ async function loadHistory(participantId) {
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}/trend?${params.toString()}`);
   const detail = await response.json();
-  document.querySelector("#detail-status").textContent = `${historyLabel(state.historyView)} · ${detail.from || "-"} to ${detail.to || "-"}`;
+  document.querySelector("#detail-title").textContent = `${detail.nickname || "Participant"} · ${historyLabel(state.historyView)}`;
+  document.querySelector("#detail-status").textContent = `${detail.from || "-"} to ${detail.to || "-"} · history window`;
   renderHistory(detail.items || []);
 }
 
 function renderDetail(detail) {
   renderDetailPanels();
   document.querySelector("#detail-summary").innerHTML = renderSummary(detail);
+  document.querySelector("#detail-composition").innerHTML = renderCompositionBlock(detail, { showCost: state.showCost });
   document.querySelector("#period-chart").innerHTML = detail.isSingleDay
     ? `<article class="empty-state">Single-day leaderboard periods are explained by composition, not a trend chart.</article>`
     : detail.periodRows?.length
@@ -132,17 +142,67 @@ function renderDetail(detail) {
 }
 
 function renderHistory(items) {
+  document.querySelector("#detail-summary").innerHTML = renderHistorySummary(items);
   document.querySelector("#history-chart").innerHTML = items.length
     ? renderCompactTrend([...items].reverse(), { topTitle: "Top period contribution" })
     : `<article class="empty-state">No usage in this history window.</article>`;
   renderRawRows(items, { mode: "history" });
 }
 
+function renderHistorySummary(items) {
+  const total = items.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+  const peak = items.reduce((current, item) => (!current || item.totalTokens > current.totalTokens ? item : current), null);
+  const aggregate = items.reduce((current, item) => ({
+    inputTokens: current.inputTokens + Number(item.inputTokens || 0),
+    outputTokens: current.outputTokens + Number(item.outputTokens || 0),
+    cacheReadTokens: current.cacheReadTokens + Number(item.cacheReadTokens || 0),
+    cacheWriteTokens: current.cacheWriteTokens + Number(item.cacheWriteTokens || 0),
+    reasoningTokens: current.reasoningTokens + Number(item.reasoningTokens || 0),
+    totalTokens: current.totalTokens + Number(item.totalTokens || 0),
+    estimatedCostUsd: current.estimatedCostUsd + Number(item.estimatedCostUsd || 0),
+    missingPriceTokens: current.missingPriceTokens + Number(item.missingPriceTokens || 0),
+    costQuality: mergeCostQuality(current.costQuality, item.costQuality)
+  }), {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    estimatedCostUsd: 0,
+    missingPriceTokens: 0,
+    costQuality: ""
+  });
+  const summary = [
+    ["History buckets", String(items.length)],
+    ["Window tokens", formatTokenCompact(total), formatTokenRaw(total)],
+    ["Peak period", peak ? `${formatPeriod(peak)} · ${formatTokenCompact(peak.totalTokens)}` : "-"],
+    ["Composition", tokenCompositionSummary(aggregate)]
+  ];
+  if (state.showCost) summary.push(["Window cost", renderCost(aggregate), costQualityLabel(aggregate.costQuality)]);
+  return summary.map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}>
+    <span>${escapeHtml(label)}</span>
+    <strong class="${summaryValueClass(value)}">${value}</strong>
+  </article>`).join("");
+}
+
+function mergeCostQuality(left = "", right = "") {
+  const rank = { exact_price: 0, estimated_price: 1, unknown_price: 2 };
+  if (!left) return right || "";
+  if (!right) return left;
+  return rank[right] > rank[left] ? right : left;
+}
+
 function closeDetail() {
   state.detailParticipantId = "";
-  detailEl.hidden = true;
-  detailBackdrop.hidden = true;
+  detailEl.classList.remove("is-open");
+  detailBackdrop.classList.remove("is-open");
   document.body.classList.remove("detail-open");
+  if (detailEl.hidden) return;
+  detailCloseTimer = setTimeout(() => {
+    detailEl.hidden = true;
+    detailBackdrop.hidden = true;
+  }, 180);
 }
 
 function renderDetailPanels() {
@@ -156,13 +216,15 @@ function renderSummary(detail) {
   const items = [
     ["Rank", detail.rank ? `#${detail.rank}` : "-"],
     ["Period tokens", formatTokenCompact(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
+    ["Composition", detail.compositionSummary || tokenCompositionSummary(detail)],
+    ["Dominant", humanDominant(detail.dominantComposition || dominantComposition(detail))],
     ["Models", String(detail.models?.length || 0)]
   ];
   if (state.showCost) items.push(["Est. cost", renderCost(detail), costTitle(detail)]);
   return items
     .map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}>
       <span>${escapeHtml(label)}</span>
-      <strong>${value}</strong>
+      <strong class="${summaryValueClass(value)}">${value}</strong>
     </article>`)
     .join("");
 }
@@ -173,11 +235,17 @@ function renderRawRows(items, { mode }) {
         .map((item) => `<tr>
           <td>${mode === "history" ? formatPeriod(item) : item.day}</td>
           <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatTokenCompact(item.totalTokens)}</td>
+          <td>${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</td>
+          <td class="tokens" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)}</td>
+          <td class="tokens" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)}</td>
+          <td class="tokens" title="${formatTokenRaw((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}">${renderAccountingToken((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))}</td>
+          <td class="tokens" title="${formatTokenRaw(item.reasoningTokens)}">${renderAccountingToken(item.reasoningTokens, item.reasoningCostUsd)}</td>
           ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
+          ${state.showCost ? `<td>${escapeHtml(costQualityLabel(item.costQuality))}</td>` : ""}
           <td>${mode === "history" ? renderModels(item.models) : renderModels([{ name: item.model, totalTokens: item.totalTokens }])}</td>
         </tr>`)
         .join("")
-    : `<tr><td class="empty" colspan="${state.showCost ? 4 : 3}">No usage in this period.</td></tr>`;
+    : `<tr><td class="empty" colspan="${state.showCost ? 10 : 8}">No usage in this period.</td></tr>`;
 }
 
 function renderBreakdownBars(items = []) {
@@ -218,10 +286,55 @@ function renderCompactTrend(items, { topTitle }) {
         .map((item, index) => `<article>
           <span>#${index + 1} ${escapeHtml(formatPeriod(item))}</span>
           <strong title="${escapeHtml(trendItemTitle(item))}">${formatTokenCompact(item.totalTokens)}${state.showCost ? ` · ${renderCost(item)}` : ""}</strong>
+          <small>${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</small>
         </article>`)
         .join("")}
     </div>
   </div>`;
+}
+
+function renderCompositionBlock(item, { showCost = false } = {}) {
+  const rows = tokenCompositionDetails(item)
+    .map((entry) => {
+      const cost = showCost ? renderCostPart(item, entry.field) : "";
+      return `<article class="summary-tile composition-tile">
+        <span>${escapeHtml(entry.label)}</span>
+        <strong title="${formatTokenRaw(entry.tokens)}">${formatTokenCompact(entry.tokens)}</strong>
+        <small>${Math.round(entry.ratio * 100)}%${cost ? ` · ${cost}` : ""}</small>
+      </article>`;
+    })
+    .join("");
+  const footer = showCost
+    ? `<p class="composition-note">Total ${renderCost(item)} · ${escapeHtml(costQualityLabel(item.costQuality))}</p>`
+    : `<p class="composition-note">${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</p>`;
+  return `<div class="detail-summary composition-grid">${rows}</div>${footer}`;
+}
+
+function renderAccountingToken(tokens, cost) {
+  const costLine = state.showCost ? `<small>${formatCost(cost)}</small>` : "";
+  return `<span class="token-accounting">${formatTokenCompact(tokens || 0)}${costLine}</span>`;
+}
+
+function sumKnownCosts(...values) {
+  const known = values.filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)));
+  if (!known.length) return null;
+  return known.reduce((sum, value) => sum + Number(value), 0);
+}
+
+function renderCostPart(item, tokenField) {
+  const mapping = {
+    inputTokens: item.inputCostUsd,
+    outputTokens: item.outputCostUsd,
+    cacheReadTokens: item.cacheReadCostUsd,
+    cacheWriteTokens: item.cacheWriteCostUsd,
+    reasoningTokens: item.reasoningCostUsd
+  };
+  return formatCost(mapping[tokenField]);
+}
+
+function summaryValueClass(value) {
+  const text = String(value || "").replace(/<[^>]+>/g, "");
+  return text.length > 14 || text.includes("·") ? "compact-value" : "";
 }
 
 function renderModels(items = []) {
@@ -325,14 +438,31 @@ function formatCost(value) {
 }
 
 function costTitle(item) {
-  const missing = (item.missingPriceModels || []).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
+  const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
   return `${item.costQuality || "unknown_price"} · ${item.pricingVersion || "no pricing version"}${missing ? ` · missing: ${missing}` : ""}`;
+}
+
+function normalizeMissingPriceModels(value) {
+  if (Array.isArray(value)) return value;
+  return Object.entries(value || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, totalTokens]) => ({ name, totalTokens }));
 }
 
 function renderCost(item) {
   const value = formatCost(item.estimatedCostUsd);
   if (value === "-") return value;
   return `${value}${item.missingPriceTokens ? `<sup title="Some model prices are missing">*</sup>` : ""}`;
+}
+
+function humanDominant(value = "") {
+  return {
+    "input-heavy": "Input-heavy",
+    "output-heavy": "Output-heavy",
+    "cache-heavy": "Cache-heavy",
+    "reasoning-heavy": "Reasoning-heavy",
+    "no-usage": "No usage"
+  }[value] || value || "-";
 }
 
 function trendItemTitle(item) {

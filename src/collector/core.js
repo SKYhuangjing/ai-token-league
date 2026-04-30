@@ -25,7 +25,7 @@ export async function scanUsage(config) {
       for (const file of files) {
         const source = sourceForProviderFile(provider, file);
         if (source && previousSources[source.sourceFingerprint]) {
-          const cachedItems = previousSources[source.sourceFingerprint].items || [];
+          const cachedItems = (previousSources[source.sourceFingerprint].items || []).map((item) => publicUsageItem(item));
           items.push(...cachedItems);
           sourceIndex[source.sourceFingerprint] = {
             ...source,

@@ -93,6 +93,9 @@ MVP 发布必须同时满足：
 | E20 | Icon 资源与打包标识收口 | DONE | icon 资源已重新生成，macOS/Windows 分发包已重打，Web favicon 与包内资源已验证 |
 | E21 | Sources 开关与 Cursor Token 配置收口 | DONE | 删除独立 Cursor dashboard 设置区，来源卡片承担 On/Off，Cursor token 通过弹窗校验保存 |
 | E22 | Sources 开关性能优化与 0.2 基线 | DONE | On/Off 不触发全量扫描或 Cursor API；`doc/0.2-baseline.md` 固化当前现状 |
+| E23 | P0 Admin 信息架构与详情面板重构 | DONE | Admin 首屏压缩为工作台；Usage 表格只保留主决策列；详情面板按当前上下文解释 |
+| E24 | P1 运营动作闭环与质量诊断 | DONE | Pricing 缺价任务队列、Quality 分组诊断、成本语义统一已落地 |
+| E25 | P2 桌面端交互安全与设置归属 | DONE | Trend 进入时回到顶部；Sync 上传前预览确认；高风险设置集中到 System 提示 |
 
 ## 5. Epic 任务拆分
 
@@ -612,6 +615,23 @@ P1: E13-T6, E13-T7
 - 打包后 macOS 客户端验证 Today/Trend：Today 主读数为短单位；Trend chart old->new，Table new->old。
 ```
 
+### E26 Total Token 主口径修正
+
+目标：修复全局展示/排行 total token 口径，使 total 正确包含 cache，但不包含 reasoning。
+
+产品决定：
+
+- 所有展示、排行、趋势、Admin quality 和 pricing coverage 的 `totalTokens` 主口径统一为 `inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`。
+- `reasoningTokens` 保留在 composition 和 cost 明细里，不进入 total。
+- provider 只提供 total、无法拆分 input/output/cache 的 partial 行不再贡献展示/排序 total，避免旧 provider total 污染主口径。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E26-T1 | 共享 schema 归一化 | DONE | E12/E14 | `publicUsageItem` 和上传入口把 total 归一为 input+output+cache |
+| E26-T2 | Provider 采集口径修正 | DONE | E26-T1 | Claude/Codex/Cursor provider 把 cache 计入 total，但不把 reasoning 计入 total |
+| E26-T3 | 历史数据与本地缓存修正 | DONE | E26-T1 | JSON/MySQL 历史行和 Desktop snapshot 读取时统一归一为 input+output+cache |
+| E26-T4 | 文档与测试回归 | DONE | E26-T1 | 测试断言 total=input+output+cache；设计文档同步新 invariant |
+
 ### E14 估算成本能力
 
 目标：基于标准化 token 明细二次计算估算成本，让成本成为可选辅助信息，而不是公开榜主排序口径。
@@ -1077,6 +1097,110 @@ P2: E14-T6, E14-T8, E14-T9, E14-T10, E14-T11, E14-T12, E14-T13
 | 回归 | `node --check src/desktop/renderer.js`、`node --check src/desktop/main.cjs`、`npm test`、`npm run desktop:smoke` | 全部通过 |
 | 打包 | `npm run package:all` | dist 内包含新 renderer 和 baseline 文档 |
 
+### E23 P0 Admin 信息架构与详情面板重构
+
+目标：把 Admin 从展示型大页收口成运营工作台，优先暴露真实决策面，降低首屏噪音。
+
+产品判断：
+
+- Admin 用户的第一任务不是理解品牌，而是快速判断数据范围、成本质量、缺价风险和异常入口。
+- Usage 表格不应把全部明细压进首行；首行只保留决策列，其余进入展开行。
+- 详情面板必须说明当前查询上下文，避免把全周期详情误读为单日或当前榜单详情。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E23-T1 | Admin 首屏压缩 | DONE | E17 | Admin masthead 改为紧凑工作台，首屏可直接看到 tabs、filters 和 Usage 表头 |
+| E23-T2 | Usage 表格列优先级重排 | DONE | E16 | 默认列只保留 Period、User、Total、Cost quality、Top workdir、Top model、Action |
+| E23-T3 | 展开行承载长明细 | DONE | E23-T2 | Composition、Sources、Pricing note、Top slices 进入展开行 |
+| E23-T4 | Admin 详情上下文面板 | DONE | E23-T1 | 详情标题和状态展示查询范围、粒度与用户，不再只写泛化 detail |
+
+验证矩阵：
+
+| 验证项 | 方式 | 完成标准 |
+| --- | --- | --- |
+| 首屏效率 | in-app browser 打开 `/admin.html` | 不需要滚动即可看到主要筛选和 Usage 表头 |
+| 表格可读性 | Admin Usage 默认视图 | 首行不再挤入完整 composition/workdir/model/source 列 |
+| 展开行 | 点击 Show | 能看到 composition、sources、pricing note 和 top slices |
+| 详情语义 | 点击用户 | 面板显示当前查询范围和 grain |
+
+实现记录：
+
+```text
+2026-04-30:
+- Admin masthead 已改为紧凑 workbench header，移除首屏超大标题和悬浮 metric card。
+- Usage 表格默认列收敛为 Period/User/Total/Cost quality/Top workdir/Top model/Action。
+- 展开行保留 composition detail、top workdirs/models/sources 和 pricing note。
+- Admin 用户详情状态改为 `range · grain · row count`，避免泛化 detail 语义。
+```
+
+### E24 P1 运营动作闭环与质量诊断
+
+目标：把 Pricing 和 Quality 从只展示数据升级为能指导下一步动作的运营面板。
+
+产品判断：
+
+- Missing price 是待办队列，不是普通列表；每个模型需要展示影响、来源和下一步。
+- Quality anomaly 当前重复输出 `input-heavy/cache-heavy`，应按类型聚合并只展示高影响项。
+- `*`、Estimated、Missing price、Exact 必须使用同一套语义，减少跨页面解释成本。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E24-T1 | Pricing 缺价任务队列 | DONE | E14 | Missing models 展示影响 token、占比、来源，点击后带入表单 |
+| E24-T2 | Pricing 保存后闭环刷新 | DONE | E24-T1 | 保存或删除 custom price 后刷新 pricing、usage 和 quality 状态 |
+| E24-T3 | Quality 分组诊断 | DONE | E12/E14 | Anomalies 按类型分组，默认只显示每组 Top 5 |
+| E24-T4 | 成本语义统一 | DONE | E14 | Web/Admin 使用 Exact、Estimated、Missing price 统一标记 |
+
+验证矩阵：
+
+| 验证项 | 方式 | 完成标准 |
+| --- | --- | --- |
+| 缺价任务 | 打开 Model prices | 每个 missing model 显示影响和来源，点击后填充 model |
+| 质量诊断 | 打开 Quality | anomaly 不再是未分组长列表，按类型展示 Top 5 |
+| 成本语义 | Usage/Public/Detail/Pricing | 缺价/估算/精确成本标记一致 |
+
+实现记录：
+
+```text
+2026-04-30:
+- Missing prices 改为 task queue 样式，显示 token impact、share 和 source impact。
+- Quality anomalies 已按 anomaly type 分组，每组最多展示 Top 5，并保留 coverage 与 explainability。
+- Cost quality label 在 Admin 和 Public 页面统一走 `costQualityLabel`，`*` 只表示存在缺价模型。
+```
+
+### E25 P2 桌面端交互安全与设置归属
+
+目标：降低桌面端误操作和深层状态困扰，把上传、凭据、重置等风险动作显性化。
+
+产品判断：
+
+- Desktop 启动和切换主 section 时应回到该 section 顶部，避免打开后停在 Trend 深层展开态。
+- `Sync now` 会向配置的 API 上传 usage 聚合数据，必须在动作前给出目标、最近扫描时间和本次待上传规模。
+- Settings 中涉及上传、凭据、重置的动作需要在 System 中有集中说明；具体配置入口仍保留在原工作流位置。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E25-T1 | Desktop section 顶部复位 | DONE | E16 | 启动和点击 Today/Trend/Settings 时 workspace 滚动回顶部 |
+| E25-T2 | Sync 上传预览确认 | DONE | E19 | 点击 Sync now 前显示目标 API、最近扫描、待上传 rows，用户确认后才上传 |
+| E25-T3 | System 风险动作说明 | DONE | E21 | System 页集中说明 Sync、Cursor token、Profile import/export、Reset 的风险边界 |
+| E25-T4 | 设置归属微调 | DONE | E25-T3 | Sources 保持来源管理，System 保留风险动作说明和 reset |
+
+验证矩阵：
+
+| 验证项 | 方式 | 完成标准 |
+| --- | --- | --- |
+| 顶部复位 | Desktop 切换 Today/Trend/Settings | 进入新 section 后显示顶部内容 |
+| 上传确认 | 点击 Sync now | 出现包含 API、rows、scan time 的确认文案，取消不会上传 |
+| 风险归属 | Settings/System | 能看到上传、凭据、身份包、重置的集中说明 |
+
+实现记录：
+
+```text
+2026-04-30:
+- Desktop `selectSection` 已在切换后将 workspace 滚动到顶部。
+- `syncNow` 新增上传预览确认，取消时状态显示 Sync canceled。
+- Settings/System 新增 Risk controls 说明，明确 Sync、Cursor token、profile import/export 与 reset 的边界。
+```
+
 ## 6. 发布阻塞项
 
 当前阻塞项：
@@ -1132,3 +1256,4 @@ Windows x64 分发包已生成；Windows 实机 E2E 需要在 Windows 主机执�
 | 2026-04-30 | 启动 Sources 开关收口 | 新增 E21：删除独立 Cursor dashboard 设置区，来源卡片统一承担 On/Off，Add Cursor token 改为弹窗校验保存 |
 | 2026-04-30 | 完成 Sources 开关收口 | E21 已落地并重新打包：来源卡片统一启停，Cursor token 弹窗校验保存，本地 provider Off 后不扫描，回归、desktop smoke 和 dist 包内验证通过 |
 | 2026-04-30 | 完成 Sources 开关性能优化 | E22 已落地：On/Off 不再触发全量 usage scan，卡片乐观更新，0.2 baseline 文档新增 |
+| 2026-04-30 | 完成 P0/P1/P2 产品迭代 | 新增 E23-E25 并落地 Admin 信息架构、Pricing/Quality 运营闭环、Desktop 同步确认与设置风险归属 |

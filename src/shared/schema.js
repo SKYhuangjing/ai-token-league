@@ -44,6 +44,14 @@ export function normalizeTokenNumber(value) {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
 }
 
+export function primaryTokenTotal(item = {}) {
+  return normalizeTokenNumber(item.inputTokens) + normalizeTokenNumber(item.outputTokens);
+}
+
+export function displayTotalTokens(item = {}) {
+  return primaryTokenTotal(item) + normalizeTokenNumber(item.cacheReadTokens) + normalizeTokenNumber(item.cacheWriteTokens);
+}
+
 export function usageKey(item, participantId, deviceId) {
   return [
     item.day,
@@ -57,6 +65,12 @@ export function usageKey(item, participantId, deviceId) {
 }
 
 export function publicUsageItem(item) {
+  const inputTokens = normalizeTokenNumber(item.inputTokens);
+  const outputTokens = normalizeTokenNumber(item.outputTokens);
+  const cacheReadTokens = normalizeTokenNumber(item.cacheReadTokens);
+  const cacheWriteTokens = normalizeTokenNumber(item.cacheWriteTokens);
+  const reasoningTokens = normalizeTokenNumber(item.reasoningTokens);
+  const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
   const publicItem = {
     day: item.day,
     toolCode: item.toolCode,
@@ -64,12 +78,12 @@ export function publicUsageItem(item) {
     workdirHash: item.workdirHash,
     workdirDisplayName: item.workdirDisplayName,
     model: item.model,
-    inputTokens: normalizeTokenNumber(item.inputTokens),
-    outputTokens: normalizeTokenNumber(item.outputTokens),
-    cacheReadTokens: normalizeTokenNumber(item.cacheReadTokens),
-    cacheWriteTokens: normalizeTokenNumber(item.cacheWriteTokens),
-    reasoningTokens: normalizeTokenNumber(item.reasoningTokens),
-    totalTokens: normalizeTokenNumber(item.totalTokens),
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    reasoningTokens,
+    totalTokens,
     sourceQuality: item.sourceQuality || "unknown",
     rawSourceRef: safeTraceText(item.rawSourceRef),
     providerVersion: safeTraceText(item.providerVersion),

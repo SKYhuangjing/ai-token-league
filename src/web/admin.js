@@ -1,3 +1,5 @@
+import { costQualityLabel, tokenCompositionDetails, tokenCompositionSummary } from "/shared/composition.js";
+
 const state = {
   grainMode: "auto",
   grain: "day",
@@ -6,7 +8,8 @@ const state = {
   end: "",
   participantId: "",
   rawTokens: false,
-  showCost: false
+  showCost: false,
+  expandedUsageKey: ""
 };
 const storageKeys = {
   rawTokens: "ai-token-league.admin.rawTokens",
@@ -18,6 +21,7 @@ const detailBoard = document.querySelector("#detail-board");
 const detailBackdrop = document.querySelector("#admin-detail-backdrop");
 const participantFilter = document.querySelector("#participant-filter");
 const pricingStatus = document.querySelector("#pricing-status");
+let detailCloseTimer = null;
 
 hydratePreferences();
 applyToggleState();
@@ -29,6 +33,9 @@ document.querySelector(".admin-tabs").addEventListener("click", (event) => {
   document.querySelectorAll("[data-admin-panel]").forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
   document.querySelector(`[data-admin-panel="${button.dataset.adminTab}"]`).classList.add("active");
+  if (button.dataset.adminTab === "quality") loadQuality().catch((error) => {
+    document.querySelector("#quality-status").textContent = error.message;
+  });
 });
 
 document.querySelector("[data-filter='quick-range']").addEventListener("click", (event) => {
@@ -93,7 +100,6 @@ document.querySelector("#pricing-form").addEventListener("submit", async (event)
     outputCostPerMTok: document.querySelector("#price-output").value,
     cacheReadCostPerMTok: document.querySelector("#price-cache-read").value,
     cacheWriteCostPerMTok: document.querySelector("#price-cache-write").value,
-    reasoningCostPerMTok: document.querySelector("#price-reasoning").value,
     source: "admin"
   };
   const response = await fetch("/api/admin/model-prices", {
@@ -107,6 +113,17 @@ document.querySelector("#pricing-form").addEventListener("submit", async (event)
   await loadUsage();
 });
 
+document.querySelector("#refresh-openrouter").addEventListener("click", () => refreshOpenRouter(false));
+document.querySelector("#refresh-openrouter-recalculate").addEventListener("click", () => refreshOpenRouter(true));
+
+async function refreshOpenRouter(recalculate) {
+  pricingStatus.textContent = recalculate ? "Refreshing and recalculating..." : "Refreshing OpenRouter...";
+  const response = await fetch(`/api/admin/model-prices/refresh-openrouter?recalculate=${recalculate ? "1" : "0"}`, { method: "POST" });
+  if (!response.ok) throw new Error((await response.json()).error || "failed to refresh OpenRouter prices");
+  await loadPricing();
+  if (recalculate) await loadUsage();
+}
+
 async function loadUsage() {
   updateAutoGrain();
   syncRangeInputs();
@@ -116,6 +133,7 @@ async function loadUsage() {
   renderParticipantOptions(data.participants || []);
   render(data.items || []);
   statusEl.textContent = `${data.items.length} aggregate row${data.items.length === 1 ? "" : "s"} · ${data.from || "-"} to ${data.to || "-"}`;
+  await loadQuality();
 }
 
 async function loadPricing() {
@@ -127,12 +145,17 @@ async function loadPricing() {
 function renderPricing(data) {
   const missing = data.missingModels || [];
   const custom = data.custom || [];
-  pricingStatus.textContent = `${missing.length} missing model${missing.length === 1 ? "" : "s"} · ${custom.length} custom price${custom.length === 1 ? "" : "s"}`;
+  const openrouter = data.openrouter || [];
+  const missingTotal = missing.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+  pricingStatus.textContent = `${missing.length} missing model${missing.length === 1 ? "" : "s"} · ${custom.length} custom price${custom.length === 1 ? "" : "s"} · ${openrouter.length} OpenRouter price${openrouter.length === 1 ? "" : "s"}`;
+  document.querySelector("#remote-pricing-status").innerHTML = renderRemotePricingStatus(data.remote || {});
   document.querySelector("#missing-prices").innerHTML = missing.length
     ? missing
-        .map((item) => `<button class="price-suggestion" type="button" data-model="${escapeHtml(item.model)}" title="${escapeHtml(renderProviderTitle(item.providers))}">
+        .map((item, index) => `<button class="price-suggestion price-task" type="button" data-model="${escapeHtml(item.model)}" title="${escapeHtml(renderProviderTitle(item.providers))}">
+          <span class="task-rank">#${index + 1}</span>
           <strong>${escapeHtml(item.model)}</strong>
-          <span>${formatToken(item.totalTokens)}</span>
+          <span>${formatToken(item.totalTokens)} · ${formatPercent(ratio(item.totalTokens, missingTotal))}</span>
+          <small>${escapeHtml(renderProviderTitle(item.providers) || "No source breakdown")}</small>
         </button>`)
         .join("")
     : `<article class="empty-state">No missing prices in this month.</article>`;
@@ -151,6 +174,15 @@ function renderPricing(data) {
         </article>`)
         .join("")
     : `<article class="empty-state">No custom model prices yet.</article>`;
+  document.querySelector("#openrouter-prices").innerHTML = openrouter.length
+    ? openrouter
+        .slice(0, 20)
+        .map((item) => `<article class="price-row">
+          <strong>${escapeHtml(item.model)}</strong>
+          <span>in ${formatUsdPerMillion(item.inputCostPerMTok)} · out ${formatUsdPerMillion(item.outputCostPerMTok)}</span>
+        </article>`)
+        .join("")
+    : `<article class="empty-state">No OpenRouter prices cached.</article>`;
   document.querySelectorAll("[data-delete-price]").forEach((button) => {
     button.addEventListener("click", async () => {
       pricingStatus.textContent = "Deleting...";
@@ -159,6 +191,15 @@ function renderPricing(data) {
       await loadUsage();
     });
   });
+}
+
+function renderRemotePricingStatus(remote) {
+  const status = remote.status || "empty";
+  const fetchedAt = remote.fetchedAt || "-";
+  const expiresAt = remote.expiresAt || "-";
+  const count = remote.modelCount || 0;
+  const error = remote.lastError ? ` · ${escapeHtml(remote.lastError)}` : "";
+  return `<strong>OpenRouter ${escapeHtml(status)}</strong><span>${count} models · fetched ${escapeHtml(fetchedAt)} · expires ${escapeHtml(expiresAt)}${error}</span>`;
 }
 
 function renderParticipantOptions(participants) {
@@ -171,37 +212,54 @@ function renderParticipantOptions(participants) {
 
 function render(items) {
   if (!items.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 8 : 7}">No usage uploaded for this query.</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="7">No usage uploaded for this query.</td></tr>`;
     return;
   }
   tbody.innerHTML = items
-    .map(
-      (item) => `<tr>
+    .map((item) => {
+      const key = usageRowKey(item);
+      const expanded = state.expandedUsageKey === key;
+      return `<tr>
         <td>${formatPeriod(item)}</td>
         <td><button class="link-button" data-participant="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</button></td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
-        ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
-        <td>${renderBreakdown(item.workdirs)}</td>
-        <td>${renderBreakdown(item.models)}</td>
-        <td>${renderBreakdown(item.providers)}</td>
-        <td>${renderQuality(item.sourceQuality)}</td>
-      </tr>`
-    )
+        <td>${renderCostQuality(item)}</td>
+        <td>${renderPrimarySlice(item.workdirs)}</td>
+        <td>${renderPrimarySlice(item.models)}</td>
+        <td><button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? "Hide details" : "Show details"}</button></td>
+      </tr>
+      ${expanded ? `<tr class="expanded-row"><td colspan="7">
+        ${renderExpandedUsage(item)}
+      </td></tr>` : ""}`;
+    })
     .join("");
   tbody.querySelectorAll("[data-participant]").forEach((button) => {
     button.addEventListener("click", () => loadDetail(button.dataset.participant));
   });
+  tbody.querySelectorAll("[data-expand-row]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.expandedUsageKey = state.expandedUsageKey === button.dataset.expandRow ? "" : button.dataset.expandRow;
+      render(items);
+    });
+  });
 }
 
 async function loadDetail(participantId) {
+  if (detailCloseTimer) clearTimeout(detailCloseTimer);
   detailBoard.hidden = false;
   detailBackdrop.hidden = false;
-  document.body.classList.add("detail-open");
+  requestAnimationFrame(() => {
+    detailBoard.classList.add("is-open");
+    detailBackdrop.classList.add("is-open");
+    document.body.classList.add("detail-open");
+  });
   document.querySelector("#detail-status").textContent = "Loading...";
   const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}?${queryString()}`);
   const detail = await response.json();
-  document.querySelector("#detail-title").textContent = `${detail.nickname} detail`;
-  document.querySelector("#detail-status").textContent = `${formatToken(detail.totalTokens)} tokens`;
+  document.querySelector("#detail-title").textContent = `${detail.nickname} · ${selectedRange().label}`;
+  document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${state.grain} grain · ${detail.rows?.length || 0} raw rows`;
+  document.querySelector("#detail-summary").innerHTML = renderDetailSummary(detail);
+  document.querySelector("#detail-composition").innerHTML = renderCompositionBlock(detail);
   document.querySelector("#detail-workdirs").innerHTML = renderBars(detail.workdirs);
   document.querySelector("#detail-days").innerHTML = renderBars((detail.periodRows || []).map((item) => ({ ...item, name: formatPeriod(item) })));
   document.querySelector("#detail-rows").innerHTML = detail.rows
@@ -210,16 +268,32 @@ async function loadDetail(participantId) {
       <td>${escapeHtml(row.workdirDisplayName)}</td>
       <td>${escapeHtml(row.model)}</td>
       <td class="tokens" title="${formatTokenRaw(row.totalTokens)}">${formatToken(row.totalTokens)}</td>
+      <td class="tokens" title="${formatTokenRaw(row.inputTokens)}">${renderAccountingToken(row.inputTokens, row.inputCostUsd)}</td>
+      <td class="tokens" title="${formatTokenRaw(row.outputTokens)}">${renderAccountingToken(row.outputTokens, row.outputCostUsd)}</td>
+      <td class="tokens" title="${formatTokenRaw((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0))}">${renderAccountingToken((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0), sumKnownCosts(row.cacheReadCostUsd, row.cacheWriteCostUsd))}</td>
+      <td class="tokens" title="${formatTokenRaw(row.reasoningTokens)}">${renderAccountingToken(row.reasoningTokens, row.reasoningCostUsd)}</td>
       ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(row))}">${renderCost(row)}</td>` : ""}
+      ${state.showCost ? `<td>${escapeHtml(costQualityLabel(row.costQuality))}</td>` : ""}
       <td>${renderQuality(row.sourceQuality)}</td>
     </tr>`)
     .join("");
 }
 
+async function loadQuality() {
+  const response = await fetch(`/api/admin/quality?${qualityQueryString()}`);
+  const data = await response.json();
+  renderQualityBoard(data);
+}
+
 function closeDetail() {
-  detailBoard.hidden = true;
-  detailBackdrop.hidden = true;
+  detailBoard.classList.remove("is-open");
+  detailBackdrop.classList.remove("is-open");
   document.body.classList.remove("detail-open");
+  if (detailBoard.hidden) return;
+  detailCloseTimer = setTimeout(() => {
+    detailBoard.hidden = true;
+    detailBackdrop.hidden = true;
+  }, 180);
 }
 
 function queryString() {
@@ -229,6 +303,16 @@ function queryString() {
   });
   if (state.participantId) params.set("participantId", state.participantId);
   if (state.showCost) params.set("includeCost", "1");
+  if (state.range === "custom") {
+    if (state.start) params.set("start", state.start);
+    if (state.end) params.set("end", state.end);
+  }
+  return params.toString();
+}
+
+function qualityQueryString() {
+  const params = new URLSearchParams({ range: state.range });
+  if (state.participantId) params.set("participantId", state.participantId);
   if (state.range === "custom") {
     if (state.start) params.set("start", state.start);
     if (state.end) params.set("end", state.end);
@@ -369,14 +453,206 @@ function renderBars(items = []) {
     .join("");
 }
 
+function renderExpandedUsage(item) {
+  return `<div class="detail-grid usage-expanded-grid">
+    <section>
+      <h3>Composition detail</h3>
+      ${renderCompositionBlock(item)}
+    </section>
+    <section>
+      <h3>Top slices</h3>
+      <p>${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</p>
+      <p>Models · ${escapeHtml(renderBreakdownText(item.models))}</p>
+      <p>Workdirs · ${escapeHtml(renderBreakdownText(item.workdirs))}</p>
+      <p>Sources · ${escapeHtml(renderBreakdownText(item.providers))}</p>
+      <p>Pricing · ${escapeHtml(costQualityLabel(item.costQuality))}${state.showCost ? ` · ${stripHtml(renderCost(item))}` : ""}</p>
+      <p>Source quality · ${stripHtml(renderQuality(item.sourceQuality))}</p>
+    </section>
+  </div>`;
+}
+
+function renderDetailSummary(detail) {
+  const items = [
+    ["Total", formatToken(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
+    ["Composition", detail.compositionSummary || tokenCompositionSummary(detail)],
+    ["Workdirs", String(detail.workdirs?.length || 0)],
+    ["Models", String(detail.models?.length || 0)]
+  ];
+  if (state.showCost) items.push(["Est. cost", renderCost(detail), costTitle(detail)]);
+  return items.map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}>
+    <span>${escapeHtml(label)}</span>
+    <strong class="${summaryValueClass(value)}">${value}</strong>
+  </article>`).join("");
+}
+
+function renderCompositionBlock(item) {
+  const rows = tokenCompositionDetails(item)
+    .map((entry) => `<article class="summary-tile composition-tile">
+      <span>${escapeHtml(entry.label)}</span>
+      <strong title="${formatTokenRaw(entry.tokens)}">${formatToken(entry.tokens)}</strong>
+      <small>${Math.round(entry.ratio * 100)}%${state.showCost ? ` · ${formatCost(costValueForField(item, entry.field))}` : ""}</small>
+    </article>`)
+    .join("");
+  return `<div class="detail-summary composition-grid">${rows}</div>`;
+}
+
+function renderAccountingToken(tokens, cost) {
+  const costLine = state.showCost ? `<small>${formatCost(cost)}</small>` : "";
+  return `<span class="token-accounting">${formatToken(tokens || 0)}${costLine}</span>`;
+}
+
+function sumKnownCosts(...values) {
+  const known = values.filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)));
+  if (!known.length) return null;
+  return known.reduce((sum, value) => sum + Number(value), 0);
+}
+
+function renderQualityBoard(data) {
+  document.querySelector("#quality-status").textContent = `${data.from || "-"} to ${data.to || "-"} · ${data.rows || 0} rows`;
+  document.querySelector("#quality-summary").innerHTML = [
+    ["Rows", String(data.rows || 0)],
+    ["Tokens", formatToken(data.totalTokens || 0), formatTokenRaw(data.totalTokens || 0)],
+    ["Composition", ratioSummary(data.compositionRatios || {})],
+    ["Missing price", formatPercent(data.pricingCoverage?.missingTokenRatio || 0)]
+  ].map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}><span>${escapeHtml(label)}</span><strong class="${summaryValueClass(value)}">${value}</strong></article>`).join("");
+  document.querySelector("#quality-anomalies").innerHTML = (data.anomalies || []).length
+    ? renderAnomalyGroups(data.anomalies, data.totalTokens || 1)
+    : `<article class="empty-state">No composition anomaly detected in this range.</article>`;
+  document.querySelector("#quality-pricing").innerHTML = renderBars([
+    { name: "Known price", totalTokens: data.pricingCoverage?.knownTokens || 0 },
+    { name: "Missing price", totalTokens: data.pricingCoverage?.missingTokens || 0 }
+  ]);
+  document.querySelector("#quality-participants").innerHTML = (data.pricingCoverage?.participants || []).length
+    ? data.pricingCoverage.participants.slice(0, 8).map((item) => `<article class="bar-row" title="${escapeHtml(formatPercent(item.missingPriceRatio))}">
+      <span>${escapeHtml(item.nickname)}</span>
+      <strong>${formatPercent(item.missingPriceRatio)} · ${formatToken(item.missingPriceTokens)}</strong>
+      <i style="width:${Math.max(3, item.missingPriceRatio * 100)}%"></i>
+    </article>`).join("")
+    : `<article class="empty-state">No participant is impacted by missing pricing.</article>`;
+  document.querySelector("#quality-explainability").innerHTML = (data.pricingCoverage?.costExplainability || []).length
+    ? data.pricingCoverage.costExplainability.map((item) => `<article class="price-row">
+      <strong>${escapeHtml(item.label)}</strong>
+      <span>${item.count} rows</span>
+    </article>`).join("")
+    : `<article class="empty-state">No explainability data.</article>`;
+}
+
+function renderAnomalyGroups(anomalies, totalTokens) {
+  const groups = new Map();
+  for (const item of anomalies) {
+    const types = item.anomalyTypes?.length ? item.anomalyTypes : ["unclassified"];
+    for (const type of types) {
+      const rows = groups.get(type) || [];
+      rows.push(item);
+      groups.set(type, rows);
+    }
+  }
+  return [...groups.entries()]
+    .sort((a, b) => groupTokens(b[1]) - groupTokens(a[1]))
+    .map(([type, rows]) => {
+      const topRows = [...rows].sort((a, b) => b.totalTokens - a.totalTokens).slice(0, 5);
+      return `<section class="quality-group">
+        <header>
+          <strong>${escapeHtml(anomalyLabel(type))}</strong>
+          <span>${topRows.length} of ${rows.length} rows · ${formatToken(groupTokens(rows))}</span>
+        </header>
+        <div class="breakdown">
+          ${topRows.map((item) => `<article class="bar-row" title="${escapeHtml(item.compositionSummary)}">
+            <span>${escapeHtml(item.day)} · ${escapeHtml(item.compositionSummary || "")}</span>
+            <strong>${formatToken(item.totalTokens)}</strong>
+            <i style="width:${Math.max(3, Math.min(100, (item.totalTokens / Math.max(totalTokens, 1)) * 100))}%"></i>
+          </article>`).join("")}
+        </div>
+      </section>`;
+    })
+    .join("");
+}
+
+function anomalyLabel(type) {
+  return {
+    "input-heavy": "Input-heavy rows",
+    "output-heavy": "Output-heavy rows",
+    "cache-heavy": "Cache-heavy rows",
+    "reasoning-heavy": "Reasoning-heavy rows",
+    unclassified: "Unclassified rows"
+  }[type] || type;
+}
+
+function groupTokens(items) {
+  return items.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+}
+
+function usageRowKey(item) {
+  return `${item.periodStart}|${item.participantId}`;
+}
+
+function ratioSummary(ratios = {}) {
+  return [
+    `In ${formatPercent(ratios.inputRatio || 0)}`,
+    `Out ${formatPercent(ratios.outputRatio || 0)}`,
+    `Cache ${formatPercent(ratios.cacheRatio || 0)}`,
+    `Reasoning ${formatPercent(ratios.reasoningRatio || 0)}`
+  ].join(" · ");
+}
+
+function formatPercent(value) {
+  return `${Math.round(Number(value || 0) * 100)}%`;
+}
+
+function ratio(value, total) {
+  return total ? Number(value || 0) / total : 0;
+}
+
+function renderBreakdownText(items = []) {
+  return items.slice(0, 3).map((item) => `${item.name} ${formatToken(item.totalTokens)}`).join(" · ") || "-";
+}
+
+function costValueForField(item, field) {
+  return {
+    inputTokens: item.inputCostUsd,
+    outputTokens: item.outputCostUsd,
+    cacheReadTokens: item.cacheReadCostUsd,
+    cacheWriteTokens: item.cacheWriteCostUsd,
+    reasoningTokens: item.reasoningCostUsd
+  }[field];
+}
+
+function summaryValueClass(value) {
+  const text = String(value || "").replace(/<[^>]+>/g, "");
+  return text.length > 14 || text.includes("·") ? "compact-value" : "";
+}
+
 function renderQuality(value) {
   const label = value === "exact" ? "完整字段" : "部分字段";
   const title = value === "exact" ? "工具日志提供了明确 token 字段" : "部分 token 字段缺失或只能按可用 usage 字段统计";
   return `<span class="pill" title="${escapeHtml(title)}">${label}</span>`;
 }
 
+function renderCostQuality(item) {
+  const label = costQualityLabel(item.costQuality);
+  const cost = state.showCost ? renderCost(item) : "";
+  return `<span class="cost-quality ${escapeHtml(item.costQuality || "unknown_price")}" title="${escapeHtml(costTitle(item))}">
+    <strong>${escapeHtml(label)}</strong>
+    ${cost ? `<small>${cost}</small>` : ""}
+  </span>`;
+}
+
+function renderPrimarySlice(items = []) {
+  const [first, ...rest] = items;
+  if (!first) return `<span class="muted-cell">-</span>`;
+  return `<span class="primary-slice" title="${escapeHtml(renderBreakdownText(items))}">
+    <strong>${escapeHtml(first.name)}</strong>
+    <small>${formatToken(first.totalTokens)}${rest.length ? ` · +${rest.length}` : ""}</small>
+  </span>`;
+}
+
 function formatPeriod(item) {
   return item.periodStart === item.periodEnd ? item.periodStart : `${item.periodStart} - ${item.periodEnd}`;
+}
+
+function formatPeriodRange(from, to) {
+  if (!from && !to) return "-";
+  return from === to ? from : `${from} to ${to}`;
 }
 
 function formatNumber(value) {
@@ -407,8 +683,15 @@ function formatCost(value) {
 }
 
 function costTitle(item) {
-  const missing = (item.missingPriceModels || []).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
+  const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
   return `${item.costQuality || "unknown_price"} · ${item.pricingVersion || "no pricing version"}${missing ? ` · missing: ${missing}` : ""}`;
+}
+
+function normalizeMissingPriceModels(value) {
+  if (Array.isArray(value)) return value;
+  return Object.entries(value || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, totalTokens]) => ({ name, totalTokens }));
 }
 
 function renderCost(item) {
@@ -428,6 +711,10 @@ function formatUsdPerMillion(value) {
 
 function renderProviderTitle(items = []) {
   return items.map((item) => `${item.name}: ${formatTokenRaw(item.totalTokens)}`).join(", ");
+}
+
+function stripHtml(value) {
+  return String(value || "").replace(/<[^>]+>/g, "");
 }
 
 function trimFixed(value, digits) {

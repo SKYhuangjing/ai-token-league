@@ -102,6 +102,7 @@ npm run desktop:smoke
 Build macOS arm64 and Windows x64 app bundles:
 
 ```bash
+rm -rf dist
 npm run package:all
 ```
 
@@ -113,6 +114,8 @@ dist/AI Token League-win32-x64.zip
 ```
 
 The macOS artifact is smoke-tested on this machine. The Windows artifact is generated as a Windows x64 Electron app bundle; final E2E execution requires a Windows host.
+
+Detailed packaging and packaged-app verification steps are in `doc/packaging.md`.
 
 ## Test
 
