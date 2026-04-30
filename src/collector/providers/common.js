@@ -4,6 +4,8 @@ import crypto from "node:crypto";
 import { normalizeTokenNumber } from "../../shared/schema.js";
 import { localDay } from "../../shared/date.js";
 
+const fsp = fs.promises;
+
 export function walkFiles(root, matcher, limit = 1000) {
   const out = [];
   if (!root || !fs.existsSync(root)) return out;
@@ -25,6 +27,21 @@ export function walkFiles(root, matcher, limit = 1000) {
   return out;
 }
 
+export async function readJsonLinesAsync(file) {
+  const content = await fsp.readFile(file, "utf8");
+  return content
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
 export function readJsonLines(file) {
   return fs
     .readFileSync(file, "utf8")
@@ -38,6 +55,34 @@ export function readJsonLines(file) {
       }
     })
     .filter(Boolean);
+}
+
+export async function sourceMetadataAsync(file, providerId, parserVersion) {
+  const stats = await fsp.stat(file);
+  const rawSourceRef = path.basename(file);
+  const sourceFingerprint = crypto
+    .createHash("sha256")
+    .update([providerId, parserVersion, file, stats.size, Math.round(stats.mtimeMs)].join("|"))
+    .digest("hex");
+  return {
+    rawSourceRef,
+    sourceFingerprint,
+    parserVersion
+  };
+}
+
+export function sourceMetadata(file, providerId, parserVersion) {
+  const stats = fs.statSync(file);
+  const rawSourceRef = path.basename(file);
+  const sourceFingerprint = crypto
+    .createHash("sha256")
+    .update([providerId, parserVersion, file, stats.size, Math.round(stats.mtimeMs)].join("|"))
+    .digest("hex");
+  return {
+    rawSourceRef,
+    sourceFingerprint,
+    parserVersion
+  };
 }
 
 export function deepFindNumber(value, names) {
@@ -66,18 +111,4 @@ export function dayFromRecord(record, fallbackMtime) {
   const raw = deepFindString(record, ["timestamp", "created_at", "createdAt", "time", "date"]);
   const date = raw ? new Date(raw) : new Date(fallbackMtime);
   return localDay(Number.isNaN(date.getTime()) ? new Date() : date);
-}
-
-export function sourceMetadata(file, providerId, parserVersion) {
-  const stats = fs.statSync(file);
-  const rawSourceRef = path.basename(file);
-  const sourceFingerprint = crypto
-    .createHash("sha256")
-    .update([providerId, parserVersion, file, stats.size, Math.round(stats.mtimeMs)].join("|"))
-    .digest("hex");
-  return {
-    rawSourceRef,
-    sourceFingerprint,
-    parserVersion
-  };
 }

@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { dayFromRecord, deepFindString, readJsonLines, sourceMetadata, walkFiles } from "./common.js";
+import { dayFromRecord, deepFindString, readJsonLinesAsync, sourceMetadataAsync, walkFiles } from "./common.js";
 
 export const codexLocalProvider = {
   id: "codex_local",
@@ -26,10 +26,10 @@ export const codexLocalProvider = {
     return this.roots(config).flatMap((root) => walkFiles(root, (file) => file.endsWith(".jsonl")));
   },
 
-  parseUsage(file) {
-    const stats = fs.statSync(file);
-    const source = sourceMetadata(file, this.id, this.version);
-    const rows = readJsonLines(file);
+  async parseUsage(file) {
+    const stats = await fs.promises.stat(file);
+    const source = await sourceMetadataAsync(file, this.id, this.version);
+    const rows = await readJsonLinesAsync(file);
     const events = [];
     let sessionCwd = "";
     let sessionId = path.basename(file);
