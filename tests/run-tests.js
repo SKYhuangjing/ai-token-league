@@ -113,6 +113,17 @@ function testCursorDashboardMapping() {
   });
   assert.equal(duplicateSources.length, 1);
   assert.equal(duplicateSources[0].accountName, "cursor@example.com");
+  const duplicateAccounts = cursorDashboardUsageProvider.scanSessions({
+    cursorDashboardUsage: {
+      enabled: true,
+      autoDetectLocal: false,
+      workosSessionTokens: [
+        { token: "user_01TESTCURSOR::state-token", accountName: "cursor@example.com" },
+        { token: "user_01TESTCURSOR::account-token", accountName: "cursor@example.com" }
+      ]
+    }
+  });
+  assert.equal(duplicateAccounts.length, 1);
 }
 
 async function testCursorLocalTokenDetection() {
@@ -133,7 +144,8 @@ async function testCursorLocalTokenDetection() {
     const health = cursorDashboardUsageProvider.reportHealth({ cursorDashboardUsage: { enabled: false } });
     assert.equal(health.detected, true);
     assert.equal(health.enabled, false);
-    assert.ok(health.roots.some((root) => root.startsWith("local_cursor_state:")));
+    assert.ok(health.roots.includes("user_01TESTCURSOR"));
+    assert.ok(health.roots.every((root) => !root.startsWith("local_cursor_")));
   } finally {
     delete process.env.CURSOR_STATE_DB_PATH;
   }

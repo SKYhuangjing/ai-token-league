@@ -14,5 +14,8 @@ contextBridge.exposeInMainWorld("tokenLeague", {
   providerHealth: () => ipcRenderer.invoke("providers:health"),
   modelPrices: () => ipcRenderer.invoke("pricing:model-prices"),
   scanUsage: (options) => ipcRenderer.invoke("usage:scan", options),
-  syncUsage: () => ipcRenderer.invoke("usage:sync")
+  startUsageScan: (options) => ipcRenderer.invoke("usage:scan-start", options),
+  usageScanStatus: () => ipcRenderer.invoke("usage:scan-status"),
+  syncUsage: () => ipcRenderer.invoke("usage:sync"),
+  resetLocalData: () => ipcRenderer.invoke("app:reset-local-data")
 });

@@ -14,13 +14,12 @@ let trendView = "daily";
 let serverPriceMap = null;
 let pricingSource = "local fallback pricing";
 let latestScanAt = "";
+let scanRunning = false;
+let scanPollTimer = null;
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
-    document.querySelectorAll("nav button").forEach((item) => item.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    $(`#${button.dataset.section}`).classList.add("active");
+    selectSection(button.dataset.section);
     if (button.dataset.section === "today") run(loadToday);
     if (button.dataset.section === "trend") run(loadTrend);
     if (button.dataset.section === "settings") run(loadBackgroundStatus);
@@ -34,6 +33,13 @@ $("#refresh-health").addEventListener("click", () => run(async () => {
   await loadHealth();
 }));
 $("#sync-now").addEventListener("click", () => run(syncNow));
+$("#onboarding-save").addEventListener("click", () => run(saveOnboardingNickname));
+$("#onboarding-import").addEventListener("click", () => run(importProfile));
+$("#onboarding-sources").addEventListener("click", () => {
+  selectSection("settings");
+  selectSettingsTab("sources");
+  run(loadHealth);
+});
 $("#add-codex-root").addEventListener("click", () => run(() => addProviderRoot("codex_local")));
 $("#add-claude-root").addEventListener("click", () => run(() => addProviderRoot("claude_code_local")));
 $("#add-cursor-token").addEventListener("click", openCursorTokenModal);
@@ -69,10 +75,7 @@ $("#trend-view").addEventListener("click", (event) => {
 $("#settings-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button) return;
-  $("#settings-tabs").querySelectorAll("button").forEach((item) => item.classList.remove("active"));
-  document.querySelectorAll("[data-settings-panel]").forEach((item) => item.classList.remove("active"));
-  button.classList.add("active");
-  document.querySelector(`[data-settings-panel="${button.dataset.settingsTab}"]`).classList.add("active");
+  selectSettingsTab(button.dataset.settingsTab);
   if (button.dataset.settingsTab === "sync") run(loadBackgroundStatus);
   if (button.dataset.settingsTab === "sources") run(loadHealth);
 });
@@ -91,9 +94,21 @@ document.querySelectorAll(".save-settings").forEach((button) => button.addEventL
   await saveSettings({ reloadToday: true });
 })));
 
+$("#reset-local-data").addEventListener("click", () => run(resetLocalData));
+
+function selectSection(section) {
+  document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.section === section));
+  document.querySelectorAll(".panel").forEach((item) => item.classList.toggle("active", item.id === section));
+}
+
+function selectSettingsTab(tab) {
+  $("#settings-tabs").querySelectorAll("button").forEach((item) => item.classList.toggle("active", item.dataset.settingsTab === tab));
+  document.querySelectorAll("[data-settings-panel]").forEach((item) => item.classList.toggle("active", item.dataset.settingsPanel === tab));
+}
+
 async function saveSettings({ reloadToday = true } = {}) {
   const payload = settingsPayload();
-  setSaveMessage("Checking API...", "");
+  setSaveMessage(payload.apiBaseUrl ? "Checking API..." : "Saving settings...", "");
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
   renderConfig(config);
@@ -113,6 +128,7 @@ function settingsPayload() {
     autoRefreshEnabled: $("#autoRefreshEnabled").checked,
     refreshIntervalMinutes: $("#refreshIntervalMinutes").value || 15,
     launchAtLogin: $("#launchAtLogin").checked,
+    desktopAutoInitialized: false,
     providerEnabled: latestConfig?.providerEnabled || {},
     cursorDashboardUsage: {
       enabled: latestConfig?.cursorDashboardUsage?.enabled ?? false
@@ -126,13 +142,38 @@ $("#export").addEventListener("click", async () => run(async () => {
 }));
 
 $("#import").addEventListener("click", async () => run(async () => {
+  await importProfile();
+}));
+
+async function importProfile() {
   const config = await api.importIdentity();
   if (!config?.canceled) {
     renderConfig(config);
-    await loadToday();
+    await loadToday(true);
     await loadBackgroundStatus();
   }
-}));
+}
+
+async function saveOnboardingNickname() {
+  const nickname = $("#onboarding-nickname").value.trim() || "anonymous";
+  $("#nickname").value = nickname;
+  latestConfig = await api.updateConfig({
+    ...settingsPayload(),
+    nickname,
+    desktopAutoInitialized: false
+  });
+  renderConfig(latestConfig);
+  setSaveMessage("Nickname saved", "ok");
+  $("#sync-state").textContent = "Profile ready";
+}
+
+async function resetLocalData() {
+  const ok = window.confirm("Reset this desktop profile, cached usage, aliases, local Cursor tokens, sync queue, and settings? Source files in Codex, Claude Code, and Cursor are not deleted.");
+  if (!ok) return;
+  $("#reset-local-data").disabled = true;
+  $("#sync-state").textContent = "Resetting local data...";
+  await api.resetLocalData();
+}
 
 async function boot() {
   const config = await api.getConfig();
@@ -148,22 +189,72 @@ async function boot() {
 }
 
 async function loadToday(force = false) {
-  const [usage, health] = await Promise.all([api.scanUsage({ force }), api.providerHealth(), refreshPricing()]);
-  allUsage = usage.items;
-  latestScanAt = usage.scannedAt || "";
-  latestUsage = allUsage.filter((item) => item.day === localDay());
-  latestHealth = health;
-  renderToday();
-  renderHealth();
-  renderAliases();
+  await refreshPricing();
+  const status = await api.startUsageScan({ force });
+  applyUsageScanStatus(status, { force });
+  pollUsageScan();
+}
+
+function setScanState(running, force = false) {
+  scanRunning = running;
+  $("#refresh-today").disabled = running;
+  $("#refresh-trend").disabled = running;
+  $("#today-summary").textContent = running
+    ? `${force ? "Refreshing" : "Scanning"} local usage. First scan can take a while on large histories.`
+    : $("#today-summary").textContent;
+  $("#today-scan-time").textContent = running ? "Refreshing in background..." : `Last scan ${latestScanAt ? formatDateTime(latestScanAt) : "-"}`;
+  $("#trend-summary").textContent = running
+    ? "Refreshing in background. You can keep using the app."
+    : $("#trend-summary").textContent;
+  renderOnboarding();
 }
 
 async function loadTrend(force = false) {
   await refreshPricing();
-  const usage = await api.scanUsage({ force });
-  allUsage = usage.items;
+  const status = await api.startUsageScan({ force });
+  applyUsageScanStatus(status, { force });
+  pollUsageScan();
+}
+
+function pollUsageScan() {
+  if (scanPollTimer) return;
+  scanPollTimer = setInterval(async () => {
+    try {
+      const status = await api.usageScanStatus();
+      applyUsageScanStatus(status);
+      if (!status.running) {
+        clearInterval(scanPollTimer);
+        scanPollTimer = null;
+      }
+    } catch (error) {
+      clearInterval(scanPollTimer);
+      scanPollTimer = null;
+      setScanState(false);
+      $("#today-summary").textContent = `Refresh status failed: ${error.message}`;
+      $("#trend-summary").textContent = `Refresh status failed: ${error.message}`;
+      console.error(error);
+    }
+  }, 1000);
+}
+
+function applyUsageScanStatus(status, { force = false } = {}) {
+  if (status.snapshot) applyUsageSnapshot(status.snapshot);
+  setScanState(Boolean(status.running), status.force ?? force);
+  if (status.error) {
+    $("#today-summary").textContent = `Refresh failed: ${status.error}`;
+    $("#trend-summary").textContent = `Refresh failed: ${status.error}`;
+  }
+}
+
+function applyUsageSnapshot(usage) {
+  allUsage = usage.items || [];
   latestScanAt = usage.scannedAt || latestScanAt;
+  latestUsage = allUsage.filter((item) => item.day === localDay());
+  if (usage.health) latestHealth = usage.health;
+  renderToday();
   renderTrend();
+  renderHealth();
+  renderAliases();
 }
 
 async function loadHealth() {
@@ -232,16 +323,24 @@ function closeCursorTokenModal() {
 
 function renderConfig(config) {
   latestConfig = config;
-  $("#profile-state").textContent = config ? "Ready" : "Not configured";
+  $("#profile-state").textContent = config?.desktopAutoInitialized ? "First run" : config ? "Ready" : "Not configured";
   if (config?.nickname) $("#nickname").value = config.nickname;
+  if (config?.nickname) $("#onboarding-nickname").value = config.nickname;
   $("#apiBaseUrl").value = config?.apiBaseUrl ?? "";
   $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
   $("#showRawTokens").checked = config?.showRawTokens ?? false;
-  $("#autoRefreshEnabled").checked = config?.autoRefreshEnabled ?? true;
+  $("#autoRefreshEnabled").checked = config?.autoRefreshEnabled ?? false;
   $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
   $("#launchAtLogin").checked = config?.launchAtLogin ?? false;
   renderCursorTokenSummary(config?.cursorDashboardUsage);
   renderSyncStatus(config);
+  renderOnboarding();
+}
+
+function renderOnboarding() {
+  const card = $("#onboarding-card");
+  if (!card) return;
+  card.hidden = !(latestConfig?.desktopAutoInitialized || scanRunning);
 }
 
 function renderCursorTokenSummary(cursorConfig = {}) {

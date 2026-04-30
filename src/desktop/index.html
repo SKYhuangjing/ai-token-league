@@ -42,6 +42,25 @@
             </div>
           </div>
 
+          <section id="onboarding-card" class="onboarding-card" hidden>
+            <div>
+              <p class="eyebrow">First run</p>
+              <h3>Local setup is running</h3>
+              <p>The first scan can take a while on machines with large Codex or Claude Code history. You can name this profile now, or import an existing profile before syncing.</p>
+            </div>
+            <div class="onboarding-actions">
+              <label>
+                Nickname
+                <input id="onboarding-nickname" value="anonymous" />
+              </label>
+              <div class="actions">
+                <button id="onboarding-save" type="button">Save nickname</button>
+                <button id="onboarding-import" type="button">Import profile</button>
+                <button id="onboarding-sources" type="button">Review sources</button>
+              </div>
+            </div>
+          </section>
+
           <section class="cards cards-three">
             <article class="stat-card">
               <span>Workdirs</span>
@@ -178,14 +197,14 @@
             <div class="form-grid">
               <label>
                 API base URL
-                <input id="apiBaseUrl" value="http://127.0.0.1:8787" />
+                <input id="apiBaseUrl" placeholder="https://your-api.example" />
               </label>
               <label>
                 Refresh interval
                 <input id="refreshIntervalMinutes" type="number" min="1" step="1" value="15" />
               </label>
               <label class="toggle-row">
-                <input id="autoRefreshEnabled" type="checkbox" checked />
+                <input id="autoRefreshEnabled" type="checkbox" />
                 Background refresh
               </label>
             </div>
@@ -239,6 +258,13 @@
             <div class="actions">
               <button class="save-settings" type="button">Save settings</button>
             </div>
+            <section class="danger-zone">
+              <div>
+                <strong>Reset local data</strong>
+                <p>Clears this desktop profile, upload queue, cached usage scan, local tokens, aliases, and settings. Codex, Claude Code, and Cursor source files are not deleted.</p>
+              </div>
+              <button id="reset-local-data" type="button">Reset data</button>
+            </section>
           </section>
         </section>
       </section>

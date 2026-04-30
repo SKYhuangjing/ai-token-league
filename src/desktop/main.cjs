@@ -20,6 +20,16 @@ const usageCache = {
   cacheTtlMs: 5 * 60 * 1000
 };
 
+const foregroundScan = {
+  running: false,
+  taskId: 0,
+  force: false,
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  snapshot: null
+};
+
 function pathToFileUrl(file) {
   return `file://${file.replaceAll("\\", "/")}`;
 }
@@ -69,8 +79,9 @@ app.whenReady().then(async () => {
     return;
   }
   const { config } = await modules();
-  applyLaunchAtLogin(config.loadConfig());
-  await scheduleBackgroundRefresh();
+  const current = ensureDesktopConfig(config);
+  applyLaunchAtLogin(current);
+  await scheduleBackgroundRefresh(current);
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -83,7 +94,7 @@ app.on("window-all-closed", () => {
 
 ipcMain.handle("config:get", async () => {
   const { config } = await modules();
-  return sanitizeConfig(config.loadConfig());
+  return sanitizeConfig(ensureDesktopConfig(config));
 });
 
 ipcMain.handle("api:check", async (_event, apiBaseUrl) => {
@@ -181,8 +192,7 @@ ipcMain.handle("workdirs:set-alias", async (_event, input) => {
 
 ipcMain.handle("providers:health", async () => {
   const { config, core } = await modules();
-  const current = config.loadConfig();
-  if (!current) throw new Error("Open Settings first");
+  const current = ensureDesktopConfig(config);
   return core.providerHealth(current);
 });
 
@@ -198,9 +208,19 @@ ipcMain.handle("pricing:model-prices", async () => {
 
 ipcMain.handle("usage:scan", async (_event, options = {}) => {
   const { config, core } = await modules();
-  const current = config.loadConfig();
-  if (!current) throw new Error("Open Settings first");
+  const current = ensureDesktopConfig(config);
   return getUsageSnapshot({ config, core, current, force: Boolean(options.force) });
+});
+
+ipcMain.handle("usage:scan-start", async (_event, options = {}) => {
+  const { config, core } = await modules();
+  const current = ensureDesktopConfig(config);
+  startForegroundScan({ config, core, current, force: Boolean(options.force) });
+  return foregroundScanStatus();
+});
+
+ipcMain.handle("usage:scan-status", async () => {
+  return foregroundScanStatus();
 });
 
 ipcMain.handle("usage:sync", async () => {
@@ -208,6 +228,14 @@ ipcMain.handle("usage:sync", async () => {
   const current = config.loadConfig();
   if (!current) throw new Error("Open Settings first");
   return syncCurrentUsage({ config, core, crypto, current });
+});
+
+ipcMain.handle("app:reset-local-data", async () => {
+  const { config } = await modules();
+  resetLocalData(config);
+  app.relaunch();
+  app.exit(0);
+  return { ok: true };
 });
 
 async function scheduleBackgroundRefresh(configOverride = null) {
@@ -373,6 +401,69 @@ async function getUsageSnapshot({ core, current, force = false }) {
   return snapshot;
 }
 
+function startForegroundScan({ config, core, current, force = false }) {
+  const cached = readUsageCache();
+  if (foregroundScan.running) return;
+  if (!force && cached && Date.now() - Date.parse(cached.scannedAt) < usageCache.cacheTtlMs) {
+    foregroundScan.snapshot = cached;
+    foregroundScan.startedAt = cached.scannedAt;
+    foregroundScan.finishedAt = cached.scannedAt;
+    foregroundScan.error = null;
+    foregroundScan.force = false;
+    return;
+  }
+  const taskId = foregroundScan.taskId + 1;
+  foregroundScan.taskId = taskId;
+  foregroundScan.running = true;
+  foregroundScan.force = force;
+  foregroundScan.startedAt = new Date().toISOString();
+  foregroundScan.finishedAt = null;
+  foregroundScan.error = null;
+  foregroundScan.snapshot = cached || null;
+  setTimeout(() => {
+    getUsageSnapshot({ config, core, current, force })
+      .then((snapshot) => {
+        if (foregroundScan.taskId !== taskId) return;
+        foregroundScan.snapshot = snapshot;
+        foregroundScan.finishedAt = new Date().toISOString();
+      })
+      .catch((error) => {
+        if (foregroundScan.taskId !== taskId) return;
+        foregroundScan.error = error.message;
+        foregroundScan.finishedAt = new Date().toISOString();
+      })
+      .finally(() => {
+        if (foregroundScan.taskId !== taskId) return;
+        foregroundScan.running = false;
+      });
+  }, 0);
+}
+
+function foregroundScanStatus() {
+  const snapshot = foregroundScan.snapshot || readUsageCache();
+  return {
+    running: foregroundScan.running,
+    taskId: foregroundScan.taskId,
+    force: foregroundScan.force,
+    startedAt: foregroundScan.startedAt,
+    finishedAt: foregroundScan.finishedAt,
+    error: foregroundScan.error,
+    snapshot: snapshot ? publicUsageSnapshot(snapshot) : null
+  };
+}
+
+function publicUsageSnapshot(snapshot) {
+  return {
+    items: snapshot.items || [],
+    health: snapshot.health || [],
+    cacheVersion: snapshot.cacheVersion,
+    scannedAt: snapshot.scannedAt || null,
+    rowCount: snapshot.rowCount || 0,
+    sourceFingerprint: snapshot.sourceFingerprint || "",
+    fromCache: Boolean(snapshot.fromCache)
+  };
+}
+
 function usageCachePath() {
   return path.join(app.getPath("userData"), "usage-cache.json");
 }
@@ -399,6 +490,25 @@ function writeUsageCache(snapshot) {
 function invalidateUsageCache() {
   usageCache.loaded = true;
   usageCache.data = null;
+  try {
+    fs.rmSync(usageCachePath(), { force: true });
+  } catch {}
+}
+
+function resetLocalData(configModule) {
+  if (background.timer) clearInterval(background.timer);
+  background.timer = null;
+  background.running = false;
+  background.nextRunAt = null;
+  usageCache.loaded = true;
+  usageCache.data = null;
+  foregroundScan.running = false;
+  foregroundScan.taskId += 1;
+  foregroundScan.error = null;
+  foregroundScan.snapshot = null;
+  try {
+    fs.rmSync(configModule.APP_DIR, { recursive: true, force: true });
+  } catch {}
   try {
     fs.rmSync(usageCachePath(), { force: true });
   } catch {}
@@ -506,6 +616,40 @@ function snapshotFingerprint(items = []) {
     .sort()
     .join("\n");
   return nodeCrypto.createHash("sha256").update(text).digest("hex");
+}
+
+function ensureDesktopConfig(configModule) {
+  const current = configModule.loadConfig();
+  if (current) {
+    if (!Object.hasOwn(current, "desktopAutoInitialized") && isUnconfirmedDesktopProfile(current)) {
+      const next = configModule.updateConfig({ desktopAutoInitialized: true }, current);
+      return next;
+    }
+    return current;
+  }
+  return configModule.initConfig({
+    apiBaseUrl: "",
+    desktopAutoInitialized: true,
+    apiConnection: {
+      ok: true,
+      status: "not_configured",
+      apiBaseUrl: "",
+      checkedAt: new Date().toISOString(),
+      message: "API not configured"
+    }
+  });
+}
+
+function isUnconfirmedDesktopProfile(current) {
+  return (
+    (current.nickname || "anonymous") === "anonymous" &&
+    !String(current.apiBaseUrl || "").trim() &&
+    !current.lastSyncAt &&
+    !Object.keys(current.workdirAliases || {}).length &&
+    !Object.keys(current.providerRoots || {}).length &&
+    !current.cursorDashboardUsage?.workosSessionToken &&
+    !(current.cursorDashboardUsage?.workosSessionTokens || []).length
+  );
 }
 
 function uploadQueuePath(current = null) {

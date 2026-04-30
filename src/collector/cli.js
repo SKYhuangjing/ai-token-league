@@ -31,7 +31,7 @@ async function postJson(url, body) {
 async function main() {
   if (command === "init") {
     const nickname = argValue("nickname", "anonymous");
-    const apiBaseUrl = argValue("api", "http://127.0.0.1:8787");
+    const apiBaseUrl = argValue("api", "");
     const config = initConfig({ nickname, apiBaseUrl });
     console.log(JSON.stringify({ participantId: config.participantId, deviceId: config.deviceId, nickname: config.nickname }, null, 2));
     return;
@@ -103,7 +103,7 @@ async function main() {
   }
 
   console.log(`Usage:
-  npm run collector:init -- --nickname sky [--api http://127.0.0.1:8787]
+  npm run collector:init -- --nickname sky [--api https://your-api.example]
   npm run collector -- health
   npm run collector -- scan
   npm run collector -- register

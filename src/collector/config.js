@@ -23,12 +23,13 @@ export function saveConfig(config) {
 
 export function initConfig({
   nickname = "anonymous",
-  apiBaseUrl = "http://127.0.0.1:8787",
+  apiBaseUrl = "",
   apiConnection = {},
-  autoRefreshEnabled = true,
+  autoRefreshEnabled = false,
   refreshIntervalMinutes = 15,
   showRawTokens = false,
-  launchAtLogin = false
+  launchAtLogin = false,
+  desktopAutoInitialized = false
 } = {}) {
   const identity = generateIdentity();
   const interval = Number(refreshIntervalMinutes);
@@ -45,6 +46,7 @@ export function initConfig({
     autoRefreshEnabled,
     refreshIntervalMinutes: Number.isFinite(interval) ? Math.max(1, Math.round(interval)) : 15,
     launchAtLogin,
+    desktopAutoInitialized,
     cursorDashboardUsage: {
       enabled: false,
       workosSessionToken: "",
@@ -81,13 +83,14 @@ export function importIdentity(identity, current = {}, { persist = true } = {}) 
     identityPublicKey: identity.identityPublicKey,
     identityPrivateKey: identity.identityPrivateKey,
     deviceId: current.deviceId || newId("d"),
-    apiBaseUrl: current.apiBaseUrl || "http://127.0.0.1:8787",
+    apiBaseUrl: current.apiBaseUrl || "",
     publicUpload: current.publicUpload ?? true,
     showEstimatedCost: current.showEstimatedCost ?? false,
     showRawTokens: current.showRawTokens ?? false,
-    autoRefreshEnabled: current.autoRefreshEnabled ?? true,
+    autoRefreshEnabled: current.autoRefreshEnabled ?? false,
     refreshIntervalMinutes: current.refreshIntervalMinutes || 15,
     launchAtLogin: current.launchAtLogin ?? false,
+    desktopAutoInitialized: false,
     cursorDashboardUsage: current.cursorDashboardUsage || { enabled: false, workosSessionToken: "", workosSessionTokens: [] },
     syncStatus: current.syncStatus || {},
     workdirAliases: current.workdirAliases || {},
@@ -154,8 +157,9 @@ export function updateConfig(input = {}, current = loadConfig(), { persist = tru
     publicUpload: input.publicUpload ?? current.publicUpload ?? true,
     showEstimatedCost: input.showEstimatedCost ?? current.showEstimatedCost ?? false,
     showRawTokens: input.showRawTokens ?? current.showRawTokens ?? false,
-    autoRefreshEnabled: input.autoRefreshEnabled ?? current.autoRefreshEnabled ?? true,
+    autoRefreshEnabled: input.autoRefreshEnabled ?? current.autoRefreshEnabled ?? false,
     launchAtLogin: input.launchAtLogin ?? current.launchAtLogin ?? false,
+    desktopAutoInitialized: input.desktopAutoInitialized ?? current.desktopAutoInitialized ?? false,
     providerEnabled: {
       claude_code_local: true,
       codex_local: true,

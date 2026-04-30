@@ -54,7 +54,7 @@ export const cursorDashboardUsageProvider = {
       toolCode: this.toolCode,
       detected: deduped.length > 0,
       enabled: cursorConfig.enabled === true,
-      roots: deduped.map((source) => source.accountName ? `${source.sourceKind}:${source.accountName}` : source.sourceKind),
+      roots: deduped.map((source) => source.accountName || "Cursor"),
       lastCheckedAt: new Date().toISOString()
     };
   }
@@ -393,7 +393,23 @@ function dedupeSources(sources) {
       byCookie.set(source.cookie, source);
     }
   }
-  return [...byCookie.values()];
+  const byAccount = new Map();
+  for (const source of byCookie.values()) {
+    const key = sourceAccountKey(source);
+    const current = byAccount.get(key);
+    if (!current || sourceNameScore(source) > sourceNameScore(current)) {
+      byAccount.set(key, source);
+    }
+  }
+  return [...byAccount.values()];
+}
+
+function sourceAccountKey(source = {}) {
+  const account = String(source.accountName || "").trim().toLowerCase();
+  if (account && account !== "cursor") return account;
+  const token = safeDecodeURIComponent(String(source.cookie || "").replace(/^WorkosCursorSessionToken=/, ""));
+  const userId = token.includes("::") ? token.split("::")[0] : userIdFromAccessToken(token);
+  return userId || source.cookie || source.sourceKind || "cursor";
 }
 
 function sourceNameScore(source = {}) {
