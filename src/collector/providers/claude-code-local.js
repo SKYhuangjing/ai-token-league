@@ -43,8 +43,11 @@ export const claudeCodeLocalProvider = {
     const stats = fs.statSync(file);
     const source = sourceMetadata(file, this.id, this.version);
     const rows = readJsonLines(file);
+    let lastModel = "";
     return rows
       .map((row) => {
+        const detectedModel = deepFindString(row, ["model"]);
+        if (detectedModel) lastModel = detectedModel;
         const inputTokens = deepFindNumber(row, ["input_tokens", "inputTokens", "prompt_tokens"]);
         const outputTokens = deepFindNumber(row, ["output_tokens", "outputTokens", "completion_tokens"]);
         const cacheReadTokens = deepFindNumber(row, ["cache_read_input_tokens", "cacheReadTokens", "cache_read_tokens"]);
@@ -63,7 +66,7 @@ export const claudeCodeLocalProvider = {
           sessionId: deepFindString(row, ["session_id", "sessionId", "conversation_id"]) || path.basename(file),
           day: dayFromRecord(row, stats.mtimeMs),
           workdirCandidate: deepFindString(row, ["cwd", "workdir", "working_directory", "project_path"]) || decodeProjectDir(file),
-          model: deepFindString(row, ["model"]) || "unknown",
+          model: detectedModel || lastModel || "unknown",
           inputTokens,
           outputTokens,
           cacheReadTokens,
