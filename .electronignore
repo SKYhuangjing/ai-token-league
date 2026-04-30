@@ -1,0 +1,4 @@
+dist
+.tmp-smoke
+data/db.json
+*.log

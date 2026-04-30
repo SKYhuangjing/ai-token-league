@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Token League</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <aside class="rail">
+        <div>
+          <p class="eyebrow">AI Token League</p>
+          <h1>Token usage</h1>
+          <p class="rail-copy">Local daily totals, grouped by workdir. No prompts, responses, code, or real paths are uploaded.</p>
+        </div>
+        <nav>
+          <button data-section="today" class="active">Today</button>
+          <button data-section="trend">Trend</button>
+          <button data-section="settings">Settings</button>
+        </nav>
+        <div class="sync-card">
+          <span id="sync-state">Not synced</span>
+          <button id="sync-now">Sync now</button>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <section id="today" class="panel active">
+          <div class="panel-head hero-head">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h2 id="today-total">0</h2>
+              <p id="today-summary" class="subtle">Scanning local usage...</p>
+            </div>
+            <div class="head-actions">
+              <span id="today-scan-time" class="badge">Last scan -</span>
+              <button id="refresh-today">Refresh</button>
+            </div>
+          </div>
+
+          <section class="cards cards-three">
+            <article class="stat-card">
+              <span>Workdirs</span>
+              <strong id="workdir-count">0</strong>
+            </article>
+            <article class="stat-card">
+              <span>Models</span>
+              <strong id="model-count">0</strong>
+            </article>
+            <article class="stat-card" id="today-cost-card" hidden>
+              <span>Est. cost</span>
+              <strong id="today-cost">-</strong>
+              <small id="today-cost-note">pricing unavailable</small>
+            </article>
+          </section>
+
+          <section class="section-block">
+            <div class="section-title">
+              <h3>Workdir consumption</h3>
+              <p>Only public directory names are shown.</p>
+            </div>
+            <div id="workdir-list" class="list"></div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-title">
+              <h3>Model consumption</h3>
+              <p>Token totals grouped by model.</p>
+            </div>
+            <div id="model-list" class="list"></div>
+          </section>
+        </section>
+
+        <section id="trend" class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Trend</p>
+              <h2>Usage rhythm</h2>
+            </div>
+            <div class="panel-actions">
+              <div class="segmented-control" id="trend-view">
+                <button data-view="daily" class="active">Daily</button>
+                <button data-view="weekly">Weekly</button>
+                <button data-view="monthly">Monthly</button>
+              </div>
+              <div class="segmented-control" id="trend-mode">
+                <button data-mode="chart" class="active">Chart</button>
+                <button data-mode="table">Table</button>
+              </div>
+              <button id="refresh-trend">Refresh</button>
+            </div>
+          </div>
+
+          <section class="section-block trend-block">
+            <div class="section-title">
+              <h3 id="trend-heading">Daily review</h3>
+              <p id="trend-summary">Grouped from cached local usage rows.</p>
+            </div>
+            <div id="trend-chart-panel" class="trend-chart"></div>
+            <div id="trend-table-panel" class="table-wrap" hidden>
+              <table class="trend-table">
+                <thead>
+                  <tr>
+                    <th>Period</th>
+                    <th>Total Tokens</th>
+                    <th>Models</th>
+                    <th>Workdirs</th>
+                    <th id="trend-cost-header" hidden>Est. Cost</th>
+                  </tr>
+                </thead>
+                <tbody id="trend-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="settings" class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Settings</p>
+              <h2>Account and sync</h2>
+            </div>
+            <span id="profile-state" class="badge">Not configured</span>
+          </div>
+
+          <div class="segmented-control settings-tabs" id="settings-tabs">
+            <button data-settings-tab="profile" class="active">Profile</button>
+            <button data-settings-tab="display">Display</button>
+            <button data-settings-tab="sync">Sync</button>
+            <button data-settings-tab="sources">Sources</button>
+            <button data-settings-tab="aliases">Aliases</button>
+            <button data-settings-tab="system">System</button>
+          </div>
+
+          <section class="section-block settings-panel active" data-settings-panel="profile">
+            <div class="form-grid">
+              <label>
+                Nickname
+                <input id="nickname" value="anonymous" />
+              </label>
+            </div>
+            <div class="actions">
+              <button class="save-settings" type="button">Save settings</button>
+              <button id="export">Export profile</button>
+              <button id="import">Import profile</button>
+            </div>
+          </section>
+
+          <section class="section-block settings-panel" data-settings-panel="display">
+            <div class="section-title">
+              <h3>Display preferences</h3>
+              <p>Controls local rendering only. It does not change stored usage.</p>
+            </div>
+            <div class="form-grid">
+              <label class="toggle-row">
+                <input id="showEstimatedCost" type="checkbox" />
+                Show estimated cost
+              </label>
+              <label class="toggle-row">
+                <input id="showRawTokens" type="checkbox" />
+                Raw token numbers
+              </label>
+            </div>
+            <div class="actions">
+              <button class="save-settings" type="button">Save settings</button>
+            </div>
+          </section>
+
+          <section class="section-block settings-panel" data-settings-panel="sync">
+            <div class="section-title">
+              <h3>Sync and refresh</h3>
+              <p>Controls local refresh cadence and the remote API used for uploads and pricing.</p>
+            </div>
+            <div class="form-grid">
+              <label>
+                API base URL
+                <input id="apiBaseUrl" value="http://127.0.0.1:8787" />
+              </label>
+              <label>
+                Refresh interval
+                <input id="refreshIntervalMinutes" type="number" min="1" step="1" value="15" />
+              </label>
+              <label class="toggle-row">
+                <input id="autoRefreshEnabled" type="checkbox" checked />
+                Background refresh
+              </label>
+            </div>
+            <div class="actions">
+              <button class="save-settings" type="button">Save settings</button>
+            </div>
+            <p id="background-state" class="sync-note">Background refresh has not run yet.</p>
+          </section>
+
+          <section class="section-block settings-panel" data-settings-panel="sources">
+            <div class="section-title">
+              <h3>Local sources</h3>
+              <p>Manage provider locations and optional API-backed sources.</p>
+            </div>
+            <div class="actions">
+              <button id="refresh-health">Refresh sources</button>
+              <button id="add-codex-root">Add Codex location</button>
+              <button id="add-claude-root">Add Claude Code location</button>
+            </div>
+            <div id="settings-source-list" class="source-grid"></div>
+
+            <div class="section-title source-subtitle">
+              <h3>Cursor dashboard</h3>
+              <p>Uses Cursor dashboard usage events. Workdir is shown as Cursor because the API does not return project paths.</p>
+            </div>
+            <div class="form-grid">
+              <label class="toggle-row">
+                <input id="cursorDashboardEnabled" type="checkbox" />
+                Enable Cursor usage
+              </label>
+              <label>
+                Workos session token
+                <input id="cursorWorkosSessionToken" placeholder="Optional: user_xxx::token or WorkosCursorSessionToken=..." />
+              </label>
+            </div>
+            <div class="actions">
+              <button class="save-settings" type="button">Save settings</button>
+            </div>
+          </section>
+
+          <section class="section-block settings-panel" data-settings-panel="aliases">
+            <div class="section-title">
+              <h3>Workdir aliases</h3>
+              <p>Aliases change public directory names without uploading real paths.</p>
+            </div>
+            <div id="workdir-alias-list" class="alias-list"></div>
+          </section>
+
+          <section class="section-block settings-panel" data-settings-panel="system">
+            <div class="section-title">
+              <h3>System behavior</h3>
+              <p>Controls how the desktop app starts on this computer.</p>
+            </div>
+            <div class="form-grid">
+              <label class="toggle-row">
+                <input id="launchAtLogin" type="checkbox" />
+                Launch at login
+              </label>
+            </div>
+            <div class="actions">
+              <button class="save-settings" type="button">Save settings</button>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>

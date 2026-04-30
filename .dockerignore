@@ -1,0 +1,7 @@
+node_modules
+dist
+data
+.tmp-smoke
+.DS_Store
+*.log
+*.pid

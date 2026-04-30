@@ -1,0 +1,31 @@
+{
+  "name": "ai-token-league",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/desktop/main.cjs",
+  "scripts": {
+    "start": "node src/backend/server.js",
+    "desktop": "electron .",
+    "desktop:smoke": "electron . --desktop-smoke",
+    "collector": "node src/collector/cli.js",
+    "collector:init": "node src/collector/cli.js init",
+    "collector:scan": "node src/collector/cli.js scan",
+    "collector:sync": "node src/collector/cli.js sync",
+    "test": "node tests/run-tests.js",
+    "smoke": "node tests/run-tests.js && node src/backend/server.js --smoke",
+    "package:mac": "electron-packager . \"AI Token League\" --platform=darwin --arch=arm64 --out=dist --overwrite --app-version=0.1.0 --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
+    "package:win": "electron-packager . \"AI Token League\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=0.1.0 --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
+    "package:all": "npm run package:mac && npm run package:win && node scripts/zip-dist.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.0.0",
+    "electron": "^41.3.0"
+  },
+  "dependencies": {
+    "mysql2": "^3.22.3"
+  }
+}

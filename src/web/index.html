@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Token League</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell public-shell">
+      <section class="masthead public-masthead">
+        <div>
+          <p class="eyebrow">Public community board</p>
+          <h1>AI Token League</h1>
+          <p class="summary">Daily token totals from local collectors. The public view only shows nickname, total tokens, and model totals.</p>
+        </div>
+        <div class="score-card">
+          <span class="label">Ranking metric</span>
+          <strong>Total tokens</strong>
+          <small>Model totals are shown for context.</small>
+        </div>
+      </section>
+
+      <section class="toolbar" aria-label="Leaderboard period">
+        <div class="segmented" data-filter="period">
+          <button data-value="today" class="active">Today</button>
+          <button data-value="yesterday">Yesterday</button>
+          <button data-value="this_week">This week</button>
+          <button data-value="last_week">Last week</button>
+          <button data-value="this_month">This month</button>
+          <button data-value="last_month">Last month</button>
+        </div>
+        <label class="inline-toggle">
+          <input id="show-cost" type="checkbox" />
+          Estimated cost
+        </label>
+      </section>
+
+      <section class="board">
+        <div class="board-header">
+          <h2>Community Leaderboard</h2>
+          <p id="status">Loading...</p>
+        </div>
+        <div class="table-wrap">
+          <table class="public-table">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Total tokens</th>
+                <th class="cost-col" hidden>Est. cost</th>
+                <th>Models</th>
+              </tr>
+            </thead>
+            <tbody id="leaderboard"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="board detail-board" id="participant-detail" hidden>
+        <div class="board-header">
+          <div>
+            <h2 id="detail-title">Participant detail</h2>
+            <p id="detail-status">Select a user from the leaderboard.</p>
+          </div>
+          <div class="detail-controls">
+            <div class="segmented compact" data-detail-tab>
+              <button data-value="period" class="active">Period detail</button>
+              <button data-value="history">History trend</button>
+            </div>
+            <div class="segmented compact" data-history-view hidden>
+              <button data-value="daily" class="active">Daily</button>
+              <button data-value="weekly">Weekly</button>
+              <button data-value="monthly">Monthly</button>
+            </div>
+            <button class="drawer-close" id="close-detail" type="button" aria-label="Close detail">Close</button>
+          </div>
+        </div>
+        <div id="detail-summary" class="detail-summary"></div>
+        <div id="period-detail-panel">
+          <div id="period-chart" class="detail-chart"></div>
+          <div class="detail-grid">
+            <section>
+              <h3>Models</h3>
+              <div id="detail-models" class="breakdown"></div>
+            </section>
+            <section>
+              <h3>Workdirs</h3>
+              <div id="detail-workdirs" class="breakdown"></div>
+            </section>
+            <section>
+              <h3>Sources</h3>
+              <div id="detail-sources" class="breakdown"></div>
+            </section>
+          </div>
+        </div>
+        <div id="history-trend-panel" hidden>
+          <div id="history-chart" class="detail-chart"></div>
+        </div>
+        <details class="raw-data">
+          <summary>Raw data</summary>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Period</th>
+                  <th>Total tokens</th>
+                  <th class="cost-col" hidden>Est. cost</th>
+                  <th>Models</th>
+                </tr>
+              </thead>
+              <tbody id="detail-rows"></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+      <div class="drawer-backdrop" id="detail-backdrop" hidden></div>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

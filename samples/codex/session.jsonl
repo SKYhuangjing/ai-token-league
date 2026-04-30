@@ -1,0 +1,2 @@
+{"timestamp":"2026-04-29T08:00:00.000Z","session_id":"codex-sample","cwd":"/Users/sky/demo/codex-project","model":"gpt-5","token_count":{"input_tokens":1200,"output_tokens":300,"reasoning_tokens":150,"total_tokens":1650}}
+{"timestamp":"2026-04-29T08:05:00.000Z","session_id":"codex-sample","cwd":"/Users/sky/demo/codex-project","model":"gpt-5","token_count":{"input_tokens":1900,"output_tokens":700,"reasoning_tokens":260,"total_tokens":2860}}

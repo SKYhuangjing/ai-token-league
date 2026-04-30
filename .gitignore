@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.zip
+
+# Runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local smoke/test runtime
+.tmp*/
+.tmp-*/
+*.log
+*.pid
+
+# Local OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local secrets and deployment overrides
+.env
+.env.*
+!.env.example
+docker-compose.mysql.yml
+
+# Electron/package caches
+out/
+release/
+*.dmg
+*.exe
+*.blockmap

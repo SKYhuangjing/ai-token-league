@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Token League Admin</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="masthead">
+        <div>
+          <p class="eyebrow">Admin board</p>
+          <h1>AI Token League Admin</h1>
+          <p class="summary">Operational view for uploaded usage, workdir distribution, source quality, and participant detail.</p>
+        </div>
+        <div class="score-card">
+          <span class="label">Tracked metric</span>
+          <strong>Total tokens</strong>
+          <small>Cost is reserved for later calculation.</small>
+        </div>
+      </section>
+
+      <nav class="admin-tabs" aria-label="Admin sections">
+        <button type="button" data-admin-tab="usage" class="active">Usage ranking</button>
+        <button type="button" data-admin-tab="pricing">Model prices</button>
+      </nav>
+
+      <section class="board admin-panel active" data-admin-panel="usage">
+        <section class="toolbar admin-toolbar usage-toolbar" aria-label="Usage ranking filters">
+          <button class="date-range-display" id="date-range-display" type="button">This month</button>
+          <div class="segmented quick-range" data-filter="quick-range">
+            <button data-value="today">1d</button>
+            <button data-value="last7">7d</button>
+            <button data-value="last30">30d</button>
+            <button data-value="month" class="active">MTD</button>
+            <button data-value="last_month">Last month</button>
+          </div>
+          <div class="segmented" data-filter="grain">
+            <button data-value="auto" class="active">Auto</button>
+            <button data-value="day">Day</button>
+            <button data-value="week">Week</button>
+            <button data-value="month">Month</button>
+          </div>
+          <div class="date-filter">
+            <select id="participant-filter">
+              <option value="">All users</option>
+            </select>
+            <input id="start-date" type="date" />
+            <input id="end-date" type="date" />
+            <button id="apply-custom-range">Apply</button>
+          </div>
+          <label class="inline-toggle">
+            <input id="raw-tokens" type="checkbox" />
+            Raw tokens
+          </label>
+          <label class="inline-toggle">
+            <input id="show-cost" type="checkbox" />
+            Estimated cost
+          </label>
+        </section>
+        <div class="board-header">
+          <h2>Usage aggregates</h2>
+          <p id="status">Loading...</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Period</th>
+                <th>Nickname</th>
+                <th>Total tokens</th>
+                <th class="cost-col" hidden>Est. cost</th>
+                <th>Workdir usage</th>
+                <th>Models</th>
+                <th>Sources</th>
+                <th>Quality</th>
+              </tr>
+            </thead>
+            <tbody id="leaderboard"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="board pricing-board admin-panel" data-admin-panel="pricing">
+        <div class="board-header">
+          <h2>Model pricing</h2>
+          <p id="pricing-status">Loading...</p>
+        </div>
+        <form id="pricing-form" class="pricing-form">
+          <input id="price-model" placeholder="model, e.g. codex-default" autocomplete="off" />
+          <input id="price-input" type="number" step="0.000001" min="0" placeholder="Input $/1M" />
+          <input id="price-output" type="number" step="0.000001" min="0" placeholder="Output $/1M" />
+          <input id="price-cache-read" type="number" step="0.000001" min="0" placeholder="Cache read $/1M" />
+          <input id="price-cache-write" type="number" step="0.000001" min="0" placeholder="Cache write $/1M" />
+          <input id="price-reasoning" type="number" step="0.000001" min="0" placeholder="Reasoning $/1M" />
+          <button type="submit">Save price</button>
+        </form>
+        <div class="pricing-grid">
+          <div>
+            <h3>Missing prices</h3>
+            <div id="missing-prices" class="breakdown"></div>
+          </div>
+          <div>
+            <h3>Custom prices</h3>
+            <div id="custom-prices" class="breakdown"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="board detail-board" id="detail-board" hidden>
+        <div class="board-header">
+          <div>
+            <h2 id="detail-title">Detail</h2>
+            <p id="detail-status">Select a nickname</p>
+          </div>
+          <button class="drawer-close" id="close-admin-detail" type="button">Close</button>
+        </div>
+        <div class="detail-grid">
+          <div>
+            <h3>Workdir Consumption</h3>
+            <div id="detail-workdirs" class="breakdown"></div>
+          </div>
+          <div>
+            <h3>Daily Trend</h3>
+            <div id="detail-days" class="breakdown"></div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Workdir</th>
+                <th>Model</th>
+                <th>Tokens</th>
+                <th class="cost-col" hidden>Est. cost</th>
+                <th>Quality</th>
+              </tr>
+            </thead>
+            <tbody id="detail-rows"></tbody>
+          </table>
+        </div>
+      </section>
+      <div class="drawer-backdrop" id="admin-detail-backdrop" hidden></div>
+    </main>
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>
