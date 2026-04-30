@@ -13,7 +13,7 @@ const SQL = await initSqlJs();
 export const cursorDashboardUsageProvider = {
   id: "cursor_dashboard_usage",
   toolCode: "cursor",
-  version: "0.1.0",
+  version: "0.1.1",
 
   scanSessions(config = {}) {
     const cursorConfig = config.cursorDashboardUsage || {};
@@ -79,7 +79,7 @@ export function eventsToUsageEvents(events = [], source = {}) {
         sessionId: `cursor-${event.timestamp || "unknown"}`,
         day: dayFromCursorTimestamp(event.timestamp),
         workdirCandidate: `virtual:cursor-dashboard:${cursorWorkdirName(source)}`,
-        model: event.model || "cursor-model",
+        model: normalizeCursorModel(event.model),
         inputTokens,
         outputTokens,
         cacheReadTokens,
@@ -92,6 +92,12 @@ export function eventsToUsageEvents(events = [], source = {}) {
       };
     })
     .filter(Boolean);
+}
+
+function normalizeCursorModel(model) {
+  const value = String(model || "").trim().toLowerCase();
+  if (!value || value === "default" || value === "auto") return "cursor-auto";
+  return String(model).trim();
 }
 
 function cursorSourceFingerprint(event, source) {

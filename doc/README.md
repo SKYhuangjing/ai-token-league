@@ -6,6 +6,7 @@ This directory keeps the project documents after the v0.1 phase freeze.
 
 - `v0.1-baseline.md` - stable v0.1 product and engineering baseline.
 - `product-design.md` - detailed product design history and decisions.
+- `usage-composition-design.md` - product design and implementation task baseline for token/cost composition accounting.
 - `mvp-development-tasks.md` - task execution history through E18.
 - `er-diagram.md` - local and remote storage model diagrams.
 

@@ -5,11 +5,17 @@ const state = {
   historyView: "daily",
   showCost: false
 };
+const storageKeys = {
+  showCost: "ai-token-league.public.showCost"
+};
 
 const tbody = document.querySelector("#leaderboard");
 const statusEl = document.querySelector("#status");
 const detailEl = document.querySelector("#participant-detail");
 const detailBackdrop = document.querySelector("#detail-backdrop");
+
+hydratePreferences();
+applyToggleState();
 
 document.querySelectorAll("[data-filter='period']").forEach((group) => {
   group.addEventListener("click", (event) => {
@@ -44,9 +50,8 @@ detailBackdrop.addEventListener("click", closeDetail);
 
 document.querySelector("#show-cost").addEventListener("change", (event) => {
   state.showCost = event.target.checked;
-  document.querySelectorAll(".cost-col").forEach((item) => {
-    item.hidden = !state.showCost;
-  });
+  persistPreference(storageKeys.showCost, state.showCost);
+  applyToggleState();
   loadLeaderboard();
   if (state.detailParticipantId) loadDetail(state.detailParticipantId);
 });
@@ -122,7 +127,6 @@ function renderDetail(detail) {
       ? renderCompactTrend([...detail.periodRows].reverse(), { topTitle: "Top date contribution" })
       : `<article class="empty-state">No usage in this period.</article>`;
   document.querySelector("#detail-models").innerHTML = renderBreakdownBars(detail.models);
-  document.querySelector("#detail-workdirs").innerHTML = renderBreakdownBars(detail.workdirs);
   document.querySelector("#detail-sources").innerHTML = renderBreakdownBars(detail.providers?.map((item) => ({ ...item, name: sourceName(item.name) })));
   renderRawRows(detail.rows || [], { mode: "period" });
 }
@@ -152,8 +156,7 @@ function renderSummary(detail) {
   const items = [
     ["Rank", detail.rank ? `#${detail.rank}` : "-"],
     ["Period tokens", formatTokenCompact(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
-    ["Models", String(detail.models?.length || 0)],
-    ["Workdirs", String(detail.workdirs?.length || 0)]
+    ["Models", String(detail.models?.length || 0)]
   ];
   if (state.showCost) items.push(["Est. cost", renderCost(detail), costTitle(detail)]);
   return items
@@ -269,6 +272,33 @@ function sourceName(providerId) {
   if (providerId === "claude_code_local") return "Claude Code";
   if (providerId === "cursor_dashboard_usage") return "Cursor";
   return providerId;
+}
+
+function hydratePreferences() {
+  state.showCost = readBooleanPreference(storageKeys.showCost, false);
+}
+
+function applyToggleState() {
+  document.querySelector("#show-cost").checked = state.showCost;
+  document.querySelectorAll(".cost-col").forEach((item) => {
+    item.hidden = !state.showCost;
+  });
+}
+
+function persistPreference(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(Boolean(value)));
+  } catch {}
+}
+
+function readBooleanPreference(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw) === true;
+  } catch {
+    return fallback;
+  }
 }
 
 function formatNumber(value) {

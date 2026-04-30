@@ -92,6 +92,18 @@ function testCursorDashboardMapping() {
   assert.equal(items[0].model, "composer-2-fast");
   assert.equal(items[0].totalTokens, 460);
   assert.ok(items[0].sourceFingerprint);
+  const defaultModelItems = eventsToUsageEvents([
+    {
+      timestamp: "1776866406216",
+      model: "default",
+      tokenUsage: { inputTokens: 10, outputTokens: 20 }
+    },
+    {
+      timestamp: "1776866406217",
+      tokenUsage: { inputTokens: 5, outputTokens: 5 }
+    }
+  ]);
+  assert.deepEqual(defaultModelItems.map((item) => item.model), ["cursor-auto", "cursor-auto"]);
   assert.equal(localDay("2026-04-29T18:30:00.000Z", "Asia/Shanghai"), "2026-04-30");
   const namedItems = eventsToUsageEvents([
     {
@@ -151,6 +163,18 @@ async function testCursorLocalTokenDetection() {
   }
 }
 
+function testCodexLocalSkipsUnknownModel() {
+  const file = path.join(tmp, "codex-missing-model.jsonl");
+  fs.writeFileSync(file, `${JSON.stringify({
+    timestamp: "2026-04-29T08:00:00.000Z",
+    session_id: "codex-missing-model",
+    cwd: "/Users/sky/demo/codex-project",
+    token_count: { input_tokens: 1200, output_tokens: 300, reasoning_tokens: 150, total_tokens: 1650 }
+  })}\n`);
+  const items = codexLocalProvider.parseUsage(file);
+  assert.equal(items.length, 0);
+}
+
 function jwtWithSub(sub) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({ sub })).toString("base64url");
@@ -187,14 +211,14 @@ function testBackendUpload(identity, items) {
     items: [
       {
         ...uploadItems[0],
-        model: "codex-default",
+        model: "custom-test-model",
         inputTokens: 600,
         outputTokens: 400,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         reasoningTokens: 0,
         totalTokens: 1000,
-        sourceFingerprint: "test-codex-default"
+        sourceFingerprint: "test-custom-test-model"
       }
     ]
   });
@@ -250,18 +274,18 @@ function testBackendUpload(identity, items) {
   const recalculated = store.recalculateCosts();
   assert.ok(recalculated.updated >= 1);
   const beforePrice = store.missingPriceModels();
-  assert.ok(beforePrice.some((item) => item.model === "codex-default"));
+  assert.ok(beforePrice.some((item) => item.model === "custom-test-model"));
   const savedPrice = store.upsertModelPrice({
-    model: "codex-default",
+    model: "custom-test-model",
     inputCostPerMTok: 1,
     outputCostPerMTok: 2,
     cacheReadCostPerMTok: 0.1,
     cacheWriteCostPerMTok: 1,
     reasoningCostPerMTok: 2
   });
-  assert.equal(savedPrice.price.model, "codex-default");
-  assert.ok(store.listModelPrices().custom.some((item) => item.model === "codex-default"));
-  assert.ok(!store.missingPriceModels().some((item) => item.model === "codex-default"));
+  assert.equal(savedPrice.price.model, "custom-test-model");
+  assert.ok(store.listModelPrices().custom.some((item) => item.model === "custom-test-model"));
+  assert.ok(!store.missingPriceModels().some((item) => item.model === "custom-test-model"));
   const customCostBoard = store.publicLeaderboard({ period: "this_month", includeCost: true });
   assert.notEqual(customCostBoard[0].estimatedCostUsd, null);
   assert.ok(signature);
@@ -270,7 +294,7 @@ function testBackendUpload(identity, items) {
 function testForbiddenUploadFields() {
   assert.throws(() => assertNoForbiddenUploadFields({ prompt: "secret" }), /forbidden upload field/);
   assert.throws(() => assertNoForbiddenUploadFields({ nested: { identityPrivateKey: "secret" } }), /forbidden upload field/);
-  assert.equal(USAGE_CACHE_VERSION, 2);
+  assert.equal(USAGE_CACHE_VERSION, 3);
 }
 
 function testIdentityImport() {
@@ -360,8 +384,8 @@ function testDisplayAndPricing() {
   const unknown = estimateUsageCost({ model: "unknown-model", inputTokens: 1000, outputTokens: 1000 });
   assert.equal(unknown.costQuality, "unknown_price");
   assert.equal(unknown.estimatedCostUsd, null);
-  const custom = estimateUsageCost({ model: "codex-default", inputTokens: 1000, outputTokens: 1000 }, createPriceMap({
-    "codex-default": { model: "codex-default", inputCostPerMTok: 1, outputCostPerMTok: 2 }
+  const custom = estimateUsageCost({ model: "custom-test-model", inputTokens: 1000, outputTokens: 1000 }, createPriceMap({
+    "custom-test-model": { model: "custom-test-model", inputCostPerMTok: 1, outputCostPerMTok: 2 }
   }));
   assert.equal(custom.costQuality, "exact_price");
   assert.equal(custom.estimatedCostUsd, 0.003);
@@ -375,6 +399,7 @@ testUpdateConfigKeepsIdentity();
 testAddCursorTokenKeepsMultipleAccounts();
 await testCursorLocalTokenDetection();
 testCursorDashboardMapping();
+testCodexLocalSkipsUnknownModel();
 testForbiddenUploadFields();
 testDisplayAndPricing();
 console.log("All tests passed");

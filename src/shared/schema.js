@@ -1,6 +1,6 @@
 export const SOURCE_QUALITY = new Set(["exact", "partial", "estimated", "imported", "unknown"]);
 export const STORAGE_SCHEMA_VERSION = 2;
-export const USAGE_CACHE_VERSION = 2;
+export const USAGE_CACHE_VERSION = 3;
 
 export const FORBIDDEN_UPLOAD_FIELDS = new Set([
   "absolutePath",

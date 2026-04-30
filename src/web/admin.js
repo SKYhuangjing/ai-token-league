@@ -8,12 +8,19 @@ const state = {
   rawTokens: false,
   showCost: false
 };
+const storageKeys = {
+  rawTokens: "ai-token-league.admin.rawTokens",
+  showCost: "ai-token-league.admin.showCost"
+};
 const tbody = document.querySelector("#leaderboard");
 const statusEl = document.querySelector("#status");
 const detailBoard = document.querySelector("#detail-board");
 const detailBackdrop = document.querySelector("#admin-detail-backdrop");
 const participantFilter = document.querySelector("#participant-filter");
 const pricingStatus = document.querySelector("#pricing-status");
+
+hydratePreferences();
+applyToggleState();
 
 document.querySelector(".admin-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("button");
@@ -62,14 +69,15 @@ document.querySelector("#apply-custom-range").addEventListener("click", () => {
 
 document.querySelector("#raw-tokens").addEventListener("change", (event) => {
   state.rawTokens = event.target.checked;
+  persistPreference(storageKeys.rawTokens, state.rawTokens);
+  applyToggleState();
   loadUsage();
 });
 
 document.querySelector("#show-cost").addEventListener("change", (event) => {
   state.showCost = event.target.checked;
-  document.querySelectorAll(".cost-col").forEach((item) => {
-    item.hidden = !state.showCost;
-  });
+  persistPreference(storageKeys.showCost, state.showCost);
+  applyToggleState();
   loadUsage();
 });
 
@@ -245,6 +253,35 @@ function autoGrain() {
     if (span > 31) return "week";
   }
   return "day";
+}
+
+function hydratePreferences() {
+  state.rawTokens = readBooleanPreference(storageKeys.rawTokens, false);
+  state.showCost = readBooleanPreference(storageKeys.showCost, false);
+}
+
+function applyToggleState() {
+  document.querySelector("#raw-tokens").checked = state.rawTokens;
+  document.querySelector("#show-cost").checked = state.showCost;
+  document.querySelectorAll(".cost-col").forEach((item) => {
+    item.hidden = !state.showCost;
+  });
+}
+
+function persistPreference(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(Boolean(value)));
+  } catch {}
+}
+
+function readBooleanPreference(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw) === true;
+  } catch {
+    return fallback;
+  }
 }
 
 function syncRangeInputs() {

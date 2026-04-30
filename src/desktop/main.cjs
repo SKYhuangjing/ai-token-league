@@ -389,9 +389,10 @@ async function getUsageSnapshot({ core, current, force = false }) {
     return { ...cached, fromCache: true };
   }
   const scanned = await core.scanUsage({ ...current, __usageCacheIndex: cached?.sourceIndex || {} });
+  const { schema } = await modules();
   const snapshot = {
     ...scanned,
-    cacheVersion: 2,
+    cacheVersion: schema.USAGE_CACHE_VERSION,
     scannedAt: new Date().toISOString(),
     rowCount: scanned.items.length,
     sourceFingerprint: snapshotFingerprint(scanned.items),
@@ -473,7 +474,8 @@ function readUsageCache() {
   usageCache.loaded = true;
   try {
     const file = usageCachePath();
-    usageCache.data = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    const cached = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    usageCache.data = cached?.cacheVersion === 3 ? cached : null;
   } catch {
     usageCache.data = null;
   }

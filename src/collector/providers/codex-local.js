@@ -6,7 +6,7 @@ import { dayFromRecord, deepFindString, readJsonLines, sourceMetadata, walkFiles
 export const codexLocalProvider = {
   id: "codex_local",
   toolCode: "codex",
-  version: "0.1.0",
+  version: "0.1.1",
 
   roots(config = {}) {
     if (config.providerRootsOnly && config.providerRoots?.codex_local) return normalizeCustomRoots(config.providerRoots.codex_local);
@@ -46,6 +46,8 @@ export const codexLocalProvider = {
       currentModel = deepFindString(row, ["model", "model_slug", "model_name"]) || currentModel;
       const usage = extractUsage(row);
       if (!usage) continue;
+      const normalizedModel = normalizeCodexModel(currentModel);
+      if (!normalizedModel) continue;
       const totalTokens = usage.deltaTotal(previousCumulativeTotal);
       if (!totalTokens) continue;
       events.push({
@@ -57,7 +59,7 @@ export const codexLocalProvider = {
         sessionId,
         day: dayFromRecord(row, stats.mtimeMs),
         workdirCandidate: sessionCwd || deepFindString(row, ["cwd", "workdir", "working_directory", "project_path"]) || process.cwd(),
-        model: currentModel || "codex-default",
+        model: normalizedModel,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         cacheReadTokens: usage.cacheReadTokens,
@@ -83,6 +85,12 @@ export const codexLocalProvider = {
     };
   }
 };
+
+function normalizeCodexModel(model) {
+  const value = String(model || "").trim();
+  if (!value || value === "codex-default") return "";
+  return value;
+}
 
 function normalizeCustomRoots(value) {
   if (!value) return [];

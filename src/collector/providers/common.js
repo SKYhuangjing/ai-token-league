@@ -73,7 +73,7 @@ export function sourceMetadata(file, providerId, parserVersion) {
   const rawSourceRef = path.basename(file);
   const sourceFingerprint = crypto
     .createHash("sha256")
-    .update([providerId, file, stats.size, Math.round(stats.mtimeMs)].join("|"))
+    .update([providerId, parserVersion, file, stats.size, Math.round(stats.mtimeMs)].join("|"))
     .digest("hex");
   return {
     rawSourceRef,
