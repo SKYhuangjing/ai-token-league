@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { localDay } from "../../shared/date.js";
+
+const require = createRequire(import.meta.url);
+const initSqlJs = require("sql.js/dist/sql-asm.js");
+const SQL = await initSqlJs();
 
 export const cursorDashboardUsageProvider = {
   id: "cursor_dashboard_usage",
@@ -11,15 +17,12 @@ export const cursorDashboardUsageProvider = {
 
   scanSessions(config = {}) {
     const cursorConfig = config.cursorDashboardUsage || {};
-    if (!cursorConfig.enabled) return [];
-    const sources = [];
-    if (cursorConfig.workosSessionToken) {
-      sources.push({
-        sourceKind: "manual_workos_cookie",
-        cookie: normalizeWorkosCookie(cursorConfig.workosSessionToken)
-      });
+    if (cursorConfig.enabled !== true) return [];
+    const sources = configuredSources(cursorConfig);
+    if (cursorConfig.autoDetectLocal !== false) {
+      for (const source of discoverAccountSources()) sources.push(source);
+      for (const source of discoverLocalCursorSources()) sources.push(source);
     }
-    for (const source of discoverAccountSources()) sources.push(source);
     return dedupeSources(sources);
   },
 
@@ -39,12 +42,19 @@ export const cursorDashboardUsageProvider = {
   },
 
   reportHealth(config = {}) {
-    const sources = this.scanSessions(config);
+    const cursorConfig = config.cursorDashboardUsage || {};
+    const sources = [
+      ...configuredSources(cursorConfig),
+      ...(cursorConfig.autoDetectLocal === false ? [] : discoverAccountSources()),
+      ...(cursorConfig.autoDetectLocal === false ? [] : discoverLocalCursorSources())
+    ];
+    const deduped = dedupeSources(sources);
     return {
       providerId: this.id,
       toolCode: this.toolCode,
-      detected: sources.length > 0,
-      roots: sources.map((source) => source.sourceKind),
+      detected: deduped.length > 0,
+      enabled: cursorConfig.enabled === true,
+      roots: deduped.map((source) => source.accountName ? `${source.sourceKind}:${source.accountName}` : source.sourceKind),
       lastCheckedAt: new Date().toISOString()
     };
   }
@@ -68,7 +78,7 @@ export function eventsToUsageEvents(events = [], source = {}) {
         sourceQuality: "exact",
         sessionId: `cursor-${event.timestamp || "unknown"}`,
         day: dayFromCursorTimestamp(event.timestamp),
-        workdirCandidate: "virtual:cursor-dashboard:Cursor",
+        workdirCandidate: `virtual:cursor-dashboard:${cursorWorkdirName(source)}`,
         model: event.model || "cursor-model",
         inputTokens,
         outputTokens,
@@ -90,6 +100,7 @@ function cursorSourceFingerprint(event, source) {
     .update([
       cursorDashboardUsageProvider.id,
       source.sourceKind || "cursor-dashboard",
+      source.accountName || "",
       event.timestamp || "",
       event.model || "",
       JSON.stringify(event.tokenUsage || {})
@@ -145,6 +156,7 @@ function discoverAccountSources() {
         if (!userId || !account.access_token) return null;
         return {
           sourceKind: "local_cursor_account",
+          accountName: account.email || account.cachedEmail || account.cursor_auth_raw?.cachedEmail || userId,
           cookie: `WorkosCursorSessionToken=${encodeURIComponent(`${userId}::${account.access_token}`)}`
         };
       } catch {
@@ -154,9 +166,182 @@ function discoverAccountSources() {
     .filter(Boolean);
 }
 
+function discoverLocalCursorSources() {
+  const sources = [];
+  const sqliteAuth = readTokenFromCursorSqlite();
+  if (sqliteAuth.token) {
+    const cookie = cursorTokenToCookie(sqliteAuth.token);
+    if (cookie) {
+      sources.push({
+        sourceKind: "local_cursor_state",
+        accountName: sqliteAuth.accountName || cursorAccountNameFromToken(sqliteAuth.token),
+        cookie
+      });
+    }
+  }
+  for (const configPath of cursorConfigPaths()) {
+    const configAuth = readTokenFromCursorConfig(configPath);
+    if (!configAuth.token) continue;
+    const cookie = cursorTokenToCookie(configAuth.token);
+    if (cookie) {
+      sources.push({
+        sourceKind: "local_cursor_config",
+        accountName: configAuth.accountName || cursorAccountNameFromToken(configAuth.token),
+        cookie
+      });
+    }
+  }
+  return sources;
+}
+
+function configuredSources(cursorConfig = {}) {
+  const sources = [];
+  if (cursorConfig.workosSessionToken) {
+    const cookie = cursorTokenToCookie(cursorConfig.workosSessionToken);
+    if (cookie) {
+      sources.push({
+        sourceKind: "manual_workos_cookie",
+        accountName: cursorAccountNameFromToken(cursorConfig.workosSessionToken),
+        cookie
+      });
+    }
+  }
+  for (const item of cursorConfig.workosSessionTokens || []) {
+    const token = typeof item === "string" ? item : item?.token;
+    const cookie = cursorTokenToCookie(token);
+    if (cookie) {
+      sources.push({
+        sourceKind: "manual_workos_cookie",
+        accountName: typeof item === "object" ? item.accountName || cursorAccountNameFromToken(token) : cursorAccountNameFromToken(token),
+        cookie
+      });
+    }
+  }
+  if (cursorConfig.autoDetectLocal !== false) {
+    for (const source of discoverLocalCursorSources()) sources.push(source);
+  }
+  return sources;
+}
+
+function readTokenFromCursorSqlite() {
+  const dbPath = cursorDbPath();
+  if (!dbPath || !fs.existsSync(dbPath)) return {};
+  return readTokenUsingSqlJs(dbPath) || readTokenUsingSqliteCommand(dbPath);
+}
+
+function readTokenUsingSqlJs(dbPath) {
+  try {
+    const db = new SQL.Database(fs.readFileSync(dbPath));
+    try {
+      const token = querySqlJsValue(db, "cursorAuth/accessToken");
+      if (!token) return {};
+      return {
+        token,
+        accountName: querySqlJsValue(db, "cursorAuth/cachedEmail") || querySqlJsValue(db, "cursorAuth/email") || cursorAccountNameFromToken(token)
+      };
+    } finally {
+      db.close();
+    }
+  } catch {
+    return {};
+  }
+}
+
+function readTokenUsingSqliteCommand(dbPath) {
+  try {
+    const token = execFileSync("sqlite3", [dbPath, "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';"], {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (!token) return {};
+    const accountName = execFileSync("sqlite3", [dbPath, "SELECT value FROM ItemTable WHERE key IN ('cursorAuth/cachedEmail','cursorAuth/email') LIMIT 1;"], {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    return { token, accountName: accountName || cursorAccountNameFromToken(token) };
+  } catch {
+    return {};
+  }
+}
+
+function querySqlJsValue(db, key) {
+  const result = db.exec(`SELECT value FROM ItemTable WHERE key = '${key.replaceAll("'", "''")}'`);
+  return String(result?.[0]?.values?.[0]?.[0] || "");
+}
+
+function cursorDbPath() {
+  if (process.env.CURSOR_STATE_DB_PATH) return process.env.CURSOR_STATE_DB_PATH;
+  const home = os.homedir();
+  if (process.platform === "win32") {
+    return path.join(home, "AppData", "Roaming", "Cursor", "User", "globalStorage", "state.vscdb");
+  }
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb");
+  }
+  return path.join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb");
+}
+
+function cursorConfigPaths() {
+  const home = os.homedir();
+  if (process.platform === "win32") {
+    return [
+      path.join(home, "AppData", "Roaming", "Cursor", "User", "globalStorage", "storage.json"),
+      path.join(home, ".cursor", "config.json"),
+      path.join(home, "AppData", "Roaming", "Cursor", "config.json")
+    ];
+  }
+  if (process.platform === "darwin") {
+    return [
+      path.join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "storage.json"),
+      path.join(home, ".cursor", "config.json"),
+      path.join(home, "Library", "Application Support", "Cursor", "config.json")
+    ];
+  }
+  return [
+    path.join(home, ".config", "Cursor", "User", "globalStorage", "storage.json"),
+    path.join(home, ".cursor", "config.json"),
+    path.join(home, ".config", "Cursor", "config.json")
+  ];
+}
+
+function readTokenFromCursorConfig(configPath) {
+  try {
+    if (!fs.existsSync(configPath)) return {};
+    const content = fs.readFileSync(configPath, "utf8");
+    try {
+      return authFromObject(JSON.parse(content));
+    } catch {
+      return { token: content.match(/WorkosCursorSessionToken[=:]["']?([^"'\s;]+)/)?.[1] || "" };
+    }
+  } catch {
+    return {};
+  }
+}
+
+function authFromObject(value) {
+  if (!value || typeof value !== "object") return {};
+  for (const key of ["cursorAuth/accessToken", "accessToken", "sessionToken", "WorkosCursorSessionToken"]) {
+    if (typeof value[key] === "string" && value[key]) {
+      return {
+        token: value[key],
+        accountName: value.accountName || value.email || value.cachedEmail || value["cursorAuth/cachedEmail"] || ""
+      };
+    }
+  }
+  for (const child of Object.values(value)) {
+    const found = authFromObject(child);
+    if (found.token) return found;
+  }
+  return {};
+}
+
 function userIdFromAccessToken(token = "") {
   try {
-    const parts = token.split(".");
+    const decoded = safeDecodeURIComponent(token);
+    if (decoded.includes("::")) return decoded.split("::")[0];
+    const parts = decoded.split(".");
     if (parts.length !== 3) return "";
     let payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
     while (payload.length % 4) payload += "=";
@@ -167,20 +352,56 @@ function userIdFromAccessToken(token = "") {
   }
 }
 
-function normalizeWorkosCookie(value) {
+function cursorTokenToCookie(value) {
   const text = String(value || "").trim();
   if (!text) return "";
   if (text.startsWith("WorkosCursorSessionToken=")) return text;
-  return `WorkosCursorSessionToken=${encodeURIComponent(text)}`;
+  const decoded = safeDecodeURIComponent(text);
+  if (decoded.includes("::")) return `WorkosCursorSessionToken=${encodeURIComponent(decoded)}`;
+  const userId = userIdFromAccessToken(decoded);
+  return userId ? `WorkosCursorSessionToken=${encodeURIComponent(`${userId}::${decoded}`)}` : "";
+}
+
+function cursorAccountNameFromToken(token) {
+  const decoded = safeDecodeURIComponent(String(token || "").trim());
+  if (decoded.startsWith("WorkosCursorSessionToken=")) {
+    return cursorAccountNameFromToken(decoded.replace(/^WorkosCursorSessionToken=/, ""));
+  }
+  if (decoded.includes("::")) return decoded.split("::")[0] || "Cursor";
+  return userIdFromAccessToken(decoded) || "Cursor";
+}
+
+function cursorWorkdirName(source = {}) {
+  const account = String(source.accountName || "").trim();
+  return account ? `Cursor · ${account}` : "Cursor";
+}
+
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function dedupeSources(sources) {
-  const seen = new Set();
-  return sources.filter((source) => {
-    if (!source.cookie || seen.has(source.cookie)) return false;
-    seen.add(source.cookie);
-    return true;
-  });
+  const byCookie = new Map();
+  for (const source of sources) {
+    if (!source.cookie) continue;
+    const current = byCookie.get(source.cookie);
+    if (!current || sourceNameScore(source) > sourceNameScore(current)) {
+      byCookie.set(source.cookie, source);
+    }
+  }
+  return [...byCookie.values()];
+}
+
+function sourceNameScore(source = {}) {
+  const name = String(source.accountName || "");
+  if (name.includes("@")) return 3;
+  if (name && !name.startsWith("user_") && name !== "Cursor") return 2;
+  if (name) return 1;
+  return 0;
 }
 
 function numberValue(value) {

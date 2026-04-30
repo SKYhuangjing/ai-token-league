@@ -14,8 +14,9 @@
     "collector:sync": "node src/collector/cli.js sync",
     "test": "node tests/run-tests.js",
     "smoke": "node tests/run-tests.js && node src/backend/server.js --smoke",
-    "package:mac": "electron-packager . \"AI Token League\" --platform=darwin --arch=arm64 --out=dist --overwrite --app-version=0.1.0 --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
-    "package:win": "electron-packager . \"AI Token League\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=0.1.0 --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
+    "icons": "node scripts/generate-icons.js",
+    "package:mac": "electron-packager . \"AI Token League\" --platform=darwin --arch=arm64 --out=dist --overwrite --app-version=0.1.0 --icon=assets/app-icon.icns --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
+    "package:win": "electron-packager . \"AI Token League\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=0.1.0 --icon=assets/app-icon.ico --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
     "package:all": "npm run package:mac && npm run package:win && node scripts/zip-dist.js"
   },
   "engines": {
@@ -26,6 +27,7 @@
     "electron": "^41.3.0"
   },
   "dependencies": {
-    "mysql2": "^3.22.3"
+    "mysql2": "^3.22.3",
+    "sql.js": "^1.13.0"
   }
 }

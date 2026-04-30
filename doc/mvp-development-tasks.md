@@ -90,6 +90,9 @@ MVP 发布必须同时满足：
 | E17 | 设置归属、Admin Tab 语境与 Chart Tooltip 收口 | DONE | Settings 按 Profile/Display/Sync/Sources/Aliases/System 分组，Cursor 归入 Sources，Admin 筛选只在 Usage tab 内，图表 hover 展示日期/token/成本 |
 | E18 | 测试环境部署与 MySQL 存储迁移 | REVIEW | MySQL Store 已用独立库完成本机服务端 E2E；Docker backend 到外部 MySQL 的网络链路待测试环境网络放通 |
 | E19 | 同步目标可见化与环境配置收口 | DONE | 客户端持久展示 API/上次同步状态；Docker 通过 env.local/env.test 显式选择 dev/test 数据库 |
+| E20 | Icon 资源与打包标识收口 | DONE | icon 资源已重新生成，macOS/Windows 分发包已重打，Web favicon 与包内资源已验证 |
+| E21 | Sources 开关与 Cursor Token 配置收口 | DONE | 删除独立 Cursor dashboard 设置区，来源卡片承担 On/Off，Cursor token 通过弹窗校验保存 |
+| E22 | Sources 开关性能优化与 0.2 基线 | DONE | On/Off 不触发全量扫描或 Cursor API；`doc/0.2-baseline.md` 固化当前现状 |
 
 ## 5. Epic 任务拆分
 
@@ -192,9 +195,12 @@ MVP 发布必须同时满足：
 | E3.5-T1 | 确认 Cursor dashboard API 鉴权 | DONE | E1-T1 | 使用 `WorkosCursorSessionToken=<userId>::<accessToken>` 可访问 usage event |
 | E3.5-T2 | 实现 Cursor provider | DONE | E3.5-T1 | `cursor_dashboard_usage` 可分页读取 dashboard usage events |
 | E3.5-T3 | 实现 token 字段映射 | DONE | E3.5-T2 | 可输出 input/output/cacheRead/cacheWrite/total/model/day |
-| E3.5-T4 | 明确 workdir 规则 | DONE | E3.5-T2 | Cursor workdir 固定展示为 `Cursor`，不上传真实路径，不做目录归因 |
+| E3.5-T4 | 明确 workdir 规则 | DONE | E3.5-T2 | Cursor workdir 展示为 `Cursor · <账号名>`，不上传真实路径，不做目录归因 |
 | E3.5-T5 | 设置页启用配置 | DONE | E8 | 用户可启用 Cursor usage，可填写 Workos session token；token 不展示、不上传 |
 | E3.5-T6 | 添加 provider 测试 | DONE | E3.5-T3 | 样本 event 映射测试通过 |
+| E3.5-T7 | 自动检测 Cursor 本机 token | DONE | E3.5-T2 | macOS/Windows/Linux 读取 Cursor `state.vscdb` 的 `cursorAuth/accessToken`，解析 JWT userId 并构造 Workos cookie |
+| E3.5-T8 | Sources 添加 Cursor token 入口 | DONE | E17 | `Add Cursor token` 按钮位于 `Add Claude Code location` 后，支持 token/account JSON 输入并自动启用 Cursor usage |
+| E3.5-T9 | 多 Cursor token 与账号 workdir | DONE | E3.5-T8 | 支持多次追加 Cursor token；Cursor 虚拟 workdir 按账号名拆分为 `Cursor · <账号名>` |
 
 验证记录：
 
@@ -206,9 +212,12 @@ MVP 发布必须同时满足：
 - src/collector/providers/cursor-dashboard-usage.js 已实现。
 - Cursor provider 默认关闭，Settings 中显式启用。
 - 多个本地 Cursor account source 互相隔离，失效 token 不会阻断其他有效 token。
+- 自动检测 Cursor 官方 `state.vscdb`，同时保留 `.antigravity_cockpit/cursor_accounts` 与手工 token。
 - Cursor session token 只保存在本地配置，sanitize 后不回显真实 token。
-- workdirCandidate 固定为 `Cursor`。
+- workdirCandidate 使用 `Cursor · <账号名>`；账号名优先 email，无法识别时退回 `user_xxx`。
 - 本机临时启用验证返回 15 条 Cursor 聚合行，样例模型包含 `composer-2-fast`、`claude-opus-4-7-thinking-high`、`claude-4.6-sonnet-medium-thinking`。
+- 2026-04-30 重新验证本机 Cursor provider：检测到 `manual_workos_cookie` 与本地 Cursor account source，扫描返回 15 条 Cursor 聚合行，共 175,619,470 tokens。
+- 2026-04-30 多账号 workdir 验证：本机 Cursor 行拆分为 `Cursor · user_01JSX3Z74AZ2T1TA4HFXT7H36R` 与 `Cursor · 18838983358@163.com`。
 - 验证聚合 usage JSON 不包含 `WorkosCursorSessionToken`。
 ```
 
@@ -936,6 +945,138 @@ P2: E14-T6, E14-T8, E14-T9, E14-T10, E14-T11, E14-T12, E14-T13
 | Renderer 语法 | `node --check src/desktop/renderer.js` | renderer 语法通过 |
 | 回归 | `npm test` | 原有测试通过 |
 
+### E20 Icon 资源与打包标识收口
+
+目标：把本地未提交的应用 icon 资源设计固化为可重复生成、可验证、跨 macOS / Windows / Web 一致的资源链路。
+
+产品/工程边界：
+
+- 本轮只收口应用 icon 与 favicon，不扩展完整品牌视觉系统。
+- 源图保留在 `assets/app-icon-source.png`，派生资源由脚本生成，避免手工多份资源漂移。
+- Electron 窗口、macOS `.icns`、Windows `.ico`、Web favicon 和 Desktop HTML favicon 使用同一源图基线。
+- 当前代码与资源仍处于本地未提交状态；进入 `DONE` 前必须随打包产物做一次验证。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E20-T1 | 源图与派生资源落库 | DONE | E9 | `assets/app-icon-source.png`、`app-icon.png`、`app-icon.icns`、`app-icon.ico`、Web/Desktop favicon 路径明确且进入提交范围 |
+| E20-T2 | icon 生成脚本 | DONE | E20-T1 | `npm run icons` 可从源图重复生成 macOS/Windows/Web 所需资源 |
+| E20-T3 | Electron 与 HTML 引用 | DONE | E20-T1 | Desktop window 使用应用 icon，Web `/`、`/admin.html` 和 Desktop HTML 加载 favicon |
+| E20-T4 | 打包脚本接入 | DONE | E20-T1 | `package:mac` 使用 `assets/app-icon.icns`，`package:win` 使用 `assets/app-icon.ico` |
+| E20-T5 | 资源验收 | DONE | E20-T2/E20-T4 | 重新生成 icon、执行打包或 smoke，确认 macOS/Windows/Web icon 显示正常 |
+
+验证矩阵：
+
+| 验证项 | 方式 | 完成标准 |
+| --- | --- | --- |
+| 资源生成 | `npm run icons` | `assets/app-icon.icns`、`assets/app-icon.ico`、`src/web/favicon.png`、`src/desktop/favicon.png` 重新生成成功 |
+| macOS 标识 | macOS 打包产物或运行窗口 | Dock/窗口/应用包显示 AI Token League icon |
+| Windows 标识 | Windows exe 或资源检查 | exe 使用 `assets/app-icon.ico` |
+| Web favicon | 打开 `/` 与 `/admin.html` | 浏览器标签加载 `/favicon.png` |
+| 提交范围 | `git status --short` | icon 资源、生成脚本、引用代码和文档同批进入 review |
+
+实现记录：
+
+```text
+2026-04-30:
+- 本地未提交代码已新增 `assets/` icon 资源、`scripts/generate-icons.js` 与 `npm run icons`。
+- `package:mac` / `package:win` 已接入应用 icon，后续验证中收敛为平台显式路径。
+- `src/desktop/main.cjs` 已为 BrowserWindow 设置平台 icon。
+- `src/web/index.html`、`src/web/admin.html`、`src/desktop/index.html` 已引入 favicon。
+- 当前记录说明本地未提交实现状态；后续验证记录已补齐资源生成、打包和显示验证结果。
+2026-04-30:
+- `npm run icons` 重新生成 `assets/app-icon.png`、`assets/app-icon.icns`、`assets/app-icon.ico`、`src/web/favicon.png`、`src/desktop/favicon.png` 成功。
+- `node --check scripts/generate-icons.js`、`node --check src/backend/server.js`、`node --check src/desktop/main.cjs`、`node --check src/desktop/renderer.js` 通过。
+- `npm test` 与 `npm run desktop:smoke` 通过。
+- 首轮打包验证发现 macOS `CFBundleIconFile` 仍引用默认 `electron.icns`；已将 `package:mac` 改为 `--icon=assets/app-icon.icns`、`package:win` 改为 `--icon=assets/app-icon.ico`。
+- `npm run package:all` 通过，重新生成 `dist/AI Token League-darwin-arm64.zip` 与 `dist/AI Token League-win32-x64.zip`。
+- macOS 包内 `Contents/Resources/electron.icns` 与 `assets/app-icon.icns` SHA-256 一致，打包后 app `--desktop-smoke` 通过。
+- Windows exe 确认为 `PE32+ executable (GUI) x86-64, for MS Windows`，Windows 实机显示仍需 Windows 主机最终目视确认。
+- Web favicon HTTP 验证通过：`/favicon.png` 返回 `image/png`，内容 hash 与 `src/web/favicon.png` 一致；`/` 与 `/admin.html` 均声明 `/favicon.png`。
+- in-app browser 已打开 `/` 与 `/admin.html` 截图验证，页面加载正常且各有一个 favicon link。
+```
+
+### E21 Sources 开关与 Cursor Token 配置收口
+
+目标：把 Sources 页的来源卡片升级为唯一控制面，删除独立 Cursor dashboard 设置区，避免 `Cursor On` 与 `Enable Cursor usage` 双 truth source。
+
+产品/工程边界：
+
+- Claude Code、Codex、Cursor 都在来源卡片上完成 On/Off。
+- Cursor 的 On/Off 等价于 `cursorDashboardUsage.enabled`；Off 时不访问 Cursor dashboard API。
+- Claude Code、Codex 的 On/Off 只控制本机扫描，不删除已配置 location。
+- `Add Cursor token` 使用弹窗输入和本地格式校验，不再使用浏览器 prompt。
+- Cursor token 只保存在本机配置，UI 不展示真实 token，不上传服务端。
+- 保存 token 成功后自动开启 Cursor source。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E21-T1 | 删除独立 Cursor dashboard 设置区 | DONE | E17/E3.5 | Sources 页不再出现 `Cursor dashboard`、`Enable Cursor usage`、`Workos session token` 常驻表单 |
+| E21-T2 | 来源卡片 On/Off 交互 | DONE | E21-T1 | Claude Code、Codex、Cursor 卡片均可直接切换启停 |
+| E21-T3 | 本地 provider 启停配置 | DONE | E21-T2 | Codex/Claude Code Off 后不扫描本地 session，但保留 location |
+| E21-T4 | Cursor 启停合并 | DONE | E21-T2 | Cursor 卡片 Off 后 `cursor_dashboard_usage` 不返回扫描源；On 后按已配置 token / 本机 token 扫描 |
+| E21-T5 | Cursor token 弹窗 | DONE | E3.5 | 弹窗支持输入 token / account JSON，空值和非法格式阻止保存 |
+| E21-T6 | Token 保存与账号摘要 | DONE | E21-T5 | 合法 token 去重保存；保存后 Cursor 自动 On；账号摘要脱敏展示 |
+| E21-T7 | 回归测试与文档同步 | DONE | E21-T1-E21-T6 | `node --check`、`npm test` 通过，产品设计和任务文档同步 |
+
+验证矩阵：
+
+| 验证项 | 方式 | 完成标准 |
+| --- | --- | --- |
+| Cursor 设置区删除 | 打开 Settings / Sources | 页面只保留来源卡片和 Add Cursor token，不再有独立 dashboard 表单 |
+| Codex/Claude 开关 | 点击来源卡片 On/Off 后刷新 | Off 时不扫描对应本地 provider，On 时恢复扫描 |
+| Cursor 开关 | 点击 Cursor 来源卡片 On/Off 后刷新 | Off 时不访问 Cursor API，On 时按 token source 扫描 |
+| Token 弹窗 | 点击 Add Cursor token | 空值、非法格式提示错误；合法 token 保存并自动开启 Cursor |
+| 安全边界 | 查看 UI 与上传 payload | 不展示真实 token，不上传 Cursor session token |
+| 回归 | `node --check src/desktop/renderer.js`、`node --check src/desktop/main.cjs`、`npm test` | 全部通过 |
+
+实现记录：
+
+```text
+2026-04-30:
+- Sources 页已删除独立 Cursor dashboard 设置区。
+- 来源卡片新增 On/Off 按钮；Cursor 绑定 `cursorDashboardUsage.enabled`，Codex/Claude Code 绑定 `providerEnabled`。
+- Codex/Claude Code provider 在 Off 时不扫描 session，health 仍保留检测到的 location。
+- `Add Cursor token` 已从 `window.prompt` 改为弹窗，空值和非法格式在弹窗内提示。
+- 合法 Cursor token 继续复用 `addCursorToken` 去重保存，保存成功后自动开启 Cursor。
+- `node --check src/desktop/renderer.js`、`node --check src/desktop/main.cjs`、`npm test`、`npm run desktop:smoke` 均通过。
+- `npm run package:all` 已重新生成 `dist/AI Token League-darwin-arm64.zip` 与 `dist/AI Token League-win32-x64.zip`；解包 `app.asar` 验证桌面 UI 不再包含旧 Cursor dashboard 表单。
+```
+
+### E22 Sources 开关性能优化与 0.2 基线
+
+目标：修复 Sources 卡片 On/Off 点击后 UI 卡顿的问题，并把当前产品、工程和验证状态固化为 `0.2` 基线。
+
+根因：
+
+- E21 的 On/Off 逻辑保存配置后调用 `loadHealth()`，随后又调用 `loadToday(true)`。
+- `loadToday(true)` 会强制重扫全部 provider；Cursor 打开时还会访问 Cursor dashboard API。
+- 来源开关是配置动作，不是 usage 刷新动作；把两者串联会让单次点击承担本地文件扫描、SQLite 读取、网络请求和图表重渲染。
+
+设计原则：
+
+- On/Off 点击只做轻量配置变更。
+- UI 先乐观更新卡片状态，再异步保存配置。
+- 保存后只刷新 source health 和 background status。
+- usage totals 不在 On/Off 点击链路里刷新；用户点击 Today Refresh、后台 refresh 或 sync 时再扫描。
+- 配置变更仍会让 usage cache 失效，保证下一次显式刷新拿到正确 provider 集合。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E22-T1 | 定位 On/Off 卡顿根因 | DONE | E21 | 明确卡顿来自 `toggleSource -> loadToday(true)` 强制扫描 |
+| E22-T2 | 切断 On/Off 全量扫描链路 | DONE | E22-T1 | 点击 On/Off 不调用 `loadToday(true)`，不访问 Cursor usage API |
+| E22-T3 | 来源卡片乐观更新 | DONE | E22-T2 | 点击后卡片状态立即切换，保存失败可回滚 |
+| E22-T4 | 保留正确刷新语义 | DONE | E22-T2 | 配置保存后只刷新 health；usage totals 通过 Refresh / 后台任务更新 |
+| E22-T5 | 0.2 baseline 文档 | DONE | E22-T4 | 新增 `doc/0.2-baseline.md`，记录当前产品、性能和发布状态 |
+
+验证矩阵：
+
+| 验证项 | 方式 | 完成标准 |
+| --- | --- | --- |
+| 切换链路 | 代码检查 `toggleSource` | 不再调用 `loadToday(true)` |
+| Cursor API 边界 | 代码检查 | On/Off 只保存配置和刷新 health，不触发 `parseUsage` |
+| 回归 | `node --check src/desktop/renderer.js`、`node --check src/desktop/main.cjs`、`npm test`、`npm run desktop:smoke` | 全部通过 |
+| 打包 | `npm run package:all` | dist 内包含新 renderer 和 baseline 文档 |
+
 ## 6. 发布阻塞项
 
 当前阻塞项：
@@ -985,3 +1126,9 @@ Windows x64 分发包已生成；Windows 实机 E2E 需要在 Windows 主机执�
 | 2026-04-30 | 启动 E18 测试环境部署 | 新增 MySQL Store、migration、Dockerfile、外部 MySQL compose 配置；独立库 `ai_token_league` 本机 E2E 通过，Docker 到外部 MySQL 网络待放通 |
 | 2026-04-30 | 完成 E19 同步目标可见化 | 客户端持久化并展示 API/上次同步状态；Docker env.local/env.test 显式区分 dev/test 数据库 |
 | 2026-04-30 | 修复业务日偏移并重打包 | `TZ=Asia/Shanghai` 统一每日归属，MySQL DATE 读回不再 UTC 截断；重新生成桌面分发包 |
+| 2026-04-30 | 增强 Cursor Dashboard 来源 | 自动检测 Cursor `state.vscdb` token，Sources 增加 `Add Cursor token` 按钮，支持多 token 与账号 workdir |
+| 2026-04-30 | 记录 Icon 资源设计 | 本地未提交代码已补齐应用 icon、macOS/Windows 打包 icon、Web/Desktop favicon 与生成脚本；作为 E20 待验证项跟踪 |
+| 2026-04-30 | 完成 Icon 资源验证 | 重新生成 icon、修正平台打包 icon 参数和 Web PNG MIME，重打 macOS/Windows 包并完成包内资源、desktop smoke、Web favicon 和浏览器截图验证 |
+| 2026-04-30 | 启动 Sources 开关收口 | 新增 E21：删除独立 Cursor dashboard 设置区，来源卡片统一承担 On/Off，Add Cursor token 改为弹窗校验保存 |
+| 2026-04-30 | 完成 Sources 开关收口 | E21 已落地并重新打包：来源卡片统一启停，Cursor token 弹窗校验保存，本地 provider Off 后不扫描，回归、desktop smoke 和 dist 包内验证通过 |
+| 2026-04-30 | 完成 Sources 开关性能优化 | E22 已落地：On/Off 不再触发全量 usage scan，卡片乐观更新，0.2 baseline 文档新增 |

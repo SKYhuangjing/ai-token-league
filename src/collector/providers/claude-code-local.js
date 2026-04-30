@@ -35,6 +35,7 @@ export const claudeCodeLocalProvider = {
   },
 
   scanSessions(config) {
+    if (config.providerEnabled?.claude_code_local === false) return [];
     return this.roots(config).flatMap((root) => walkFiles(root, (file) => file.endsWith(".jsonl")));
   },
 
@@ -81,6 +82,7 @@ export const claudeCodeLocalProvider = {
       providerId: this.id,
       toolCode: this.toolCode,
       detected: detection.detected,
+      enabled: config.providerEnabled?.claude_code_local !== false,
       roots: detection.roots,
       lastCheckedAt: new Date().toISOString()
     };

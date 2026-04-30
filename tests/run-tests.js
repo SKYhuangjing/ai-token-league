@@ -2,16 +2,21 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload } from "../src/shared/crypto.js";
 import { assertNoForbiddenUploadFields, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
 import { scanUsage } from "../src/collector/core.js";
-import { exportIdentity, importIdentity, updateConfig } from "../src/collector/config.js";
-import { eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
+import { addCursorToken, exportIdentity, importIdentity, updateConfig } from "../src/collector/config.js";
+import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
+import { codexLocalProvider } from "../src/collector/providers/codex-local.js";
+import { cursorDashboardUsageProvider, eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost } from "../src/shared/pricing.js";
 import { localDay } from "../src/shared/date.js";
 
+const require = createRequire(import.meta.url);
+const initSqlJs = require("sql.js/dist/sql-asm.js");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
 
 async function testScan() {
@@ -43,6 +48,31 @@ async function testScan() {
   return { identity, items: result.items };
 }
 
+async function testProviderEnabledSwitches() {
+  const identity = generateIdentity();
+  const config = {
+    participantId: identity.participantId,
+    workdirAliases: {},
+    providerRootsOnly: true,
+    providerEnabled: {
+      codex_local: false,
+      claude_code_local: true
+    },
+    providerRoots: {
+      codex_local: path.resolve("samples/codex"),
+      claude_code_local: path.resolve("samples/claude/projects")
+    }
+  };
+  const result = await scanUsage(config);
+  assert.equal(result.items.some((item) => item.providerId === "codex_local"), false);
+  assert.equal(result.items.some((item) => item.providerId === "claude_code_local"), true);
+  assert.equal(codexLocalProvider.reportHealth(config).enabled, false);
+  assert.equal(claudeCodeLocalProvider.reportHealth(config).enabled, true);
+  const updated = updateConfig({ providerEnabled: { codex_local: true } }, config, { persist: false });
+  assert.equal(updated.providerEnabled.codex_local, true);
+  assert.equal(updated.providerEnabled.claude_code_local, true);
+}
+
 function testCursorDashboardMapping() {
   const items = eventsToUsageEvents([
     {
@@ -63,6 +93,56 @@ function testCursorDashboardMapping() {
   assert.equal(items[0].totalTokens, 460);
   assert.ok(items[0].sourceFingerprint);
   assert.equal(localDay("2026-04-29T18:30:00.000Z", "Asia/Shanghai"), "2026-04-30");
+  const namedItems = eventsToUsageEvents([
+    {
+      timestamp: "1776866406216",
+      model: "gpt-5",
+      tokenUsage: { inputTokens: 1, outputTokens: 2 }
+    }
+  ], { accountName: "cursor@example.com" });
+  assert.equal(namedItems[0].workdirCandidate, "virtual:cursor-dashboard:Cursor · cursor@example.com");
+  const duplicateSources = cursorDashboardUsageProvider.scanSessions({
+    cursorDashboardUsage: {
+      enabled: true,
+      autoDetectLocal: false,
+      workosSessionTokens: [
+        { token: "user_01TESTCURSOR::manual", accountName: "user_01TESTCURSOR" },
+        { token: "user_01TESTCURSOR::manual", accountName: "cursor@example.com" }
+      ]
+    }
+  });
+  assert.equal(duplicateSources.length, 1);
+  assert.equal(duplicateSources[0].accountName, "cursor@example.com");
+}
+
+async function testCursorLocalTokenDetection() {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  const token = jwtWithSub("auth0|user_01TESTCURSOR");
+  db.run("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)");
+  db.run("INSERT INTO ItemTable VALUES (?, ?)", ["cursorAuth/accessToken", token]);
+  const dbPath = path.join(tmp, "cursor-state.vscdb");
+  fs.writeFileSync(dbPath, Buffer.from(db.export()));
+  db.close();
+  process.env.CURSOR_STATE_DB_PATH = dbPath;
+  try {
+    const sources = cursorDashboardUsageProvider.scanSessions({ cursorDashboardUsage: { enabled: true } });
+    const localSource = sources.find((source) => source.sourceKind === "local_cursor_state");
+    assert.ok(localSource);
+    assert.ok(decodeURIComponent(localSource.cookie).includes("user_01TESTCURSOR::"));
+    const health = cursorDashboardUsageProvider.reportHealth({ cursorDashboardUsage: { enabled: false } });
+    assert.equal(health.detected, true);
+    assert.equal(health.enabled, false);
+    assert.ok(health.roots.some((root) => root.startsWith("local_cursor_state:")));
+  } finally {
+    delete process.env.CURSOR_STATE_DB_PATH;
+  }
+}
+
+function jwtWithSub(sub) {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ sub })).toString("base64url");
+  return `${header}.${payload}.signature`;
 }
 
 function testBackendUpload(identity, items) {
@@ -205,12 +285,18 @@ function testUpdateConfigKeepsIdentity() {
     identityPrivateKey: identity.identityPrivateKey,
     deviceId: newId("d"),
     apiBaseUrl: "http://127.0.0.1:8787",
+    apiConnection: { status: "reachable", apiBaseUrl: "http://127.0.0.1:8787" },
+    syncStatus: { status: "success", apiBaseUrl: "http://127.0.0.1:8787" },
+    lastSyncAt: "2026-04-30T01:00:00.000Z",
     autoRefreshEnabled: true,
     refreshIntervalMinutes: 15
   };
   const updated = updateConfig({
     nickname: "renamed",
     apiBaseUrl: "",
+    apiConnection: { status: "not_configured", apiBaseUrl: "" },
+    syncStatus: {},
+    lastSyncAt: "",
     autoRefreshEnabled: false,
     refreshIntervalMinutes: 3
   }, current, { persist: false });
@@ -218,9 +304,36 @@ function testUpdateConfigKeepsIdentity() {
   assert.equal(updated.deviceId, current.deviceId);
   assert.equal(updated.nickname, "renamed");
   assert.equal(updated.apiBaseUrl, "");
+  assert.equal(updated.apiConnection.status, "not_configured");
+  assert.deepEqual(updated.syncStatus, {});
+  assert.equal(updated.lastSyncAt, "");
   assert.equal(updated.showEstimatedCost, false);
   assert.equal(updated.autoRefreshEnabled, false);
   assert.equal(updated.refreshIntervalMinutes, 3);
+}
+
+function testAddCursorTokenKeepsMultipleAccounts() {
+  const identity = generateIdentity();
+  const current = {
+    participantId: identity.participantId,
+    nickname: "origin",
+    identityPublicKey: identity.identityPublicKey,
+    identityPrivateKey: identity.identityPrivateKey,
+    deviceId: newId("d"),
+    cursorDashboardUsage: { enabled: false, workosSessionToken: "", workosSessionTokens: [] }
+  };
+  const first = addCursorToken(JSON.stringify({
+    email: "a@example.com",
+    access_token: jwtWithSub("auth0|user_01A")
+  }), current, { persist: false });
+  const second = addCursorToken(JSON.stringify({
+    email: "b@example.com",
+    access_token: jwtWithSub("auth0|user_01B")
+  }), first, { persist: false });
+  assert.equal(second.cursorDashboardUsage.enabled, true);
+  assert.equal(second.cursorDashboardUsage.workosSessionTokens.length, 2);
+  assert.deepEqual(second.cursorDashboardUsage.workosSessionTokens.map((item) => item.accountName), ["a@example.com", "b@example.com"]);
+  assert.throws(() => addCursorToken("not-a-token", current, { persist: false }), /Cursor token is empty or invalid/);
 }
 
 function testDisplayAndPricing() {
@@ -243,9 +356,12 @@ function testDisplayAndPricing() {
 }
 
 const { identity, items } = await testScan();
+await testProviderEnabledSwitches();
 testBackendUpload(identity, items);
 testIdentityImport();
 testUpdateConfigKeepsIdentity();
+testAddCursorTokenKeepsMultipleAccounts();
+await testCursorLocalTokenDetection();
 testCursorDashboardMapping();
 testForbiddenUploadFields();
 testDisplayAndPricing();

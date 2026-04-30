@@ -41,6 +41,7 @@ function createWindow() {
     minWidth: 920,
     minHeight: 680,
     title: "AI Token League",
+    icon: path.join(app.getAppPath(), "assets", process.platform === "win32" ? "app-icon.ico" : "app-icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -85,10 +86,15 @@ ipcMain.handle("config:get", async () => {
   return sanitizeConfig(config.loadConfig());
 });
 
+ipcMain.handle("api:check", async (_event, apiBaseUrl) => {
+  return checkApiConnection(apiBaseUrl);
+});
+
 ipcMain.handle("config:init", async (_event, input) => {
   const { config } = await modules();
   const current = config.loadConfig();
-  const next = current ? config.updateConfig(input, current) : config.initConfig(input);
+  const prepared = await prepareConfigInput(input, current);
+  const next = current ? config.updateConfig(prepared, current) : config.initConfig(prepared);
   invalidateUsageCache();
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
@@ -97,7 +103,8 @@ ipcMain.handle("config:init", async (_event, input) => {
 
 ipcMain.handle("config:update", async (_event, input) => {
   const { config } = await modules();
-  const next = config.updateConfig(input, config.loadConfig());
+  const current = config.loadConfig();
+  const next = config.updateConfig(await prepareConfigInput(input, current), current);
   invalidateUsageCache();
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
@@ -143,6 +150,15 @@ ipcMain.handle("providers:add-root", async (_event, providerId) => {
   });
   if (source.canceled || !source.filePaths[0]) return { canceled: true };
   const next = config.addProviderRoot(providerId, source.filePaths[0], current);
+  invalidateUsageCache();
+  return sanitizeConfig(next);
+});
+
+ipcMain.handle("cursor:add-token", async (_event, rawInput) => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  if (!current) throw new Error("Open Settings first");
+  const next = config.addCursorToken(rawInput, current);
   invalidateUsageCache();
   return sanitizeConfig(next);
 });
@@ -392,6 +408,82 @@ function hasApiBaseUrl(config) {
   return Boolean(String(config?.apiBaseUrl || "").trim());
 }
 
+async function prepareConfigInput(input = {}, current = null) {
+  if (!Object.hasOwn(input, "apiBaseUrl")) return input;
+  const apiBaseUrl = normalizeApiBaseUrl(input.apiBaseUrl);
+  const previousApiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
+  const shouldCheckApi = !current || apiBaseUrl !== previousApiBaseUrl || (apiBaseUrl && !current.apiConnection?.checkedAt);
+  if (!shouldCheckApi) return { ...input, apiBaseUrl };
+  const apiConnection = await checkApiConnection(apiBaseUrl);
+  const next = {
+    ...input,
+    apiBaseUrl,
+    apiConnection
+  };
+  if (apiBaseUrl !== previousApiBaseUrl) {
+    next.syncStatus = {};
+    next.lastSyncAt = "";
+    next.lastSyncStatus = "";
+    next.lastSyncApiBaseUrl = "";
+    next.lastSyncError = "";
+  }
+  return next;
+}
+
+async function checkApiConnection(apiBaseUrl) {
+  const normalized = normalizeApiBaseUrl(apiBaseUrl);
+  const checkedAt = new Date().toISOString();
+  if (!normalized) {
+    return {
+      ok: true,
+      status: "not_configured",
+      apiBaseUrl: "",
+      checkedAt,
+      message: "API not configured"
+    };
+  }
+  let healthUrl;
+  try {
+    const base = new URL(normalized);
+    if (!["http:", "https:"].includes(base.protocol)) throw new Error("API base URL must use http or https");
+    healthUrl = new URL("/api/health", base).toString();
+  } catch (error) {
+    throw new Error(`Invalid API base URL: ${error.message}`);
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(healthUrl, { signal: controller.signal });
+    const text = await response.text();
+    let body = {};
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {}
+    if (!response.ok || body.ok !== true) {
+      const detail = body.error || text || response.statusText;
+      throw new Error(`${response.status} ${detail}`.trim());
+    }
+    return {
+      ok: true,
+      status: "reachable",
+      apiBaseUrl: normalized,
+      checkedAt,
+      dbType: body.dbType || "",
+      serverTime: body.serverTime || "",
+      message: "API reachable"
+    };
+  } catch (error) {
+    const reason = error.name === "AbortError" ? "request timed out" : error.message;
+    throw new Error(`API health check failed: ${reason}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeApiBaseUrl(apiBaseUrl) {
+  return String(apiBaseUrl || "").trim().replace(/\/+$/, "");
+}
+
 function backgroundStatus() {
   const { items: queuedItems } = readUploadQueue();
   return {
@@ -515,7 +607,12 @@ function sanitizeConfig(config) {
     cursorDashboardUsage: safe.cursorDashboardUsage
       ? {
           ...safe.cursorDashboardUsage,
-          workosSessionToken: safe.cursorDashboardUsage.workosSessionToken ? "[configured]" : ""
+          workosSessionToken: safe.cursorDashboardUsage.workosSessionToken ? "[configured]" : "",
+          workosSessionTokens: (safe.cursorDashboardUsage.workosSessionTokens || []).map((item) => ({
+            accountName: item.accountName || "Cursor",
+            token: item.token ? "[configured]" : "",
+            addedAt: item.addedAt || ""
+          }))
         }
       : undefined
   };

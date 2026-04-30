@@ -315,8 +315,17 @@ Cookie: WorkosCursorSessionToken=<userId>::<accessToken>
 
 token 来源：
 
-- 用户手动填入 `WorkosCursorSessionToken`。
-- 或客户端只在本机尝试从已知 Cursor account cache 自动构造，例如 `~/.antigravity_cockpit/cursor_accounts/*.json`。
+- Sources 页提供 `Add Cursor token` 按钮，用户可多次添加 token；每个 token 单独保存、去重和脱敏展示。
+- 用户可手动填入 `WorkosCursorSessionToken`、`user_xxx::accessToken`、纯 JWT access token，或 Cursor account JSON。
+- 客户端自动检测本机 Cursor 官方存储：
+  - macOS: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
+  - Windows: `%APPDATA%\Cursor\User\globalStorage\state.vscdb`
+  - Linux: `~/.config/Cursor/User/globalStorage/state.vscdb`
+- 自动检测读取 SQLite `ItemTable` 中 `key = 'cursorAuth/accessToken'` 的值，并从 JWT `sub` 提取 `user_xxx` 后构造 `WorkosCursorSessionToken=<userId>::<accessToken>`。
+- 兼容旧版 Cursor JSON 配置与已知 Cursor account cache，例如 `~/.antigravity_cockpit/cursor_accounts/*.json`。
+- Sources 可以显示本机 Cursor token 是否可检测；真正扫描 Cursor Dashboard usage 受 Cursor 来源卡片 `On/Off` 控制，因为扫描会访问 cursor.com API。
+- Sources 页不再保留独立 `Cursor dashboard` 设置区；Cursor 的启停与其他来源一致，由来源卡片承担唯一控制面。
+- `Add Cursor token` 使用弹窗输入，先做本地格式校验和去重保存；远端 API 可用性进入 Refresh sources / 扫描结果，不阻塞本地保存。
 
 安全边界：
 
@@ -328,8 +337,9 @@ token 来源：
 工作目录限制：
 
 - Cursor dashboard usage event 当前不包含 workspace、repo、path、project 等字段。
-- 因此 `cursor_dashboard_usage` 的 workdir 固定为 `Cursor`。
-- Cursor 的 token 总量和模型分布可以准确统计；目录维度不做猜测归因。
+- 因此 `cursor_dashboard_usage` 不做真实目录归因；虚拟 workdir 使用 `Cursor · <账号名>`。
+- 账号名优先取 Cursor account JSON / 本机 Cursor cache 中的 email；没有 email 时退回 `user_xxx`。
+- Cursor 的 token 总量、模型分布和账号维度可以准确统计；真实目录维度不做猜测归因。
 
 数据质量：
 
@@ -1645,7 +1655,8 @@ Desktop Settings
   Sources
     Codex locations
     Claude Code locations
-    Cursor dashboard usage
+    Cursor dashboard usage source card
+    Add Cursor token dialog
 
   Aliases
     workdir public aliases
@@ -1739,6 +1750,35 @@ Next.js / Vite + React / Vue
 ```
 
 第一版重点是表格、筛选和详情页，不需要复杂前端架构。
+
+### 18.4 Icon 资源设计
+
+本地未提交实现已补齐应用 icon 与 favicon 资源。设计目标不是新增品牌系统，而是解决 macOS / Windows 安装包、桌面窗口、Web 页面和 Admin 页缺少统一图标的问题。
+
+资源边界：
+
+- `assets/app-icon-source.png` 作为源图。
+- `assets/app-icon.png` 作为 Electron 窗口和通用应用 icon。
+- `assets/app-icon.icns` 用于 macOS 打包。
+- `assets/app-icon.ico` 用于 Windows 打包。
+- `src/web/favicon.png` 用于 Web 与 Admin favicon。
+- `src/desktop/favicon.png` 用于桌面 HTML favicon。
+
+生成规则：
+
+- 通过 `npm run icons` 执行 `scripts/generate-icons.js`，从源图生成平台资源。
+- macOS 依赖系统 `sips` 与 `iconutil`。
+- Windows `.ico` 由脚本写入多尺寸 PNG icon entry，覆盖 16/24/32/48/64/128/256。
+- macOS 打包脚本通过 `--icon=assets/app-icon.icns` 接入 `.icns`。
+- Windows 打包脚本通过 `--icon=assets/app-icon.ico` 接入 `.ico`。
+- Web 静态服务必须为 `.png` 返回 `image/png`，避免 favicon 在严格浏览器中被错误 MIME 影响。
+
+验收口径：
+
+- macOS 窗口、Dock、打包产物显示应用 icon。
+- Windows exe 显示 `.ico` 资源。
+- Web `/` 与 `/admin.html` 均加载 favicon。
+- icon 生成脚本可重复执行，输出文件路径稳定。
 
 ## 19. MVP 里程碑
 

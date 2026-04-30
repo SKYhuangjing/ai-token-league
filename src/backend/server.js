@@ -156,7 +156,13 @@ function serveStatic(req, res) {
     return;
   }
   const ext = path.extname(file);
-  const type = ext === ".css" ? "text/css" : ext === ".js" ? "text/javascript" : "text/html";
+  const type = {
+    ".css": "text/css",
+    ".html": "text/html",
+    ".ico": "image/x-icon",
+    ".js": "text/javascript",
+    ".png": "image/png"
+  }[ext] || "application/octet-stream";
   res.writeHead(200, { "content-type": `${type}; charset=utf-8` });
   fs.createReadStream(file).pipe(res);
 }

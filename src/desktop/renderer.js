@@ -36,6 +36,20 @@ $("#refresh-health").addEventListener("click", () => run(async () => {
 $("#sync-now").addEventListener("click", () => run(syncNow));
 $("#add-codex-root").addEventListener("click", () => run(() => addProviderRoot("codex_local")));
 $("#add-claude-root").addEventListener("click", () => run(() => addProviderRoot("claude_code_local")));
+$("#add-cursor-token").addEventListener("click", openCursorTokenModal);
+$("#cancel-cursor-token").addEventListener("click", closeCursorTokenModal);
+$("#save-cursor-token").addEventListener("click", () => run(addCursorToken));
+$("#cursor-token-modal").addEventListener("click", (event) => {
+  if (event.target.id === "cursor-token-modal") closeCursorTokenModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#cursor-token-modal").hidden) closeCursorTokenModal();
+});
+$("#settings-source-list").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-toggle-source]");
+  if (!button) return;
+  run(() => toggleSource(button.dataset.toggleSource));
+});
 $("#trend-mode").addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -79,9 +93,11 @@ document.querySelectorAll(".save-settings").forEach((button) => button.addEventL
 
 async function saveSettings({ reloadToday = true } = {}) {
   const payload = settingsPayload();
+  setSaveMessage("Checking API...", "");
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
   renderConfig(config);
+  setSaveMessage("Settings saved", "ok");
   $("#sync-state").textContent = "Settings saved";
   if (reloadToday) await loadToday(true);
   await loadBackgroundStatus();
@@ -97,27 +113,11 @@ function settingsPayload() {
     autoRefreshEnabled: $("#autoRefreshEnabled").checked,
     refreshIntervalMinutes: $("#refreshIntervalMinutes").value || 15,
     launchAtLogin: $("#launchAtLogin").checked,
-    cursorDashboardUsage: cursorSettingsPayload()
+    providerEnabled: latestConfig?.providerEnabled || {},
+    cursorDashboardUsage: {
+      enabled: latestConfig?.cursorDashboardUsage?.enabled ?? false
+    }
   };
-}
-
-function cursorSettingsPayload() {
-  const token = normalizeCursorTokenInput($("#cursorWorkosSessionToken").value.trim());
-  const payload = { enabled: $("#cursorDashboardEnabled").checked };
-  if (token && token !== "[configured]") payload.workosSessionToken = token;
-  return payload;
-}
-
-function normalizeCursorTokenInput(value) {
-  if (!value || value === "[configured]") return value;
-  try {
-    const parsed = JSON.parse(value);
-    const account = Array.isArray(parsed) ? parsed[0] : parsed;
-    const workosId = account?.cursor_auth_raw?.workosId || account?.auth_id?.match(/user_[A-Za-z0-9]+/)?.[0];
-    const accessToken = account?.access_token || account?.cursor_auth_raw?.accessToken;
-    if (workosId && accessToken) return `${workosId}::${accessToken}`;
-  } catch {}
-  return value;
 }
 
 $("#export").addEventListener("click", async () => run(async () => {
@@ -196,6 +196,40 @@ async function addProviderRoot(providerId) {
   await loadBackgroundStatus();
 }
 
+async function addCursorToken() {
+  const input = $("#cursor-token-input");
+  const error = $("#cursor-token-error");
+  const raw = input.value.trim();
+  if (!raw) {
+    error.textContent = "Cursor token is required";
+    return;
+  }
+  let config;
+  try {
+    config = await api.addCursorToken(raw);
+  } catch (err) {
+    error.textContent = err.message || "Cursor token is invalid";
+    return;
+  }
+  latestConfig = config;
+  renderConfig(config);
+  closeCursorTokenModal();
+  setSaveMessage("Cursor token added", "ok");
+  await loadHealth();
+  await loadToday(true);
+}
+
+function openCursorTokenModal() {
+  $("#cursor-token-input").value = "";
+  $("#cursor-token-error").textContent = "";
+  $("#cursor-token-modal").hidden = false;
+  $("#cursor-token-input").focus();
+}
+
+function closeCursorTokenModal() {
+  $("#cursor-token-modal").hidden = true;
+}
+
 function renderConfig(config) {
   latestConfig = config;
   $("#profile-state").textContent = config ? "Ready" : "Not configured";
@@ -206,29 +240,42 @@ function renderConfig(config) {
   $("#autoRefreshEnabled").checked = config?.autoRefreshEnabled ?? true;
   $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
   $("#launchAtLogin").checked = config?.launchAtLogin ?? false;
-  $("#cursorDashboardEnabled").checked = config?.cursorDashboardUsage?.enabled ?? false;
-  $("#cursorWorkosSessionToken").value = config?.cursorDashboardUsage?.workosSessionToken || "";
+  renderCursorTokenSummary(config?.cursorDashboardUsage);
   renderSyncStatus(config);
+}
+
+function renderCursorTokenSummary(cursorConfig = {}) {
+  const tokens = cursorConfig?.workosSessionTokens || [];
+  const legacy = cursorConfig?.workosSessionToken ? [{ accountName: "legacy token" }] : [];
+  const accounts = [...tokens, ...legacy].map((item) => item.accountName || "Cursor").filter(Boolean);
+  $("#cursor-token-summary").textContent = accounts.length
+    ? `${accounts.length} Cursor token${accounts.length === 1 ? "" : "s"} configured · ${accounts.join(", ")}`
+    : "No Cursor token configured. Local Cursor state can still be detected automatically.";
 }
 
 function renderSyncStatus(config, result = null) {
   const status = config?.syncStatus || {};
-  const apiBaseUrl = status.apiBaseUrl || config?.apiBaseUrl || "";
-  const lastFinishedAt = status.lastFinishedAt || config?.lastSyncAt || "";
+  const configuredApiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || "");
+  const statusApiBaseUrl = normalizeApiBaseUrl(status.apiBaseUrl || config?.lastSyncApiBaseUrl || "");
+  const statusMatchesApi = statusApiBaseUrl && statusApiBaseUrl === configuredApiBaseUrl;
+  const connection = config?.apiConnection || {};
+  const apiBaseUrl = configuredApiBaseUrl || connection.apiBaseUrl || "";
+  const lastFinishedAt = statusMatchesApi ? status.lastFinishedAt || config?.lastSyncAt || "" : "";
   const queuePending = Number(status.queuePending || result?.queuePending || 0);
-  const scanned = Number(status.scanned || result?.scanned || 0);
-  const accepted = Number(status.accepted || result?.accepted || 0);
-  const rejected = Number(status.rejected || result?.rejected || 0);
-  const state = status.status || config?.lastSyncStatus || "";
-  const error = status.error || config?.lastSyncError || result?.error || "";
+  const scanned = statusMatchesApi ? Number(status.scanned || result?.scanned || 0) : 0;
+  const accepted = statusMatchesApi ? Number(status.accepted || result?.accepted || 0) : 0;
+  const rejected = statusMatchesApi ? Number(status.rejected || result?.rejected || 0) : 0;
+  const state = statusMatchesApi ? status.status || config?.lastSyncStatus || "" : connection.status || "";
+  const error = statusMatchesApi ? status.error || config?.lastSyncError || result?.error || "" : connection.message || "";
   const stateLabel = syncStateLabel(state, { scanned, accepted, rejected, queuePending, error });
+  const apiCheckedAt = connection.checkedAt ? `API checked ${formatDateTime(connection.checkedAt)}` : "";
   $("#sync-state").textContent = stateLabel;
   $("#sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "API not configured";
   $("#sync-target").title = apiBaseUrl || "";
-  $("#sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : "Last sync -";
+  $("#sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : apiCheckedAt || "Last sync -";
   $("#settings-sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "API not configured";
   $("#settings-sync-target").title = apiBaseUrl || "";
-  $("#settings-sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : "Last sync -";
+  $("#settings-sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : apiCheckedAt || "Last sync -";
   $("#settings-sync-result").textContent = stateLabel;
   $("#settings-sync-result").title = error || stateLabel;
 }
@@ -244,6 +291,12 @@ function syncStateLabel(state, { scanned = 0, accepted = 0, rejected = 0, queueP
   }
   if (state === "failed") {
     return error ? `Sync failed: ${error}` : "Sync failed";
+  }
+  if (state === "reachable") {
+    return "API reachable; not synced";
+  }
+  if (state === "not_configured") {
+    return "API not configured";
   }
   return "Not synced";
 }
@@ -315,16 +368,102 @@ function renderAliases() {
 
 function renderHealth() {
   const html = latestHealth
-    .map((item) => `<article class="source-card">
+    .map((item) => {
+      const enabled = sourceEnabled(item);
+      return `<article class="source-card">
       <div>
         <strong>${sourceName(item.providerId)}</strong>
-        <small>${item.detected ? `${(item.roots || []).length} location${(item.roots || []).length === 1 ? "" : "s"}` : "Not found"}</small>
+        <small>${sourceSummary(item)}</small>
+        <p>${sourceDescription(item.providerId)}</p>
         ${renderRoots(item.roots)}
       </div>
-      <span class="${item.detected ? "ok" : "miss"}">${item.detected ? "On" : "Off"}</span>
-    </article>`)
+      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? "On" : "Off"}</button>
+    </article>`;
+    })
     .join("");
   $("#settings-source-list").innerHTML = html;
+}
+
+async function toggleSource(providerId) {
+  const current = latestConfig || await api.getConfig();
+  if (!current) throw new Error("Open Settings first");
+  const nextEnabled = !sourceEnabledForConfig(current, providerId);
+  const previousConfig = current;
+  const previousHealth = latestHealth;
+  latestConfig = applySourceEnabled(current, providerId, nextEnabled);
+  latestHealth = latestHealth.map((item) => item.providerId === providerId ? { ...item, enabled: nextEnabled } : item);
+  renderConfig(latestConfig);
+  renderHealth();
+  setSaveMessage(`${sourceName(providerId)} ${nextEnabled ? "enabling" : "disabling"}...`, "");
+  try {
+    latestConfig = await api.updateConfig(sourceTogglePayload(providerId, nextEnabled, current));
+    renderConfig(latestConfig);
+    setSaveMessage(`${sourceName(providerId)} ${nextEnabled ? "enabled" : "disabled"}; refresh usage to update totals`, "ok");
+    await loadHealth();
+  } catch (error) {
+    latestConfig = previousConfig;
+    latestHealth = previousHealth;
+    renderConfig(previousConfig);
+    renderHealth();
+    throw error;
+  }
+}
+
+function sourceEnabled(item) {
+  if (item.providerId === "cursor_dashboard_usage") return item.enabled === true;
+  return item.enabled !== false;
+}
+
+function sourceEnabledForConfig(config, providerId) {
+  if (providerId === "cursor_dashboard_usage") return config.cursorDashboardUsage?.enabled === true;
+  return config.providerEnabled?.[providerId] !== false;
+}
+
+function sourceTogglePayload(providerId, enabled, config) {
+  if (providerId === "cursor_dashboard_usage") {
+    return {
+      cursorDashboardUsage: {
+        enabled
+      }
+    };
+  }
+  return {
+    providerEnabled: {
+      ...(config.providerEnabled || {}),
+      [providerId]: enabled
+    }
+  };
+}
+
+function applySourceEnabled(config, providerId, enabled) {
+  if (providerId === "cursor_dashboard_usage") {
+    return {
+      ...config,
+      cursorDashboardUsage: {
+        ...(config.cursorDashboardUsage || {}),
+        enabled
+      }
+    };
+  }
+  return {
+    ...config,
+    ...sourceTogglePayload(providerId, enabled, config)
+  };
+}
+
+function sourceSummary(item) {
+  const count = (item.roots || []).length;
+  if (item.providerId === "cursor_dashboard_usage") {
+    if (!count) return "No Cursor token configured";
+    return `${count} account source${count === 1 ? "" : "s"}`;
+  }
+  if (!item.detected) return "Not found";
+  return `${count} location${count === 1 ? "" : "s"}`;
+}
+
+function sourceDescription(providerId) {
+  if (providerId === "cursor_dashboard_usage") return "Uses Cursor dashboard usage events. Project paths are not available from the Cursor API.";
+  return "Scans local usage files from configured and detected locations.";
 }
 
 async function loadBackgroundStatus() {
@@ -549,8 +688,21 @@ async function run(fn) {
     await fn();
   } catch (error) {
     $("#sync-state").textContent = "Action failed";
+    setSaveMessage(error.message, "error");
     console.error(error);
   }
+}
+
+function setSaveMessage(message, tone = "") {
+  const target = $("#settings-save-message");
+  if (!target) return;
+  target.textContent = message || "";
+  target.dataset.tone = tone;
+  target.title = message || "";
+}
+
+function normalizeApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
 }
 
 function formatNumber(value) {

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Token League</title>
+    <link rel="icon" type="image/png" href="./favicon.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -190,6 +191,7 @@
             </div>
             <div class="actions">
               <button class="save-settings" type="button">Save settings</button>
+              <span id="settings-save-message" class="action-message" aria-live="polite"></span>
             </div>
             <div class="sync-status-box">
               <strong>Sync status</strong>
@@ -209,26 +211,10 @@
               <button id="refresh-health">Refresh sources</button>
               <button id="add-codex-root">Add Codex location</button>
               <button id="add-claude-root">Add Claude Code location</button>
+              <button id="add-cursor-token">Add Cursor token</button>
             </div>
+            <p id="cursor-token-summary" class="sync-note">No Cursor token configured.</p>
             <div id="settings-source-list" class="source-grid"></div>
-
-            <div class="section-title source-subtitle">
-              <h3>Cursor dashboard</h3>
-              <p>Uses Cursor dashboard usage events. Workdir is shown as Cursor because the API does not return project paths.</p>
-            </div>
-            <div class="form-grid">
-              <label class="toggle-row">
-                <input id="cursorDashboardEnabled" type="checkbox" />
-                Enable Cursor usage
-              </label>
-              <label>
-                Workos session token
-                <input id="cursorWorkosSessionToken" placeholder="Optional: user_xxx::token or WorkosCursorSessionToken=..." />
-              </label>
-            </div>
-            <div class="actions">
-              <button class="save-settings" type="button">Save settings</button>
-            </div>
           </section>
 
           <section class="section-block settings-panel" data-settings-panel="aliases">
@@ -257,6 +243,23 @@
         </section>
       </section>
     </main>
+    <div id="cursor-token-modal" class="modal-backdrop" hidden>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="cursor-token-title">
+        <div class="section-title">
+          <h3 id="cursor-token-title">Add Cursor token</h3>
+          <p>Cursor credentials stay on this computer and are never uploaded.</p>
+        </div>
+        <label>
+          Cursor token
+          <textarea id="cursor-token-input" rows="7" placeholder="WorkosCursorSessionToken=... or user_xxx::accessToken or Cursor account JSON"></textarea>
+        </label>
+        <p id="cursor-token-error" class="form-error" aria-live="polite"></p>
+        <div class="actions modal-actions">
+          <button id="cancel-cursor-token" type="button">Cancel</button>
+          <button id="save-cursor-token" type="button">Save token</button>
+        </div>
+      </section>
+    </div>
     <script type="module" src="./renderer.js"></script>
   </body>
 </html>

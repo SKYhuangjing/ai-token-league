@@ -24,6 +24,7 @@ export function saveConfig(config) {
 export function initConfig({
   nickname = "anonymous",
   apiBaseUrl = "http://127.0.0.1:8787",
+  apiConnection = {},
   autoRefreshEnabled = true,
   refreshIntervalMinutes = 15,
   showRawTokens = false,
@@ -46,11 +47,17 @@ export function initConfig({
     launchAtLogin,
     cursorDashboardUsage: {
       enabled: false,
-      workosSessionToken: ""
+      workosSessionToken: "",
+      workosSessionTokens: []
     },
+    apiConnection,
     syncStatus: {},
     workdirAliases: {},
     providerRoots: {},
+    providerEnabled: {
+      claude_code_local: true,
+      codex_local: true
+    },
     createdAt: new Date().toISOString()
   };
   saveConfig(config);
@@ -81,10 +88,15 @@ export function importIdentity(identity, current = {}, { persist = true } = {}) 
     autoRefreshEnabled: current.autoRefreshEnabled ?? true,
     refreshIntervalMinutes: current.refreshIntervalMinutes || 15,
     launchAtLogin: current.launchAtLogin ?? false,
-    cursorDashboardUsage: current.cursorDashboardUsage || { enabled: false, workosSessionToken: "" },
+    cursorDashboardUsage: current.cursorDashboardUsage || { enabled: false, workosSessionToken: "", workosSessionTokens: [] },
     syncStatus: current.syncStatus || {},
     workdirAliases: current.workdirAliases || {},
     providerRoots: current.providerRoots || {},
+    providerEnabled: {
+      claude_code_local: true,
+      codex_local: true,
+      ...(current.providerEnabled || {})
+    },
     importedAt: new Date().toISOString()
   };
   if (persist) saveConfig(config);
@@ -132,6 +144,9 @@ export function updateConfig(input = {}, current = loadConfig(), { persist = tru
   if (input.cursorDashboardUsage && !Object.hasOwn(input.cursorDashboardUsage, "workosSessionToken")) {
     cursorDashboardUsage.workosSessionToken = current.cursorDashboardUsage?.workosSessionToken || "";
   }
+  if (input.cursorDashboardUsage && !Object.hasOwn(input.cursorDashboardUsage, "workosSessionTokens")) {
+    cursorDashboardUsage.workosSessionTokens = current.cursorDashboardUsage?.workosSessionTokens || [];
+  }
   const config = {
     ...current,
     nickname: input.nickname ?? current.nickname,
@@ -141,12 +156,131 @@ export function updateConfig(input = {}, current = loadConfig(), { persist = tru
     showRawTokens: input.showRawTokens ?? current.showRawTokens ?? false,
     autoRefreshEnabled: input.autoRefreshEnabled ?? current.autoRefreshEnabled ?? true,
     launchAtLogin: input.launchAtLogin ?? current.launchAtLogin ?? false,
+    providerEnabled: {
+      claude_code_local: true,
+      codex_local: true,
+      ...(current.providerEnabled || {}),
+      ...(input.providerEnabled || {})
+    },
     refreshIntervalMinutes: Number.isFinite(refreshIntervalMinutes)
       ? Math.max(1, Math.round(refreshIntervalMinutes))
       : 15,
     cursorDashboardUsage,
+    apiConnection: input.apiConnection ?? current.apiConnection ?? {},
+    syncStatus: input.syncStatus ?? current.syncStatus ?? {},
+    lastSyncAt: input.lastSyncAt ?? current.lastSyncAt,
+    lastSyncStatus: input.lastSyncStatus ?? current.lastSyncStatus,
+    lastSyncApiBaseUrl: input.lastSyncApiBaseUrl ?? current.lastSyncApiBaseUrl,
+    lastSyncError: input.lastSyncError ?? current.lastSyncError,
     updatedAt: new Date().toISOString()
   };
   if (persist) saveConfig(config);
   return config;
+}
+
+export function addCursorToken(rawInput, current = loadConfig(), { persist = true } = {}) {
+  if (!current) throw new Error("Initialize identity first");
+  const records = parseCursorTokenInput(rawInput);
+  if (!records.length) throw new Error("Cursor token is empty or invalid");
+  const existing = normalizeCursorTokenRecords(current.cursorDashboardUsage);
+  const byToken = new Map(existing.map((item) => [item.token, item]));
+  for (const record of records) {
+    byToken.set(record.token, {
+      ...byToken.get(record.token),
+      ...record,
+      addedAt: byToken.get(record.token)?.addedAt || new Date().toISOString()
+    });
+  }
+  const config = {
+    ...current,
+    cursorDashboardUsage: {
+      ...(current.cursorDashboardUsage || {}),
+      enabled: true,
+      workosSessionToken: "",
+      workosSessionTokens: [...byToken.values()]
+    },
+    updatedAt: new Date().toISOString()
+  };
+  if (persist) saveConfig(config);
+  return config;
+}
+
+function normalizeCursorTokenRecords(cursorDashboardUsage = {}) {
+  const records = [];
+  if (cursorDashboardUsage.workosSessionToken) {
+    records.push(...parseCursorTokenInput(cursorDashboardUsage.workosSessionToken));
+  }
+  for (const item of cursorDashboardUsage.workosSessionTokens || []) {
+    if (typeof item === "string") {
+      records.push(...parseCursorTokenInput(item));
+    } else if (item?.token) {
+      records.push(...parseCursorTokenInput(JSON.stringify(item)));
+    }
+  }
+  const byToken = new Map();
+  for (const record of records) byToken.set(record.token, { ...byToken.get(record.token), ...record });
+  return [...byToken.values()];
+}
+
+function parseCursorTokenInput(rawInput) {
+  const text = String(rawInput || "").trim();
+  if (!text || text === "[configured]") return [];
+  try {
+    const parsed = JSON.parse(text);
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    const records = list.flatMap((item) => parseCursorTokenObject(item));
+    if (records.length) return records;
+  } catch {}
+  const stripped = text.startsWith("WorkosCursorSessionToken=")
+    ? text.replace(/^WorkosCursorSessionToken=/, "")
+    : text;
+  const decoded = safeDecodeURIComponent(stripped);
+  const token = normalizeCursorTokenValue(decoded);
+  if (!token) return [];
+  return [{ token, accountName: cursorAccountNameFromToken(token) }];
+}
+
+function parseCursorTokenObject(input) {
+  if (!input || typeof input !== "object") return [];
+  const token = input.token || input.workosSessionToken || input.access_token || input.accessToken || input.cursor_auth_raw?.accessToken;
+  const workosId = input.workosId || input.cursor_auth_raw?.workosId || String(input.auth_id || "").match(/user_[A-Za-z0-9]+/)?.[0];
+  const normalized = normalizeCursorTokenValue(workosId && token && !String(token).includes("::") ? `${workosId}::${token}` : token);
+  if (!normalized) return [];
+  return [{
+    token: normalized,
+    accountName: input.accountName || input.email || input.cachedEmail || input.cursor_auth_raw?.cachedEmail || cursorAccountNameFromToken(normalized)
+  }];
+}
+
+function normalizeCursorTokenValue(value) {
+  const decoded = safeDecodeURIComponent(String(value || "").trim());
+  if (!decoded) return "";
+  if (decoded.includes("::")) return decoded;
+  const userId = cursorUserIdFromToken(decoded);
+  return userId ? `${userId}::${decoded}` : "";
+}
+
+function cursorAccountNameFromToken(token) {
+  return String(token || "").split("::")[0] || "Cursor";
+}
+
+function cursorUserIdFromToken(token = "") {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return "";
+    let payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (payload.length % 4) payload += "=";
+    const sub = JSON.parse(Buffer.from(payload, "base64").toString("utf8")).sub || "";
+    return String(sub).match(/user_[A-Za-z0-9]+/)?.[0] || "";
+  } catch {
+    return "";
+  }
+}
+
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

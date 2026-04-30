@@ -354,6 +354,35 @@ h3 {
   color: var(--muted);
 }
 
+.source-card p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.source-toggle {
+  min-width: 58px;
+  padding: 8px 12px;
+  text-align: center;
+}
+
+.source-toggle.ok {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.source-toggle.miss {
+  border-color: var(--muted);
+  color: var(--muted);
+}
+
+.source-toggle.ok:hover,
+.source-toggle.miss:hover {
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
 .bar-row em {
   position: relative;
   z-index: 1;
@@ -408,7 +437,8 @@ label {
   text-transform: uppercase;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   border: 1px solid var(--ink);
   border-radius: 6px;
@@ -440,6 +470,65 @@ input[type="checkbox"] {
 
 .actions + .source-grid {
   margin-top: 14px;
+}
+
+.sync-note + .source-grid {
+  margin-top: 14px;
+}
+
+.action-message {
+  align-self: center;
+  min-width: 0;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(23, 22, 20, 0.38);
+  padding: 24px;
+}
+
+.modal-panel {
+  width: min(620px, 100%);
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+  box-shadow: 0 18px 60px rgba(23, 22, 20, 0.22);
+}
+
+.modal-panel textarea {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+}
+
+.form-error {
+  min-height: 18px;
+  margin: 8px 0 0;
+  color: var(--red);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.action-message[data-tone="ok"] {
+  color: #2d6a4f;
+}
+
+.action-message[data-tone="error"] {
+  color: var(--accent);
 }
 
 .sync-note {
