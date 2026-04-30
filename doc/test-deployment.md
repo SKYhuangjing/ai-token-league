@@ -15,27 +15,43 @@ This is a test environment, not a public production deployment. Do not expose `/
 
 ## Start Backend Against Existing MySQL
 
-For the current test environment, use:
+For local debugging against the development database, use:
 
 ```bash
-docker compose -f docker-compose.mysql.yml up --build -d
+docker compose -f docker-compose.mysql.example.yml up --build -d
 ```
 
-This file is local-only and ignored by git because it contains the current test database connection settings.
+For test deployment against the test database, use:
 
-Use `docker-compose.mysql.example.yml` as the committed template.
+```bash
+ENV_FILE=env.test docker compose -f docker-compose.mysql.example.yml up --build -d
+```
+
+`docker-compose.mysql.example.yml` reads `${ENV_FILE:-env.local}` through `env_file`. The compose YAML intentionally does not repeat database credentials or runtime environment variables. `env.local` and `env.test` are local-only and ignored by git because they contain credentials. `env.example` is the committed template.
+
+Current database split:
+
+```text
+env.local -> MYSQL_DATABASE=ai_token_league_dev
+env.test  -> MYSQL_DATABASE=ai_token_league
+```
+
+The desktop client only stores `apiBaseUrl`. If both env files publish the backend on `http://127.0.0.1:8787`, the active container decides which database receives the upload.
+
+Set the business day timezone with `TZ`. The default env files use:
+
+```text
+TZ=Asia/Shanghai
+```
+
+This matters because collector events and MySQL `DATE` values must be grouped by the user's business day, not by UTC midnight.
 
 Alternative without storing credentials in compose:
 
 ```bash
-export MYSQL_HOST="mysql.dev.1datatm.info"
-export MYSQL_PORT="3306"
-export MYSQL_DATABASE="ai_token_league"
-export MYSQL_USER="<user>"
-export MYSQL_PASSWORD="<password>"
-export MYSQL_AUTO_MIGRATE="false"
-
-docker compose -f docker-compose.test.yml up --build -d
+cp env.example env.my-test
+# edit env.my-test
+ENV_FILE=env.my-test docker compose -f docker-compose.mysql.example.yml up --build -d
 ```
 
 Open:
@@ -73,7 +89,9 @@ Because this changes an external database schema, enable it only after confirmin
 Current E18 decision:
 
 - Do not use `cube-center-deploy`.
-- Use the dedicated database `ai_token_league`.
+- Use dedicated databases:
+  - `ai_token_league_dev` for local debugging.
+  - `ai_token_league` for test deployment.
 - Do not store credentials in this repository.
 
 Core tables created by the migration:
@@ -100,14 +118,36 @@ When `MYSQL_AUTO_MIGRATE=false`, the backend expects these tables to already exi
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DB_TYPE` | `json` | Set to `mysql` for test deployment |
+| `TZ` | `Asia/Shanghai` | Business day timezone for today/yesterday/week/month grouping |
 | `MYSQL_HOST` | `127.0.0.1` | MySQL host |
 | `MYSQL_PORT` | `3306` | MySQL port inside Docker network |
 | `MYSQL_DATABASE` | `ai_token_league` | Database name |
 | `MYSQL_USER` | `ai_token` | Database user |
 | `MYSQL_PASSWORD` | `ai_token` | Database password |
-| `MYSQL_AUTO_MIGRATE` | `true` in raw server mode, `false` in compose | Whether backend runs migration SQL at startup |
+| `MYSQL_AUTO_MIGRATE` | `true` | Whether backend runs migration SQL at startup |
 | `HOST` | `127.0.0.1` | Server bind host; compose uses `0.0.0.0` |
 | `PORT` | `8787` | Server port |
+
+Committed template:
+
+```text
+env.example
+```
+
+Local ignored files:
+
+```text
+env.local
+env.test
+```
+
+Compose selector:
+
+```text
+ENV_FILE=env.local  -> local debugging
+ENV_FILE=env.test   -> test deployment
+HOST_PORT=8788      -> optional host port override
+```
 
 ## Smoke
 

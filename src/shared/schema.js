@@ -20,7 +20,7 @@ export const FORBIDDEN_UPLOAD_FIELDS = new Set([
 ]);
 
 export function todayLocal() {
-  return new Date().toISOString().slice(0, 10);
+  return localDay();
 }
 
 export function assertUsageItem(item) {
@@ -99,3 +99,4 @@ function safeTraceText(value) {
   if (!text) return "";
   return text.slice(0, 160);
 }
+import { localDay } from "./date.js";

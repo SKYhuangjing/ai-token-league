@@ -151,8 +151,10 @@ HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" npm start
 Run backend/Web with MySQL:
 
 ```bash
-docker compose -f docker-compose.mysql.yml up --build -d
+docker compose -f docker-compose.mysql.example.yml up --build -d
 ```
+
+The compose file reads `env.local` by default. Use `ENV_FILE=env.test` for `ai_token_league`. Both env files set `TZ=Asia/Shanghai` so daily rankings use the business day instead of UTC.
 
 See:
 

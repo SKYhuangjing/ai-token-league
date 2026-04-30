@@ -288,11 +288,30 @@ function daySpan(start, end) {
 }
 
 function utcToday() {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return dayToUtcDate(localDay());
 }
 
 function toDay(date) {
+  return utcDateToDay(date);
+}
+
+function localDay(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const part = (type) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function dayToUtcDate(day) {
+  const [year, month, date] = String(day || "").split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, date));
+}
+
+function utcDateToDay(date) {
   return date.toISOString().slice(0, 10);
 }
 

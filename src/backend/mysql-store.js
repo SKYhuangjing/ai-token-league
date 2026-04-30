@@ -3,6 +3,7 @@ import path from "node:path";
 import mysql from "mysql2/promise";
 import { Store } from "./store.js";
 import { normalizeModelName } from "../shared/pricing.js";
+import { localDay } from "../shared/date.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 
@@ -332,7 +333,7 @@ function priceFromRow(row) {
 }
 
 function toDayString(value) {
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (value instanceof Date) return localDay(value);
   return String(value || "").slice(0, 10);
 }
 

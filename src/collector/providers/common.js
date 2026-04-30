@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { normalizeTokenNumber } from "../../shared/schema.js";
+import { localDay } from "../../shared/date.js";
 
 export function walkFiles(root, matcher, limit = 1000) {
   const out = [];
@@ -64,8 +65,7 @@ export function deepFindString(value, names) {
 export function dayFromRecord(record, fallbackMtime) {
   const raw = deepFindString(record, ["timestamp", "created_at", "createdAt", "time", "date"]);
   const date = raw ? new Date(raw) : new Date(fallbackMtime);
-  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
-  return date.toISOString().slice(0, 10);
+  return localDay(Number.isNaN(date.getTime()) ? new Date() : date);
 }
 
 export function sourceMetadata(file, providerId, parserVersion) {

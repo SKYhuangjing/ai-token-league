@@ -104,6 +104,11 @@ button.active {
   color: var(--paper);
 }
 
+button:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
 .sync-card {
   display: grid;
   gap: 10px;
@@ -111,6 +116,15 @@ button.active {
   border-radius: 8px;
   background: var(--panel);
   padding: 14px;
+}
+
+.sync-card small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace {
@@ -433,6 +447,29 @@ input[type="checkbox"] {
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+
+.sync-status-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffdf7;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.sync-status-box strong,
+.sync-status-box span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-status-box span {
+  color: var(--muted);
 }
 
 pre {

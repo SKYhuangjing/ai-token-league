@@ -10,6 +10,7 @@ import { exportIdentity, importIdentity, updateConfig } from "../src/collector/c
 import { eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost } from "../src/shared/pricing.js";
+import { localDay } from "../src/shared/date.js";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
 
@@ -61,12 +62,13 @@ function testCursorDashboardMapping() {
   assert.equal(items[0].model, "composer-2-fast");
   assert.equal(items[0].totalTokens, 460);
   assert.ok(items[0].sourceFingerprint);
+  assert.equal(localDay("2026-04-29T18:30:00.000Z", "Asia/Shanghai"), "2026-04-30");
 }
 
 function testBackendUpload(identity, items) {
   const store = new Store(path.join(tmp, "db.json"));
   const deviceId = newId("d");
-  const testDay = new Date().toISOString().slice(0, 10);
+  const testDay = localDay();
   const uploadItems = items.map((item) => ({ ...item, day: testDay }));
   store.registerDevice({
     participantId: identity.participantId,

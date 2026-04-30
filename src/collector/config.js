@@ -48,6 +48,7 @@ export function initConfig({
       enabled: false,
       workosSessionToken: ""
     },
+    syncStatus: {},
     workdirAliases: {},
     providerRoots: {},
     createdAt: new Date().toISOString()
@@ -81,6 +82,7 @@ export function importIdentity(identity, current = {}, { persist = true } = {}) 
     refreshIntervalMinutes: current.refreshIntervalMinutes || 15,
     launchAtLogin: current.launchAtLogin ?? false,
     cursorDashboardUsage: current.cursorDashboardUsage || { enabled: false, workosSessionToken: "" },
+    syncStatus: current.syncStatus || {},
     workdirAliases: current.workdirAliases || {},
     providerRoots: current.providerRoots || {},
     importedAt: new Date().toISOString()

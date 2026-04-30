@@ -1,5 +1,6 @@
 import { addCostToUsageItem, aggregateCost, createPriceMap } from "../shared/pricing.js";
 import { formatTokenCompact, formatTokenRaw, formatUsd } from "../shared/display.js";
+import { dayToUtcDate, localDay, utcDateToDay } from "../shared/date.js";
 
 const api = window.tokenLeague;
 const $ = (selector) => document.querySelector(selector);
@@ -150,7 +151,7 @@ async function loadToday(force = false) {
   const [usage, health] = await Promise.all([api.scanUsage({ force }), api.providerHealth(), refreshPricing()]);
   allUsage = usage.items;
   latestScanAt = usage.scannedAt || "";
-  latestUsage = allUsage.filter((item) => item.day === new Date().toISOString().slice(0, 10));
+  latestUsage = allUsage.filter((item) => item.day === localDay());
   latestHealth = health;
   renderToday();
   renderHealth();
@@ -172,11 +173,17 @@ async function loadHealth() {
 }
 
 async function syncNow() {
-  await saveSettings({ reloadToday: false });
+  const button = $("#sync-now");
+  button.disabled = true;
   $("#sync-state").textContent = "Syncing...";
-  const result = await api.syncUsage();
-  $("#sync-state").textContent = `Synced ${result.scanned} rows`;
-  await loadToday();
+  try {
+    const result = await api.syncUsage();
+    latestConfig = await api.getConfig();
+    renderSyncStatus(latestConfig, result);
+    await loadToday();
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function addProviderRoot(providerId) {
@@ -201,6 +208,44 @@ function renderConfig(config) {
   $("#launchAtLogin").checked = config?.launchAtLogin ?? false;
   $("#cursorDashboardEnabled").checked = config?.cursorDashboardUsage?.enabled ?? false;
   $("#cursorWorkosSessionToken").value = config?.cursorDashboardUsage?.workosSessionToken || "";
+  renderSyncStatus(config);
+}
+
+function renderSyncStatus(config, result = null) {
+  const status = config?.syncStatus || {};
+  const apiBaseUrl = status.apiBaseUrl || config?.apiBaseUrl || "";
+  const lastFinishedAt = status.lastFinishedAt || config?.lastSyncAt || "";
+  const queuePending = Number(status.queuePending || result?.queuePending || 0);
+  const scanned = Number(status.scanned || result?.scanned || 0);
+  const accepted = Number(status.accepted || result?.accepted || 0);
+  const rejected = Number(status.rejected || result?.rejected || 0);
+  const state = status.status || config?.lastSyncStatus || "";
+  const error = status.error || config?.lastSyncError || result?.error || "";
+  const stateLabel = syncStateLabel(state, { scanned, accepted, rejected, queuePending, error });
+  $("#sync-state").textContent = stateLabel;
+  $("#sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "API not configured";
+  $("#sync-target").title = apiBaseUrl || "";
+  $("#sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : "Last sync -";
+  $("#settings-sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "API not configured";
+  $("#settings-sync-target").title = apiBaseUrl || "";
+  $("#settings-sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : "Last sync -";
+  $("#settings-sync-result").textContent = stateLabel;
+  $("#settings-sync-result").title = error || stateLabel;
+}
+
+function syncStateLabel(state, { scanned = 0, accepted = 0, rejected = 0, queuePending = 0, error = "" } = {}) {
+  if (state === "success") {
+    const rejectedText = rejected ? `, ${rejected} rejected` : "";
+    const queueText = queuePending ? `, ${queuePending} queued` : "";
+    return `Synced ${scanned} rows (${accepted} accepted${rejectedText}${queueText})`;
+  }
+  if (state === "queued") {
+    return `Queued ${scanned} rows${queuePending ? ` (${queuePending} pending)` : ""}`;
+  }
+  if (state === "failed") {
+    return error ? `Sync failed: ${error}` : "Sync failed";
+  }
+  return "Not synced";
 }
 
 function renderToday() {
@@ -284,6 +329,11 @@ function renderHealth() {
 
 async function loadBackgroundStatus() {
   const status = await api.backgroundStatus();
+  const config = await api.getConfig();
+  if (config) {
+    latestConfig = config;
+    renderSyncStatus(config);
+  }
   const parts = [];
   parts.push(status.enabled ? "Background refresh on" : "Background refresh off");
   if (status.lastResult) parts.push(status.lastResult);
@@ -689,12 +739,11 @@ function startOfUtcWeek(date) {
 }
 
 function utcToday() {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return dayToUtcDate(localDay());
 }
 
 function toDay(date) {
-  return date.toISOString().slice(0, 10);
+  return utcDateToDay(date);
 }
 
 function escapeHtml(value) {

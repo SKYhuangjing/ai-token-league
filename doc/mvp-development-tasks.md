@@ -89,6 +89,7 @@ MVP 发布必须同时满足：
 | E16 | Web/客户端详情与筛选交互优化 | DONE | 用户详情改为弹窗/抽屉，Web/客户端趋势压缩成固定高度图表，Admin 时间筛选改为 quick range + date picker 联动 |
 | E17 | 设置归属、Admin Tab 语境与 Chart Tooltip 收口 | DONE | Settings 按 Profile/Display/Sync/Sources/Aliases/System 分组，Cursor 归入 Sources，Admin 筛选只在 Usage tab 内，图表 hover 展示日期/token/成本 |
 | E18 | 测试环境部署与 MySQL 存储迁移 | REVIEW | MySQL Store 已用独立库完成本机服务端 E2E；Docker backend 到外部 MySQL 的网络链路待测试环境网络放通 |
+| E19 | 同步目标可见化与环境配置收口 | DONE | 客户端持久展示 API/上次同步状态；Docker 通过 env.local/env.test 显式选择 dev/test 数据库 |
 
 ## 5. Epic 任务拆分
 
@@ -899,8 +900,41 @@ P2: E14-T6, E14-T8, E14-T9, E14-T10, E14-T11, E14-T12, E14-T13
 - Docker backend 镜像可构建。
 - Docker 容器内直连外部 MySQL 失败：`PROTOCOL_CONNECTION_LOST`，同样连接在宿主机 Node 中正常；判断为 Docker bridge/VPN/MySQL 访问策略问题。
 - Dockerfile 已适配国内构建源：默认 base image 使用 DaoCloud Docker Hub 镜像，npm 使用 npmmirror。
-- 新增 `docker-compose.mysql.yml`，内置当前测试库 `ai_token_league` 的一键启动配置，启动时 `MYSQL_AUTO_MIGRATE=true`。
+- `docker-compose.mysql.example.yml` 作为提交模板，实际启动通过被忽略的 `env.local` / `env.test` 选择数据库。
 ```
+
+### E19 同步目标可见化与环境配置收口
+
+目标：解决“客户端点同步后到底上传到了哪个环境”和“本地调试/测试部署数据库选择不显性”的产品与工程问题。
+
+产品判断：
+
+- 客户端只知道 API base URL，不应该也不能直接知道服务端 MySQL database。
+- 用户需要看到的是本机最后一次上传的目标 API、完成时间、成功/排队/失败状态和队列数量。
+- 数据库选择属于服务端部署环境，必须通过 env 文件显式选择，而不是依赖当前容器残留配置。
+- `Sync now` 不应隐式保存 Settings；同步动作只使用已保存配置，避免一次点击同时改变 API、清缓存、扫描和上传。
+
+| ID | 任务 | 状态 | 依赖 | 验收标准 |
+| --- | --- | --- | --- | --- |
+| E19-T1 | 同步状态数据模型 | DONE | E12/E18 | 本地配置持久化 `syncStatus`，包含 API、last attempt/finish/success、status、row counts、queue pending、error |
+| E19-T2 | 客户端状态展示 | DONE | E8 | Sidebar 与 Settings/Sync 展示目标 API 和上次同步结果 |
+| E19-T3 | 同步性能收口 | DONE | E12 | 手动同步不再隐式保存设置，优先复用最近 usage cache，减少无意义全量扫描 |
+| E19-T4 | Docker env 文件 | DONE | E18 | `env.example` 可提交；本机 `env.local` 指向 `ai_token_league_dev`，`env.test` 指向 `ai_token_league` 且被 git ignore |
+| E19-T5 | 部署文档更新 | DONE | E18 | `test-deployment.md` 说明 `ENV_FILE=env.local/env.test` 的启动方式和数据库分工 |
+| E19-T6 | 业务日期时区修复 | DONE | E18 | 采集、服务端周期查询、MySQL DATE 读回统一按 `TZ=Asia/Shanghai` 业务日，避免今日数据显示到前一天 |
+| E19-T7 | 重新构建运行包 | DONE | E9/E19 | macOS / Windows 分发包重新生成，包含同步状态 UI |
+
+验证矩阵：
+
+| 验证项 | 方式 | 完成标准 |
+| --- | --- | --- |
+| 配置安全 | `git check-ignore env.local env.test` | 本机带密码 env 文件不会进入 git |
+| 启动选择 | `docker compose -f docker-compose.mysql.example.yml config` | 默认读取 `env.local`，解析后数据库为 `ai_token_league_dev` |
+| 测试部署选择 | `ENV_FILE=env.test docker compose -f docker-compose.mysql.example.yml config` | 解析后数据库为 `ai_token_league` |
+| 时区选择 | compose config | 解析后包含 `TZ=Asia/Shanghai` |
+| 客户端语法 | `node --check src/desktop/main.cjs` | Electron main process 语法通过 |
+| Renderer 语法 | `node --check src/desktop/renderer.js` | renderer 语法通过 |
+| 回归 | `npm test` | 原有测试通过 |
 
 ## 6. 发布阻塞项
 
@@ -949,3 +983,5 @@ Windows x64 分发包已生成；Windows 实机 E2E 需要在 Windows 主机执�
 | 2026-04-30 | 完成 E16 交互优化 | 公开榜详情 drawer、Web/客户端 compact trend、Admin quick range + Auto grain 已落地并验证 |
 | 2026-04-30 | 完成 E17 交互归属收口 | Settings 重组、Cursor 归 Sources、Admin filters 归 Usage tab、Chart hover tooltip 和文档同步完成 |
 | 2026-04-30 | 启动 E18 测试环境部署 | 新增 MySQL Store、migration、Dockerfile、外部 MySQL compose 配置；独立库 `ai_token_league` 本机 E2E 通过，Docker 到外部 MySQL 网络待放通 |
+| 2026-04-30 | 完成 E19 同步目标可见化 | 客户端持久化并展示 API/上次同步状态；Docker env.local/env.test 显式区分 dev/test 数据库 |
+| 2026-04-30 | 修复业务日偏移并重打包 | `TZ=Asia/Shanghai` 统一每日归属，MySQL DATE 读回不再 UTC 截断；重新生成桌面分发包 |

@@ -6,6 +6,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8787
 ENV HOST=0.0.0.0
+ENV TZ=Asia/Shanghai
 
 COPY package.json package-lock.json ./
 ARG NPM_REGISTRY=https://registry.npmmirror.com

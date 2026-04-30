@@ -3,6 +3,7 @@ import path from "node:path";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap, FALLBACK_PRICE_MAP, normalizeModelName, priceToPublic } from "../shared/pricing.js";
 import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertUsageItem, usageKey } from "../shared/schema.js";
+import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 
 export const DEFAULT_DB = {
   schemaVersion: STORAGE_SCHEMA_VERSION,
@@ -97,6 +98,22 @@ export class Store {
           delete this.db.usageDaily[
             [raw.day, input.participantId, input.deviceId, raw.toolCode, raw.providerId, raw.workdirHash, "unknown"].join("|")
           ];
+        }
+        if (raw.sourceFingerprint) {
+          for (const [existingKey, existing] of Object.entries(this.db.usageDaily)) {
+            if (
+              existingKey !== key &&
+              existing.participantId === input.participantId &&
+              existing.deviceId === input.deviceId &&
+              existing.toolCode === raw.toolCode &&
+              existing.providerId === raw.providerId &&
+              existing.workdirHash === raw.workdirHash &&
+              existing.model === raw.model &&
+              existing.sourceFingerprint === raw.sourceFingerprint
+            ) {
+              delete this.db.usageDaily[existingKey];
+            }
+          }
         }
         if (raw.toolCode === "cursor" && raw.workdirDisplayName === "Cursor") {
           for (const [existingKey, existing] of Object.entries(this.db.usageDaily)) {
@@ -495,25 +512,24 @@ function daysForQuery({ period = "", range = "today", startDay = "", endDay = ""
 }
 
 function daysForPeriod(period) {
-  const today = utcToday();
-  if (period === "today") return [toDay(today)];
+  const today = localDay();
+  if (period === "today") return [today];
   if (period === "yesterday") {
-    const day = new Date(today);
-    day.setUTCDate(day.getUTCDate() - 1);
-    return [toDay(day)];
+    return [addDays(today, -1)];
   }
   if (period === "this_week" || period === "last_week") {
-    const start = startOfUtcWeek(today);
+    const start = startOfUtcWeek(dayToUtcDate(today));
     if (period === "last_week") start.setUTCDate(start.getUTCDate() - 7);
     const end = new Date(start);
     end.setUTCDate(start.getUTCDate() + 6);
-    return daysBetween(toDay(start), toDay(period === "this_week" && end > today ? today : end));
+    return daysBetween(toDay(start), toDay(period === "this_week" && end > dayToUtcDate(today) ? dayToUtcDate(today) : end));
   }
   if (period === "this_month" || period === "last_month") {
-    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + (period === "last_month" ? -1 : 0), 1));
+    const todayDate = dayToUtcDate(today);
+    const start = new Date(Date.UTC(todayDate.getUTCFullYear(), todayDate.getUTCMonth() + (period === "last_month" ? -1 : 0), 1));
     const end = period === "last_month"
       ? new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0))
-      : today;
+      : todayDate;
     return daysBetween(toDay(start), toDay(end));
   }
   return daysForPeriod("today");
@@ -535,30 +551,29 @@ function daysForDetailRange(range, { startDay = "", endDay = "" } = {}) {
 }
 
 function daysForRange(range, { startDay = "", endDay = "" } = {}) {
-  const today = new Date();
+  const today = localDay();
   if (range === "custom" && isDay(startDay) && isDay(endDay)) {
     return daysBetween(startDay, endDay);
   }
   if (range === "month" || range === "lastMonth") {
-    const year = today.getUTCFullYear();
-    const month = today.getUTCMonth() + (range === "lastMonth" ? -1 : 0);
+    const todayDate = dayToUtcDate(today);
+    const year = todayDate.getUTCFullYear();
+    const month = todayDate.getUTCMonth() + (range === "lastMonth" ? -1 : 0);
     const start = new Date(Date.UTC(year, month, 1));
     const end = range === "lastMonth"
       ? new Date(Date.UTC(year, month + 1, 0))
-      : today;
-    return daysBetween(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10));
+      : todayDate;
+    return daysBetween(toDay(start), toDay(end));
   }
   const offset = range === "yesterday" ? 1 : 0;
   const count = range === "7d" ? 7 : 1;
   return Array.from({ length: count }, (_, index) => {
-    const d = new Date(today);
-    d.setUTCDate(today.getUTCDate() - index - offset);
-    return d.toISOString().slice(0, 10);
+    return addDays(today, -index - offset);
   });
 }
 
 function trailingDays(count) {
-  const today = utcToday();
+  const today = dayToUtcDate(localDay());
   return Array.from({ length: count }, (_, index) => {
     const d = new Date(today);
     d.setUTCDate(today.getUTCDate() - count + index + 1);
@@ -566,13 +581,8 @@ function trailingDays(count) {
   });
 }
 
-function utcToday() {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
-
 function toDay(date) {
-  return date.toISOString().slice(0, 10);
+  return utcDateToDay(date);
 }
 
 function startOfUtcWeek(date) {
@@ -657,26 +667,15 @@ function aggregateUsageRows(rows, grain, { includeAdminFields = false, participa
     }));
 }
 
-function daysBetween(startDay, endDay) {
-  const start = new Date(`${startDay}T00:00:00Z`);
-  const end = new Date(`${endDay}T00:00:00Z`);
-  if (start > end) return [];
-  const days = [];
-  for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
-    days.push(d.toISOString().slice(0, 10));
-  }
-  return days;
-}
-
 function daysForLastWeeks(count) {
-  const today = utcToday();
+  const today = dayToUtcDate(localDay());
   const start = startOfUtcWeek(today);
   start.setUTCDate(start.getUTCDate() - ((count - 1) * 7));
   return daysBetween(toDay(start), toDay(today));
 }
 
 function daysForLastMonths(count) {
-  const today = utcToday();
+  const today = dayToUtcDate(localDay());
   const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - count + 1, 1));
   return daysBetween(toDay(start), toDay(today));
 }

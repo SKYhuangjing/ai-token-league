@@ -21,6 +21,8 @@
         </nav>
         <div class="sync-card">
           <span id="sync-state">Not synced</span>
+          <small id="sync-target">API -</small>
+          <small id="sync-last">Last sync -</small>
           <button id="sync-now">Sync now</button>
         </div>
       </aside>
@@ -188,6 +190,12 @@
             </div>
             <div class="actions">
               <button class="save-settings" type="button">Save settings</button>
+            </div>
+            <div class="sync-status-box">
+              <strong>Sync status</strong>
+              <span id="settings-sync-target">API -</span>
+              <span id="settings-sync-last">Last sync -</span>
+              <span id="settings-sync-result">No upload attempt recorded.</span>
             </div>
             <p id="background-state" class="sync-note">Background refresh has not run yet.</p>
           </section>

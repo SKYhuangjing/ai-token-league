@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { localDay } from "../../shared/date.js";
 
 export const cursorDashboardUsageProvider = {
   id: "cursor_dashboard_usage",
@@ -190,6 +191,5 @@ function numberValue(value) {
 function dayFromCursorTimestamp(value) {
   const timestamp = Number(value || 0);
   const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
-  return date.toISOString().slice(0, 10);
+  return localDay(Number.isNaN(date.getTime()) ? new Date() : date);
 }

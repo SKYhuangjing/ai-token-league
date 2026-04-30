@@ -1270,7 +1270,7 @@ MVP 客户端信息架构：
 - Settings：按模块分组为 Profile、Display、Sync、Sources、Aliases、System。
   - Profile 只放昵称和身份包导入/导出。
   - Display 放 `Show estimated cost` 与 `Raw token numbers`，因为它们只影响展示，不改变采集和上传。
-  - Sync 放 API base URL、后台刷新和刷新间隔，因为它们决定同步目标和刷新节奏。
+  - Sync 放 API base URL、后台刷新、刷新间隔和同步状态，因为它们共同回答“上传到哪里、多久刷新、最近一次是否成功”。
   - Sources 放本地 Codex/Claude Code 位置和 Cursor dashboard usage，因为 Cursor 是一种采集来源，不是独立账户设置页。
   - Aliases 放工作目录公开名维护。
   - System 放开机自启等系统级行为。
@@ -1283,10 +1283,41 @@ MVP 客户端信息架构：
 - 每 15 分钟同步一次。
 - 网络失败时本地缓存，后续重试。
 - Today / Trend 默认读取本地 usage cache，只有手动刷新、后台刷新或同步动作才触发 provider 扫描。
+- 手动同步不隐式保存 Settings；用户修改 API base URL 后必须先保存，避免一次同步同时改变配置、清缓存、全量扫描和上传目标。
+- 手动同步优先复用最近 usage cache；缓存过期或用户显式刷新后才重新扫描，减少本地大目录扫描带来的 UI 等待。
+- 同步状态必须本地持久化，至少包含 API base URL、last attempt、last finish、last success、status、scanned、accepted、rejected、queue pending、last error。
+- Sidebar 只展示最小状态：目标 API、上次同步时间、成功/排队/失败摘要。
+- Settings / Sync 展示完整状态，用于排查“当前客户端到底上传到哪个服务、服务再写哪个数据库”。
 - 开启 `Show estimated cost` 时，客户端先从服务端 `GET /api/model-prices` 拉取价格体系，再对本地 Today/Trend 明细二次计算成本。
 - 未配置 API 或 API 不可用时，客户端使用本地 fallback 价格表，并在 tooltip 中标记价格来源。
 - Today 展示当日估算成本总额；目录消耗和模型消耗行同步展示各自成本。
 - Trend chart/table 展示每个 period 的估算成本；部分模型缺价时展示 `*`，全部缺价时展示 `-`。
+
+同步目标解释：
+
+```text
+Desktop Client
+  stores apiBaseUrl only
+  uploads to http://127.0.0.1:8787
+
+Backend at 127.0.0.1:8787
+  chooses storage by environment
+  DB_TYPE=mysql
+  MYSQL_DATABASE=ai_token_league_dev or ai_token_league
+  TZ=Asia/Shanghai
+
+MySQL
+  ai_token_league_dev = local debugging
+  ai_token_league = test deployment
+```
+
+因此客户端不会直接选择数据库。若同一个 API 地址背后的服务被重启到不同 env，后续同步就会写入新的库；产品上必须把 API 地址和最后同步时间展示出来，部署上必须用 env 文件显式选择数据库。
+
+每日归属规则：
+
+- 产品里的 `Today`、`Yesterday`、周榜、月榜按业务本地日计算，不按 UTC 日计算。
+- 部署默认使用 `TZ=Asia/Shanghai`；如后续支持国际社区，可把 timezone 变成社区/榜单维度配置。
+- 采集端把工具事件时间转换成本地 day 后上传；服务端读取 MySQL `DATE` 时也必须按同一 timezone 保持日期，不允许用 UTC ISO 截断。
 
 Trend 页交互重新定义：
 
@@ -1609,6 +1640,7 @@ Desktop Settings
     API base URL
     background refresh
     refresh interval
+    last sync target/status/time
 
   Sources
     Codex locations
@@ -1628,6 +1660,14 @@ Desktop Settings
 - Tooltip 至少包含 period/date、完整 token、估算成本。
 - 成本未开启时 tooltip 仍展示 period/date + 完整 token。
 - 部分模型缺价时成本值后用 `*`，tooltip 或 title 中展示缺价模型和价格来源。
+
+同步状态规则：
+
+- `success`：最近一次已上传到服务端，展示 scanned / accepted / rejected。
+- `queued`：服务端不可达或上传失败，payload 已进入本地 queue，展示 pending 数量和错误摘要。
+- `failed`：配置错误或本地不可恢复错误，不应伪装成已同步。
+- `lastSuccessAt` 与 `lastFinishedAt` 分开保存；失败或排队不能覆盖最后成功时间。
+- `apiBaseUrl` 与状态一起保存，避免用户只看到“Synced”但不知道同步到了哪个 backend。
 
 Admin 布局规则：
 

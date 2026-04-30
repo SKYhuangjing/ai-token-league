@@ -231,7 +231,7 @@ async function runBackgroundRefresh() {
     if (hasApiBaseUrl(current)) {
       const result = await syncCurrentUsage({ config, core, crypto, current, scanned });
       background.lastMode = "sync";
-      background.lastResult = `Uploaded ${result.scanned} rows`;
+      background.lastResult = result.queued ? `Queued ${result.scanned} rows` : `Uploaded ${result.scanned} rows`;
     } else {
       background.lastMode = "scan";
       background.lastResult = `Refreshed ${scanned.items.length} rows`;
@@ -244,39 +244,55 @@ async function runBackgroundRefresh() {
   }
 }
 
-async function syncCurrentUsage({ crypto, current, scanned = null }) {
+async function syncCurrentUsage({ config, core, crypto, current, scanned = null }) {
   if (!hasApiBaseUrl(current)) throw new Error("Configure API base URL first");
-  const { config, core } = await modules();
-  const usage = scanned || await getUsageSnapshot({ config, core, current, force: true });
-  await postJson(`${current.apiBaseUrl}/api/devices/register`, {
-    participantId: current.participantId,
-    deviceId: current.deviceId,
-    nickname: current.nickname,
-    identityPublicKey: current.identityPublicKey,
-    os: process.platform,
-    appVersion: app.getVersion()
-  });
-  const payload = {
-    participantId: current.participantId,
-    deviceId: current.deviceId,
-    clientGeneratedAt: new Date().toISOString(),
-    items: usage.items
-  };
-  const drainBefore = await drainUploadQueue(current);
-  const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
+  const startedAt = new Date().toISOString();
+  const apiBaseUrl = String(current.apiBaseUrl || "").trim();
+  const usage = scanned || await getUsageSnapshot({ config, core, current, force: false });
   try {
+    await postJson(`${apiBaseUrl}/api/devices/register`, {
+      participantId: current.participantId,
+      deviceId: current.deviceId,
+      nickname: current.nickname,
+      identityPublicKey: current.identityPublicKey,
+      os: process.platform,
+      appVersion: app.getVersion()
+    });
+    const payload = {
+      participantId: current.participantId,
+      deviceId: current.deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: usage.items
+    };
+    const drainBefore = await drainUploadQueue(current);
+    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
     const result = await uploadQueueEntry(current, signed);
     const drainAfter = await drainUploadQueue(current);
-    return {
+    const syncResult = {
       ...result,
       scanned: usage.items.length,
       queued: false,
       queueUploaded: drainBefore.uploaded + drainAfter.uploaded,
       queuePending: drainAfter.pending
     };
+    persistSyncStatus(config, current, {
+      apiBaseUrl,
+      status: "success",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      result: syncResult
+    });
+    return syncResult;
   } catch (error) {
+    const payload = {
+      participantId: current.participantId,
+      deviceId: current.deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: usage.items
+    };
+    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
     const queued = enqueueUpload(current, signed, error.message);
-    return {
+    const syncResult = {
       accepted: 0,
       rejected: 0,
       scanned: usage.items.length,
@@ -285,7 +301,42 @@ async function syncCurrentUsage({ crypto, current, scanned = null }) {
       queuePending: readUploadQueue(current).items.length,
       error: error.message
     };
+    persistSyncStatus(config, current, {
+      apiBaseUrl,
+      status: "queued",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      result: syncResult,
+      error: error.message
+    });
+    return syncResult;
   }
+}
+
+function persistSyncStatus(configModule, current, { apiBaseUrl, status, startedAt, finishedAt, result, error = "" }) {
+  const previous = current.syncStatus || {};
+  const syncStatus = {
+    apiBaseUrl,
+    lastAttemptAt: startedAt,
+    lastFinishedAt: finishedAt,
+    lastSuccessAt: status === "success" ? finishedAt : previous.lastSuccessAt || "",
+    status,
+    scanned: result.scanned || 0,
+    accepted: result.accepted || 0,
+    rejected: result.rejected || 0,
+    queueUploaded: result.queueUploaded || 0,
+    queuePending: result.queuePending || 0,
+    error
+  };
+  configModule.saveConfig({
+    ...current,
+    syncStatus,
+    lastSyncAt: finishedAt,
+    lastSyncStatus: status,
+    lastSyncApiBaseUrl: apiBaseUrl,
+    lastSyncError: error,
+    updatedAt: finishedAt
+  });
 }
 
 async function getUsageSnapshot({ core, current, force = false }) {
