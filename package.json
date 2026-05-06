@@ -4,6 +4,34 @@
   "private": true,
   "type": "module",
   "main": "src/desktop/main.cjs",
+  "build": {
+    "appId": "com.ai.token.league",
+    "productName": "AI Token League",
+    "files": [
+      "src/**/*",
+      "scripts/**/*",
+      "assets/**/*",
+      "package.json",
+      "README.md"
+    ],
+    "directories": {
+      "output": "dist-installer"
+    },
+    "mac": {
+      "icon": "assets/app-icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac-intel-installer.${ext}"
+    }
+  },
   "scripts": {
     "start": "node src/backend/server.js",
     "desktop": "electron .",
@@ -16,6 +44,9 @@
     "smoke": "node tests/run-tests.js && node src/backend/server.js --smoke",
     "icons": "node scripts/generate-icons.js",
     "package:mac": "electron-packager . \"AI Token League\" --platform=darwin --arch=arm64 --out=dist --overwrite --app-version=0.1.0 --icon=assets/app-icon.icns --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
+    "package:mac:intel": "electron-packager . \"AI Token League\" --platform=darwin --arch=x64 --out=dist --overwrite --app-version=0.1.0 --icon=assets/app-icon.icns --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
+    "package:mac:all": "npm run package:mac && npm run package:mac:intel",
+    "package:mac:intel:installer": "electron-builder --mac dmg --x64",
     "package:win": "electron-packager . \"AI Token League\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=0.1.0 --icon=assets/app-icon.ico --ignore='^/(dist|\\.tmp-smoke|data/db\\.json)$'",
     "package:all": "npm run package:mac && npm run package:win && node scripts/zip-dist.js"
   },
@@ -24,7 +55,8 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
-    "electron": "^41.3.0"
+    "electron": "^41.3.0",
+    "electron-builder": "^26.0.12"
   },
   "dependencies": {
     "mysql2": "^3.22.3",
