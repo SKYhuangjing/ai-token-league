@@ -66,11 +66,3 @@
 | 客户端内置 manifest URL | 与 0.3.0 的单一数据源原则冲突；release 地址必须由 app-server 控制。 |
 | manifest 非对称签名 | 开源阶段收益有限，当前以 OSS 写权限边界和 artifact sha256 校验控制风险；更强分发安全需求出现后再恢复。 |
 | Hook-based live collection | 当前产品仍以本地扫描和手动/定时同步为主，实时采集会扩大权限和稳定性风险。 |
-
-## FAQ
-
-### Mac 安装提示损坏
-
-```bash
-sudo xattr -rd com.apple.quarantine "/Applications/AI Token League.app"
-```
