@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { initConfig, loadConfig, saveConfig, exportIdentity, importIdentity } from "./config.js";
 import { scanUsage, providerHealth } from "./core.js";
 import { signPayload } from "../shared/crypto.js";
+import { clientMetadata } from "../shared/version.js";
 
 const command = process.argv[2] || "help";
 
@@ -28,6 +29,13 @@ async function postJson(url, body) {
   return text ? JSON.parse(text) : {};
 }
 
+async function getJson(url) {
+  const response = await fetch(url);
+  const text = await response.text();
+  if (!response.ok) throw new Error(`${response.status} ${text}`);
+  return text ? JSON.parse(text) : {};
+}
+
 async function main() {
   if (command === "init") {
     const nickname = argValue("nickname", "anonymous");
@@ -38,7 +46,42 @@ async function main() {
   }
 
   if (command === "health") {
-    console.log(JSON.stringify(providerHealth(requireConfig()), null, 2));
+    const config = requireConfig();
+    const client = clientMetadata();
+    let server = null;
+    if (config.apiBaseUrl) {
+      const params = new URLSearchParams({
+        clientAppVersion: client.clientAppVersion,
+        clientProtocolVersion: String(client.clientProtocolVersion),
+        clientPlatform: client.clientPlatform,
+        clientBuild: client.clientBuild
+      });
+      server = await getJson(`${config.apiBaseUrl}/api/health?${params}`);
+    }
+    console.log(JSON.stringify({ client, server, providers: providerHealth(config) }, null, 2));
+    return;
+  }
+
+  if (command === "status") {
+    const config = requireConfig();
+    const client = clientMetadata();
+    let server = null;
+    if (config.apiBaseUrl) {
+      const params = new URLSearchParams({
+        clientAppVersion: client.clientAppVersion,
+        clientProtocolVersion: String(client.clientProtocolVersion),
+        clientPlatform: client.clientPlatform,
+        clientBuild: client.clientBuild
+      });
+      server = await getJson(`${config.apiBaseUrl}/api/health?${params}`);
+    }
+    console.log(JSON.stringify({
+      client,
+      apiBaseUrl: config.apiBaseUrl || "",
+      compatibility: server?.compatibility || null,
+      serverVersion: server?.serverVersion || "",
+      latestClientVersion: server?.latestClientVersion || ""
+    }, null, 2));
     return;
   }
 
@@ -57,7 +100,8 @@ async function main() {
       nickname: config.nickname,
       identityPublicKey: config.identityPublicKey,
       os: process.platform,
-      appVersion: "0.1.0"
+      appVersion: clientMetadata().clientAppVersion,
+      ...clientMetadata()
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -71,13 +115,15 @@ async function main() {
       nickname: config.nickname,
       identityPublicKey: config.identityPublicKey,
       os: process.platform,
-      appVersion: "0.1.0"
+      appVersion: clientMetadata().clientAppVersion,
+      ...clientMetadata()
     });
     const scanned = await scanUsage(config);
     const payload = {
       participantId: config.participantId,
       deviceId: config.deviceId,
       clientGeneratedAt: new Date().toISOString(),
+      client: clientMetadata(),
       items: scanned.items
     };
     const result = await postJson(`${config.apiBaseUrl}/api/usage/daily-batch`, {
@@ -105,6 +151,7 @@ async function main() {
   console.log(`Usage:
   npm run collector:init -- --nickname sky [--api https://your-api.example]
   npm run collector -- health
+  npm run collector -- status
   npm run collector -- scan
   npm run collector -- register
   npm run collector -- sync

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const nodeCrypto = require("node:crypto");
@@ -30,6 +30,13 @@ const foregroundScan = {
   snapshot: null
 };
 
+const updateCheck = {
+  timer: null,
+  lastCheckedAt: null,
+  lastResult: null,
+  lastError: null
+};
+
 function pathToFileUrl(file) {
   return `file://${file.replaceAll("\\", "/")}`;
 }
@@ -40,7 +47,9 @@ async function modules() {
     config: await import(pathToFileUrl(path.join(root, "src/collector/config.js"))),
     core: await import(pathToFileUrl(path.join(root, "src/collector/core.js"))),
     crypto: await import(pathToFileUrl(path.join(root, "src/shared/crypto.js"))),
-    schema: await import(pathToFileUrl(path.join(root, "src/shared/schema.js")))
+    schema: await import(pathToFileUrl(path.join(root, "src/shared/schema.js"))),
+    version: await import(pathToFileUrl(path.join(root, "src/shared/version.js"))),
+    update: await import(pathToFileUrl(path.join(root, "src/shared/update.js")))
   };
 }
 
@@ -82,6 +91,7 @@ app.whenReady().then(async () => {
   const current = ensureDesktopConfig(config);
   applyLaunchAtLogin(current);
   await scheduleBackgroundRefresh(current);
+  await scheduleBackgroundUpdateCheck(current);
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -109,6 +119,7 @@ ipcMain.handle("config:init", async (_event, input) => {
   invalidateUsageCache();
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
+  scheduleBackgroundUpdateCheck(next);
   return sanitizeConfig(next);
 });
 
@@ -119,6 +130,7 @@ ipcMain.handle("config:update", async (_event, input) => {
   invalidateUsageCache();
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
+  scheduleBackgroundUpdateCheck(next);
   return sanitizeConfig(next);
 });
 
@@ -148,6 +160,7 @@ ipcMain.handle("identity:import", async () => {
   const next = config.importIdentity(identity, config.loadConfig() || {});
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
+  scheduleBackgroundUpdateCheck(next);
   return sanitizeConfig(next);
 });
 
@@ -230,6 +243,70 @@ ipcMain.handle("usage:sync", async () => {
   return syncCurrentUsage({ config, core, crypto, current });
 });
 
+ipcMain.handle("app:version", async () => {
+  const { version } = await modules();
+  return version.clientMetadata({
+    clientAppVersion: app.getVersion(),
+    clientBuild: `${version.clientPlatform()}-${app.getVersion()}`
+  });
+});
+
+ipcMain.handle("update:check", async () => {
+  const { config, version, update } = await modules();
+  const current = config.loadConfig();
+  const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
+  const checkedAt = new Date().toISOString();
+  const client = version.clientMetadata({ clientAppVersion: app.getVersion() });
+  const preflight = update.updatePreflightState({ apiBaseUrl, checkedAt, client });
+  if (preflight) return preflight;
+  const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
+  const release = releaseConfig?.release || {};
+  const manifestUrl = release.manifestUrl || "";
+  const releasePreflight = update.updatePreflightState({
+    apiBaseUrl,
+    release,
+    checkedAt,
+    client,
+    server: releaseConfig
+  });
+  if (releasePreflight) return releasePreflight;
+  const manifest = await getJson(manifestUrl);
+  const state = update.updateStateFromManifest(manifest, {
+    currentVersion: app.getVersion(),
+    platform: version.clientPlatform()
+  });
+  return {
+    code: state.updateAvailable ? "update_available" : "up_to_date",
+    checkedAt,
+    client,
+    server: releaseConfig,
+    manifestUrl,
+    manifest,
+    update: state,
+    message: state.updateAvailable ? `Version ${state.latestVersion} is available` : "Current version is up to date"
+  };
+});
+
+ipcMain.handle("update:download", async (_event, input = {}) => {
+  const { update } = await modules();
+  const artifact = input.artifact;
+  if (!artifact?.url || !artifact.sha256) throw new Error("Update artifact URL and checksum are required");
+  const dir = path.join(app.getPath("temp"), "ai-token-league-updates");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, artifact.fileName || path.basename(new URL(artifact.url).pathname));
+  const response = await fetch(artifact.url);
+  if (!response.ok) throw new Error(`download failed: ${response.status} ${await response.text()}`);
+  fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+  await update.verifyFileChecksum(file, artifact.sha256);
+  await shell.showItemInFolder(file);
+  return {
+    ok: true,
+    file,
+    sha256: artifact.sha256,
+    handoff: "Downloaded and verified. Quit the app, then replace or install using the downloaded package."
+  };
+});
+
 ipcMain.handle("app:reset-local-data", async () => {
   const { config } = await modules();
   resetLocalData(config);
@@ -255,6 +332,39 @@ async function scheduleBackgroundRefresh(configOverride = null) {
     }, intervalMs);
   } catch (error) {
     background.lastError = error.message;
+  }
+}
+
+async function scheduleBackgroundUpdateCheck(configOverride = null) {
+  if (updateCheck.timer) clearInterval(updateCheck.timer);
+  updateCheck.timer = null;
+  const current = configOverride || (await modules()).config.loadConfig();
+  if (!current || current.autoRefreshEnabled === false || !hasApiBaseUrl(current)) return;
+  const intervalMs = 6 * 60 * 60 * 1000;
+  updateCheck.timer = setInterval(() => {
+    runUpdateCheck(current).catch(() => {});
+  }, intervalMs);
+}
+
+async function runUpdateCheck(current) {
+  const { version, update } = await modules();
+  const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
+  if (!apiBaseUrl) return null;
+  updateCheck.lastCheckedAt = new Date().toISOString();
+  updateCheck.lastError = null;
+  try {
+    const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
+    const manifestUrl = releaseConfig?.release?.manifestUrl || "";
+    if (!manifestUrl) throw new Error("Release manifest URL is not configured");
+    const manifest = await getJson(manifestUrl);
+    updateCheck.lastResult = update.updateStateFromManifest(manifest, {
+      currentVersion: app.getVersion(),
+      platform: version.clientPlatform()
+    });
+    return updateCheck.lastResult;
+  } catch (error) {
+    updateCheck.lastError = error.message;
+    throw error;
   }
 }
 
@@ -294,18 +404,22 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
   const apiBaseUrl = String(current.apiBaseUrl || "").trim();
   const usage = scanned || await getUsageSnapshot({ config, core, current, force: false });
   try {
+    const { version } = await modules();
+    const client = version.clientMetadata({ clientAppVersion: app.getVersion(), clientBuild: `${version.clientPlatform()}-${app.getVersion()}` });
     await postJson(`${apiBaseUrl}/api/devices/register`, {
       participantId: current.participantId,
       deviceId: current.deviceId,
       nickname: current.nickname,
       identityPublicKey: current.identityPublicKey,
       os: process.platform,
-      appVersion: app.getVersion()
+      appVersion: app.getVersion(),
+      ...client
     });
     const payload = {
       participantId: current.participantId,
       deviceId: current.deviceId,
       clientGeneratedAt: new Date().toISOString(),
+      client,
       items: usage.items
     };
     const drainBefore = await drainUploadQueue(current);
@@ -328,10 +442,13 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
     });
     return syncResult;
   } catch (error) {
+    const { version } = await modules();
+    const client = version.clientMetadata({ clientAppVersion: app.getVersion(), clientBuild: `${version.clientPlatform()}-${app.getVersion()}` });
     const payload = {
       participantId: current.participantId,
       deviceId: current.deviceId,
       clientGeneratedAt: new Date().toISOString(),
+      client,
       items: usage.items
     };
     const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
@@ -558,7 +675,8 @@ async function checkApiConnection(apiBaseUrl) {
   try {
     const base = new URL(normalized);
     if (!["http:", "https:"].includes(base.protocol)) throw new Error("API base URL must use http or https");
-    healthUrl = new URL("/api/health", base).toString();
+    const { version } = await modules();
+    healthUrl = new URL(`/api/health?${clientQuery(version, app.getVersion())}`, base).toString();
   } catch (error) {
     throw new Error(`Invalid API base URL: ${error.message}`);
   }
@@ -582,6 +700,12 @@ async function checkApiConnection(apiBaseUrl) {
       checkedAt,
       dbType: body.dbType || "",
       serverTime: body.serverTime || "",
+      serverVersion: body.serverVersion || "",
+      serverProtocolVersion: body.serverProtocolVersion || "",
+      supportedClientProtocol: body.supportedClientProtocol || null,
+      latestClientVersion: body.latestClientVersion || "",
+      compatibility: body.compatibility || null,
+      release: body.release || null,
       message: "API reachable"
     };
   } catch (error) {
@@ -623,7 +747,12 @@ function backgroundStatus() {
     nextRunAt: background.nextRunAt,
     cacheScannedAt: readUsageCache()?.scannedAt || null,
     cacheRowCount: readUsageCache()?.rowCount || 0,
-    queuePending: queuedItems.length
+    queuePending: queuedItems.length,
+    updateCheck: {
+      lastCheckedAt: updateCheck.lastCheckedAt,
+      lastResult: updateCheck.lastResult,
+      lastError: updateCheck.lastError
+    }
   };
 }
 
@@ -747,6 +876,26 @@ async function uploadQueueEntry(current, entry) {
     ...entry.payload,
     signature: entry.signature
   });
+}
+
+async function getJson(url) {
+  const response = await fetch(url);
+  const text = await response.text();
+  if (!response.ok) throw new Error(`${response.status} ${text}`);
+  return text ? JSON.parse(text) : {};
+}
+
+function clientQuery(versionModule, appVersion) {
+  const client = versionModule.clientMetadata({
+    clientAppVersion: appVersion,
+    clientBuild: `${versionModule.clientPlatform()}-${appVersion}`
+  });
+  return new URLSearchParams({
+    clientAppVersion: client.clientAppVersion,
+    clientProtocolVersion: String(client.clientProtocolVersion),
+    clientPlatform: client.clientPlatform,
+    clientBuild: client.clientBuild
+  }).toString();
 }
 
 async function postJson(url, body) {

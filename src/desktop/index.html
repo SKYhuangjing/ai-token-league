@@ -167,21 +167,20 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow">Settings</p>
-              <h2>Account and sync</h2>
+              <h2>Account, cloud, and app</h2>
             </div>
             <span id="profile-state" class="badge">Not configured</span>
           </div>
 
           <div class="segmented-control settings-tabs" id="settings-tabs">
-            <button data-settings-tab="profile" class="active">Profile</button>
-            <button data-settings-tab="display">Display</button>
-            <button data-settings-tab="sync">Sync</button>
+            <button data-settings-tab="account" class="active">Account</button>
             <button data-settings-tab="sources">Sources</button>
-            <button data-settings-tab="aliases">Aliases</button>
-            <button data-settings-tab="system">System</button>
+            <button data-settings-tab="cloud">Cloud</button>
+            <button data-settings-tab="sync">Sync</button>
+            <button data-settings-tab="app">App</button>
           </div>
 
-          <section class="section-block settings-panel active" data-settings-panel="profile">
+          <section class="section-block settings-panel active" data-settings-panel="account">
             <div class="form-grid">
               <label>
                 Nickname
@@ -195,36 +194,58 @@
             </div>
           </section>
 
-          <section class="section-block settings-panel" data-settings-panel="display">
+          <section class="section-block settings-panel" data-settings-panel="sources">
             <div class="section-title">
-              <h3>Display preferences</h3>
-              <p>Controls local rendering only. It does not change stored usage.</p>
-            </div>
-            <div class="form-grid">
-              <label class="toggle-row">
-                <input id="showEstimatedCost" type="checkbox" />
-                Show estimated cost
-              </label>
-              <label class="toggle-row">
-                <input id="showRawTokens" type="checkbox" />
-                Raw token numbers
-              </label>
+              <h3>Local sources</h3>
+              <p>Manage local providers, Cursor tokens, and public workdir aliases.</p>
             </div>
             <div class="actions">
-              <button class="save-settings" type="button">Save settings</button>
+              <button id="refresh-health">Refresh sources</button>
+              <button id="add-codex-root">Add Codex location</button>
+              <button id="add-claude-root">Add Claude Code location</button>
+              <button id="add-cursor-token">Add Cursor token</button>
             </div>
+            <p id="cursor-token-summary" class="sync-note">No Cursor token configured.</p>
+            <div id="settings-source-list" class="source-grid"></div>
+            <div class="section-title compact-title">
+              <h3>Workdir aliases</h3>
+            </div>
+            <div id="workdir-alias-list" class="alias-list"></div>
           </section>
 
-          <section class="section-block settings-panel" data-settings-panel="sync">
+          <section class="section-block settings-panel" data-settings-panel="cloud">
             <div class="section-title">
-              <h3>Sync and refresh</h3>
-              <p>Controls local refresh cadence and the remote API used for uploads and pricing.</p>
+              <h3>Cloud connection</h3>
+              <p>One app-server target is used by sync, pricing, compatibility, and update checks.</p>
             </div>
             <div class="form-grid">
               <label>
                 API base URL
                 <input id="apiBaseUrl" placeholder="https://your-api.example" />
               </label>
+            </div>
+            <div class="actions">
+              <button class="save-settings" type="button">Save settings</button>
+              <span id="settings-save-message" class="action-message" aria-live="polite"></span>
+            </div>
+            <div class="sync-status-box">
+              <strong>Cloud status</strong>
+              <span id="cloud-target">API -</span>
+              <span id="cloud-health">Health -</span>
+              <span id="cloud-server-version">Server -</span>
+              <span id="cloud-protocol">Protocol -</span>
+              <span id="cloud-compatibility">Compatibility -</span>
+              <span id="cloud-latest-version">Latest -</span>
+              <span id="cloud-release-manifest">Release manifest -</span>
+            </div>
+          </section>
+
+          <section class="section-block settings-panel" data-settings-panel="sync">
+            <div class="section-title">
+              <h3>Sync and refresh</h3>
+              <p>Controls local refresh cadence and upload queue behavior.</p>
+            </div>
+            <div class="form-grid">
               <label>
                 Refresh interval
                 <input id="refreshIntervalMinutes" type="number" min="1" step="1" value="15" />
@@ -236,7 +257,6 @@
             </div>
             <div class="actions">
               <button class="save-settings" type="button">Save settings</button>
-              <span id="settings-save-message" class="action-message" aria-live="polite"></span>
             </div>
             <div class="sync-status-box">
               <strong>Sync status</strong>
@@ -247,33 +267,21 @@
             <p id="background-state" class="sync-note">Background refresh has not run yet.</p>
           </section>
 
-          <section class="section-block settings-panel" data-settings-panel="sources">
+          <section class="section-block settings-panel" data-settings-panel="app">
             <div class="section-title">
-              <h3>Local sources</h3>
-              <p>Manage provider locations and optional API-backed sources.</p>
+              <h3>App</h3>
+              <p>Client version, verified update download, display preferences, and local startup behavior.</p>
+            </div>
+            <div class="sync-status-box">
+              <strong>Version status</strong>
+              <span id="system-client-version">Client -</span>
+              <span id="system-latest-version">Latest -</span>
+              <span id="system-update-checked">Last check -</span>
             </div>
             <div class="actions">
-              <button id="refresh-health">Refresh sources</button>
-              <button id="add-codex-root">Add Codex location</button>
-              <button id="add-claude-root">Add Claude Code location</button>
-              <button id="add-cursor-token">Add Cursor token</button>
-            </div>
-            <p id="cursor-token-summary" class="sync-note">No Cursor token configured.</p>
-            <div id="settings-source-list" class="source-grid"></div>
-          </section>
-
-          <section class="section-block settings-panel" data-settings-panel="aliases">
-            <div class="section-title">
-              <h3>Workdir aliases</h3>
-              <p>Aliases change public directory names without uploading real paths.</p>
-            </div>
-            <div id="workdir-alias-list" class="alias-list"></div>
-          </section>
-
-          <section class="section-block settings-panel" data-settings-panel="system">
-            <div class="section-title">
-              <h3>System behavior</h3>
-              <p>Controls how the desktop app starts on this computer.</p>
+              <button id="check-update" type="button">Check update</button>
+              <button id="download-update" type="button" disabled>Download verified package</button>
+              <span id="update-message" class="action-message" aria-live="polite"></span>
             </div>
             <section class="risk-panel">
               <h3>Risk controls</h3>
@@ -297,6 +305,14 @@
               </div>
             </section>
             <div class="form-grid">
+              <label class="toggle-row">
+                <input id="showEstimatedCost" type="checkbox" />
+                Show estimated cost
+              </label>
+              <label class="toggle-row">
+                <input id="showRawTokens" type="checkbox" />
+                Raw token numbers
+              </label>
               <label class="toggle-row">
                 <input id="launchAtLogin" type="checkbox" />
                 Launch at login

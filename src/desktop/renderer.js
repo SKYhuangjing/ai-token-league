@@ -20,13 +20,14 @@ let pricingSource = "local fallback pricing";
 let latestScanAt = "";
 let scanRunning = false;
 let scanPollTimer = null;
+let latestUpdateState = null;
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
     selectSection(button.dataset.section);
     if (button.dataset.section === "today") run(loadToday);
     if (button.dataset.section === "trend") run(loadTrend);
-    if (button.dataset.section === "settings") run(loadBackgroundStatus);
+  if (button.dataset.section === "settings") run(loadBackgroundStatus);
   });
 });
 
@@ -84,6 +85,8 @@ $("#settings-tabs").addEventListener("click", (event) => {
   if (!button) return;
   selectSettingsTab(button.dataset.settingsTab);
   if (button.dataset.settingsTab === "sync") run(loadBackgroundStatus);
+  if (button.dataset.settingsTab === "cloud") run(loadCloudStatus);
+  if (button.dataset.settingsTab === "app") run(loadSystemStatus);
   if (button.dataset.settingsTab === "sources") run(loadHealth);
 });
 $("#workdir-alias-list").addEventListener("click", (event) => {
@@ -102,6 +105,8 @@ document.querySelectorAll(".save-settings").forEach((button) => button.addEventL
 })));
 
 $("#reset-local-data").addEventListener("click", () => run(resetLocalData));
+$("#check-update").addEventListener("click", () => run(checkUpdate));
+$("#download-update").addEventListener("click", () => run(downloadUpdate));
 
 function selectSection(section) {
   document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.section === section));
@@ -190,6 +195,7 @@ async function boot() {
     renderConfig(config);
     await loadToday();
     await loadBackgroundStatus();
+    await loadSystemStatus();
   } else {
     $("#today-summary").textContent = "Open Settings to start tracking.";
     document.querySelector('[data-section="settings"]').click();
@@ -286,6 +292,7 @@ function positiveInteger(value) {
 
 async function loadHealth() {
   latestHealth = await api.providerHealth();
+  renderCursorTokenSummary(latestConfig?.cursorDashboardUsage);
   renderHealth();
   await loadBackgroundStatus();
 }
@@ -312,7 +319,7 @@ function confirmSyncUpload() {
   const config = latestConfig || {};
   const apiBaseUrl = normalizeApiBaseUrl(config.apiBaseUrl || config.apiConnection?.apiBaseUrl || "");
   if (!apiBaseUrl) {
-    window.alert("Configure an API base URL in Settings before syncing.");
+    window.alert("Configure Cloud Connection before syncing.");
     return false;
   }
   const rows = allUsage.length || latestUsage.length || 0;
@@ -384,8 +391,86 @@ function renderConfig(config) {
   $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
   $("#launchAtLogin").checked = config?.launchAtLogin ?? false;
   renderCursorTokenSummary(config?.cursorDashboardUsage);
+  renderCloudStatus(config);
   renderSyncStatus(config);
+  renderSystemStatus({ client: null, server: config?.apiConnection || null, update: latestUpdateState });
   renderOnboarding();
+}
+
+async function loadCloudStatus() {
+  latestConfig = await api.getConfig();
+  renderCloudStatus(latestConfig);
+}
+
+async function loadSystemStatus() {
+  const client = await api.appVersion();
+  const server = latestConfig?.apiConnection || null;
+  renderSystemStatus({ client, server, update: latestUpdateState });
+}
+
+async function checkUpdate() {
+  $("#check-update").disabled = true;
+  $("#update-message").textContent = "Checking...";
+  try {
+    latestUpdateState = await api.checkUpdate();
+    renderSystemStatus(latestUpdateState);
+    $("#update-message").textContent = updateMessage(latestUpdateState);
+    $("#download-update").disabled = !latestUpdateState.update?.updateAvailable;
+    latestConfig = await api.getConfig();
+    renderCloudStatus(latestConfig);
+  } finally {
+    $("#check-update").disabled = false;
+  }
+}
+
+async function downloadUpdate() {
+  if (!latestUpdateState?.update?.artifact) return;
+  $("#download-update").disabled = true;
+  $("#update-message").textContent = "Downloading...";
+  try {
+    const result = await api.downloadUpdate({ artifact: latestUpdateState.update.artifact });
+    $("#update-message").textContent = result.handoff || "Downloaded and verified";
+  } finally {
+    $("#download-update").disabled = !latestUpdateState?.update?.updateAvailable;
+  }
+}
+
+function renderSystemStatus(state = {}) {
+  const client = state.client || {};
+  const server = state.server || {};
+  const update = state.update || latestUpdateState?.update || null;
+  $("#system-client-version").textContent = client.clientAppVersion
+    ? `Client ${client.clientAppVersion} · protocol ${client.clientProtocolVersion} · ${client.clientPlatform}`
+    : "Client -";
+  $("#system-latest-version").textContent = update?.latestVersion || server.latestClientVersion
+    ? `Latest ${update?.latestVersion || server.latestClientVersion}`
+    : "Latest -";
+  $("#system-update-checked").textContent = state.checkedAt ? `Last check ${formatDateTime(state.checkedAt)}` : "Last check -";
+}
+
+function renderCloudStatus(config = latestConfig) {
+  const connection = config?.apiConnection || {};
+  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || connection.apiBaseUrl || "");
+  const compatibility = connection.compatibility || {};
+  const release = connection.release || {};
+  $("#cloud-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "Cloud not configured";
+  $("#cloud-target").title = apiBaseUrl || "";
+  $("#cloud-health").textContent = connection.status ? `Health ${connection.status}` : "Health -";
+  $("#cloud-health").title = connection.message || "";
+  $("#cloud-server-version").textContent = connection.serverVersion ? `Server ${connection.serverVersion}` : "Server -";
+  $("#cloud-protocol").textContent = connection.supportedClientProtocol
+    ? `Protocol ${connection.serverProtocolVersion || "-"} · clients ${connection.supportedClientProtocol.min}-${connection.supportedClientProtocol.max}`
+    : "Protocol -";
+  $("#cloud-compatibility").textContent = compatibility.status ? `Compatibility ${compatibility.status}` : "Compatibility -";
+  $("#cloud-latest-version").textContent = connection.latestClientVersion ? `Latest ${connection.latestClientVersion}` : "Latest -";
+  $("#cloud-release-manifest").textContent = release.manifestUrl ? "Release manifest configured" : "Release manifest -";
+  $("#cloud-release-manifest").title = release.manifestUrl || "";
+}
+
+function updateMessage(state = {}) {
+  if (state.code === "cloud_not_configured") return "Configure Cloud Connection before checking updates";
+  if (state.code === "release_not_configured") return "Release manifest is not configured on the app server";
+  return state.message || "Update check finished";
 }
 
 function renderOnboarding() {
@@ -397,10 +482,21 @@ function renderOnboarding() {
 function renderCursorTokenSummary(cursorConfig = {}) {
   const tokens = cursorConfig?.workosSessionTokens || [];
   const legacy = cursorConfig?.workosSessionToken ? [{ accountName: "legacy token" }] : [];
-  const accounts = [...tokens, ...legacy].map((item) => item.accountName || "Cursor").filter(Boolean);
-  $("#cursor-token-summary").textContent = accounts.length
-    ? `${accounts.length} Cursor token${accounts.length === 1 ? "" : "s"} configured · ${accounts.join(", ")}`
-    : "No Cursor token configured. Local Cursor state can still be detected automatically.";
+  const configuredAccounts = [...tokens, ...legacy].map((item) => item.accountName || "Cursor").filter(Boolean);
+  const detectedAccounts = cursorDetectedAccounts().filter((account) => !configuredAccounts.includes(account));
+  if (configuredAccounts.length) {
+    const detectedText = detectedAccounts.length ? `; local account detected · ${detectedAccounts.join(", ")}` : "";
+    $("#cursor-token-summary").textContent = `${configuredAccounts.length} Cursor token${configuredAccounts.length === 1 ? "" : "s"} configured · ${configuredAccounts.join(", ")}${detectedText}`;
+    return;
+  }
+  $("#cursor-token-summary").textContent = detectedAccounts.length
+    ? `${detectedAccounts.length} local Cursor account${detectedAccounts.length === 1 ? "" : "s"} detected · ${detectedAccounts.join(", ")}`
+    : "No Cursor token configured and no local Cursor account detected.";
+}
+
+function cursorDetectedAccounts() {
+  const cursorHealth = latestHealth.find((item) => item.providerId === "cursor_dashboard_usage");
+  return [...new Set((cursorHealth?.roots || []).map((root) => String(root || "").trim()).filter(Boolean))];
 }
 
 function renderSyncStatus(config, result = null) {
@@ -437,6 +533,8 @@ function syncStateLabel(state, { scanned = 0, accepted = 0, rejected = 0, queueP
     return `Synced ${scanned} rows (${accepted} accepted${rejectedText}${queueText})`;
   }
   if (state === "queued") {
+    if (error.includes("unsupported_client")) return `Update required; ${queuePending || scanned} rows kept in queue`;
+    if (error.includes("unsupported_server")) return `Server is not compatible; ${queuePending || scanned} rows kept in queue`;
     return `Queued ${scanned} rows${queuePending ? ` (${queuePending} pending)` : ""}`;
   }
   if (state === "failed") {
@@ -632,7 +730,7 @@ function applySourceEnabled(config, providerId, enabled) {
 function sourceSummary(item) {
   const count = (item.roots || []).length;
   if (item.providerId === "cursor_dashboard_usage") {
-    if (!count) return "No Cursor token configured";
+    if (!count) return "No Cursor account detected";
     return `${count} account source${count === 1 ? "" : "s"}`;
   }
   if (!item.detected) return "Not found";

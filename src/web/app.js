@@ -13,6 +13,8 @@ const storageKeys = {
 
 const tbody = document.querySelector("#leaderboard");
 const statusEl = document.querySelector("#status");
+const downloadStatusEl = document.querySelector("#download-status");
+const downloadActionsEl = document.querySelector("#download-actions");
 const detailEl = document.querySelector("#participant-detail");
 const detailBackdrop = document.querySelector("#detail-backdrop");
 let detailCloseTimer = null;
@@ -92,6 +94,43 @@ function render(items) {
   tbody.querySelectorAll("[data-participant]").forEach((button) => {
     button.addEventListener("click", () => loadDetail(button.dataset.participant));
   });
+}
+
+async function loadReleaseDownloads() {
+  try {
+    const response = await fetch("/api/release/latest");
+    const data = await response.json();
+    if (!data.ok || !data.manifest) {
+      renderDownloadUnavailable(data.code || data.error || "release unavailable");
+      return;
+    }
+    renderReleaseDownloads(data.manifest);
+  } catch (error) {
+    renderDownloadUnavailable(error.message);
+  }
+}
+
+function renderReleaseDownloads(manifest) {
+  const platforms = Object.entries(manifest.platforms || {})
+    .filter(([, artifact]) => artifact?.url)
+    .sort(([left], [right]) => platformSort(left) - platformSort(right));
+  const preferred = preferredPlatform();
+  const preferredArtifact = platforms.find(([platform]) => platform === preferred);
+  downloadStatusEl.textContent = `Latest ${manifest.version} · ${platforms.length} platform${platforms.length === 1 ? "" : "s"}`;
+  downloadActionsEl.innerHTML = platforms.length
+    ? platforms
+        .map(([platform, artifact]) => `<a class="download-link${platform === preferred ? " primary" : ""}" href="${escapeAttribute(artifact.url)}" target="_blank" rel="noreferrer">
+          <strong>${escapeHtml(platformLabel(platform))}</strong>
+          <span>${escapeHtml(fileSize(artifact.size))}</span>
+        </a>`)
+        .join("")
+    : `<span class="download-placeholder">No downloadable client artifacts</span>`;
+  if (preferredArtifact) downloadStatusEl.textContent = `Latest ${manifest.version} · recommended for this device: ${platformLabel(preferred)}`;
+}
+
+function renderDownloadUnavailable(reason) {
+  downloadStatusEl.textContent = "Client downloads are not configured on this app server.";
+  downloadActionsEl.innerHTML = `<span class="download-placeholder">${escapeHtml(reason)}</span>`;
 }
 
 async function loadDetail(participantId) {
@@ -387,6 +426,37 @@ function sourceName(providerId) {
   return providerId;
 }
 
+function platformSort(platform) {
+  return {
+    "darwin-arm64": 1,
+    "darwin-x64": 2,
+    "win32-x64": 3
+  }[platform] || 99;
+}
+
+function platformLabel(platform) {
+  return {
+    "darwin-arm64": "macOS Apple silicon",
+    "darwin-x64": "macOS Intel",
+    "win32-x64": "Windows x64"
+  }[platform] || platform;
+}
+
+function preferredPlatform() {
+  const userAgent = window.navigator.userAgent || "";
+  if (/Windows/i.test(userAgent)) return "win32-x64";
+  return "";
+}
+
+function fileSize(bytes) {
+  const value = Number(bytes || 0);
+  if (!value) return "download";
+  if (value >= 1024 * 1024 * 1024) return `${trimFixed(value / 1024 / 1024 / 1024, 1)} GB`;
+  if (value >= 1024 * 1024) return `${trimFixed(value / 1024 / 1024, 0)} MB`;
+  if (value >= 1024) return `${trimFixed(value / 1024, 0)} KB`;
+  return `${value} B`;
+}
+
 function hydratePreferences() {
   state.showCost = readBooleanPreference(storageKeys.showCost, false);
 }
@@ -478,6 +548,11 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
 
+function escapeAttribute(value) {
+  return escapeHtml(value);
+}
+
+loadReleaseDownloads();
 loadLeaderboard().catch((error) => {
   statusEl.textContent = error.message;
 });

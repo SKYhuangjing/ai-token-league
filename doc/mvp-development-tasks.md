@@ -8,8 +8,8 @@
 
 v0.1 状态：
 
-- E0-E9、E11-E17 已完成。
-- E10 发布验证仍保留 `REVIEW`，原因是 macOS 本机链路已验证、Windows x64 包已生成，但 Windows 主机 E2E 尚未执行。
+- E0-E17 已完成。
+- E10 发布验证已完成：macOS 本机链路已验证，Windows x64 包已由外部用户在真实 Windows 电脑本地验证通过。
 - `dist/AI Token League-darwin-arm64.zip` 与 `dist/AI Token League-win32-x64.zip` 为当前阶段产物。
 - E18 开始进入 v0.2 测试环境部署准备：Docker + MySQL，不改变 v0.1 已冻结基线。
 
@@ -80,7 +80,7 @@ MVP 发布必须同时满足：
 | E7 | Web Leaderboard | DONE | 普通公开榜与管理员查看页可用 |
 | E8 | Desktop UI | DONE | Electron 桌面壳已实现，覆盖 Today、Trend、设置、后台刷新、同步 |
 | E9 | 跨平台打包 | DONE | macOS app 与 Windows x64 分发包已生成 |
-| E10 | 发布验证 | REVIEW | 本机 smoke 通过，Windows 实机 E2E 待 Windows 主机验证 |
+| E10 | 发布验证 | DONE | 本机 smoke 通过，Windows 实机 E2E 已由外部用户验证通过 |
 | E11 | Web/Trend 交互模型重构 | DONE | 榜单周期、用户趋势、管理员查询和客户端 Trend 已按新产品模型落地 |
 | E12 | 存储模型与追溯能力硬化 | DONE | 本地/远端按可追溯每日明细模型落地，支持性能可控的刷新、合并、上传和分析 |
 | E13 | 展示可读性与详情页去重 | DONE | token 短单位、图表/表格互斥、表格日期倒序、图表最新点突出 |
@@ -374,7 +374,7 @@ MVP 发布必须同时满足：
 | E9-T1 | macOS 打包 | DONE | E8 | macOS 可安装或直接运行 |
 | E9-T2 | Windows 打包 | DONE | E8 | Windows 可安装或直接运行 |
 | E9-T3 | macOS 路径验证 | DONE | E2/E3/E5 | macOS 真实路径可扫描、hash、展示 |
-| E9-T4 | Windows 路径验证 | BLOCKED | E2/E3/E5 | Windows x64 包已生成；真实路径扫描需 Windows 主机执行 |
+| E9-T4 | Windows 路径验证 | DONE | E2/E3/E5 | Windows x64 包已由外部用户在真实 Windows 电脑本地验证可用 |
 | E9-T5 | 打包产物 smoke | DONE | E9-T1/E9-T2 | 打包产物可完成首次设置、扫描、上传 |
 
 验证记录：
@@ -390,6 +390,8 @@ MVP 发布必须同时满足：
 - 客户端 Today/Settings 调整后已重新生成 macOS / Windows 分发包。
 - macOS 打包产物 `--desktop-smoke` 通过。
 - Windows exe 已再次确认为 PE32+ x86-64 GUI 可执行文件。
+2026-05-06:
+- Windows x64 分发包已由外部用户在真实 Windows 电脑本地验证通过，当前反馈为无问题。
 ```
 
 ### E10 发布验证
@@ -400,7 +402,7 @@ MVP 发布必须同时满足：
 | --- | --- | --- | --- | --- |
 | E10-T1 | 编写 smoke checklist | DONE | E6/E7/E8/E9 | checklist 覆盖身份、采集、目录、上传、榜单 |
 | E10-T2 | macOS E2E 验证 | DONE | E10-T1 | macOS 完成 collector 到 web 榜单闭环 |
-| E10-T3 | Windows E2E 验证 | BLOCKED | E10-T1 | Windows x64 包已生成；端到端执行需 Windows 主机 |
+| E10-T3 | Windows E2E 验证 | DONE | E10-T1 | Windows x64 包已由外部用户在真实 Windows 电脑本地验证通过 |
 | E10-T4 | 隐私 payload 检查 | DONE | E10-T2 | 上传 payload 不包含 prompt、response、代码、真实路径 |
 | E10-T5 | 重复上传检查 | DONE | E6-T5 | 重复上传不会重复计数 |
 | E10-T6 | 发布说明 | DONE | E10-T2 | 输出 MVP 范围、已知限制、后续计划 |
@@ -428,6 +430,8 @@ MVP 发布必须同时满足：
 - 最新打包后的 macOS 客户端已启动，PID 23554。
 - `npm test`、`npm run desktop:smoke`、macOS 打包产物 `--desktop-smoke` 均通过。
 - macOS / Windows 分发 zip 已重新生成。
+2026-05-06:
+- 外部用户已在真实 Windows 电脑本地验证 Windows x64 版本，当前反馈为无问题。
 ```
 
 ### E11 Web/Trend 交互模型重构
@@ -1010,7 +1014,7 @@ P2: E14-T6, E14-T8, E14-T9, E14-T10, E14-T11, E14-T12, E14-T13
 - 首轮打包验证发现 macOS `CFBundleIconFile` 仍引用默认 `electron.icns`；已将 `package:mac` 改为 `--icon=assets/app-icon.icns`、`package:win` 改为 `--icon=assets/app-icon.ico`。
 - `npm run package:all` 通过，重新生成 `dist/AI Token League-darwin-arm64.zip` 与 `dist/AI Token League-win32-x64.zip`。
 - macOS 包内 `Contents/Resources/electron.icns` 与 `assets/app-icon.icns` SHA-256 一致，打包后 app `--desktop-smoke` 通过。
-- Windows exe 确认为 `PE32+ executable (GUI) x86-64, for MS Windows`，Windows 实机显示仍需 Windows 主机最终目视确认。
+- Windows exe 确认为 `PE32+ executable (GUI) x86-64, for MS Windows`；2026-05-06 已由外部用户在真实 Windows 电脑本地验证通过。
 - Web favicon HTTP 验证通过：`/favicon.png` 返回 `image/png`，内容 hash 与 `src/web/favicon.png` 一致；`/` 与 `/admin.html` 均声明 `/favicon.png`。
 - in-app browser 已打开 `/` 与 `/admin.html` 截图验证，页面加载正常且各有一个 favicon link。
 ```
@@ -1206,7 +1210,7 @@ P2: E14-T6, E14-T8, E14-T9, E14-T10, E14-T11, E14-T12, E14-T13
 当前阻塞项：
 
 ```text
-Windows x64 分发包已生成；Windows 实机 E2E 需要在 Windows 主机执行。
+无。
 ```
 
 ## 7. 已确认不进入 MVP
@@ -1257,3 +1261,4 @@ Windows x64 分发包已生成；Windows 实机 E2E 需要在 Windows 主机执�
 | 2026-04-30 | 完成 Sources 开关收口 | E21 已落地并重新打包：来源卡片统一启停，Cursor token 弹窗校验保存，本地 provider Off 后不扫描，回归、desktop smoke 和 dist 包内验证通过 |
 | 2026-04-30 | 完成 Sources 开关性能优化 | E22 已落地：On/Off 不再触发全量 usage scan，卡片乐观更新，0.2 baseline 文档新增 |
 | 2026-04-30 | 完成 P0/P1/P2 产品迭代 | 新增 E23-E25 并落地 Admin 信息架构、Pricing/Quality 运营闭环、Desktop 同步确认与设置风险归属 |
+| 2026-05-06 | 补齐 Windows 实机验证状态 | Windows x64 版本已由外部用户在真实 Windows 电脑本地验证通过，E9/E10 阻塞项关闭 |

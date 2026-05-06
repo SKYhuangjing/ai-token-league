@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload } from "../src/shared/crypto.js";
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
+import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION } from "../src/shared/version.js";
+import { buildReleaseManifest, releasePublicConfig, selectUpdateArtifact, updatePreflightState, updateStateFromManifest, validateReleaseConfig, validateReleaseManifest, verifyFileChecksum } from "../src/shared/update.js";
 import { scanUsage } from "../src/collector/core.js";
 import { addCursorToken, exportIdentity, importIdentity, updateConfig } from "../src/collector/config.js";
 import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
@@ -360,6 +362,71 @@ function testForbiddenUploadFields() {
   assert.equal(USAGE_CACHE_VERSION, 3);
 }
 
+async function testVersionCompatibilityAndManifest() {
+  assert.equal(clientMetadata().clientProtocolVersion, CLIENT_PROTOCOL_VERSION);
+  assert.equal(compatibilityResult({ clientProtocolVersion: CLIENT_PROTOCOL_VERSION }).status, "compatible");
+  assert.equal(compatibilityResult({ clientProtocolVersion: 0 }).status, "unsupported_client");
+  assert.equal(compatibilityResult({ clientProtocolVersion: 99 }).status, "unsupported_server");
+  assert.equal(compatibilityResult({}).status, "upgrade_recommended");
+  assert.equal(compatibilityResult({ clientProtocolVersion: "bad" }).status, "unsupported_client");
+  assert.throws(() => validateReleaseConfig({ publicBaseUrl: "", manifestPath: "" }), /missing release config/);
+  const artifactFile = path.join(tmp, "AI Token League-darwin-arm64.zip");
+  fs.writeFileSync(artifactFile, "test-artifact");
+  const expectedSha = "a5db9b186b4b28674910702a72ba352b9e71cd699e8e186b4b7c931412edd5f3";
+  await verifyFileChecksum(artifactFile, expectedSha);
+  await assert.rejects(() => verifyFileChecksum(artifactFile, "bad"), /checksum mismatch/);
+  const manifest = buildReleaseManifest({
+    version: "0.3.1",
+    publicBaseUrl: "https://example.com/releases",
+    manifestPath: "releases/latest.json",
+    artifacts: [
+      {
+        platform: "darwin-arm64",
+        fileName: "AI Token League-darwin-arm64.zip",
+        url: "https://example.com/releases/releases/0.3.1/AI%20Token%20League-darwin-arm64.zip",
+        sha256: expectedSha,
+        size: fs.statSync(artifactFile).size
+      }
+    ]
+  });
+  assert.equal(validateReleaseManifest(manifest).version, "0.3.1");
+  assert.equal(selectUpdateArtifact(manifest, "darwin-arm64").sha256, expectedSha);
+  assert.equal(updateStateFromManifest(manifest, { currentVersion: "0.3.0", platform: "darwin-arm64" }).updateAvailable, true);
+  assert.equal(updatePreflightState({ apiBaseUrl: "" }).code, "cloud_not_configured");
+  assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example" }), null);
+  assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example", release: {} }).code, "release_not_configured");
+  assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example", release: { manifestUrl: "https://cdn.example/latest.json" } }), null);
+  const publicRelease = releasePublicConfig({
+    release: {
+      endpoint: "oss-cn-shanghai.aliyuncs.com",
+      bucket: "private-bucket",
+      prefix: "private-prefix",
+      publicBaseUrl: "https://cdn.example",
+      manifestPath: "releases/latest.json",
+      manifestUrl: "https://cdn.example/releases/latest.json"
+    },
+    latestClientVersion: "0.3.1"
+  });
+  assert.equal(publicRelease.latestClientVersion, "0.3.1");
+  assert.equal(publicRelease.manifestUrl, "https://cdn.example/releases/latest.json");
+  assert.equal(Object.hasOwn(publicRelease, "endpoint"), false);
+  assert.equal(Object.hasOwn(publicRelease, "bucket"), false);
+  assert.equal(Object.hasOwn(publicRelease, "prefix"), false);
+  assert.throws(() => selectUpdateArtifact(manifest, "win32-x64"), /does not support/);
+  assert.throws(() => buildReleaseManifest({
+    version: "0.3.1",
+    publicBaseUrl: "https://example.com",
+    manifestPath: "releases/latest.json",
+    artifacts: [{ platform: "linux-x64", url: "https://example.com/a.zip", sha256: "x" }]
+  }), /unsupported platform/);
+  assert.throws(() => buildReleaseManifest({
+    version: "0.3.1",
+    publicBaseUrl: "https://example.com",
+    manifestPath: "releases/latest.json",
+    artifacts: [{ platform: "darwin-arm64", url: "https://example.com/a.zip" }]
+  }), /missing checksum/);
+}
+
 function testIdentityImport() {
   const identity = generateIdentity();
   const config = {
@@ -535,6 +602,7 @@ testCursorDashboardMapping();
 await testCodexLocalSkipsUnknownModel();
 await testCodexLocalNormalizesInputTokens();
 testForbiddenUploadFields();
+await testVersionCompatibilityAndManifest();
 testDisplayAndPricing();
 await testOpenRouterRefresh();
 console.log("All tests passed");

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { sha256File } from "../src/shared/update.js";
 
 const dist = path.resolve("dist");
 if (!fs.existsSync(dist)) {
@@ -15,3 +16,11 @@ for (const entry of fs.readdirSync(dist, { withFileTypes: true })) {
   if (result.status !== 0) process.exit(result.status);
   console.log(`created dist/${zipName}`);
 }
+
+const checksums = fs.readdirSync(dist)
+  .filter((name) => name.endsWith(".zip"))
+  .sort()
+  .map((name) => `${sha256File(path.join(dist, name))}  ${name}`)
+  .join("\n");
+fs.writeFileSync(path.join(dist, "checksums.txt"), `${checksums}\n`);
+console.log("created dist/checksums.txt");

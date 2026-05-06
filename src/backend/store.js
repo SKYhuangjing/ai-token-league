@@ -65,6 +65,10 @@ export class Store {
       participantId: input.participantId,
       os: input.os || "unknown",
       appVersion: input.appVersion || "0.0.0",
+      clientAppVersion: input.clientAppVersion || input.client?.clientAppVersion || input.appVersion || "0.0.0",
+      clientProtocolVersion: input.clientProtocolVersion ?? input.client?.clientProtocolVersion ?? null,
+      clientPlatform: input.clientPlatform || input.client?.clientPlatform || input.os || "unknown",
+      clientBuild: input.clientBuild || input.client?.clientBuild || "",
       createdAt: this.db.devices[input.deviceId]?.createdAt || now,
       lastSeenAt: now
     };

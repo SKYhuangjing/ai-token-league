@@ -29,6 +29,7 @@ In another terminal:
 ```bash
 HOME="$PWD/.tmp-smoke/home" npm run collector:init -- --nickname smoke --api http://127.0.0.1:8787
 HOME="$PWD/.tmp-smoke/home" npm run collector -- scan
+HOME="$PWD/.tmp-smoke/home" npm run collector -- health
 HOME="$PWD/.tmp-smoke/home" npm run collector -- sync
 curl -s 'http://127.0.0.1:8787/api/leaderboard?range=today&tool=all'
 ```
@@ -37,6 +38,7 @@ curl -s 'http://127.0.0.1:8787/api/leaderboard?range=today&tool=all'
 
 - collector scan returns `claude_code_local` and `codex_local` provider health.
 - upload returns `accepted: 2`, `rejected: 0`.
+- health/status output includes client version, client protocol, server version, latest client version, and compatibility.
 - leaderboard contains nickname `smoke`.
 - leaderboard total tokens are `6260` for bundled samples.
 - top workdir is `claude-project`.
@@ -64,6 +66,9 @@ The MVP is distributed as:
 - Collector CLI: `npm run collector -- <command>`
 - Desktop collector UI: `npm run desktop`
 - macOS arm64 app bundle: `dist/AI Token League-darwin-arm64.zip`
+- macOS Intel x64 app bundle: `dist/AI Token League-darwin-x64.zip`
 - Windows x64 app bundle: `dist/AI Token League-win32-x64.zip`
+- Release checksum file: `dist/checksums.txt`
+- Release manifest dry run: `npm run release:dry-run`
 
-The Windows x64 bundle is produced on macOS and must be E2E tested on a Windows host.
+The Windows x64 bundle is produced on macOS and has been validated by external users on real Windows machines.

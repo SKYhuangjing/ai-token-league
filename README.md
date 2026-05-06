@@ -139,9 +139,9 @@ npm run desktop
 
 ## 桌面应用 / Desktop App
 
-项目可以构建 macOS arm64 和 Windows x64 桌面包。macOS 已在本机完成 smoke test。Windows 已完成初步验证，可以使用，但还没有覆盖充分的 Windows 主机场景测试。
+项目可以构建 macOS arm64、macOS Intel x64 和 Windows x64 桌面包。macOS arm64 已在本机完成 smoke test。Windows x64 已由外部用户在真实 Windows 电脑本地验证通过，当前反馈可用。
 
-The project can build desktop bundles for macOS arm64 and Windows x64. macOS has been smoke-tested locally. Windows has passed initial verification and is usable, but has not yet been fully tested across Windows host scenarios.
+The project can build desktop bundles for macOS arm64, macOS Intel x64, and Windows x64. macOS arm64 has been smoke-tested locally. Windows x64 has been validated by external users on real Windows machines and is currently reported usable.
 
 开发命令、API 细节、存储说明和打包检查放在 [AGENTS.md](AGENTS.md)。
 
@@ -150,6 +150,8 @@ Developer commands, API details, storage notes, and packaging checks live in [AG
 ## 项目文档 / Project Docs
 
 - [doc/0.2-baseline.md](doc/0.2-baseline.md) - 当前产品和发布基线。 / Current product and release baseline.
+- [doc/0.3-baseline.md](doc/0.3-baseline.md) - 0.3 产品基线。 / 0.3 product baseline.
+- [doc/0.3-development-tasks.md](doc/0.3-development-tasks.md) - 0.3 开发任务与验证记录。 / 0.3 development tasks and verification record.
 - [doc/v0.1-baseline.md](doc/v0.1-baseline.md) - 冻结的 v0.1 基线。 / Frozen v0.1 baseline.
 - [doc/product-design.md](doc/product-design.md) - 产品设计历史。 / Product design history.
 - [doc/mvp-development-tasks.md](doc/mvp-development-tasks.md) - MVP 任务执行历史。 / MVP task execution history.
@@ -165,7 +167,7 @@ Developer commands, API details, storage notes, and packaging checks live in [AG
 - 暂无原生安装器。 / No native installer yet.
 - token total 是主排行口径；cost 是可选展示，不是主排行依据。 / Token total is the primary ranking metric; cost is optional display, not the main ranking truth.
 - Cursor dashboard usage 不提供本地工作目录归因。 / Cursor dashboard usage does not provide local workdir attribution.
-- Windows 已初步验证可用，但尚未充分测试。 / Windows is initially verified and usable, but not yet fully tested.
+- Windows x64 已由外部用户实机验证可用。 / Windows x64 has been validated by external users on real Windows machines.
 
 ## 推荐 GitHub Topics / Suggested GitHub Topics
 

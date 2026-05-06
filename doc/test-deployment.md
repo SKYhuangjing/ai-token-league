@@ -186,5 +186,5 @@ http://127.0.0.1:8787
 - The MySQL store keeps the existing in-memory aggregation logic and persists facts to MySQL. It is suitable for test deployment, not final production scaling.
 - Aggregate cache is still in process memory for the MySQL deployment.
 - Admin page access is not protected yet.
-- Windows client E2E remains pending on a Windows host.
+- Windows x64 client has been validated by external users on real Windows machines; repeat this check after packaging, updater, or Windows-specific changes.
 - On the current macOS development machine, Docker containers cannot complete a MySQL connection to the external service and receive `PROTOCOL_CONNECTION_LOST`; the same credentials work from the host Node process. This needs test-environment network/VPN/MySQL access-policy validation before Docker runtime can be marked fully passed.
