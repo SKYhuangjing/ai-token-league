@@ -119,13 +119,20 @@ function renderReleaseDownloads(manifest) {
   downloadStatusEl.textContent = `Latest ${manifest.version} · ${platforms.length} platform${platforms.length === 1 ? "" : "s"}`;
   downloadActionsEl.innerHTML = platforms.length
     ? platforms
-        .map(([platform, artifact]) => `<a class="download-link${platform === preferred ? " primary" : ""}" href="${escapeAttribute(artifact.url)}" target="_blank" rel="noreferrer">
-          <strong>${escapeHtml(platformLabel(platform))}</strong>
-          <span>${escapeHtml(fileSize(artifact.size))}</span>
-        </a>`)
+        .map(([platform, artifact]) => {
+          const link = artifact.installer || artifact;
+          const ext = artifact.installer ? artifact.installer.ext : "zip";
+          return `<a class="download-link${platform === preferred ? " primary" : ""}" href="${escapeAttribute(link.url)}" target="_blank" rel="noreferrer">
+            <strong>${escapeHtml(platformLabel(platform))}</strong>
+            <span>${escapeHtml(fileSize(link.size))} · ${ext.toUpperCase()}</span>
+          </a>`;
+        })
         .join("")
     : `<span class="download-placeholder">No downloadable client artifacts</span>`;
   if (preferredArtifact) downloadStatusEl.textContent = `Latest ${manifest.version} · recommended for this device: ${platformLabel(preferred)}`;
+  else if (isMacBrowser() && platforms.some(([platform]) => platform === "darwin-arm64") && platforms.some(([platform]) => platform === "darwin-x64")) {
+    downloadStatusEl.textContent = `Latest ${manifest.version} · choose macOS Apple silicon or macOS Intel`;
+  }
 }
 
 function renderDownloadUnavailable(reason) {
@@ -446,6 +453,10 @@ function preferredPlatform() {
   const userAgent = window.navigator.userAgent || "";
   if (/Windows/i.test(userAgent)) return "win32-x64";
   return "";
+}
+
+function isMacBrowser() {
+  return /Mac OS X|Macintosh/i.test(window.navigator.userAgent || "");
 }
 
 function fileSize(bytes) {

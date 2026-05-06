@@ -258,10 +258,29 @@
               <span id="system-client-version">Client -</span>
               <span id="system-latest-version">Latest -</span>
               <span id="system-update-checked">Last check -</span>
+              <span id="system-silent-update">Silent update -</span>
+            </div>
+            <div class="silent-update-control" role="radiogroup" aria-label="Silent update">
+              <label>
+                <input type="radio" name="silentUpdateMode" value="notify" />
+                <strong>Notify</strong>
+                <small>Check only</small>
+              </label>
+              <label>
+                <input type="radio" name="silentUpdateMode" value="auto_download" />
+                <strong>Prepare</strong>
+                <small>Download verified zip</small>
+              </label>
+              <label>
+                <input type="radio" name="silentUpdateMode" value="auto_apply_on_idle" />
+                <strong>Auto apply</strong>
+                <small>Restart when idle</small>
+              </label>
             </div>
             <div class="actions">
               <button id="check-update" type="button">Check update</button>
-              <button id="download-update" type="button" disabled>Download verified package</button>
+              <button id="download-update" type="button" disabled>Download and restart</button>
+              <button class="save-settings" type="button">Save settings</button>
               <button id="export-diagnostics" type="button">Export diagnostics</button>
               <span id="update-message" class="action-message" aria-live="polite"></span>
               <span id="diagnostics-message" class="action-message" aria-live="polite"></span>

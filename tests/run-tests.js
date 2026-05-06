@@ -7,9 +7,9 @@ import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload } from "../src/shared/crypto.js";
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION } from "../src/shared/version.js";
-import { buildReleaseManifest, releasePublicConfig, selectUpdateArtifact, updatePreflightState, updateStateFromManifest, validateReleaseConfig, validateReleaseManifest, verifyFileChecksum } from "../src/shared/update.js";
+import { buildReleaseManifest, INSTALLER_PLATFORMS, releasePublicConfig, selectInstallerArtifact, selectUpdateArtifact, updatePreflightState, updateStateFromManifest, validateReleaseConfig, validateReleaseManifest, verifyFileChecksum } from "../src/shared/update.js";
 import { scanUsage } from "../src/collector/core.js";
-import { addCursorToken, exportIdentity, importIdentity, updateConfig } from "../src/collector/config.js";
+import { addCursorToken, exportConfig, exportIdentity, importIdentity, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
 import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
 import { codexLocalProvider } from "../src/collector/providers/codex-local.js";
 import { cursorDashboardUsageProvider, eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
@@ -574,6 +574,55 @@ async function testVersionCompatibilityAndManifest() {
     manifestPath: "releases/latest.json",
     artifacts: [{ platform: "darwin-arm64", url: "https://example.com/a.zip" }]
   }), /missing checksum/);
+
+  // Installer artifacts in manifest
+  assert.equal(INSTALLER_PLATFORMS["darwin-arm64"].ext, "dmg");
+  assert.equal(INSTALLER_PLATFORMS["win32-x64"].ext, "exe");
+  const manifestWithInstaller = buildReleaseManifest({
+    version: "0.4.0",
+    publicBaseUrl: "https://example.com/releases",
+    manifestPath: "releases/latest.json",
+    artifacts: [
+      {
+        platform: "darwin-arm64",
+        fileName: "AI Token League-darwin-arm64.zip",
+        url: "https://example.com/releases/releases/0.4.0/AI%20Token%20League-darwin-arm64.zip",
+        sha256: expectedSha,
+        size: 100
+      }
+    ],
+    installerArtifacts: [
+      {
+        platform: "darwin-arm64",
+        fileName: "AI Token League-0.4.0-mac-arm64-installer.dmg",
+        url: "https://example.com/releases/releases/0.4.0/AI%20Token%20League-0.4.0-mac-arm64-installer.dmg",
+        sha256: expectedSha,
+        size: 200,
+        ext: "dmg"
+      }
+    ]
+  });
+  assert.ok(manifestWithInstaller.platforms["darwin-arm64"].installer);
+  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.ext, "dmg");
+  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.url, "https://example.com/releases/releases/0.4.0/AI%20Token%20League-0.4.0-mac-arm64-installer.dmg");
+  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.size, 200);
+
+  // selectUpdateArtifact returns zip, not installer
+  const zipArtifact = selectUpdateArtifact(manifestWithInstaller, "darwin-arm64");
+  assert.equal(zipArtifact.url, "https://example.com/releases/releases/0.4.0/AI%20Token%20League-darwin-arm64.zip");
+
+  // selectInstallerArtifact returns installer
+  const installerArtifact = selectInstallerArtifact(manifestWithInstaller, "darwin-arm64");
+  assert.ok(installerArtifact);
+  assert.equal(installerArtifact.ext, "dmg");
+  assert.equal(installerArtifact.platform, "darwin-arm64");
+
+  // selectInstallerArtifact returns null when no installer
+  assert.equal(selectInstallerArtifact(manifest, "darwin-arm64"), null);
+
+  // Old manifest without installer field still validates
+  assert.equal(manifest.platforms["darwin-arm64"].installer, undefined);
+  assert.equal(validateReleaseManifest(manifest).version, "0.3.1");
 }
 
 function testIdentityImport() {
@@ -625,6 +674,15 @@ function testUpdateConfigKeepsIdentity() {
   assert.equal(updated.showEstimatedCost, false);
   assert.equal(updated.autoRefreshEnabled, false);
   assert.equal(updated.refreshIntervalMinutes, 3);
+  assert.equal(updated.silentUpdateMode, "notify");
+  const silentUpdated = updateConfig({ silentUpdateMode: "auto_apply_on_idle" }, updated, { persist: false });
+  assert.equal(silentUpdated.silentUpdateMode, "auto_apply_on_idle");
+  const invalidSilentUpdate = updateConfig({ silentUpdateMode: "bad" }, silentUpdated, { persist: false });
+  assert.equal(invalidSilentUpdate.silentUpdateMode, "notify");
+  assert.equal(normalizeSilentUpdateMode("auto_download"), "auto_download");
+  assert.equal(normalizeSilentUpdateMode("bad"), "notify");
+  const exported = exportConfig(silentUpdated);
+  assert.equal(exported.silentUpdateMode, "auto_apply_on_idle");
 }
 
 function testAddCursorTokenKeepsMultipleAccounts() {

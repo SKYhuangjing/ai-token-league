@@ -23,5 +23,6 @@ contextBridge.exposeInMainWorld("tokenLeague", {
   appVersion: () => ipcRenderer.invoke("app:version"),
   checkUpdate: () => ipcRenderer.invoke("update:check"),
   downloadUpdate: (input) => ipcRenderer.invoke("update:download", input),
+  installAndRestartUpdate: () => ipcRenderer.invoke("update:install-and-restart"),
   resetLocalData: () => ipcRenderer.invoke("app:reset-local-data")
 });

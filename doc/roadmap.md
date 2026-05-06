@@ -33,6 +33,7 @@
 | 隐私披露 | DONE | 将 FORBIDDEN_UPLOAD_FIELDS 转化为人类可读声明，集成到向导 Welcome 步骤和 CLI init。 |
 | 源自动检测 | DONE | 向导 Sources 步骤展示本机检测到的 AI 工具，预启用已检测源，支持自定义位置添加。 |
 | CLI 交互式 init | DONE | 无 config 且无 `--nickname` 标志时，`init` 进入交互模式，提示昵称、展示检测结果、提示 API URL。 |
+| 原生安装包制作与发布 | DONE | 三平台 DMG/NSIS 安装包构建到 `dist-installer/`；发布脚本上传安装包到 OSS；manifest 每个平台含 `installer` 子对象；Web 下载面板优先展示安装包链接。 |
 
 参考：
 
@@ -44,7 +45,7 @@
 | 能力 | 优先级 | 产品目标 |
 | --- | --- | --- |
 | 安装包发布验证闭环 | P0 | 固化一次 release publish 后的人工验收：manifest 公开读、app-server release config、客户端 Check update、三平台下载 URL 和 checksum 全部一致。 |
-| 原生安装包分发 | P1 | 在自升级 zip 之外，补齐 macOS arm64 dmg、macOS Intel x64 dmg、Windows x64 NSIS exe；installer 面向首次安装和手动下载，updater 仍使用 zip，避免两套升级语义混用。 |
+| 原生安装包分发 | DONE | 在自升级 zip 之外，补齐 macOS arm64 dmg、macOS Intel x64 dmg、Windows x64 NSIS exe；installer 面向首次安装和手动下载，updater 仍使用 zip，避免两套升级语义混用。已随 0.4.0 落地。 |
 | Windows 主机覆盖 | P0 | Windows 版本已在真实 Windows 本地初验可用，后续补齐持续化 smoke、安装、更新、路径权限和防病毒误报验证。 |
 | 更新失败可诊断性 | P1 | Check update、download、checksum、apply 四类失败给出用户可执行原因，避免暴露工程配置名。 |
 | Release 回滚策略 | P1 | 当 latest manifest 发布错误时，可以回滚到上一个可用版本，并保证客户端不会读到半发布状态。 |

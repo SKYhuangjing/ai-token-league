@@ -4,34 +4,6 @@
   "private": true,
   "type": "module",
   "main": "src/desktop/main.cjs",
-  "build": {
-    "appId": "com.ai.token.league",
-    "productName": "AI Token League",
-    "files": [
-      "src/**/*",
-      "scripts/**/*",
-      "assets/**/*",
-      "package.json",
-      "README.md"
-    ],
-    "directories": {
-      "output": "dist-installer"
-    },
-    "mac": {
-      "icon": "assets/app-icon.icns",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "dmg": {
-      "artifactName": "${productName}-${version}-mac-intel-installer.${ext}"
-    }
-  },
   "scripts": {
     "start": "node src/backend/server.js",
     "desktop": "electron .",
@@ -47,7 +19,11 @@
     "package:mac:arm64": "electron-packager . \"AI Token League\" --platform=darwin --arch=arm64 --out=dist --overwrite --app-version=0.4.0 --icon=assets/app-icon.icns --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|Dockerfile|docker-compose.*|AGENTS\\.md|env\\..*|.*\\.pid|.*\\.log)($|/)'",
     "package:mac:intel": "electron-packager . \"AI Token League\" --platform=darwin --arch=x64 --out=dist --overwrite --app-version=0.4.0 --icon=assets/app-icon.icns --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|Dockerfile|docker-compose.*|AGENTS\\.md|env\\..*|.*\\.pid|.*\\.log)($|/)'",
     "package:mac:all": "npm run package:mac:arm64 && npm run package:mac:intel",
-    "package:mac:intel:installer": "electron-builder --mac dmg --x64",
+    "package:installer:mac:arm64": "electron-builder --mac dmg --arm64",
+    "package:installer:mac:intel": "electron-builder --mac dmg --x64",
+    "package:installer:mac:all": "electron-builder --mac dmg --arm64 --x64",
+    "package:installer:win": "electron-builder --win nsis --x64",
+    "package:installer:all": "electron-builder --mac dmg --arm64 --x64 --win nsis --x64",
     "package:win": "electron-packager . \"AI Token League\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=0.4.0 --icon=assets/app-icon.ico --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|Dockerfile|docker-compose.*|AGENTS\\.md|env\\..*|.*\\.pid|.*\\.log)($|/)'",
     "package:all": "npm run package:mac:all && npm run package:win && node scripts/zip-dist.js",
     "release:dry-run": "node scripts/publish-release.js --dry-run",

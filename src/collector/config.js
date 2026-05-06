@@ -6,6 +6,11 @@ import { generateIdentity, newId } from "../shared/crypto.js";
 export const APP_DIR = path.join(os.homedir(), ".ai-token-league");
 export const CONFIG_PATH = path.join(APP_DIR, "config.json");
 export const QUEUE_PATH = path.join(APP_DIR, "upload-queue.json");
+export const SILENT_UPDATE_MODES = ["notify", "auto_download", "auto_apply_on_idle"];
+
+export function normalizeSilentUpdateMode(value) {
+  return SILENT_UPDATE_MODES.includes(value) ? value : "notify";
+}
 
 export function ensureAppDir() {
   fs.mkdirSync(APP_DIR, { recursive: true });
@@ -29,6 +34,7 @@ export function initConfig({
   refreshIntervalMinutes = 15,
   showRawTokens = false,
   launchAtLogin = false,
+  silentUpdateMode = "notify",
   desktopAutoInitialized = false
 } = {}) {
   const identity = generateIdentity();
@@ -44,6 +50,7 @@ export function initConfig({
     showEstimatedCost: false,
     showRawTokens,
     autoRefreshEnabled,
+    silentUpdateMode: normalizeSilentUpdateMode(silentUpdateMode),
     refreshIntervalMinutes: Number.isFinite(interval) ? Math.max(1, Math.round(interval)) : 15,
     launchAtLogin,
     desktopAutoInitialized,
@@ -88,6 +95,7 @@ export function importIdentity(identity, current = {}, { persist = true } = {}) 
     showEstimatedCost: current.showEstimatedCost ?? false,
     showRawTokens: current.showRawTokens ?? false,
     autoRefreshEnabled: current.autoRefreshEnabled ?? false,
+    silentUpdateMode: normalizeSilentUpdateMode(current.silentUpdateMode),
     refreshIntervalMinutes: current.refreshIntervalMinutes || 15,
     launchAtLogin: current.launchAtLogin ?? false,
     desktopAutoInitialized: false,
@@ -126,6 +134,7 @@ export function importConfig(imported) {
     showEstimatedCost: imported.showEstimatedCost ?? false,
     showRawTokens: imported.showRawTokens ?? false,
     autoRefreshEnabled: imported.autoRefreshEnabled ?? false,
+    silentUpdateMode: normalizeSilentUpdateMode(imported.silentUpdateMode),
     refreshIntervalMinutes: imported.refreshIntervalMinutes || 15,
     launchAtLogin: imported.launchAtLogin ?? false,
     desktopAutoInitialized: false,
@@ -197,6 +206,7 @@ export function updateConfig(input = {}, current = loadConfig(), { persist = tru
     showEstimatedCost: input.showEstimatedCost ?? current.showEstimatedCost ?? false,
     showRawTokens: input.showRawTokens ?? current.showRawTokens ?? false,
     autoRefreshEnabled: input.autoRefreshEnabled ?? current.autoRefreshEnabled ?? false,
+    silentUpdateMode: normalizeSilentUpdateMode(input.silentUpdateMode ?? current.silentUpdateMode),
     launchAtLogin: input.launchAtLogin ?? current.launchAtLogin ?? false,
     desktopAutoInitialized: input.desktopAutoInitialized ?? current.desktopAutoInitialized ?? false,
     providerEnabled: {

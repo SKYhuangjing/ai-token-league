@@ -5,6 +5,12 @@ import { APP_VERSION, CLIENT_PROTOCOL_VERSION, SUPPORTED_CLIENT_PROTOCOL, client
 
 export const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64"];
 
+export const INSTALLER_PLATFORMS = {
+  "darwin-arm64": { ext: "dmg", label: "macOS Apple silicon" },
+  "darwin-x64": { ext: "dmg", label: "macOS Intel" },
+  "win32-x64": { ext: "exe", label: "Windows x64" }
+};
+
 export function releaseConfigFromEnv(env = process.env) {
   const publicBaseUrl = trimSlash(env.RELEASE_PUBLIC_BASE_URL || "");
   const manifestPath = trimStartSlash(env.RELEASE_MANIFEST_PATH || "releases/latest.json");
@@ -85,7 +91,7 @@ export async function verifyFileChecksum(file, expectedSha256) {
   return { ok: true, sha256: actual };
 }
 
-export function buildReleaseManifest({ version, publicBaseUrl, manifestPath, artifacts, channel = "stable", mandatory = false, releaseNotesUrl = "" }) {
+export function buildReleaseManifest({ version, publicBaseUrl, manifestPath, artifacts, installerArtifacts = [], channel = "stable", mandatory = false, releaseNotesUrl = "" }) {
   const normalizedArtifacts = {};
   for (const artifact of artifacts) {
     if (!RELEASE_PLATFORMS.includes(artifact.platform)) throw new Error(`unsupported platform: ${artifact.platform}`);
@@ -98,6 +104,19 @@ export function buildReleaseManifest({ version, publicBaseUrl, manifestPath, art
       size: artifact.size,
       mandatory: Boolean(artifact.mandatory ?? mandatory)
     };
+  }
+  for (const installer of installerArtifacts) {
+    if (!RELEASE_PLATFORMS.includes(installer.platform)) throw new Error(`unsupported installer platform: ${installer.platform}`);
+    if (!installer.sha256) throw new Error(`missing checksum for installer ${installer.platform}`);
+    if (normalizedArtifacts[installer.platform]) {
+      normalizedArtifacts[installer.platform].installer = {
+        fileName: installer.fileName,
+        url: installer.url,
+        sha256: installer.sha256,
+        size: installer.size,
+        ext: installer.ext || INSTALLER_PLATFORMS[installer.platform]?.ext || ""
+      };
+    }
   }
   return validateReleaseManifest({
     schemaVersion: 1,
@@ -124,6 +143,13 @@ export function validateReleaseManifest(manifest, { publicBaseUrl = "" } = {}) {
     if (!RELEASE_PLATFORMS.includes(platform)) throw new Error(`unsupported platform: ${platform}`);
     if (!artifact.url) throw new Error(`artifact ${platform} missing url`);
     if (!artifact.sha256) throw new Error(`artifact ${platform} missing checksum`);
+    if (artifact.installer) {
+      if (!artifact.installer.url) throw new Error(`installer ${platform} missing url`);
+      if (!artifact.installer.sha256) throw new Error(`installer ${platform} missing checksum`);
+      if (publicBaseUrl && !String(artifact.installer.url).startsWith(publicBaseUrl)) {
+        throw new Error(`installer ${platform} url is outside release public base url`);
+      }
+    }
     if (publicBaseUrl && !String(artifact.url).startsWith(publicBaseUrl)) {
       throw new Error(`artifact ${platform} url is outside release public base url`);
     }
@@ -136,6 +162,13 @@ export function selectUpdateArtifact(manifest, platform = clientPlatform()) {
   const artifact = manifest.platforms?.[platform];
   if (!artifact) throw new Error(`release manifest does not support ${platform}`);
   return artifact;
+}
+
+export function selectInstallerArtifact(manifest, platform = clientPlatform()) {
+  validateReleaseManifest(manifest);
+  const platformEntry = manifest.platforms?.[platform];
+  if (!platformEntry?.installer) return null;
+  return { ...platformEntry.installer, platform };
 }
 
 export function updateStateFromManifest(manifest, { currentVersion = APP_VERSION, platform = clientPlatform() } = {}) {

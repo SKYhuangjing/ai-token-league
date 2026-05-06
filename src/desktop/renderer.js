@@ -145,6 +145,7 @@ function settingsPayload() {
     showEstimatedCost: $("#showEstimatedCost").checked,
     showRawTokens: $("#showRawTokens").checked,
     autoRefreshEnabled: $("#autoRefreshEnabled").checked,
+    silentUpdateMode: document.querySelector("input[name='silentUpdateMode']:checked")?.value || "notify",
     refreshIntervalMinutes: $("#refreshIntervalMinutes").value || 15,
     launchAtLogin: $("#launchAtLogin").checked,
     desktopAutoInitialized: false,
@@ -522,12 +523,16 @@ function renderConfig(config) {
   $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
   $("#showRawTokens").checked = config?.showRawTokens ?? false;
   $("#autoRefreshEnabled").checked = config?.autoRefreshEnabled ?? false;
+  document.querySelectorAll("input[name='silentUpdateMode']").forEach((item) => {
+    item.checked = item.value === (config?.silentUpdateMode || "notify");
+  });
   $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
   $("#launchAtLogin").checked = config?.launchAtLogin ?? false;
   renderCursorTokenSummary(config?.cursorDashboardUsage);
   renderCloudStatus(config);
   renderSyncStatus(config);
   renderSystemStatus({ client: null, server: config?.apiConnection || null, update: latestUpdateState });
+  renderSilentUpdateStatus(null, config);
   renderWizard();
 }
 
@@ -563,6 +568,12 @@ async function downloadUpdate() {
   $("#update-message").textContent = "Downloading...";
   try {
     const result = await api.downloadUpdate({ artifact: latestUpdateState.update.artifact });
+    if (result.canInstall) {
+      $("#check-update").disabled = true;
+      $("#update-message").textContent = "Downloaded and verified. Installing update and restarting...";
+      await api.installAndRestartUpdate();
+      return;
+    }
     $("#update-message").textContent = result.handoff || "Downloaded and verified";
   } finally {
     $("#download-update").disabled = !latestUpdateState?.update?.updateAvailable;
@@ -905,6 +916,22 @@ async function loadBackgroundStatus() {
   if (status.nextRunAt) parts.push(`next ${formatTime(status.nextRunAt)}`);
   if (status.lastError) parts.push(`error: ${status.lastError}`);
   $("#background-state").textContent = parts.join(" · ");
+  renderSilentUpdateStatus(status.updateCheck, config);
+}
+
+function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
+  const mode = config?.silentUpdateMode || "notify";
+  const labels = {
+    notify: "Notify only",
+    auto_download: "Auto-download",
+    auto_apply_on_idle: "Auto-apply when idle"
+  };
+  const parts = [labels[mode] || "Notify only"];
+  if (updateCheck?.status) parts.push(updateCheck.status.replaceAll("_", " "));
+  if (updateCheck?.readyPackage) parts.push(`ready ${updateCheck.readyPackage.latestVersion || updateCheck.readyPackage.fileName}`);
+  if (updateCheck?.nextCheckAt) parts.push(`next ${formatTime(updateCheck.nextCheckAt)}`);
+  if (updateCheck?.lastError) parts.push(`error: ${updateCheck.lastError}`);
+  $("#system-silent-update").textContent = `Silent update ${parts.join(" · ")}`;
 }
 
 function renderRoots(roots = []) {

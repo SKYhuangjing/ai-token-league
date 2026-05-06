@@ -5,6 +5,7 @@ import path from "node:path";
 import { Agent } from "undici";
 import {
   RELEASE_PLATFORMS,
+  INSTALLER_PLATFORMS,
   buildReleaseManifest,
   releaseConfigFromEnv,
   releaseSecretsFromEnv,
@@ -43,6 +44,29 @@ const artifacts = RELEASE_PLATFORMS.map((platform) => {
   };
 });
 
+const installerDir = path.resolve(argValue("installer-dist") || "dist-installer");
+const installerArtifacts = [];
+for (const platform of RELEASE_PLATFORMS) {
+  const installerInfo = INSTALLER_PLATFORMS[platform];
+  if (!installerInfo) continue;
+  const fileName = buildInstallerFileName(platform, version, installerInfo.ext);
+  const file = path.join(installerDir, fileName);
+  if (!fs.existsSync(file)) {
+    console.warn(`installer artifact not found (skipping): ${file}`);
+    continue;
+  }
+  installerArtifacts.push({
+    platform,
+    file,
+    fileName,
+    ext: installerInfo.ext,
+    size: fs.statSync(file).size,
+    sha256: sha256File(file),
+    key: joinKey(config.prefix, "releases", version, fileName),
+    url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(fileName).replaceAll("%20", "%20")}`
+  });
+}
+
 const checksums = artifacts.map((artifact) => `${artifact.sha256}  ${artifact.fileName}`).join("\n") + "\n";
 const checksumsKey = joinKey(config.prefix, "releases", version, "checksums.txt");
 const manifest = buildReleaseManifest({
@@ -50,6 +74,7 @@ const manifest = buildReleaseManifest({
   publicBaseUrl: config.publicBaseUrl,
   manifestPath: config.manifestPath,
   artifacts,
+  installerArtifacts,
   releaseNotesUrl: process.env.RELEASE_NOTES_URL || ""
 });
 const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
@@ -57,6 +82,11 @@ const manifestKey = joinKey(config.prefix, config.manifestPath);
 
 const plan = [
   ...artifacts.map((artifact) => ({ key: artifact.key, file: artifact.file, contentType: "application/zip" })),
+  ...installerArtifacts.map((artifact) => ({
+    key: artifact.key,
+    file: artifact.file,
+    contentType: artifact.ext === "dmg" ? "application/x-apple-diskimage" : "application/octet-stream"
+  })),
   { key: checksumsKey, body: checksums, contentType: "text/plain; charset=utf-8" },
   { key: manifestKey, body: manifestText, contentType: "application/json; charset=utf-8", last: true }
 ];
@@ -66,9 +96,22 @@ if (dryRun) {
   process.exit(0);
 }
 
-for (const item of plan) {
+const early = plan.filter((item) => !item.last);
+const lastItems = plan.filter((item) => item.last);
+const concurrency = Number(process.env.RELEASE_UPLOAD_CONCURRENCY || 3);
+
+const results = await poolMap(early, concurrency, async (item) => {
   await putObjectWithRetry(item);
-  console.log(`uploaded oss://${config.bucket}/${item.key}${item.last ? " (latest manifest)" : ""}`);
+  console.log(`uploaded oss://${config.bucket}/${item.key}`);
+});
+const failures = results.filter((r) => r.status === "rejected");
+if (failures.length) {
+  throw new Error(`${failures.length}/${early.length} uploads failed: ${failures.map((r) => r.reason.message).join("; ")}`);
+}
+
+for (const item of lastItems) {
+  await putObjectWithRetry(item);
+  console.log(`uploaded oss://${config.bucket}/${item.key} (latest manifest)`);
 }
 
 async function putObjectWithRetry(item) {
@@ -135,4 +178,30 @@ function loadEnvFile(file) {
     if (!key || Object.hasOwn(process.env, key)) continue;
     process.env[key] = rest.join("=").replace(/^["']|["']$/g, "");
   }
+}
+
+async function poolMap(items, limit, fn) {
+  const results = new Array(items.length);
+  let index = 0;
+  async function worker() {
+    while (index < items.length) {
+      const i = index++;
+      try {
+        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
+      } catch (error) {
+        results[i] = { status: "rejected", reason: error };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+function buildInstallerFileName(platform, ver, ext) {
+  const names = {
+    "darwin-arm64": `AI Token League-${ver}-mac-arm64-installer.${ext}`,
+    "darwin-x64": `AI Token League-${ver}-mac-x64-installer.${ext}`,
+    "win32-x64": `AI Token League-${ver}-win-x64-installer.${ext}`
+  };
+  return names[platform] || `AI Token League-${ver}-${platform}-installer.${ext}`;
 }

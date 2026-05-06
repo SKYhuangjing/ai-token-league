@@ -47,16 +47,38 @@ win32-x64: about 160 MB
 
 If a zip grows back to several hundred MB, inspect `app.asar` first. Local env files, previous installers, temp folders, docs, tests, Docker assets, backend/Web server assets, and release scripts must not be packaged into the desktop client.
 
-Optional macOS Intel DMG installer:
+## Native Installers
+
+Build native installers (DMG for macOS, NSIS exe for Windows):
 
 ```bash
-npm run package:mac:intel:installer
+rm -rf dist-installer
+npm run package:installer:all
 ```
 
-Expected installer artifact:
+The script runs `electron-builder` with the config from `electron-builder.yml`:
+
+- `npm run package:installer:mac:arm64` — macOS Apple silicon DMG
+- `npm run package:installer:mac:intel` — macOS Intel DMG
+- `npm run package:installer:win` — Windows x64 NSIS exe
+
+Expected installer artifacts:
 
 ```text
-dist-installer/AI Token League-0.3.0-mac-intel-installer.dmg
+dist-installer/AI Token League-0.4.0-mac-arm64-installer.dmg
+dist-installer/AI Token League-0.4.0-mac-x64-installer.dmg
+dist-installer/AI Token League-0.4.0-win-x64-installer.exe
+```
+
+Prerequisites for macOS: none (electron-builder handles DMG natively). Prerequisites for Windows NSIS cross-build on macOS: Wine must be installed (`brew install --cask wine-stable`). electron-builder downloads NSIS automatically.
+
+Individual installer scripts:
+
+```bash
+npm run package:installer:mac:arm64
+npm run package:installer:mac:intel
+npm run package:installer:mac:all
+npm run package:installer:win
 ```
 
 ## Release Manifest Dry Run
@@ -70,9 +92,11 @@ npm run release:dry-run
 Expected behavior:
 
 - `darwin-arm64`, `darwin-x64`, and `win32-x64` zip artifacts are included.
+- If installer artifacts exist in `dist-installer/`, they are included alongside zip artifacts.
 - `checksums.txt` is generated from the zip files.
 - `releases/<version>/...` artifacts are planned before `releases/latest.json`.
 - `latest.json` is the final upload step.
+- The manifest `platforms` entries include an optional `installer` sub-object when installer artifacts are present.
 
 Publish only from a trusted release environment:
 
@@ -109,6 +133,13 @@ npx asar list "dist/AI Token League-darwin-x64/AI Token League.app/Contents/Reso
 npx asar list "dist/AI Token League-darwin-arm64/AI Token League.app/Contents/Resources/app.asar" | rg "^/(dist-installer|env\\.local|env\\.test|\\.tmp|data|doc|tests|scripts|migrations|src/backend|src/web)" && exit 1 || true
 ```
 
+After `npm run package:installer:all`, verify installer asar exclusion:
+
+```bash
+npx asar list "dist-installer/mac-arm64/AI Token League.app/Contents/Resources/app.asar" | rg "^/(src/backend|src/web|scripts|migrations|doc|tests)" && exit 1 || true
+npx asar list "dist-installer/mac-arm64/AI Token League.app/Contents/Resources/app.asar" | rg "src/desktop/(index.html|renderer.js|preload.cjs)$"
+```
+
 ## Launch Packaged macOS App
 
 Close any already running `AI Token League` app before opening a rebuilt package; otherwise macOS may keep showing an older running instance.
@@ -141,6 +172,14 @@ The Windows package is generated on this machine as an x64 Electron app bundle:
 
 ```text
 dist/AI Token League-win32-x64/AI Token League.exe
+```
+
+Native installers (built via `npm run package:installer:all`):
+
+```text
+dist-installer/AI Token League-0.4.0-mac-arm64-installer.dmg
+dist-installer/AI Token League-0.4.0-mac-x64-installer.dmg
+dist-installer/AI Token League-0.4.0-win-x64-installer.exe
 ```
 
 Windows UI/E2E has been validated by external users on real Windows machines; repeat this check after packaging or updater changes.
