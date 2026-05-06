@@ -89,6 +89,14 @@ app.whenReady().then(async () => {
   }
   const { config } = await modules();
   const current = ensureDesktopConfig(config);
+  appendRuntimeLog("app_ready", {
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    participantId: current.participantId,
+    deviceId: current.deviceId,
+    apiConfigured: hasApiBaseUrl(current)
+  });
   applyLaunchAtLogin(current);
   await scheduleBackgroundRefresh(current);
   await scheduleBackgroundUpdateCheck(current);
@@ -117,6 +125,7 @@ ipcMain.handle("config:init", async (_event, input) => {
   const prepared = await prepareConfigInput(input, current);
   const next = current ? config.updateConfig(prepared, current) : config.initConfig(prepared);
   invalidateUsageCache();
+  appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
   scheduleBackgroundUpdateCheck(next);
@@ -128,6 +137,7 @@ ipcMain.handle("config:update", async (_event, input) => {
   const current = config.loadConfig();
   const next = config.updateConfig(await prepareConfigInput(input, current), current);
   invalidateUsageCache();
+  appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
   scheduleBackgroundUpdateCheck(next);
@@ -145,7 +155,36 @@ ipcMain.handle("identity:export", async () => {
   });
   if (target.canceled || !target.filePath) return { canceled: true };
   fs.writeFileSync(target.filePath, `${JSON.stringify(config.exportIdentity(current), null, 2)}\n`);
+  appendRuntimeLog("identity_exported", { participantId: current.participantId, deviceId: current.deviceId });
   return { canceled: false, filePath: target.filePath };
+});
+
+ipcMain.handle("diagnostics:export", async () => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  if (!current) throw new Error("Open Settings first");
+  const target = await dialog.showSaveDialog({
+    title: "Export AI Token League Diagnostics",
+    defaultPath: `ai-token-league-diagnostics-${safeTimestamp(new Date())}.json`,
+    filters: [{ name: "JSON", extensions: ["json"] }]
+  });
+  if (target.canceled || !target.filePath) return { canceled: true };
+  const bundle = await diagnosticsBundle(config, current);
+  fs.writeFileSync(target.filePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  appendRuntimeLog("diagnostics_exported", {
+    participantId: current.participantId,
+    deviceId: current.deviceId,
+    usageRowCount: bundle.usageCache.rowCount,
+    queuePending: bundle.uploadQueue.pending,
+    logCount: bundle.runtimeLog.length
+  });
+  return {
+    canceled: false,
+    filePath: target.filePath,
+    usageRowCount: bundle.usageCache.rowCount,
+    queuePending: bundle.uploadQueue.pending,
+    logCount: bundle.runtimeLog.length
+  };
 });
 
 ipcMain.handle("identity:import", async () => {
@@ -158,6 +197,39 @@ ipcMain.handle("identity:import", async () => {
   if (source.canceled || !source.filePaths[0]) return { canceled: true };
   const identity = JSON.parse(fs.readFileSync(source.filePaths[0], "utf8"));
   const next = config.importIdentity(identity, config.loadConfig() || {});
+  appendRuntimeLog("identity_imported", { participantId: next.participantId, deviceId: next.deviceId });
+  applyLaunchAtLogin(next);
+  scheduleBackgroundRefresh(next);
+  scheduleBackgroundUpdateCheck(next);
+  return sanitizeConfig(next);
+});
+
+ipcMain.handle("config:export", async () => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  if (!current) throw new Error("Open Settings first");
+  const target = await dialog.showSaveDialog({
+    title: "Export AI Token League Config",
+    defaultPath: "ai-token-league-config.json",
+    filters: [{ name: "JSON", extensions: ["json"] }]
+  });
+  if (target.canceled || !target.filePath) return { canceled: true };
+  fs.writeFileSync(target.filePath, `${JSON.stringify(config.exportConfig(current), null, 2)}\n`);
+  appendRuntimeLog("config_exported", { participantId: current.participantId, deviceId: current.deviceId });
+  return { canceled: false, filePath: target.filePath };
+});
+
+ipcMain.handle("config:import", async () => {
+  const { config } = await modules();
+  const source = await dialog.showOpenDialog({
+    title: "Import AI Token League Config",
+    properties: ["openFile"],
+    filters: [{ name: "JSON", extensions: ["json"] }]
+  });
+  if (source.canceled || !source.filePaths[0]) return { canceled: true };
+  const imported = JSON.parse(fs.readFileSync(source.filePaths[0], "utf8"));
+  const next = config.importConfig(imported);
+  appendRuntimeLog("config_imported", { participantId: next.participantId, deviceId: next.deviceId });
   applyLaunchAtLogin(next);
   scheduleBackgroundRefresh(next);
   scheduleBackgroundUpdateCheck(next);
@@ -175,6 +247,7 @@ ipcMain.handle("providers:add-root", async (_event, providerId) => {
   if (source.canceled || !source.filePaths[0]) return { canceled: true };
   const next = config.addProviderRoot(providerId, source.filePaths[0], current);
   invalidateUsageCache();
+  appendRuntimeLog("provider_root_added", { providerId, participantId: next.participantId, deviceId: next.deviceId });
   return sanitizeConfig(next);
 });
 
@@ -184,6 +257,11 @@ ipcMain.handle("cursor:add-token", async (_event, rawInput) => {
   if (!current) throw new Error("Open Settings first");
   const next = config.addCursorToken(rawInput, current);
   invalidateUsageCache();
+  appendRuntimeLog("cursor_token_added", {
+    participantId: next.participantId,
+    deviceId: next.deviceId,
+    accountCount: next.cursorDashboardUsage?.workosSessionTokens?.length || 0
+  });
   return sanitizeConfig(next);
 });
 
@@ -200,6 +278,12 @@ ipcMain.handle("workdirs:set-alias", async (_event, input) => {
   if (!current) throw new Error("Open Settings first");
   const next = config.setWorkdirAlias(input.workdirHash, input.alias, current);
   invalidateUsageCache();
+  appendRuntimeLog("workdir_alias_saved", {
+    participantId: next.participantId,
+    deviceId: next.deviceId,
+    workdirHash: input.workdirHash,
+    hasAlias: Boolean(String(input.alias || "").trim())
+  });
   return sanitizeConfig(next);
 });
 
@@ -373,12 +457,14 @@ async function runBackgroundRefresh() {
   background.running = true;
   background.lastRunAt = new Date().toISOString();
   background.lastError = null;
+  appendRuntimeLog("background_refresh_start", { startedAt: background.lastRunAt });
   try {
     const { config, core, crypto } = await modules();
     const current = config.loadConfig();
     if (!current) {
       background.lastMode = "disabled";
       background.lastResult = "No settings";
+      appendRuntimeLog("background_refresh_skipped", { reason: "no_settings" });
       return;
     }
     const scanned = await getUsageSnapshot({ config, core, current, force: true });
@@ -386,13 +472,16 @@ async function runBackgroundRefresh() {
       const result = await syncCurrentUsage({ config, core, crypto, current, scanned });
       background.lastMode = "sync";
       background.lastResult = result.queued ? `Queued ${result.scanned} rows` : `Uploaded ${result.scanned} rows`;
+      appendRuntimeLog("background_refresh_done", { mode: background.lastMode, result: background.lastResult });
     } else {
       background.lastMode = "scan";
       background.lastResult = `Refreshed ${scanned.items.length} rows`;
+      appendRuntimeLog("background_refresh_done", { mode: background.lastMode, result: background.lastResult });
     }
   } catch (error) {
     background.lastError = error.message;
     background.lastResult = "Failed";
+    appendRuntimeLog("background_refresh_failed", { error: error.message });
   } finally {
     background.running = false;
   }
@@ -403,6 +492,14 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
   const startedAt = new Date().toISOString();
   const apiBaseUrl = String(current.apiBaseUrl || "").trim();
   const usage = scanned || await getUsageSnapshot({ config, core, current, force: false });
+  appendRuntimeLog("sync_start", {
+    participantId: current.participantId,
+    deviceId: current.deviceId,
+    apiBaseUrl,
+    rowCount: usage.items.length,
+    sourceFingerprint: usage.sourceFingerprint || "",
+    fromCache: Boolean(usage.fromCache)
+  });
   try {
     const { version } = await modules();
     const client = version.clientMetadata({ clientAppVersion: app.getVersion(), clientBuild: `${version.clientPlatform()}-${app.getVersion()}` });
@@ -433,6 +530,17 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       queueUploaded: drainBefore.uploaded + drainAfter.uploaded,
       queuePending: drainAfter.pending
     };
+    appendRuntimeLog("sync_success", {
+      participantId: current.participantId,
+      deviceId: current.deviceId,
+      apiBaseUrl,
+      accepted: syncResult.accepted || 0,
+      rejected: syncResult.rejected || 0,
+      scanned: syncResult.scanned || 0,
+      queueUploaded: syncResult.queueUploaded || 0,
+      queuePending: syncResult.queuePending || 0,
+      batchId: syncResult.batchId || ""
+    });
     persistSyncStatus(config, current, {
       apiBaseUrl,
       status: "success",
@@ -462,6 +570,15 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       queuePending: readUploadQueue(current).items.length,
       error: error.message
     };
+    appendRuntimeLog("sync_queued", {
+      participantId: current.participantId,
+      deviceId: current.deviceId,
+      apiBaseUrl,
+      scanned: syncResult.scanned,
+      queueId: queued.id,
+      queuePending: syncResult.queuePending,
+      error: error.message
+    });
     persistSyncStatus(config, current, {
       apiBaseUrl,
       status: "queued",
@@ -503,20 +620,40 @@ function persistSyncStatus(configModule, current, { apiBaseUrl, status, startedA
 async function getUsageSnapshot({ core, current, force = false }) {
   const cached = readUsageCache();
   if (!force && cached && Date.now() - Date.parse(cached.scannedAt) < usageCache.cacheTtlMs) {
+    appendRuntimeLog("scan_cache_hit", {
+      participantId: current.participantId,
+      deviceId: current.deviceId,
+      rowCount: cached.rowCount || cached.items?.length || 0,
+      scannedAt: cached.scannedAt || "",
+      sourceFingerprint: cached.sourceFingerprint || ""
+    });
     return { ...cached, fromCache: true };
   }
-  const scanned = await core.scanUsage({ ...current, __usageCacheIndex: cached?.sourceIndex || {} });
-  const { schema } = await modules();
-  const snapshot = {
-    ...scanned,
-    cacheVersion: schema.USAGE_CACHE_VERSION,
-    scannedAt: new Date().toISOString(),
-    rowCount: scanned.items.length,
-    sourceFingerprint: snapshotFingerprint(scanned.items),
-    fromCache: false
-  };
-  writeUsageCache(snapshot);
-  return snapshot;
+  appendRuntimeLog("scan_start", { participantId: current.participantId, deviceId: current.deviceId, force });
+  try {
+    const scanned = await core.scanUsage({ ...current, __usageCacheIndex: cached?.sourceIndex || {} });
+    const { schema } = await modules();
+    const snapshot = {
+      ...scanned,
+      cacheVersion: schema.USAGE_CACHE_VERSION,
+      scannedAt: new Date().toISOString(),
+      rowCount: scanned.items.length,
+      sourceFingerprint: snapshotFingerprint(scanned.items),
+      fromCache: false
+    };
+    writeUsageCache(snapshot);
+    appendRuntimeLog("scan_done", {
+      participantId: current.participantId,
+      deviceId: current.deviceId,
+      rowCount: snapshot.rowCount,
+      sourceFingerprint: snapshot.sourceFingerprint,
+      providers: scanHealthSummary(snapshot.health)
+    });
+    return snapshot;
+  } catch (error) {
+    appendRuntimeLog("scan_failed", { participantId: current.participantId, deviceId: current.deviceId, error: error.message });
+    throw error;
+  }
 }
 
 function startForegroundScan({ config, core, current, force = false }) {
@@ -586,6 +723,54 @@ function usageCachePath() {
   return path.join(app.getPath("userData"), "usage-cache.json");
 }
 
+function runtimeLogPath() {
+  return path.join(app.getPath("userData"), "runtime-log.jsonl");
+}
+
+function appendRuntimeLog(event, details = {}) {
+  try {
+    rotateRuntimeLog();
+    fs.mkdirSync(path.dirname(runtimeLogPath()), { recursive: true });
+    fs.appendFileSync(runtimeLogPath(), `${JSON.stringify({
+      ts: new Date().toISOString(),
+      event,
+      details: sanitizeLogValue(details)
+    })}\n`);
+  } catch {}
+}
+
+function rotateRuntimeLog() {
+  const file = runtimeLogPath();
+  if (!fs.existsSync(file)) return;
+  const maxBytes = 2 * 1024 * 1024;
+  const keepBytes = 1024 * 1024;
+  const stats = fs.statSync(file);
+  if (stats.size <= maxBytes) return;
+  const content = fs.readFileSync(file, "utf8").slice(-keepBytes);
+  const firstNewline = content.indexOf("\n");
+  fs.writeFileSync(file, firstNewline >= 0 ? content.slice(firstNewline + 1) : content);
+}
+
+function readRuntimeLog(limit = 1000) {
+  try {
+    const file = runtimeLogPath();
+    if (!fs.existsSync(file)) return [];
+    return fs.readFileSync(file, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-limit)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return { ts: "", event: "unparsed_log_line", details: { line: line.slice(0, 500) } };
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
 function readUsageCache() {
   if (usageCache.loaded) return usageCache.data;
   usageCache.loaded = true;
@@ -630,6 +815,9 @@ function resetLocalData(configModule) {
   } catch {}
   try {
     fs.rmSync(usageCachePath(), { force: true });
+  } catch {}
+  try {
+    fs.rmSync(runtimeLogPath(), { force: true });
   } catch {}
 }
 
@@ -693,6 +881,12 @@ async function checkApiConnection(apiBaseUrl) {
       const detail = body.error || text || response.statusText;
       throw new Error(`${response.status} ${detail}`.trim());
     }
+    appendRuntimeLog("api_health_ok", {
+      apiBaseUrl: normalized,
+      dbType: body.dbType || "",
+      serverVersion: body.serverVersion || "",
+      compatibility: body.compatibility?.status || ""
+    });
     return {
       ok: true,
       status: "reachable",
@@ -710,6 +904,7 @@ async function checkApiConnection(apiBaseUrl) {
     };
   } catch (error) {
     const reason = error.name === "AbortError" ? "request timed out" : error.message;
+    appendRuntimeLog("api_health_failed", { apiBaseUrl: normalized, error: reason });
     throw new Error(`API health check failed: ${reason}`);
   } finally {
     clearTimeout(timeout);
@@ -754,6 +949,170 @@ function backgroundStatus() {
       lastError: updateCheck.lastError
     }
   };
+}
+
+async function diagnosticsBundle(configModule, current) {
+  const cached = readUsageCache();
+  const queue = readUploadQueue(current);
+  const runtimeLog = readRuntimeLog();
+  const { version } = await modules();
+  const client = version.clientMetadata({
+    clientAppVersion: app.getVersion(),
+    clientBuild: `${version.clientPlatform()}-${app.getVersion()}`
+  });
+  return {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    app: {
+      name: app.getName(),
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      node: process.versions.node,
+      electron: process.versions.electron,
+      client
+    },
+    config: diagnosticsConfig(current),
+    storage: {
+      hasConfig: Boolean(configModule.loadConfig()),
+      hasUsageCache: Boolean(cached),
+      hasUploadQueue: queue.items.length > 0,
+      hasRuntimeLog: runtimeLog.length > 0
+    },
+    background: backgroundStatus(),
+    usageCache: diagnosticsUsageCache(cached),
+    uploadQueue: diagnosticsUploadQueue(queue),
+    runtimeLog
+  };
+}
+
+function diagnosticsConfig(config = {}) {
+  const cursorTokens = config.cursorDashboardUsage?.workosSessionTokens || [];
+  return {
+    participantId: config.participantId || "",
+    deviceId: config.deviceId || "",
+    nickname: config.nickname || "",
+    apiBaseUrl: config.apiBaseUrl || "",
+    publicUpload: config.publicUpload ?? true,
+    autoRefreshEnabled: config.autoRefreshEnabled ?? false,
+    refreshIntervalMinutes: config.refreshIntervalMinutes || 15,
+    showEstimatedCost: config.showEstimatedCost ?? false,
+    showRawTokens: config.showRawTokens ?? false,
+    launchAtLogin: config.launchAtLogin ?? false,
+    desktopAutoInitialized: config.desktopAutoInitialized ?? false,
+    providerEnabled: config.providerEnabled || {},
+    providerRootCounts: Object.fromEntries(Object.entries(config.providerRoots || {}).map(([providerId, roots]) => [
+      providerId,
+      Array.isArray(roots) ? roots.length : roots ? 1 : 0
+    ])),
+    workdirAliasCount: Object.keys(config.workdirAliases || {}).length,
+    cursorDashboardUsage: {
+      enabled: config.cursorDashboardUsage?.enabled ?? false,
+      tokenCount: cursorTokens.length + (config.cursorDashboardUsage?.workosSessionToken ? 1 : 0),
+      accounts: cursorTokens.map((item) => item.accountName || "").filter(Boolean)
+    },
+    apiConnection: config.apiConnection || {},
+    syncStatus: config.syncStatus || {},
+    lastSyncAt: config.lastSyncAt || "",
+    lastSyncStatus: config.lastSyncStatus || "",
+    lastSyncApiBaseUrl: config.lastSyncApiBaseUrl || "",
+    lastSyncError: config.lastSyncError || "",
+    hasIdentityPublicKey: Boolean(config.identityPublicKey),
+    hasIdentityPrivateKey: Boolean(config.identityPrivateKey),
+    identityPublicKeyFingerprint: config.identityPublicKey
+      ? nodeCrypto.createHash("sha256").update(config.identityPublicKey).digest("hex")
+      : ""
+  };
+}
+
+function diagnosticsUsageCache(cached) {
+  if (!cached) return { present: false, rowCount: 0, items: [], health: [], sourceIndex: { sourceCount: 0 } };
+  const sources = cached.sourceIndex?.sources || {};
+  return {
+    present: true,
+    cacheVersion: cached.cacheVersion || null,
+    scannedAt: cached.scannedAt || "",
+    rowCount: cached.rowCount || cached.items?.length || 0,
+    sourceFingerprint: cached.sourceFingerprint || "",
+    fromCache: Boolean(cached.fromCache),
+    health: cached.health || [],
+    items: cached.items || [],
+    sourceIndex: {
+      sourceCount: Object.keys(sources).length,
+      sources: Object.values(sources).map((source) => ({
+        rawSourceRef: source.rawSourceRef || "",
+        sourceFingerprint: source.sourceFingerprint || "",
+        parserVersion: source.parserVersion || "",
+        rowCount: source.rowCount || source.items?.length || 0
+      }))
+    }
+  };
+}
+
+function diagnosticsUploadQueue(queue) {
+  const items = queue.items || [];
+  return {
+    version: queue.version || 1,
+    pending: items.length,
+    items: items.map((entry) => ({
+      id: entry.id,
+      payloadHash: entry.payloadHash,
+      participantId: entry.participantId,
+      deviceId: entry.deviceId,
+      createdAt: entry.createdAt,
+      attempts: Number(entry.attempts || 0),
+      lastAttemptAt: entry.lastAttemptAt || "",
+      lastError: entry.lastError || "",
+      payload: {
+        participantId: entry.payload?.participantId || "",
+        deviceId: entry.payload?.deviceId || "",
+        clientGeneratedAt: entry.payload?.clientGeneratedAt || "",
+        client: entry.payload?.client || null,
+        itemCount: entry.payload?.items?.length || 0,
+        items: entry.payload?.items || []
+      }
+    }))
+  };
+}
+
+function configLogSummary(config = {}) {
+  return {
+    participantId: config.participantId || "",
+    deviceId: config.deviceId || "",
+    apiConfigured: hasApiBaseUrl(config),
+    autoRefreshEnabled: config.autoRefreshEnabled ?? false,
+    refreshIntervalMinutes: config.refreshIntervalMinutes || 15,
+    providerEnabled: config.providerEnabled || {},
+    cursorEnabled: config.cursorDashboardUsage?.enabled ?? false,
+    cursorTokenCount: config.cursorDashboardUsage?.workosSessionTokens?.length || 0
+  };
+}
+
+function scanHealthSummary(health = []) {
+  return health.map((item) => ({
+    providerId: item.providerId,
+    toolCode: item.toolCode,
+    detected: Boolean(item.detected),
+    enabled: item.enabled ?? true,
+    scannedFiles: item.scannedFiles || 0,
+    parsedFiles: item.parsedFiles || 0,
+    reusedFiles: item.reusedFiles || 0,
+    error: item.error || ""
+  }));
+}
+
+function sanitizeLogValue(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(sanitizeLogValue);
+  const blocked = new Set(["identityPrivateKey", "workosSessionToken", "workosSessionTokens", "token", "cookie", "providerRoots"]);
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key,
+    blocked.has(key) ? "[redacted]" : sanitizeLogValue(child)
+  ]));
+}
+
+function safeTimestamp(date) {
+  return date.toISOString().replace(/[:.]/g, "-");
 }
 
 function snapshotFingerprint(items = []) {

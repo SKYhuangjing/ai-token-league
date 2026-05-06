@@ -23,6 +23,22 @@
 - `doc/0.3-development-tasks.md`
 - `doc/packaging.md`
 
+## 0.4.0 已落地
+
+目标：将首次启动体验从静默初始化改为知情同意的引导流程，让用户在数据采集前理解产品用途和隐私模型。
+
+| 能力 | 状态 | 产品结果 |
+| --- | --- | --- |
+| Desktop 初始化向导 | DONE | 5 步向导替代 onboarding card：Welcome（隐私声明）→ Identity → Sources → Cloud → Ready。 |
+| 隐私披露 | DONE | 将 FORBIDDEN_UPLOAD_FIELDS 转化为人类可读声明，集成到向导 Welcome 步骤和 CLI init。 |
+| 源自动检测 | DONE | 向导 Sources 步骤展示本机检测到的 AI 工具，预启用已检测源，支持自定义位置添加。 |
+| CLI 交互式 init | DONE | 无 config 且无 `--nickname` 标志时，`init` 进入交互模式，提示昵称、展示检测结果、提示 API URL。 |
+
+参考：
+
+- `doc/0.4-baseline.md`
+- `doc/0.4-development-tasks.md`
+
 ## 0.3.x 发布后补强
 
 | 能力 | 优先级 | 产品目标 |
@@ -38,7 +54,6 @@
 
 | 能力 | 阶段 | 产品目标 |
 | --- | --- | --- |
-| 初始化引导 | Candidate | 首次启动引导用户设置昵称、选择数据源、配置 Cloud Connection，并明确隐私边界。 |
 | 自动备份 | Candidate | 备份 identity、config、tokens、aliases、usage cache 和 upload queue，降低换机或升级失败风险。 |
 | 菜单栏程序 | Candidate | 支持隐藏 Dock，仅在菜单栏展示 Today token 简要信息、同步状态和快捷入口。 |
 | 多语言 | Candidate | 优先支持中英文 UI 文案切换，后续再扩展文档和发布说明。 |

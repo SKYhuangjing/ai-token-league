@@ -109,7 +109,15 @@ function testCursorDashboardMapping() {
       tokenUsage: { inputTokens: 5, outputTokens: 5 }
     }
   ]);
-  assert.deepEqual(defaultModelItems.map((item) => item.model), ["cursor-auto", "cursor-auto"]);
+  assert.deepEqual(defaultModelItems.map((item) => item.model), ["Auto", "Auto"]);
+  const premiumModelItems = eventsToUsageEvents([
+    {
+      timestamp: "1776866406218",
+      model: "Premium (Codex 5.3)",
+      tokenUsage: { inputTokens: 3, outputTokens: 4 }
+    }
+  ]);
+  assert.equal(premiumModelItems[0].model, "Premium (Codex 5.3)");
   assert.equal(localDay("2026-04-29T18:30:00.000Z", "Asia/Shanghai"), "2026-04-30");
   const namedItems = eventsToUsageEvents([
     {
@@ -340,6 +348,17 @@ function testBackendUpload(identity, items) {
   assert.ok(recalculated.updated >= 1);
   const beforePrice = store.missingPriceModels();
   assert.ok(beforePrice.some((item) => item.model === "custom-test-model"));
+  const aliasTargetModel = uploadItems[0].model;
+  const savedAlias = store.upsertModelPriceAlias({
+    model: "custom-test-model",
+    targetModel: aliasTargetModel
+  });
+  assert.deepEqual(savedAlias.alias, { model: "custom-test-model", targetModel: aliasTargetModel });
+  assert.ok(store.listModelPrices().aliases.some((item) => item.model === "custom-test-model" && item.targetModel === aliasTargetModel));
+  assert.ok(!store.missingPriceModels().some((item) => item.model === "custom-test-model"));
+  assert.equal(Object.values(store.db.usageDaily).find((item) => item.model === "custom-test-model").pricingModel, aliasTargetModel);
+  assert.equal(store.deleteModelPriceAlias("custom-test-model").deleted, true);
+  assert.ok(store.missingPriceModels().some((item) => item.model === "custom-test-model"));
   const savedPrice = store.upsertModelPrice({
     model: "custom-test-model",
     inputCostPerMTok: 1,
@@ -354,6 +373,136 @@ function testBackendUpload(identity, items) {
   const customCostBoard = store.publicLeaderboard({ period: "this_month", includeCost: true });
   assert.notEqual(customCostBoard[0].estimatedCostUsd, null);
   assert.ok(signature);
+}
+
+function testDeleteParticipantDataAllowsResync() {
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-delete-participant.json"));
+  const deviceId = newId("d");
+  const item = {
+    day: localDay(),
+    toolCode: "codex",
+    providerId: "codex_local",
+    workdirHash: "wd_reset",
+    workdirDisplayName: "reset-project",
+    model: "gpt-5",
+    inputTokens: 100,
+    outputTokens: 40,
+    cacheReadTokens: 10,
+    cacheWriteTokens: 5,
+    reasoningTokens: 20,
+    totalTokens: 155,
+    sourceQuality: "exact",
+    rawSourceRef: "reset.jsonl",
+    providerVersion: "0.1.0",
+    parserVersion: "0.1.0",
+    sourceFingerprint: "reset-source"
+  };
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "reset-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: "0.4.0"
+  });
+  const payload = {
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: "2026-05-06T00:00:00.000Z",
+    items: [item]
+  };
+  const first = store.upsertUsageBatch(payload);
+  assert.equal(first.accepted, 1);
+  assert.equal(store.publicLeaderboard({ range: "today" }).length, 1);
+  assert.ok(Object.keys(store.db.aggregateCache).length >= 1);
+
+  const deleted = store.deleteParticipantData(identity.participantId);
+  assert.equal(deleted.deleted, true);
+  assert.deepEqual(deleted.removed, {
+    participants: 1,
+    devices: 1,
+    workdirs: 1,
+    usageDaily: 1,
+    uploadBatches: 1
+  });
+  assert.equal(store.getParticipant(identity.participantId), null);
+  assert.equal(Object.values(store.db.devices).some((row) => row.participantId === identity.participantId), false);
+  assert.equal(Object.values(store.db.workdirs).some((row) => row.participantId === identity.participantId), false);
+  assert.equal(Object.values(store.db.usageDaily).some((row) => row.participantId === identity.participantId), false);
+  assert.equal(Object.values(store.db.uploadBatches).some((row) => row.participantId === identity.participantId), false);
+  assert.equal(Object.keys(store.db.aggregateCache).length, 0);
+
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "reset-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: "0.4.0"
+  });
+  const second = store.upsertUsageBatch(payload);
+  assert.equal(second.duplicate, undefined);
+  assert.equal(second.accepted, 1);
+}
+
+function testSourceFingerprintDedupeKeepsDistinctDays() {
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-source-fingerprint.json"));
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "tester",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: "0.3.0"
+  });
+  const baseItem = {
+    toolCode: "codex",
+    providerId: "codex_local",
+    workdirHash: "wd_test",
+    workdirDisplayName: "project",
+    model: "gpt-5.5",
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 100,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 115,
+    sourceQuality: "exact",
+    rawSourceRef: "session.jsonl",
+    providerVersion: "0.1.2",
+    parserVersion: "0.1.2",
+    sourceFingerprint: "same-session-file"
+  };
+  const first = store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [
+      { ...baseItem, day: "2026-04-29" },
+      { ...baseItem, day: "2026-04-30", inputTokens: 20, totalTokens: 125 }
+    ]
+  });
+  assert.equal(first.accepted, 2);
+  assert.equal(Object.values(store.db.usageDaily).length, 2);
+  assert.deepEqual(
+    Object.values(store.db.usageDaily).map((item) => item.day).sort(),
+    ["2026-04-29", "2026-04-30"]
+  );
+
+  const second = store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: new Date(Date.now() + 1).toISOString(),
+    items: [
+      { ...baseItem, day: "2026-04-29", inputTokens: 30, totalTokens: 135 }
+    ]
+  });
+  assert.equal(second.accepted, 1);
+  assert.equal(Object.values(store.db.usageDaily).length, 2);
+  assert.equal(store.participantTrend(identity.participantId, { range: "custom", startDay: "2026-04-29", endDay: "2026-04-30" }).items.length, 2);
 }
 
 function testForbiddenUploadFields() {
@@ -519,6 +668,22 @@ function testDisplayAndPricing() {
   assert.equal(exact.pricingSource, "openrouter");
   const estimated = estimateUsageCost({ model: "gpt-5", inputTokens: 1000, outputTokens: 1000 }, createPriceMap({}, { [openrouterPrice.model]: openrouterPrice }));
   assert.equal(estimated.costQuality, "estimated_price");
+  const codexPrice = openRouterModelToPrice({
+    id: "openai/gpt-5.3-codex",
+    pricing: { prompt: "0.000003", completion: "0.000006" }
+  }, "2026-04-30T00:00:00.000Z", "test-openrouter");
+  const unmappedPremium = estimateUsageCost({ model: "Premium (Codex 5.3)", inputTokens: 1000, outputTokens: 1000 }, createPriceMap({}, {
+    "openai/gpt-5.3-codex": codexPrice
+  }));
+  assert.equal(unmappedPremium.costQuality, "unknown_price");
+  const premiumCodex = estimateUsageCost({ model: "Premium (Codex 5.3)", inputTokens: 1000, outputTokens: 1000 }, createPriceMap({}, {
+    "openai/gpt-5.3-codex": codexPrice
+  }, {
+    "Premium (Codex 5.3)": "openai/gpt-5.3-codex"
+  }));
+  assert.equal(premiumCodex.costQuality, "exact_price");
+  assert.equal(premiumCodex.pricingModel, "openai/gpt-5.3-codex");
+  assert.equal(premiumCodex.estimatedCostUsd, 0.009);
   const unknown = estimateUsageCost({ model: "unknown-model", inputTokens: 1000, outputTokens: 1000 });
   assert.equal(unknown.costQuality, "unknown_price");
   assert.equal(unknown.estimatedCostUsd, null);
@@ -594,6 +759,8 @@ async function testOpenRouterRefresh() {
 const { identity, items } = await testScan();
 await testProviderEnabledSwitches();
 testBackendUpload(identity, items);
+testDeleteParticipantDataAllowsResync();
+testSourceFingerprintDedupeKeepsDistinctDays();
 testIdentityImport();
 testUpdateConfigKeepsIdentity();
 testAddCursorTokenKeepsMultipleAccounts();

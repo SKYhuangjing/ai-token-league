@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS model_price_cache_meta (
   lastError TEXT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS model_price_aliases (
+  model VARCHAR(190) PRIMARY KEY,
+  targetModel VARCHAR(190) NOT NULL,
+  updatedAt VARCHAR(40) NOT NULL,
+  INDEX idx_model_price_alias_target (targetModel)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS usage_daily (
   usageKey VARCHAR(512) PRIMARY KEY,
   day DATE NOT NULL,

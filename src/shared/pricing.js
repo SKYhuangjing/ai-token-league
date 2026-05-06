@@ -35,7 +35,7 @@ export function estimateUsageCost(item, priceMap = {}) {
     estimatedCostUsd: roundUsd(input + output + cacheRead + cacheWrite + reasoning),
     costQuality: match.exact ? "exact_price" : "estimated_price",
     pricingVersion: price.pricingVersion || PRICING_VERSION,
-    pricingModel: match.key,
+    pricingModel: price.aliasTarget || match.key,
     pricingSource: price.source || ""
   };
 }
@@ -72,7 +72,7 @@ export function mergeCostQuality(left = "", right = "") {
   return rank[right] > rank[left] ? right : left;
 }
 
-export function createPriceMap(customPrices = {}, remotePrices = {}) {
+export function createPriceMap(customPrices = {}, remotePrices = {}, modelAliases = {}) {
   const remoteMap = {};
   for (const price of Object.values(remotePrices || {})) {
     const key = normalizeModelName(price.model || price.key || "");
@@ -91,7 +91,17 @@ export function createPriceMap(customPrices = {}, remotePrices = {}) {
       pricingVersion: "custom-overrides"
     });
   }
-  return { ...remoteMap, ...customMap };
+  const priceMap = { ...remoteMap, ...customMap };
+  for (const [sourceModel, targetModel] of Object.entries(modelAliases || {})) {
+    const source = normalizeModelName(sourceModel);
+    const target = normalizeModelName(targetModel);
+    if (!source || !target || source === target || !priceMap[target]) continue;
+    priceMap[source] = {
+      ...priceMap[target],
+      aliasTarget: target
+    };
+  }
+  return priceMap;
 }
 
 export function normalizeModelName(model) {

@@ -477,6 +477,23 @@ td {
   text-underline-offset: 3px;
 }
 
+.row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.danger-link {
+  border: 0;
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .detail-board {
   margin-top: 24px;
 }
@@ -586,7 +603,9 @@ body.detail-open {
 }
 
 .pricing-form input,
-.pricing-form button {
+.pricing-form button,
+.price-alias-task input,
+.price-alias-task button {
   min-width: 0;
   border: 1px solid var(--ink);
   border-radius: 6px;
@@ -598,13 +617,15 @@ body.detail-open {
 
 .pricing-form button,
 .price-row button,
-.price-suggestion {
+.price-suggestion,
+.price-alias-task button {
   cursor: pointer;
 }
 
 .pricing-form button:hover,
 .price-row button:hover,
-.price-suggestion:hover {
+.price-suggestion:hover,
+.price-alias-task button:hover {
   background: var(--ink);
   color: var(--paper);
 }
@@ -641,6 +662,19 @@ body.detail-open {
   font: 700 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.price-alias-task input {
+  grid-column: 2 / 3;
+}
+
+.price-alias-task button {
+  grid-column: 3 / 4;
+}
+
+.price-alias-task button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .task-rank {

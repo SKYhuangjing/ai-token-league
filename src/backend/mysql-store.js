@@ -66,6 +66,14 @@ export class MySqlStore extends Store {
     if (!columns.length) {
       await this.pool.query("ALTER TABLE usage_daily ADD COLUMN pricingSource VARCHAR(64) NOT NULL DEFAULT '' AFTER pricingModel");
     }
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS model_price_aliases (
+        model VARCHAR(190) PRIMARY KEY,
+        targetModel VARCHAR(190) NOT NULL,
+        updatedAt VARCHAR(40) NOT NULL,
+        INDEX idx_model_price_alias_target (targetModel)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
   }
 
   async load() {
@@ -75,6 +83,7 @@ export class MySqlStore extends Store {
     const [usageRows] = await this.pool.query("SELECT * FROM usage_daily");
     const [uploadBatches] = await this.pool.query("SELECT * FROM upload_batches");
     const [modelPrices] = await this.pool.query("SELECT * FROM model_prices");
+    const [modelPriceAliases] = await this.pool.query("SELECT * FROM model_price_aliases");
     const [modelPriceCache] = await this.pool.query("SELECT * FROM model_price_cache");
     const [modelPriceCacheMeta] = await this.pool.query("SELECT * FROM model_price_cache_meta WHERE source = 'openrouter'");
     this.db.participants = Object.fromEntries(participants.map((row) => [row.id, normalizeRow(row)]));
@@ -83,6 +92,7 @@ export class MySqlStore extends Store {
     this.db.usageDaily = Object.fromEntries(usageRows.map((row) => [row.usageKey, usageFromRow(row)]));
     this.db.uploadBatches = Object.fromEntries(uploadBatches.map((row) => [row.payloadHash, normalizeRow(row)]));
     this.db.modelPrices = Object.fromEntries(modelPrices.map((row) => [row.model, priceFromRow(row)]));
+    this.db.modelPriceAliases = Object.fromEntries(modelPriceAliases.map((row) => [row.model, row.targetModel]));
     this.db.modelPriceCache = {
       remote: modelPriceCacheMeta[0] ? normalizeRow(modelPriceCacheMeta[0]) : this.db.modelPriceCache.remote,
       prices: Object.fromEntries(modelPriceCache.map((row) => [row.model, cachedPriceFromRow(row)]))
@@ -141,9 +151,36 @@ export class MySqlStore extends Store {
     const normalized = normalizeModelName(model || "");
     if (!normalized || !this.db.modelPrices[normalized]) return { deleted: false };
     delete this.db.modelPrices[normalized];
+    for (const [sourceModel, targetModel] of Object.entries(this.db.modelPriceAliases || {})) {
+      if (targetModel === normalized) delete this.db.modelPriceAliases[sourceModel];
+    }
     const recalculated = Store.prototype.recalculateCosts.call(this);
     await this.syncAllTables();
     return { deleted: true, recalculated };
+  }
+
+  async upsertModelPriceAlias(input) {
+    const result = Store.prototype.upsertModelPriceAlias.call(this, input);
+    await this.syncAllTables();
+    return result;
+  }
+
+  async deleteModelPriceAlias(model) {
+    const result = Store.prototype.deleteModelPriceAlias.call(this, model);
+    await this.syncAllTables();
+    return result;
+  }
+
+  async deleteParticipantData(participantId) {
+    const result = Store.prototype.deleteParticipantData.call(this, participantId);
+    await withTransaction(this.pool, async (conn) => {
+      await conn.query("DELETE FROM upload_batches WHERE participantId = ?", [participantId]);
+      await conn.query("DELETE FROM usage_daily WHERE participantId = ?", [participantId]);
+      await conn.query("DELETE FROM workdirs WHERE participantId = ?", [participantId]);
+      await conn.query("DELETE FROM devices WHERE participantId = ?", [participantId]);
+      await conn.query("DELETE FROM participants WHERE id = ?", [participantId]);
+    });
+    return result;
   }
 
   async syncIdentityTables() {
@@ -173,6 +210,7 @@ export class MySqlStore extends Store {
       await replaceDevices(conn, Object.values(this.db.devices));
       await replaceWorkdirs(conn, Object.values(this.db.workdirs));
       await replaceModelPrices(conn, Object.values(this.db.modelPrices));
+      await replaceModelPriceAliases(conn, this.db.modelPriceAliases);
       await replaceModelPriceCache(conn, this.db.modelPriceCache);
       await insertUsageRows(conn, Object.entries(this.db.usageDaily));
       await replaceUploadBatches(conn, Object.values(this.db.uploadBatches));
@@ -255,6 +293,19 @@ async function replaceModelPrices(conn, rows) {
       (model, inputCostPerMTok, outputCostPerMTok, cacheReadCostPerMTok, cacheWriteCostPerMTok, reasoningCostPerMTok, source, notes, updatedAt)
      VALUES ?`,
     [rows.map((row) => [row.model, row.inputCostPerMTok, row.outputCostPerMTok, row.cacheReadCostPerMTok, row.cacheWriteCostPerMTok, row.reasoningCostPerMTok, row.source || "custom", row.notes || "", row.updatedAt])]
+  );
+}
+
+async function replaceModelPriceAliases(conn, aliases = {}) {
+  await conn.query("DELETE FROM model_price_aliases");
+  const rows = Object.entries(aliases || {});
+  if (!rows.length) return;
+  const now = new Date().toISOString();
+  await conn.query(
+    `INSERT INTO model_price_aliases
+      (model, targetModel, updatedAt)
+     VALUES ?`,
+    [rows.map(([model, targetModel]) => [model, targetModel, now])]
   );
 }
 

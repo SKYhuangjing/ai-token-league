@@ -14,6 +14,7 @@ export const DEFAULT_DB = {
   workdirs: {},
   usageDaily: {},
   modelPrices: {},
+  modelPriceAliases: {},
   modelPriceCache: {
     remote: { source: "openrouter", status: "empty", url: "", fetchedAt: "", expiresAt: "", pricingVersion: "", lastError: "" },
     prices: {}
@@ -31,6 +32,7 @@ export class Store {
     this.db.schemaVersion ||= STORAGE_SCHEMA_VERSION;
     this.db.aggregateCache ||= {};
     this.db.modelPrices ||= {};
+    this.db.modelPriceAliases ||= {};
     this.db.modelPriceCache ||= structuredClone(DEFAULT_DB.modelPriceCache);
     this.db.modelPriceCache.remote ||= structuredClone(DEFAULT_DB.modelPriceCache.remote);
     this.db.modelPriceCache.prices ||= {};
@@ -81,6 +83,49 @@ export class Store {
     return this.db.participants[participantId] || null;
   }
 
+  deleteParticipantData(participantId) {
+    if (!participantId) throw new Error("participantId is required");
+    const removed = {
+      participants: this.db.participants[participantId] ? 1 : 0,
+      devices: 0,
+      workdirs: 0,
+      usageDaily: 0,
+      uploadBatches: 0
+    };
+    delete this.db.participants[participantId];
+    for (const [id, row] of Object.entries(this.db.devices || {})) {
+      if (row.participantId === participantId) {
+        delete this.db.devices[id];
+        removed.devices += 1;
+      }
+    }
+    for (const [id, row] of Object.entries(this.db.workdirs || {})) {
+      if (row.participantId === participantId) {
+        delete this.db.workdirs[id];
+        removed.workdirs += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.usageDaily || {})) {
+      if (row.participantId === participantId) {
+        delete this.db.usageDaily[key];
+        removed.usageDaily += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.uploadBatches || {})) {
+      if (row.participantId === participantId) {
+        delete this.db.uploadBatches[key];
+        removed.uploadBatches += 1;
+      }
+    }
+    this.invalidateAggregateCache();
+    this.save();
+    return {
+      deleted: Object.values(removed).some((count) => count > 0),
+      participantId,
+      removed
+    };
+  }
+
   upsertUsageBatch(input) {
     const now = new Date().toISOString();
     assertNoForbiddenUploadFields(input);
@@ -117,6 +162,7 @@ export class Store {
           for (const [existingKey, existing] of Object.entries(this.db.usageDaily)) {
             if (
               existingKey !== key &&
+              existing.day === raw.day &&
               existing.participantId === input.participantId &&
               existing.deviceId === input.deviceId &&
               existing.toolCode === raw.toolCode &&
@@ -621,7 +667,7 @@ export class Store {
   }
 
   priceMap() {
-    return createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices);
+    return createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices, this.db.modelPriceAliases);
   }
 
   listModelPrices() {
@@ -630,6 +676,9 @@ export class Store {
       remote: this.db.modelPriceCache?.remote || structuredClone(DEFAULT_DB.modelPriceCache.remote),
       openrouter: Object.entries(this.db.modelPriceCache?.prices || {}).map(([model, price]) => priceToPublic(model, price)),
       custom: Object.values(this.db.modelPrices || {}).sort((a, b) => a.model.localeCompare(b.model)),
+      aliases: Object.entries(this.db.modelPriceAliases || {})
+        .map(([model, targetModel]) => ({ model, targetModel }))
+        .sort((a, b) => a.model.localeCompare(b.model)),
       missingModels: this.missingPriceModels()
     };
   }
@@ -679,6 +728,30 @@ export class Store {
     const model = normalizeModelName(modelInput || "");
     if (!model || !this.db.modelPrices[model]) return { deleted: false };
     delete this.db.modelPrices[model];
+    for (const [sourceModel, targetModel] of Object.entries(this.db.modelPriceAliases || {})) {
+      if (targetModel === model) delete this.db.modelPriceAliases[sourceModel];
+    }
+    const recalculated = this.recalculateCosts();
+    return { deleted: true, recalculated };
+  }
+
+  upsertModelPriceAlias(input) {
+    const model = normalizeModelName(input.model || input.sourceModel || "");
+    const targetModel = normalizeModelName(input.targetModel || "");
+    if (!model) throw new Error("model is required");
+    if (!targetModel) throw new Error("targetModel is required");
+    if (model === targetModel) throw new Error("model alias must target a different model");
+    const basePriceMap = createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices);
+    if (!basePriceMap[targetModel]) throw new Error(`target model price not found: ${targetModel}`);
+    this.db.modelPriceAliases[model] = targetModel;
+    const recalculated = this.recalculateCosts();
+    return { alias: { model, targetModel }, recalculated };
+  }
+
+  deleteModelPriceAlias(modelInput) {
+    const model = normalizeModelName(modelInput || "");
+    if (!model || !this.db.modelPriceAliases[model]) return { deleted: false };
+    delete this.db.modelPriceAliases[model];
     const recalculated = this.recalculateCosts();
     return { deleted: true, recalculated };
   }

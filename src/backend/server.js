@@ -67,9 +67,21 @@ async function handleApi(req, res) {
     const body = await readBody(req);
     return sendJson(res, 200, await store.upsertModelPrice(body));
   }
+  if (req.method === "POST" && req.url === "/api/admin/model-price-aliases") {
+    const body = await readBody(req);
+    return sendJson(res, 200, await store.upsertModelPriceAlias(body));
+  }
+  if (req.method === "DELETE" && req.url.startsWith("/api/admin/model-price-aliases/")) {
+    const model = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/model-price-aliases/", ""));
+    return sendJson(res, 200, await store.deleteModelPriceAlias(model));
+  }
   if (req.method === "DELETE" && req.url.startsWith("/api/admin/model-prices/")) {
     const model = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/model-prices/", ""));
     return sendJson(res, 200, await store.deleteModelPrice(model));
+  }
+  if (req.method === "DELETE" && req.url.startsWith("/api/admin/participants/")) {
+    const participantId = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/participants/", ""));
+    return sendJson(res, 200, await store.deleteParticipantData(participantId));
   }
   if (req.method === "GET" && req.url.startsWith("/api/leaderboard")) {
     const url = new URL(req.url, "http://localhost");

@@ -42,25 +42,6 @@
             </div>
           </div>
 
-          <section id="onboarding-card" class="onboarding-card" hidden>
-            <div>
-              <p class="eyebrow">First run</p>
-              <h3>Local setup is running</h3>
-              <p>The first scan can take a while on machines with large Codex or Claude Code history. You can name this profile now, or import an existing profile before syncing.</p>
-            </div>
-            <div class="onboarding-actions">
-              <label>
-                Nickname
-                <input id="onboarding-nickname" value="anonymous" />
-              </label>
-              <div class="actions">
-                <button id="onboarding-save" type="button">Save nickname</button>
-                <button id="onboarding-import" type="button">Import profile</button>
-                <button id="onboarding-sources" type="button">Review sources</button>
-              </div>
-            </div>
-          </section>
-
           <section class="cards cards-four">
             <article class="stat-card">
               <span>Workdirs</span>
@@ -189,8 +170,8 @@
             </div>
             <div class="actions">
               <button class="save-settings" type="button">Save settings</button>
-              <button id="export">Export profile</button>
-              <button id="import">Import profile</button>
+              <button id="export">Export config</button>
+              <button id="import">Import config</button>
             </div>
           </section>
 
@@ -281,7 +262,9 @@
             <div class="actions">
               <button id="check-update" type="button">Check update</button>
               <button id="download-update" type="button" disabled>Download verified package</button>
+              <button id="export-diagnostics" type="button">Export diagnostics</button>
               <span id="update-message" class="action-message" aria-live="polite"></span>
+              <span id="diagnostics-message" class="action-message" aria-live="polite"></span>
             </div>
             <section class="risk-panel">
               <h3>Risk controls</h3>
@@ -332,6 +315,119 @@
         </section>
       </section>
     </main>
+    <div id="wizard-overlay" class="modal-backdrop" hidden>
+      <section id="onboarding-wizard" class="wizard" role="dialog" aria-modal="true">
+        <div class="wizard-progress">
+          <span class="wizard-step-dot active" data-wizard-step-dot="0">1</span>
+          <span class="wizard-step-dot" data-wizard-step-dot="1">2</span>
+          <span class="wizard-step-dot" data-wizard-step-dot="2">3</span>
+          <span class="wizard-step-dot" data-wizard-step-dot="3">4</span>
+          <span class="wizard-step-dot" data-wizard-step-dot="4">5</span>
+        </div>
+        <a href="#" id="wizard-skip" class="wizard-skip">Skip setup</a>
+
+        <div class="wizard-step active" data-wizard-step="0">
+          <p class="eyebrow">Welcome</p>
+          <h2>Welcome to AI Token League</h2>
+          <p>Track your AI coding token usage and compare with the community. The app scans local usage files from Codex, Claude Code, and Cursor, then aggregates daily token counts.</p>
+          <div class="privacy-callout">
+            <h3>Your data stays private</h3>
+            <ul>
+              <li>Prompts and assistant responses are never collected.</li>
+              <li>Source code and file content are never collected.</li>
+              <li>Real file paths are replaced with SHA-256 hashes.</li>
+              <li>Cursor session tokens stay on your computer.</li>
+              <li>Your identity private key never leaves your machine.</li>
+            </ul>
+          </div>
+          <div class="wizard-actions">
+            <button id="wizard-next-0" type="button">Next</button>
+          </div>
+        </div>
+
+        <div class="wizard-step" data-wizard-step="1">
+          <p class="eyebrow">Identity</p>
+          <h2>Your identity</h2>
+          <p>AI Token League creates a cryptographic identity on this device. It signs your usage data so the server can verify it came from you, without requiring a login.</p>
+          <div class="form-grid">
+            <label>
+              Nickname
+              <input id="wizard-nickname" value="anonymous" />
+            </label>
+            <label>
+              Participant ID
+              <input id="wizard-participant-id" readonly />
+            </label>
+          </div>
+          <div class="wizard-actions">
+            <button id="wizard-back-1" type="button">Back</button>
+            <button id="wizard-import" type="button">Import existing config</button>
+            <button id="wizard-next-1" type="button">Next</button>
+          </div>
+        </div>
+
+        <div class="wizard-step" data-wizard-step="2">
+          <p class="eyebrow">Sources</p>
+          <h2>Data sources</h2>
+          <p>We checked your machine for AI coding tools. Enable the ones you want to track.</p>
+          <div id="wizard-source-list" class="source-grid"></div>
+          <div class="wizard-actions">
+            <button id="wizard-back-2" type="button">Back</button>
+            <button id="wizard-next-2" type="button">Next</button>
+          </div>
+        </div>
+
+        <div class="wizard-step" data-wizard-step="3">
+          <p class="eyebrow">Cloud</p>
+          <h2>Cloud connection (optional)</h2>
+          <p>Connect to an app server to sync your usage to the community leaderboard, check for updates, and view pricing data.</p>
+          <div class="form-grid">
+            <label>
+              API base URL
+              <input id="wizard-api-base-url" placeholder="https://your-api.example" />
+            </label>
+          </div>
+          <div class="cloud-explain">
+            <article>
+              <strong>With cloud</strong>
+              <p>Upload to the public leaderboard, check for updates, and fetch model pricing.</p>
+            </article>
+            <article>
+              <strong>Local only</strong>
+              <p>All data stays on this device. You can still view your local usage.</p>
+            </article>
+          </div>
+          <div class="wizard-actions">
+            <button id="wizard-back-3" type="button">Back</button>
+            <button id="wizard-skip-cloud" type="button">Skip cloud</button>
+            <button id="wizard-next-3" type="button">Next</button>
+          </div>
+        </div>
+
+        <div class="wizard-step" data-wizard-step="4">
+          <p class="eyebrow">Ready</p>
+          <h2>You're ready</h2>
+          <div class="wizard-summary">
+            <div class="summary-tile">
+              <span>Nickname</span>
+              <strong id="wizard-summary-nickname">anonymous</strong>
+            </div>
+            <div class="summary-tile">
+              <span>Sources</span>
+              <strong id="wizard-summary-sources">-</strong>
+            </div>
+            <div class="summary-tile">
+              <span>Cloud</span>
+              <strong id="wizard-summary-cloud">Local only</strong>
+            </div>
+          </div>
+          <div class="wizard-actions">
+            <button id="wizard-back-4" type="button">Back</button>
+            <button id="wizard-start" type="button">Start tracking</button>
+          </div>
+        </div>
+      </section>
+    </div>
     <div id="cursor-token-modal" class="modal-backdrop" hidden>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="cursor-token-title">
         <div class="section-title">

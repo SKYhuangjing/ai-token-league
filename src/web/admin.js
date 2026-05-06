@@ -146,23 +146,35 @@ function renderPricing(data) {
   const missing = data.missingModels || [];
   const custom = data.custom || [];
   const openrouter = data.openrouter || [];
+  const aliases = data.aliases || [];
+  const priceTargets = [...custom, ...openrouter]
+    .map((item) => item.model)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
   const missingTotal = missing.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
-  pricingStatus.textContent = `${missing.length} missing model${missing.length === 1 ? "" : "s"} · ${custom.length} custom price${custom.length === 1 ? "" : "s"} · ${openrouter.length} OpenRouter price${openrouter.length === 1 ? "" : "s"}`;
+  pricingStatus.textContent = `${missing.length} missing model${missing.length === 1 ? "" : "s"} · ${aliases.length} alias${aliases.length === 1 ? "" : "es"} · ${custom.length} custom price${custom.length === 1 ? "" : "s"} · ${openrouter.length} OpenRouter price${openrouter.length === 1 ? "" : "s"}`;
   document.querySelector("#remote-pricing-status").innerHTML = renderRemotePricingStatus(data.remote || {});
   document.querySelector("#missing-prices").innerHTML = missing.length
     ? missing
-        .map((item, index) => `<button class="price-suggestion price-task" type="button" data-model="${escapeHtml(item.model)}" title="${escapeHtml(renderProviderTitle(item.providers))}">
+        .map((item, index) => `<article class="price-suggestion price-task price-alias-task" title="${escapeHtml(renderProviderTitle(item.providers))}">
           <span class="task-rank">#${index + 1}</span>
           <strong>${escapeHtml(item.model)}</strong>
           <span>${formatToken(item.totalTokens)} · ${formatPercent(ratio(item.totalTokens, missingTotal))}</span>
           <small>${escapeHtml(renderProviderTitle(item.providers) || "No source breakdown")}</small>
-        </button>`)
+          <input data-alias-target="${escapeHtml(item.model)}" list="price-model-targets" placeholder="Map to existing priced model" autocomplete="off" />
+          <button type="button" data-map-price-alias="${escapeHtml(item.model)}" ${priceTargets.length ? "" : "disabled"}>Map</button>
+        </article>`)
         .join("")
+        + `<datalist id="price-model-targets">${priceTargets.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("")}</datalist>`
     : `<article class="empty-state">No missing prices in this month.</article>`;
-  document.querySelectorAll("[data-model]").forEach((button) => {
+  document.querySelectorAll("[data-map-price-alias]").forEach((button) => {
     button.addEventListener("click", () => {
-      document.querySelector("#price-model").value = button.dataset.model;
-      document.querySelector("#price-model").focus();
+      const model = button.dataset.mapPriceAlias;
+      const input = [...document.querySelectorAll("[data-alias-target]")]
+        .find((item) => item.dataset.aliasTarget === model);
+      mapModelPriceAlias(model, input?.value || "").catch((error) => {
+        pricingStatus.textContent = error.message;
+      });
     });
   });
   document.querySelector("#custom-prices").innerHTML = custom.length
@@ -174,6 +186,15 @@ function renderPricing(data) {
         </article>`)
         .join("")
     : `<article class="empty-state">No custom model prices yet.</article>`;
+  document.querySelector("#price-aliases").innerHTML = aliases.length
+    ? aliases
+        .map((item) => `<article class="price-row">
+          <strong>${escapeHtml(item.model)}</strong>
+          <span>uses ${escapeHtml(item.targetModel)}</span>
+          <button type="button" data-delete-price-alias="${escapeHtml(item.model)}">Delete</button>
+        </article>`)
+        .join("")
+    : `<article class="empty-state">No model aliases yet.</article>`;
   document.querySelector("#openrouter-prices").innerHTML = openrouter.length
     ? openrouter
         .slice(0, 20)
@@ -191,6 +212,27 @@ function renderPricing(data) {
       await loadUsage();
     });
   });
+  document.querySelectorAll("[data-delete-price-alias]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      pricingStatus.textContent = "Deleting alias...";
+      await fetch(`/api/admin/model-price-aliases/${encodeURIComponent(button.dataset.deletePriceAlias)}`, { method: "DELETE" });
+      await loadPricing();
+      await loadUsage();
+    });
+  });
+}
+
+async function mapModelPriceAlias(model, targetModel) {
+  if (!targetModel.trim()) throw new Error("Target model is required");
+  pricingStatus.textContent = "Mapping price alias...";
+  const response = await fetch("/api/admin/model-price-aliases", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, targetModel })
+  });
+  if (!response.ok) throw new Error((await response.json()).error || "failed to save model alias");
+  await loadPricing();
+  await loadUsage();
 }
 
 function renderRemotePricingStatus(remote) {
@@ -226,7 +268,12 @@ function render(items) {
         <td>${renderCostQuality(item)}</td>
         <td>${renderPrimarySlice(item.workdirs)}</td>
         <td>${renderPrimarySlice(item.models)}</td>
-        <td><button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? "Hide details" : "Show details"}</button></td>
+        <td>
+          <div class="row-actions">
+            <button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? "Hide details" : "Show details"}</button>
+            <button type="button" class="danger-link" data-delete-participant="${escapeHtml(item.participantId)}" data-delete-nickname="${escapeHtml(item.nickname)}">Reset user</button>
+          </div>
+        </td>
       </tr>
       ${expanded ? `<tr class="expanded-row"><td colspan="7">
         ${renderExpandedUsage(item)}
@@ -242,6 +289,30 @@ function render(items) {
       render(items);
     });
   });
+  tbody.querySelectorAll("[data-delete-participant]").forEach((button) => {
+    button.addEventListener("click", () => {
+      deleteParticipantData(button.dataset.deleteParticipant, button.dataset.deleteNickname).catch((error) => {
+        statusEl.textContent = error.message;
+      });
+    });
+  });
+}
+
+async function deleteParticipantData(participantId, nickname) {
+  const label = nickname || participantId;
+  const confirmed = window.confirm(`Delete all uploaded server data for ${label}?\n\nThe user's client must sync again to re-upload fresh aggregate data.`);
+  if (!confirmed) return;
+  statusEl.textContent = `Deleting ${label}...`;
+  const response = await fetch(`/api/admin/participants/${encodeURIComponent(participantId)}`, { method: "DELETE" });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "failed to delete participant data");
+  if (state.participantId === participantId) state.participantId = "";
+  state.expandedUsageKey = "";
+  await loadUsage();
+  await loadPricing();
+  statusEl.textContent = result.deleted
+    ? `Deleted ${label}: ${result.removed.usageDaily || 0} usage rows, ${result.removed.uploadBatches || 0} upload batches.`
+    : `No server data found for ${label}.`;
 }
 
 async function loadDetail(participantId) {

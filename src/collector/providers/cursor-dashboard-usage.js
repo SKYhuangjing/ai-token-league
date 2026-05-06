@@ -96,7 +96,7 @@ export function eventsToUsageEvents(events = [], source = {}) {
 
 function normalizeCursorModel(model) {
   const value = String(model || "").trim().toLowerCase();
-  if (!value || value === "default" || value === "auto") return "cursor-auto";
+  if (!value || value === "default" || value === "auto") return "Auto";
   return String(model).trim();
 }
 

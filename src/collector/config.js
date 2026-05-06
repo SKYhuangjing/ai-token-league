@@ -106,6 +106,45 @@ export function importIdentity(identity, current = {}, { persist = true } = {}) 
   return config;
 }
 
+export function exportConfig(config) {
+  const { syncStatus, apiConnection, lastSyncAt, lastSyncStatus, lastSyncApiBaseUrl, lastSyncError, updatedAt, createdAt, importedAt, ...rest } = config;
+  return { ...rest, exportedAt: new Date().toISOString() };
+}
+
+export function importConfig(imported) {
+  if (!imported?.participantId || !imported?.identityPublicKey || !imported?.identityPrivateKey) {
+    throw new Error("Invalid config file: missing identity fields");
+  }
+  const config = {
+    participantId: imported.participantId,
+    nickname: imported.nickname || "anonymous",
+    identityPublicKey: imported.identityPublicKey,
+    identityPrivateKey: imported.identityPrivateKey,
+    deviceId: imported.deviceId || newId("d"),
+    apiBaseUrl: imported.apiBaseUrl || "",
+    publicUpload: imported.publicUpload ?? true,
+    showEstimatedCost: imported.showEstimatedCost ?? false,
+    showRawTokens: imported.showRawTokens ?? false,
+    autoRefreshEnabled: imported.autoRefreshEnabled ?? false,
+    refreshIntervalMinutes: imported.refreshIntervalMinutes || 15,
+    launchAtLogin: imported.launchAtLogin ?? false,
+    desktopAutoInitialized: false,
+    cursorDashboardUsage: imported.cursorDashboardUsage || { enabled: false, workosSessionToken: "", workosSessionTokens: [] },
+    apiConnection: {},
+    syncStatus: {},
+    workdirAliases: imported.workdirAliases || {},
+    providerRoots: imported.providerRoots || {},
+    providerEnabled: {
+      claude_code_local: true,
+      codex_local: true,
+      ...(imported.providerEnabled || {})
+    },
+    importedAt: new Date().toISOString()
+  };
+  saveConfig(config);
+  return config;
+}
+
 export function addProviderRoot(providerId, rootPath, current = loadConfig()) {
   if (!current) throw new Error("Initialize identity first");
   const normalized = path.resolve(rootPath);

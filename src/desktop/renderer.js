@@ -38,13 +38,18 @@ $("#refresh-health").addEventListener("click", () => run(async () => {
   await loadHealth();
 }));
 $("#sync-now").addEventListener("click", () => run(syncNow));
-$("#onboarding-save").addEventListener("click", () => run(saveOnboardingNickname));
-$("#onboarding-import").addEventListener("click", () => run(importProfile));
-$("#onboarding-sources").addEventListener("click", () => {
-  selectSection("settings");
-  selectSettingsTab("sources");
-  run(loadHealth);
-});
+$("#wizard-skip").addEventListener("click", (e) => { e.preventDefault(); run(skipWizard); });
+$("#wizard-next-0").addEventListener("click", () => wizardGo(1));
+$("#wizard-back-1").addEventListener("click", () => wizardGo(0));
+$("#wizard-import").addEventListener("click", () => run(wizardImportProfile));
+$("#wizard-next-1").addEventListener("click", () => wizardGo(2));
+$("#wizard-back-2").addEventListener("click", () => wizardGo(1));
+$("#wizard-next-2").addEventListener("click", () => wizardGo(3));
+$("#wizard-back-3").addEventListener("click", () => wizardGo(2));
+$("#wizard-skip-cloud").addEventListener("click", () => { $("#wizard-api-base-url").value = ""; wizardGo(4); });
+$("#wizard-next-3").addEventListener("click", () => wizardGo(4));
+$("#wizard-back-4").addEventListener("click", () => wizardGo(3));
+$("#wizard-start").addEventListener("click", () => run(finishWizard));
 $("#add-codex-root").addEventListener("click", () => run(() => addProviderRoot("codex_local")));
 $("#add-claude-root").addEventListener("click", () => run(() => addProviderRoot("claude_code_local")));
 $("#add-cursor-token").addEventListener("click", openCursorTokenModal);
@@ -107,6 +112,7 @@ document.querySelectorAll(".save-settings").forEach((button) => button.addEventL
 $("#reset-local-data").addEventListener("click", () => run(resetLocalData));
 $("#check-update").addEventListener("click", () => run(checkUpdate));
 $("#download-update").addEventListener("click", () => run(downloadUpdate));
+$("#export-diagnostics").addEventListener("click", () => run(exportDiagnostics));
 
 function selectSection(section) {
   document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.section === section));
@@ -150,8 +156,8 @@ function settingsPayload() {
 }
 
 $("#export").addEventListener("click", async () => run(async () => {
-  const result = await api.exportIdentity();
-  $("#sync-state").textContent = result.canceled ? "Export canceled" : "Profile exported";
+  const result = await api.exportConfig();
+  $("#sync-state").textContent = result.canceled ? "Export canceled" : "Config exported";
 }));
 
 $("#import").addEventListener("click", async () => run(async () => {
@@ -159,7 +165,7 @@ $("#import").addEventListener("click", async () => run(async () => {
 }));
 
 async function importProfile() {
-  const config = await api.importIdentity();
+  const config = await api.importConfig();
   if (!config?.canceled) {
     renderConfig(config);
     await loadToday(true);
@@ -167,16 +173,144 @@ async function importProfile() {
   }
 }
 
-async function saveOnboardingNickname() {
-  const nickname = $("#onboarding-nickname").value.trim() || "anonymous";
-  $("#nickname").value = nickname;
+let wizardStep = 0;
+let wizardDetectedSources = [];
+
+function wizardGo(step) {
+  wizardStep = step;
+  document.querySelectorAll(".wizard-step").forEach((el) => el.classList.toggle("active", Number(el.dataset.wizardStep) === step));
+  document.querySelectorAll(".wizard-step-dot").forEach((el) => {
+    const dotStep = Number(el.dataset.wizardStepDot);
+    el.classList.toggle("active", dotStep === step);
+    el.classList.toggle("done", dotStep < step);
+  });
+  if (step === 2) renderWizardSources();
+  if (step === 4) renderWizardSummary();
+}
+
+async function renderWizard() {
+  const overlay = $("#wizard-overlay");
+  if (!overlay) return;
+  const show = latestConfig?.desktopAutoInitialized === true;
+  overlay.hidden = !show;
+  if (!show) {
+    delete overlay.dataset.initialized;
+    return;
+  }
+  if (!overlay.dataset.initialized) {
+    overlay.dataset.initialized = "1";
+    wizardStep = 0;
+    wizardGo(0);
+    if (latestConfig?.participantId) {
+      $("#wizard-participant-id").value = latestConfig.participantId;
+    }
+    if (latestConfig?.nickname && latestConfig.nickname !== "anonymous") {
+      $("#wizard-nickname").value = latestConfig.nickname;
+    }
+    try {
+      wizardDetectedSources = await api.providerHealth();
+    } catch {
+      wizardDetectedSources = [];
+    }
+  }
+}
+
+async function renderWizardSources() {
+  const container = $("#wizard-source-list");
+  if (!container) return;
+  if (!wizardDetectedSources.length) {
+    try { wizardDetectedSources = await api.providerHealth(); } catch { wizardDetectedSources = []; }
+  }
+  container.innerHTML = wizardDetectedSources.map((item) => {
+    const detected = item.detected || (item.roots && item.roots.length > 0);
+    const enabled = item.providerId === "cursor_dashboard_usage" ? false : detected;
+    const summary = item.providerId === "cursor_dashboard_usage"
+      ? (item.roots?.length ? `${item.roots.length} account source${item.roots.length === 1 ? "" : "s"}` : "Requires Cursor token in Settings")
+      : (detected ? `Found · ${item.roots?.length || 0} location${(item.roots?.length || 0) === 1 ? "" : "s"}` : "Not found on this machine");
+    return `<article class="wizard-source-card ${detected ? "detected" : ""}">
+      <div>
+        <strong>${sourceName(item.providerId)}</strong>
+        <small>${summary}</small>
+        <p>${sourceDescription(item.providerId)}</p>
+      </div>
+      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-wizard-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? "On" : "Off"}</button>
+    </article>`;
+  }).join("");
+  container.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = button.getAttribute("aria-pressed") !== "true";
+      button.setAttribute("aria-pressed", String(next));
+      button.textContent = next ? "On" : "Off";
+      button.classList.toggle("ok", next);
+      button.classList.toggle("miss", !next);
+    });
+  });
+}
+
+function renderWizardSummary() {
+  const nickname = $("#wizard-nickname").value.trim() || "anonymous";
+  const apiBaseUrl = $("#wizard-api-base-url").value.trim();
+  const enabledSources = [];
+  document.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
+    if (button.getAttribute("aria-pressed") === "true") enabledSources.push(sourceName(button.dataset.wizardToggleSource));
+  });
+  $("#wizard-summary-nickname").textContent = nickname;
+  $("#wizard-summary-sources").textContent = enabledSources.length ? enabledSources.join(", ") : "None";
+  $("#wizard-summary-cloud").textContent = apiBaseUrl || "Local only";
+}
+
+async function wizardImportProfile() {
+  const config = await api.importConfig();
+  if (!config?.canceled) {
+    latestConfig = config;
+    renderConfig(config);
+    renderWizard();
+    await loadToday(true);
+    await loadBackgroundStatus();
+  }
+}
+
+async function skipWizard() {
+  const enabledSources = {};
+  wizardDetectedSources.forEach((item) => {
+    if (item.providerId !== "cursor_dashboard_usage" && (item.detected || (item.roots && item.roots.length > 0))) {
+      enabledSources[item.providerId] = true;
+    }
+  });
   latestConfig = await api.updateConfig({
-    ...settingsPayload(),
-    nickname,
-    desktopAutoInitialized: false
+    nickname: "anonymous",
+    desktopAutoInitialized: false,
+    providerEnabled: enabledSources,
+    cursorDashboardUsage: { enabled: false }
   });
   renderConfig(latestConfig);
-  setSaveMessage("Nickname saved", "ok");
+  await loadToday(true);
+  await loadBackgroundStatus();
+  $("#sync-state").textContent = "Profile ready";
+}
+
+async function finishWizard() {
+  const nickname = $("#wizard-nickname").value.trim() || "anonymous";
+  const apiBaseUrl = $("#wizard-api-base-url").value.trim();
+  const providerEnabled = {};
+  let cursorEnabled = false;
+  document.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
+    const pid = button.dataset.wizardToggleSource;
+    const on = button.getAttribute("aria-pressed") === "true";
+    if (pid === "cursor_dashboard_usage") cursorEnabled = on;
+    else providerEnabled[pid] = on;
+  });
+  $("#nickname").value = nickname;
+  latestConfig = await api.updateConfig({
+    nickname,
+    apiBaseUrl,
+    desktopAutoInitialized: false,
+    providerEnabled,
+    cursorDashboardUsage: { enabled: cursorEnabled }
+  });
+  renderConfig(latestConfig);
+  await loadToday(true);
+  await loadBackgroundStatus();
   $("#sync-state").textContent = "Profile ready";
 }
 
@@ -193,6 +327,7 @@ async function boot() {
   if (config) {
     latestConfig = config;
     renderConfig(config);
+    renderWizard();
     await loadToday();
     await loadBackgroundStatus();
     await loadSystemStatus();
@@ -220,7 +355,7 @@ function setScanState(running, force = false) {
   $("#trend-summary").textContent = running
     ? "Refreshing in background. You can keep using the app."
     : $("#trend-summary").textContent;
-  renderOnboarding();
+  renderWizard();
 }
 
 async function loadTrend(force = false) {
@@ -383,7 +518,6 @@ function renderConfig(config) {
   latestConfig = config;
   $("#profile-state").textContent = config?.desktopAutoInitialized ? "First run" : config ? "Ready" : "Not configured";
   if (config?.nickname) $("#nickname").value = config.nickname;
-  if (config?.nickname) $("#onboarding-nickname").value = config.nickname;
   $("#apiBaseUrl").value = config?.apiBaseUrl ?? "";
   $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
   $("#showRawTokens").checked = config?.showRawTokens ?? false;
@@ -394,7 +528,7 @@ function renderConfig(config) {
   renderCloudStatus(config);
   renderSyncStatus(config);
   renderSystemStatus({ client: null, server: config?.apiConnection || null, update: latestUpdateState });
-  renderOnboarding();
+  renderWizard();
 }
 
 async function loadCloudStatus() {
@@ -432,6 +566,25 @@ async function downloadUpdate() {
     $("#update-message").textContent = result.handoff || "Downloaded and verified";
   } finally {
     $("#download-update").disabled = !latestUpdateState?.update?.updateAvailable;
+  }
+}
+
+async function exportDiagnostics() {
+  const button = $("#export-diagnostics");
+  button.disabled = true;
+  $("#diagnostics-message").dataset.tone = "";
+  $("#diagnostics-message").textContent = "Preparing diagnostics...";
+  try {
+    const result = await api.exportDiagnostics();
+    if (result.canceled) {
+      $("#diagnostics-message").textContent = "Export canceled";
+      return;
+    }
+    $("#diagnostics-message").dataset.tone = "ok";
+    $("#diagnostics-message").textContent = `Exported ${result.logCount || 0} log events, ${result.usageRowCount || 0} usage rows`;
+    $("#diagnostics-message").title = result.filePath || "";
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -473,11 +626,6 @@ function updateMessage(state = {}) {
   return state.message || "Update check finished";
 }
 
-function renderOnboarding() {
-  const card = $("#onboarding-card");
-  if (!card) return;
-  card.hidden = !(latestConfig?.desktopAutoInitialized || scanRunning);
-}
 
 function renderCursorTokenSummary(cursorConfig = {}) {
   const tokens = cursorConfig?.workosSessionTokens || [];
