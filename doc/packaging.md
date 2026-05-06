@@ -104,7 +104,16 @@ Publish only from a trusted release environment:
 npm run release:publish
 ```
 
-The publish script reads `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_SECRET` from env. These values must not be committed or exposed through app-server responses.
+`release:publish` runs `release:build` then `release:upload`. The build step removes old `dist/` and `dist-installer/`, rebuilds zip packages and native installers. The upload step uploads all artifacts to OSS with a progress bar.
+
+To rebuild and upload separately:
+
+```bash
+npm run release:build    # clean build zip + installer artifacts
+npm run release:upload   # upload with progress bar
+```
+
+The upload script reads `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_SECRET` from env. These values must not be committed or exposed through app-server responses.
 
 ## Verify
 
