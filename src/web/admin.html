@@ -26,6 +26,7 @@
         <button type="button" data-admin-tab="usage" class="active">Usage ranking</button>
         <button type="button" data-admin-tab="pricing">Model prices</button>
         <button type="button" data-admin-tab="quality">Quality</button>
+        <button type="button" data-admin-tab="devices">Devices</button>
       </nav>
 
       <section class="board admin-panel active" data-admin-panel="usage">
@@ -144,6 +145,28 @@
             <h3>Cost explainability</h3>
             <div id="quality-explainability" class="breakdown"></div>
           </section>
+        </div>
+      </section>
+
+      <section class="board admin-panel" data-admin-panel="devices">
+        <div class="board-header">
+          <h2>Client devices</h2>
+          <p id="devices-status">Loading...</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Nickname</th>
+                <th>Device</th>
+                <th>Client version</th>
+                <th>Platform</th>
+                <th>Build</th>
+                <th>Last seen</th>
+              </tr>
+            </thead>
+            <tbody id="devices-tbody"></tbody>
+          </table>
         </div>
       </section>
 

@@ -655,6 +655,24 @@ export class Store {
     };
   }
 
+  adminDevices() {
+    return Object.values(this.db.devices || {}).map((device) => {
+      const participant = this.db.participants[device.participantId] || {};
+      return {
+        deviceId: device.id,
+        participantId: device.participantId,
+        nickname: participant.nickname || device.participantId,
+        clientAppVersion: device.clientAppVersion || device.appVersion || "",
+        clientProtocolVersion: device.clientProtocolVersion ?? null,
+        clientPlatform: device.clientPlatform || device.os || "",
+        clientBuild: device.clientBuild || "",
+        os: device.os || "",
+        lastSeenAt: device.lastSeenAt || "",
+        createdAt: device.createdAt || ""
+      };
+    }).sort((a, b) => (b.lastSeenAt || "").localeCompare(a.lastSeenAt || ""));
+  }
+
   recalculateCosts() {
     let updated = 0;
     for (const item of Object.values(this.db.usageDaily || {})) {

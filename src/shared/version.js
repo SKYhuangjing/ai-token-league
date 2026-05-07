@@ -56,6 +56,7 @@ export function compatibilityResult(metadata = {}, options = {}) {
     minClientProtocol: SUPPORTED_CLIENT_PROTOCOL.min,
     maxClientProtocol: SUPPORTED_CLIENT_PROTOCOL.max,
     latestClientVersion: APP_VERSION,
+    minClientEnforce: false,
     serverProtocolVersion: SERVER_PROTOCOL_VERSION,
     serverVersion: SERVER_VERSION,
     ...options
@@ -75,7 +76,8 @@ export function compatibilityResult(metadata = {}, options = {}) {
         min: policy.minClientProtocol,
         max: policy.maxClientProtocol
       },
-      latestClientVersion: policy.latestClientVersion
+      latestClientVersion: policy.latestClientVersion,
+      minClientEnforce: policy.minClientEnforce || false
     }
   };
   if (protocol === null) {
@@ -115,6 +117,15 @@ export function compatibilityResult(metadata = {}, options = {}) {
     };
   }
   if (normalized.clientAppVersion && compareSemver(normalized.clientAppVersion, policy.latestClientVersion) < 0) {
+    if (policy.minClientEnforce) {
+      return {
+        ...base,
+        status: "unsupported_client",
+        compatible: false,
+        mandatory: true,
+        reason: "client_app_version_too_old"
+      };
+    }
     return {
       ...base,
       status: "upgrade_available",
