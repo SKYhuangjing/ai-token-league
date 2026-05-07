@@ -518,6 +518,22 @@ async function testVersionCompatibilityAndManifest() {
   assert.equal(compatibilityResult({ clientProtocolVersion: 99 }).status, "unsupported_server");
   assert.equal(compatibilityResult({}).status, "upgrade_recommended");
   assert.equal(compatibilityResult({ clientProtocolVersion: "bad" }).status, "unsupported_client");
+
+  // minClientEnforce: blocked when below latest
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.3.0" }, { latestClientVersion: "0.4.0", minClientEnforce: true }).status, "unsupported_client");
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.3.0" }, { latestClientVersion: "0.4.0", minClientEnforce: true }).compatible, false);
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.3.0" }, { latestClientVersion: "0.4.0", minClientEnforce: true }).mandatory, true);
+  // minClientEnforce: pass when equal to latest
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.4.0" }, { latestClientVersion: "0.4.0", minClientEnforce: true }).status, "compatible");
+  // minClientEnforce: pass when above latest
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.4.1" }, { latestClientVersion: "0.4.0", minClientEnforce: true }).status, "compatible");
+  // minClientEnforce=false (default): not blocked, only informational
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.3.0" }, { latestClientVersion: "0.4.0" }).status, "upgrade_available");
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.3.0" }, { latestClientVersion: "0.4.0" }).compatible, true);
+  // minClientEnforce exposed in server payload
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.5.0" }, { latestClientVersion: "0.5.0", minClientEnforce: true }).server.minClientEnforce, true);
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.5.0" }, { latestClientVersion: "0.5.0" }).server.minClientEnforce, false);
+
   assert.throws(() => validateReleaseConfig({ publicBaseUrl: "", manifestPath: "" }), /missing release config/);
   const artifactFile = path.join(tmp, "AI Token League-darwin-arm64.zip");
   fs.writeFileSync(artifactFile, "test-artifact");

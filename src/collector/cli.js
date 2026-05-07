@@ -26,7 +26,14 @@ async function postJson(url, body) {
     body: JSON.stringify(body)
   });
   const text = await response.text();
-  if (!response.ok) throw new Error(`${response.status} ${text}`);
+  if (!response.ok) {
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    const error = new Error(`${response.status} ${text}`);
+    error.status = response.status;
+    error.body = parsed;
+    throw error;
+  }
   return text ? JSON.parse(text) : {};
 }
 
@@ -196,6 +203,18 @@ async function main() {
 }
 
 main().catch((error) => {
+  if (error.status === 426) {
+    const compat = error.body?.compatibility || {};
+    const reason = compat.reason || error.body?.error || "unsupported_client";
+    const latest = compat.server?.latestClientVersion || "";
+    const current = compat.client?.clientAppVersion || "";
+    console.error(`Update required: your client ${current || "(unknown)"} is not compatible with this server.`);
+    if (latest) console.error(`Latest client version: ${latest}`);
+    if (reason === "client_app_version_too_old") console.error("Your client version is below the server minimum. Please update.");
+    else if (reason === "client_protocol_too_old") console.error("Your client protocol is too old. Please update.");
+    else console.error(`Reason: ${reason}`);
+    process.exit(1);
+  }
   console.error(error.message);
   process.exit(1);
 });

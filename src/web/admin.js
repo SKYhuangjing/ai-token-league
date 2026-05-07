@@ -52,6 +52,9 @@ document.querySelector(".admin-tabs").addEventListener("click", (event) => {
   if (button.dataset.adminTab === "quality") loadQuality().catch((error) => {
     document.querySelector("#quality-status").textContent = error.message;
   });
+  if (button.dataset.adminTab === "devices") loadDevices().catch((error) => {
+    document.querySelector("#devices-status").textContent = error.message;
+  });
 });
 
 document.querySelector("[data-filter='quick-range']").addEventListener("click", (event) => {
@@ -150,6 +153,30 @@ async function loadUsage() {
   render(data.items || []);
   statusEl.textContent = `${data.items.length} aggregate row${data.items.length === 1 ? "" : "s"} · ${data.from || "-"} to ${data.to || "-"}`;
   await loadQuality();
+}
+
+async function loadDevices() {
+  const response = await fetchAdmin("/api/admin/devices");
+  const data = await response.json();
+  renderDevices(data);
+}
+
+function renderDevices(devices) {
+  const statusEl = document.querySelector("#devices-status");
+  const tbody = document.querySelector("#devices-tbody");
+  statusEl.textContent = `${devices.length} device${devices.length === 1 ? "" : "s"}`;
+  if (!devices.length) {
+    tbody.innerHTML = `<tr><td class="empty" colspan="6">No devices registered.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = devices.map((item) => `<tr>
+    <td>${escapeHtml(item.nickname)}</td>
+    <td><span class="pill" title="${escapeHtml(item.deviceId)}">${escapeHtml(String(item.deviceId || "").slice(-8))}</span></td>
+    <td>${escapeHtml(item.clientAppVersion || "-")}</td>
+    <td>${escapeHtml(item.clientPlatform || item.os || "-")}</td>
+    <td>${escapeHtml(item.clientBuild || "-")}</td>
+    <td>${escapeHtml(item.lastSeenAt ? new Date(item.lastSeenAt).toLocaleDateString() : "-")}</td>
+  </tr>`).join("");
 }
 
 async function loadPricing() {

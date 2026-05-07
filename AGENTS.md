@@ -208,6 +208,20 @@ HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" npm start
 
 See `doc/test-deployment.md` for Docker-based MySQL setup, env files, and timezone config.
 
+### Env File Special Characters
+
+`env.local` and `env.test` are sourced by shell when running locally (not via Docker). Values containing shell metacharacters (`>`, `<`, `|`, `&`, `!`, `$`, etc.) **must be single-quoted**:
+
+```text
+# WRONG — > is interpreted as redirect, password truncated
+MYSQL_PASSWORD=h0uBPTVtmzF>1xuW
+
+# RIGHT — single quotes protect special characters
+MYSQL_PASSWORD='h0uBPTVtmzF>1xuW'
+```
+
+Docker Compose `env_file` does NOT interpret shell metacharacters, so quoting is only needed for local `source` / `. ./env.test` usage. Always quote env values with special characters to avoid silent credential truncation.
+
 ## Verification Baseline
 
 Use the smallest verification that covers the touched surface:

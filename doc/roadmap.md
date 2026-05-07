@@ -70,7 +70,7 @@
 
 | 能力 | 阶段 | 产品目标 |
 | --- | --- | --- |
-| 最低支持客户端版本策略 | Candidate | 基于 0.3 已上报的 `clientAppVersion` / `clientProtocolVersion`，在服务端配置最低支持版本、推荐升级版本和强制升级窗口；客户端收到策略后明确提示升级、阻断不兼容上传并保留本地队列。 |
+| 最低支持客户端版本策略 | 0.5 | 已简化为 MIN_CLIENT_ENFORCE 开关，复用 LATEST_CLIENT_VERSION 作为最低门槛；开启后低于 latest 的客户端被 426 拒绝。详见 `0.5-baseline.md` §2.2。 |
 | 客户端诊断数据上报 | Candidate | 面向不同环境的数据问题排查，允许用户主动上报脱敏诊断数据包；开发者可拿到客户端版本、平台、配置摘要、来源检测结果、聚合 usage cache、upload queue 摘要和运行事件，用于复现与修复问题，但不得包含 prompt、回答、源码、真实路径、Cursor token、身份私钥或原始会话内容。 |
 | 自动备份 | Candidate | 备份 identity、config、tokens、aliases、usage cache 和 upload queue，降低换机或升级失败风险。 |
 | 菜单栏程序 | Candidate | 支持隐藏 Dock，仅在菜单栏展示 Today token 简要信息、同步状态和快捷入口。 |

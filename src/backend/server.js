@@ -13,6 +13,7 @@ const SRC_DIR = path.resolve("src");
 const WEB_DIR = path.resolve("src/web");
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+const MIN_CLIENT_ENFORCE = String(process.env.MIN_CLIENT_ENFORCE || "").toLowerCase() === "true";
 const store = await createConfiguredStore();
 
 function sendJson(res, status, body) {
@@ -153,6 +154,9 @@ async function handleApi(req, res) {
       participantId: url.searchParams.get("participantId") || ""
     }));
   }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/devices")) {
+    return sendJson(res, 200, store.adminDevices());
+  }
   if (req.method === "GET" && req.url.startsWith("/api/participants/") && req.url.includes("/trend")) {
     const url = new URL(req.url, "http://localhost");
     const participantId = decodeURIComponent(url.pathname.replace("/api/participants/", "").replace("/trend", ""));
@@ -206,6 +210,7 @@ function includeFlag(url, name) {
 function serverCompatibility(client = {}) {
   return compatibilityResult(client, {
     latestClientVersion: process.env.LATEST_CLIENT_VERSION || SERVER_VERSION,
+    minClientEnforce: MIN_CLIENT_ENFORCE,
     serverVersion: SERVER_VERSION
   });
 }
@@ -220,6 +225,7 @@ function healthBody(client = {}) {
     serverProtocolVersion: SERVER_PROTOCOL_VERSION,
     supportedClientProtocol: SUPPORTED_CLIENT_PROTOCOL,
     latestClientVersion,
+    minClientEnforce: MIN_CLIENT_ENFORCE,
     compatibility: serverCompatibility(client),
     release: releasePublicConfig({
       release: releaseConfigFromEnv(),
