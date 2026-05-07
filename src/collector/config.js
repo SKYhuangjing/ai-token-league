@@ -35,7 +35,8 @@ export function initConfig({
   showRawTokens = false,
   launchAtLogin = false,
   silentUpdateMode = "notify",
-  desktopAutoInitialized = false
+  desktopAutoInitialized = false,
+  language = ""
 } = {}) {
   const identity = generateIdentity();
   const interval = Number(refreshIntervalMinutes);
@@ -46,7 +47,7 @@ export function initConfig({
     identityPrivateKey: identity.identityPrivateKey,
     deviceId: newId("d"),
     apiBaseUrl,
-    publicUpload: true,
+    language,
     showEstimatedCost: false,
     showRawTokens,
     autoRefreshEnabled,
@@ -91,7 +92,7 @@ export function importIdentity(identity, current = {}, { persist = true } = {}) 
     identityPrivateKey: identity.identityPrivateKey,
     deviceId: current.deviceId || newId("d"),
     apiBaseUrl: current.apiBaseUrl || "",
-    publicUpload: current.publicUpload ?? true,
+    language: current.language || "",
     showEstimatedCost: current.showEstimatedCost ?? false,
     showRawTokens: current.showRawTokens ?? false,
     autoRefreshEnabled: current.autoRefreshEnabled ?? false,
@@ -130,7 +131,7 @@ export function importConfig(imported) {
     identityPrivateKey: imported.identityPrivateKey,
     deviceId: imported.deviceId || newId("d"),
     apiBaseUrl: imported.apiBaseUrl || "",
-    publicUpload: imported.publicUpload ?? true,
+    language: imported.language || "",
     showEstimatedCost: imported.showEstimatedCost ?? false,
     showRawTokens: imported.showRawTokens ?? false,
     autoRefreshEnabled: imported.autoRefreshEnabled ?? false,
@@ -202,7 +203,7 @@ export function updateConfig(input = {}, current = loadConfig(), { persist = tru
     ...current,
     nickname: input.nickname ?? current.nickname,
     apiBaseUrl: input.apiBaseUrl ?? current.apiBaseUrl,
-    publicUpload: input.publicUpload ?? current.publicUpload ?? true,
+    language: input.language ?? current.language ?? "",
     showEstimatedCost: input.showEstimatedCost ?? current.showEstimatedCost ?? false,
     showRawTokens: input.showRawTokens ?? current.showRawTokens ?? false,
     autoRefreshEnabled: input.autoRefreshEnabled ?? current.autoRefreshEnabled ?? false,

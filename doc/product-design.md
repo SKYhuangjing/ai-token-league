@@ -638,7 +638,6 @@ LocalIdentityConfig
   deviceId
   nickname
   apiBaseUrl
-  publicUpload
   autoRefreshEnabled
   refreshIntervalMinutes
   createdAt

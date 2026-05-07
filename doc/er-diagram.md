@@ -120,7 +120,6 @@ erDiagram
         string deviceId
         string nickname
         string apiBaseUrl
-        boolean publicUpload
         boolean autoRefreshEnabled
         int refreshIntervalMinutes
         datetime createdAt

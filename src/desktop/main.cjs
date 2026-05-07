@@ -1214,7 +1214,7 @@ function diagnosticsConfig(config = {}) {
     deviceId: config.deviceId || "",
     nickname: config.nickname || "",
     apiBaseUrl: config.apiBaseUrl || "",
-    publicUpload: config.publicUpload ?? true,
+    language: config.language || "",
 	    autoRefreshEnabled: config.autoRefreshEnabled ?? false,
 	    silentUpdateMode: silentUpdateMode(config),
 	    refreshIntervalMinutes: config.refreshIntervalMinutes || 15,

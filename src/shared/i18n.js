@@ -1178,16 +1178,26 @@ const STORAGE_KEY = "ai-token-league.language";
 let currentLang = DEFAULT_LANG;
 
 /**
- * 初始化 i18n，从 localStorage 读取保存的语言设置
+ * 初始化 i18n，优先使用 configLanguage，其次从 localStorage 读取
+ * @param {string} [configLanguage] - 从 config.json 传入的语言设置
  */
-export function initI18n() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved && translations[saved]) {
-      currentLang = saved;
+export function initI18n(configLanguage) {
+  if (configLanguage && translations[configLanguage]) {
+    currentLang = configLanguage;
+    try {
+      localStorage.setItem(STORAGE_KEY, configLanguage);
+    } catch {
+      // localStorage 不可用
     }
-  } catch {
-    // localStorage 不可用，使用默认语言
+  } else {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved && translations[saved]) {
+        currentLang = saved;
+      }
+    } catch {
+      // localStorage 不可用，使用默认语言
+    }
   }
   document.documentElement.lang = currentLang === "zh-CN" ? "zh-CN" : "en";
   return currentLang;

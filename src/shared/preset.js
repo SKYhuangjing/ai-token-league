@@ -4,11 +4,11 @@ import path from "node:path";
 export const PRESET_ALLOWED_KEYS = [
   "apiBaseUrl",
   "nickname",
+  "language",
   "autoRefreshEnabled",
   "refreshIntervalMinutes",
   "silentUpdateMode",
   "launchAtLogin",
-  "publicUpload",
   "showEstimatedCost",
   "showRawTokens",
   "providerEnabled"

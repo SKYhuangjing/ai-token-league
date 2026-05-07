@@ -2,7 +2,7 @@ import { costQualityLabel, dominantComposition, tokenCompositionDetails, tokenCo
 import { addCostToUsageItem, aggregateCost, createPriceMap } from "../shared/pricing.js";
 import { formatTokenCompact, formatTokenRaw, formatUsd } from "../shared/display.js";
 import { dayToUtcDate, localDay, utcDateToDay } from "../shared/date.js";
-import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "../shared/i18n.js";
+import { initI18n, setLang, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "../shared/i18n.js";
 
 // 初始化多语言
 const currentLang = initI18n();
@@ -337,6 +337,9 @@ async function boot() {
   const config = await api.getConfig();
   if (config) {
     latestConfig = config;
+    if (config.language) {
+      setLang(config.language);
+    }
     renderConfig(config);
     renderWizard();
     await loadToday();
@@ -1577,7 +1580,9 @@ function cssEscape(value) {
 const langContainer = document.querySelector("#lang-switcher-container");
 if (langContainer) {
   langContainer.innerHTML = createLangSwitcher();
-  bindLangSwitcher("lang-switcher", () => {
+  bindLangSwitcher("lang-switcher", async (newLang) => {
+    // 保存语言到 config.json
+    await api.updateConfig({ language: newLang });
     // 语言切换后重新加载页面以应用新语言
     window.location.reload();
   });
