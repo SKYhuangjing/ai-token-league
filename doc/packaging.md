@@ -65,9 +65,9 @@ The script runs `electron-builder` with the config from `electron-builder.yml`:
 Expected installer artifacts:
 
 ```text
-dist-installer/AI Token League-0.4.0-mac-arm64-installer.dmg
-dist-installer/AI Token League-0.4.0-mac-x64-installer.dmg
-dist-installer/AI Token League-0.4.0-win-x64-installer.exe
+dist-installer/AI Token League-<version>-mac-arm64-installer.dmg
+dist-installer/AI Token League-<version>-mac-x64-installer.dmg
+dist-installer/AI Token League-<version>-win-x64-installer.exe
 ```
 
 Prerequisites for macOS: none (electron-builder handles DMG natively). Prerequisites for Windows NSIS cross-build on macOS: Wine must be installed (`brew install --cask wine-stable`). electron-builder downloads NSIS automatically.
@@ -186,9 +186,9 @@ dist/AI Token League-win32-x64/AI Token League.exe
 Native installers (built via `npm run package:installer:all`):
 
 ```text
-dist-installer/AI Token League-0.4.0-mac-arm64-installer.dmg
-dist-installer/AI Token League-0.4.0-mac-x64-installer.dmg
-dist-installer/AI Token League-0.4.0-win-x64-installer.exe
+dist-installer/AI Token League-<version>-mac-arm64-installer.dmg
+dist-installer/AI Token League-<version>-mac-x64-installer.dmg
+dist-installer/AI Token League-<version>-win-x64-installer.exe
 ```
 
 Windows UI/E2E has been validated by external users on real Windows machines; repeat this check after packaging or updater changes.

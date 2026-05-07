@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload } from "../src/shared/crypto.js";
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
-import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION } from "../src/shared/version.js";
+import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION } from "../src/shared/version.js";
 import { buildReleaseManifest, INSTALLER_PLATFORMS, releasePublicConfig, selectInstallerArtifact, selectUpdateArtifact, updatePreflightState, updateStateFromManifest, validateReleaseConfig, validateReleaseManifest, verifyFileChecksum } from "../src/shared/update.js";
 import { scanUsage } from "../src/collector/core.js";
 import { addCursorToken, exportConfig, exportIdentity, importIdentity, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
@@ -15,7 +15,7 @@ import { codexLocalProvider } from "../src/collector/providers/codex-local.js";
 import { cursorDashboardUsageProvider, eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
-import { localDay } from "../src/shared/date.js";
+import { addDays, localDay } from "../src/shared/date.js";
 
 const require = createRequire(import.meta.url);
 const initSqlJs = require("sql.js/dist/sql-asm.js");
@@ -404,7 +404,7 @@ function testDeleteParticipantDataAllowsResync() {
     nickname: "reset-user",
     identityPublicKey: identity.identityPublicKey,
     os: "test",
-    appVersion: "0.4.0"
+    appVersion: APP_VERSION
   });
   const payload = {
     participantId: identity.participantId,
@@ -439,11 +439,79 @@ function testDeleteParticipantDataAllowsResync() {
     nickname: "reset-user",
     identityPublicKey: identity.identityPublicKey,
     os: "test",
-    appVersion: "0.4.0"
+    appVersion: APP_VERSION
   });
   const second = store.upsertUsageBatch(payload);
   assert.equal(second.duplicate, undefined);
   assert.equal(second.accepted, 1);
+}
+
+function testAdminUsageRowRangeFeedsParticipantDetail() {
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-admin-row-detail.json"));
+  const deviceId = newId("d");
+  const today = localDay();
+  const previousDay = addDays(today, -9);
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "row-detail-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+  const baseItem = {
+    toolCode: "codex",
+    providerId: "codex_local",
+    workdirHash: "wd_row_detail",
+    workdirDisplayName: "row-detail-project",
+    model: "gpt-5",
+    inputTokens: 100,
+    outputTokens: 40,
+    cacheReadTokens: 10,
+    cacheWriteTokens: 5,
+    reasoningTokens: 20,
+    totalTokens: 155,
+    sourceQuality: "exact",
+    rawSourceRef: "row-detail.jsonl",
+    providerVersion: "0.1.0",
+    parserVersion: "0.1.0"
+  };
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: "2026-05-07T00:00:00.000Z",
+    items: [
+      { ...baseItem, day: previousDay, sourceFingerprint: "row-detail-previous", totalTokens: 155 },
+      { ...baseItem, day: today, sourceFingerprint: "row-detail-today", totalTokens: 310, inputTokens: 200, outputTokens: 80, cacheReadTokens: 20, cacheWriteTokens: 10 }
+    ]
+  });
+
+  const dayRows = store.adminUsage({ grain: "day", range: "last30" }).items;
+  const previousDayRow = dayRows.find((item) => item.participantId === identity.participantId && item.periodStart === previousDay);
+  assert.ok(previousDayRow);
+  const dayDetail = store.participantDetail(identity.participantId, {
+    range: "custom",
+    startDay: previousDayRow.periodStart,
+    endDay: previousDayRow.periodEnd
+  });
+  assert.equal(dayDetail.from, previousDay);
+  assert.equal(dayDetail.to, previousDay);
+  assert.deepEqual([...new Set(dayDetail.rows.map((item) => item.day))], [previousDay]);
+  assert.equal(dayDetail.totalTokens, previousDayRow.totalTokens);
+
+  for (const grain of ["week", "month"]) {
+    const row = store.adminUsage({ grain, range: "last30" }).items.find((item) => item.participantId === identity.participantId);
+    assert.ok(row);
+    const detail = store.participantDetail(identity.participantId, {
+      range: "custom",
+      startDay: row.periodStart,
+      endDay: row.periodEnd
+    });
+    assert.equal(detail.from, row.periodStart);
+    assert.equal(detail.to, row.periodEnd);
+    assert.equal(detail.rows.every((item) => item.day >= row.periodStart && item.day <= row.periodEnd), true);
+  }
 }
 
 function testSourceFingerprintDedupeKeepsDistinctDays() {
@@ -531,8 +599,8 @@ async function testVersionCompatibilityAndManifest() {
   assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.3.0" }, { latestClientVersion: "0.4.0" }).status, "upgrade_available");
   assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.3.0" }, { latestClientVersion: "0.4.0" }).compatible, true);
   // minClientEnforce exposed in server payload
-  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.5.0" }, { latestClientVersion: "0.5.0", minClientEnforce: true }).server.minClientEnforce, true);
-  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: "0.5.0" }, { latestClientVersion: "0.5.0" }).server.minClientEnforce, false);
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: APP_VERSION }, { latestClientVersion: APP_VERSION, minClientEnforce: true }).server.minClientEnforce, true);
+  assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: APP_VERSION }, { latestClientVersion: APP_VERSION }).server.minClientEnforce, false);
 
   assert.throws(() => validateReleaseConfig({ publicBaseUrl: "", manifestPath: "" }), /missing release config/);
   const artifactFile = path.join(tmp, "AI Token League-darwin-arm64.zip");
@@ -595,14 +663,14 @@ async function testVersionCompatibilityAndManifest() {
   assert.equal(INSTALLER_PLATFORMS["darwin-arm64"].ext, "dmg");
   assert.equal(INSTALLER_PLATFORMS["win32-x64"].ext, "exe");
   const manifestWithInstaller = buildReleaseManifest({
-    version: "0.4.0",
+    version: APP_VERSION,
     publicBaseUrl: "https://example.com/releases",
     manifestPath: "releases/latest.json",
     artifacts: [
       {
         platform: "darwin-arm64",
         fileName: "AI Token League-darwin-arm64.zip",
-        url: "https://example.com/releases/releases/0.4.0/AI%20Token%20League-darwin-arm64.zip",
+        url: `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-darwin-arm64.zip`,
         sha256: expectedSha,
         size: 100
       }
@@ -610,8 +678,8 @@ async function testVersionCompatibilityAndManifest() {
     installerArtifacts: [
       {
         platform: "darwin-arm64",
-        fileName: "AI Token League-0.4.0-mac-arm64-installer.dmg",
-        url: "https://example.com/releases/releases/0.4.0/AI%20Token%20League-0.4.0-mac-arm64-installer.dmg",
+        fileName: `AI Token League-${APP_VERSION}-mac-arm64-installer.dmg`,
+        url: `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-mac-arm64-installer.dmg`,
         sha256: expectedSha,
         size: 200,
         ext: "dmg"
@@ -620,12 +688,12 @@ async function testVersionCompatibilityAndManifest() {
   });
   assert.ok(manifestWithInstaller.platforms["darwin-arm64"].installer);
   assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.ext, "dmg");
-  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.url, "https://example.com/releases/releases/0.4.0/AI%20Token%20League-0.4.0-mac-arm64-installer.dmg");
+  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.url, `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-mac-arm64-installer.dmg`);
   assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.size, 200);
 
   // selectUpdateArtifact returns zip, not installer
   const zipArtifact = selectUpdateArtifact(manifestWithInstaller, "darwin-arm64");
-  assert.equal(zipArtifact.url, "https://example.com/releases/releases/0.4.0/AI%20Token%20League-darwin-arm64.zip");
+  assert.equal(zipArtifact.url, `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-darwin-arm64.zip`);
 
   // selectInstallerArtifact returns installer
   const installerArtifact = selectInstallerArtifact(manifestWithInstaller, "darwin-arm64");
@@ -834,6 +902,7 @@ const { identity, items } = await testScan();
 await testProviderEnabledSwitches();
 testBackendUpload(identity, items);
 testDeleteParticipantDataAllowsResync();
+testAdminUsageRowRangeFeedsParticipantDetail();
 testSourceFingerprintDedupeKeepsDistinctDays();
 testIdentityImport();
 testUpdateConfigKeepsIdentity();

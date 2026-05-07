@@ -6,6 +6,57 @@
 
 ---
 
+## [0.5.0] - 2026-05-07
+
+### 新增
+
+- 新增 Admin 路由 HTTP Basic Auth 保护（`/admin.html` 和 `/api/admin/*`），通过 `ADMIN_USERNAME` + `ADMIN_PASSWORD` 环境变量配置。
+- 新增 `MIN_CLIENT_ENFORCE` 最低客户端版本强制升级，启用后阻止过旧版本上传。
+- 新增 Admin 设备面板，展示每个参与者的注册设备。
+- 新增多语言（i18n）支持，覆盖桌面端和 Web UI。
+- 新增 Admin Usage 行级详情语义优化。
+- 新增 Desktop 设置页信息架构重构：Profile、App、Sources、Cloud、About。
+- 新增 Admin 模型价格页缓存读取价格展示。
+- 新增 Missing Price 任务点击联动，可自动填充并聚焦模型价格输入框。
+- 新增 `scripts/bump-version.js` 和 `npm run bump -- <version>`，用于发布版本号集中升级。
+- 新增 `scripts/start-server.sh`，支持 env 选择、smoke、后台运行、log 和 pid 参数。
+
+### 变更
+
+- Desktop Settings > App 只承载语言、显示预估成本、显示原始令牌数和登录时启动。
+- Desktop Settings > Sources 承载本地来源、Cursor token、workdir aliases 和本地来源扫描周期。
+- Desktop Settings > Cloud 承载 API base URL、云端状态、手动同步入口和同步状态。
+- Desktop Settings > About 承载版本状态、更新策略、诊断导出和重置本地数据。
+- 来源扫描周期明确为本地数据源扫描频率；配置云端后，同一周期会在扫描后上传每日汇总。
+- Public Web 头部和下载控件压缩高度，为排行榜表格释放更多首屏空间。
+- Public Web 下载区保留平台选择和下载按钮，删除冗余的“下载客户端”标题文案。
+- Admin 语言切换器移动到 masthead，并在桌面布局右对齐。
+- Desktop 语言切换器移动到 Settings > App，与应用偏好同组。
+- Admin 模型价格列表为 Custom prices 和 OpenRouter cache 展示 input、output 和 cache read 价格。
+- 本版本新增和调整的 Desktop / Web 文案继续统一走 `src/shared/i18n.js`。
+
+### 文档
+
+- 更新 `doc/0.5-baseline.md`，记录完整 0.5.0 产品基线和临时功能入账。
+- 更新 `doc/0.5-development-tasks.md`，记录 Epic 1 到 Epic 10 的任务状态和验收标准。
+- 更新发布版本流程文档，记录 `npm run bump`。
+- 更新本地开发启动说明，记录 `scripts/start-server.sh`。
+
+### 验证覆盖
+
+- Admin Basic Auth 的 401/200 行为和公开路由不受影响。
+- `MIN_CLIENT_ENFORCE` 的强制阻断和默认不阻断行为。
+- Admin devices 路由和面板展示。
+- Public Web、Admin、Desktop 的中英文切换。
+- Admin Usage 行点击绑定当前时间桶的语义。
+- Desktop Settings tab 职责划分和来源扫描周期 tooltip 语义。
+- Model Price 缓存读取价格展示和 Missing Price 填表交互。
+- Public 下载控件和语言切换器位置。
+- 版本 bump 脚本语法和版本真源规则。
+- 本地服务启动脚本语法和参数面。
+
+---
+
 ## [0.4.0] - 2026-05-06
 
 ### 新增

@@ -19,8 +19,8 @@ Before changing behavior, identify the real source of truth in code and docs. Do
 
 AI Token League is a local-first AI coding token usage collector plus public leaderboard for Codex, Claude Code, and Cursor.
 
-Current implemented baseline: `0.4`, released as `0.4.0` on `2026-05-06`.
-Current planning baseline: `0.5`, tracked by `doc/0.5-baseline.md` and `doc/0.5-development-tasks.md`.
+Current implemented baseline: `0.5`, released as `0.5.0` on `2026-05-07`.
+Current planning baseline: `0.6`, tracked by `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`.
 
 Core behavior:
 
@@ -144,6 +144,44 @@ dist-installer/AI Token League-<version>-win-x64-installer.exe
 
 Windows status: initial verification passed and the app is usable, but Windows host coverage is not yet full.
 
+## Release Flow
+
+Version number lives in one place: `package.json` `"version"`. All other references derive from it or are updated by the bump script.
+
+### Step 1: Bump version
+
+```bash
+npm run bump -- <new-version>          # e.g. npm run bump -- 0.6.0
+npm run bump -- <new-version> --date 2026-06-01  # explicit date
+```
+
+This updates: `package.json`, `README.md`, `README.en.md`, `CLAUDE.md`, `AGENTS.md`, `doc/roadmap.md`.
+
+### Step 2: Manual steps (script output lists these)
+
+1. Write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new version.
+2. Create `doc/<version>-baseline.md` from current product state.
+3. Create `doc/<version>-development-tasks.md` with task plan.
+4. Run `npm install --package-lock-only` to sync lock file.
+5. Run `npm test` to verify.
+
+### Step 3: Build and publish
+
+```bash
+npm run release:build     # clean build: zip + installer artifacts
+npm run release:dry-run   # verify manifest without uploading
+npm run release:upload    # upload to OSS (requires credentials)
+```
+
+Or combined: `npm run release:publish` (build + upload).
+
+### Design rules
+
+- `--app-version` is NOT hardcoded in npm scripts; `electron-packager` reads `package.json` version automatically.
+- Tests use `APP_VERSION` constant from `src/shared/version.js`, not hardcoded strings.
+- Installer filenames embed version via `electron-builder.yml` `${version}` template.
+- Documentation filenames in README use the bump script; no manual editing needed.
+
 ## API Surface
 
 Source of truth: `src/backend/server.js`. Read the route definitions there; do not maintain a separate route list in this file.
@@ -233,6 +271,18 @@ Use the smallest verification that covers the touched surface:
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.
 
 Smoke checklist: `doc/smoke-checklist.md`.
+
+## Multilingual (i18n) Rules
+
+All user-facing UI text must support `zh-CN` and `en` via `src/shared/i18n.js`.
+
+- **HTML elements**: use `data-i18n="key"`, `data-i18n-placeholder="key"`, `data-i18n-title="key"`.
+- **Dynamic JS content**: use `t("key")` or `t("key", { param: value })`.
+- **New features**: must add i18n keys for both `zh-CN` and `en` in `src/shared/i18n.js`, and use `t()` / `data-i18n` in all UI code.
+- **No hardcoded user-facing strings**: do not hardcode Chinese or English text in HTML or JS that users see.
+- **Number formatting**: use `src/shared/display.js` `formatTokenCompact()` for locale-aware number display; do not duplicate inline.
+- **Exception**: CLI (`src/collector/cli.js`) is English-only and does not require i18n.
+- **Verification**: new UI features must be tested with both `zh-CN` and `en` language settings.
 
 ## Documentation Rules
 

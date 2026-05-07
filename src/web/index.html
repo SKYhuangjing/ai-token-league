@@ -10,7 +10,7 @@
   <body>
     <main class="shell public-shell">
       <section class="masthead public-masthead">
-        <div>
+        <div class="masthead-copy">
           <p class="eyebrow" data-i18n="web.publicBoard">Public community board</p>
           <h1 data-i18n="app.name">AI Token League</h1>
           <p class="summary" data-i18n="app.tagline">AI coding token usage leaderboard</p>
@@ -21,16 +21,11 @@
             <strong data-i18n="web.totalTokens">Total tokens</strong>
             <small data-i18n="web.modelTotalsContext">Model totals are shown for context.</small>
           </div>
+          <div class="download-panel" id="download-panel">
+            <small id="download-status" data-i18n="web.checkingRelease">Checking...</small>
+            <div class="download-row" id="download-actions"></div>
+          </div>
           <div class="lang-switcher-container" id="lang-switcher-container"></div>
-          <details class="download-panel">
-            <summary>
-              <span data-i18n="web.downloadClient">Download client</span>
-              <small id="download-status" data-i18n="web.checkingRelease">Checking latest release...</small>
-            </summary>
-            <div class="download-actions" id="download-actions">
-              <span class="download-placeholder" data-i18n="web.releaseMetadata">Release metadata loading</span>
-            </div>
-          </details>
         </div>
       </section>
 

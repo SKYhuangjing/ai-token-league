@@ -2,10 +2,14 @@ import { costQualityLabel, dominantComposition, tokenCompositionDetails, tokenCo
 import { addCostToUsageItem, aggregateCost, createPriceMap } from "../shared/pricing.js";
 import { formatTokenCompact, formatTokenRaw, formatUsd } from "../shared/display.js";
 import { dayToUtcDate, localDay, utcDateToDay } from "../shared/date.js";
-import { initI18n, t, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "../shared/i18n.js";
+import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "../shared/i18n.js";
 
 // 初始化多语言
 const currentLang = initI18n();
+
+function localeTokenCompact(value) {
+  return formatTokenCompact(value, getCurrentLang());
+}
 
 const api = window.tokenLeague;
 const $ = (selector) => document.querySelector(selector);
@@ -41,7 +45,7 @@ $("#refresh-health").addEventListener("click", () => run(async () => {
   await saveSettings({ reloadToday: false });
   await loadHealth();
 }));
-$("#sync-now").addEventListener("click", () => run(syncNow));
+document.querySelectorAll("[data-sync-now]").forEach((button) => button.addEventListener("click", () => run(syncNow)));
 $("#wizard-skip").addEventListener("click", (e) => { e.preventDefault(); run(skipWizard); });
 $("#wizard-next-0").addEventListener("click", () => wizardGo(1));
 $("#wizard-back-1").addEventListener("click", () => wizardGo(0));
@@ -93,9 +97,11 @@ $("#settings-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button) return;
   selectSettingsTab(button.dataset.settingsTab);
-  if (button.dataset.settingsTab === "sync") run(loadBackgroundStatus);
-  if (button.dataset.settingsTab === "cloud") run(loadCloudStatus);
-  if (button.dataset.settingsTab === "app") run(loadSystemStatus);
+  if (button.dataset.settingsTab === "cloud") run(async () => {
+    await loadCloudStatus();
+    await loadBackgroundStatus();
+  });
+  if (button.dataset.settingsTab === "about") run(loadSystemStatus);
   if (button.dataset.settingsTab === "sources") run(loadHealth);
 });
 $("#workdir-alias-list").addEventListener("click", (event) => {
@@ -131,12 +137,12 @@ function selectSettingsTab(tab) {
 
 async function saveSettings({ reloadToday = true } = {}) {
   const payload = settingsPayload();
-  setSaveMessage(payload.apiBaseUrl ? "Checking API..." : "Saving settings...", "");
+  setSaveMessage(payload.apiBaseUrl ? t("desktop.renderer.checkingApi") : t("desktop.renderer.savingSettings"), "");
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
   renderConfig(config);
-  setSaveMessage("Settings saved", "ok");
-  $("#sync-state").textContent = "Settings saved";
+  setSaveMessage(t("desktop.sync.settingsSaved"), "ok");
+  $("#sync-state").textContent = t("desktop.sync.settingsSaved");
   if (reloadToday) await loadToday(true);
   await loadBackgroundStatus();
   return config;
@@ -162,7 +168,7 @@ function settingsPayload() {
 
 $("#export").addEventListener("click", async () => run(async () => {
   const result = await api.exportConfig();
-  $("#sync-state").textContent = result.canceled ? "Export canceled" : "Config exported";
+  $("#sync-state").textContent = result.canceled ? t("desktop.renderer.exportCanceled") : t("desktop.renderer.configExported");
 }));
 
 $("#import").addEventListener("click", async () => run(async () => {
@@ -230,22 +236,22 @@ async function renderWizardSources() {
     const detected = item.detected || (item.roots && item.roots.length > 0);
     const enabled = item.providerId === "cursor_dashboard_usage" ? false : detected;
     const summary = item.providerId === "cursor_dashboard_usage"
-      ? (item.roots?.length ? `${item.roots.length} account source${item.roots.length === 1 ? "" : "s"}` : "Requires Cursor token in Settings")
-      : (detected ? `Found · ${item.roots?.length || 0} location${(item.roots?.length || 0) === 1 ? "" : "s"}` : "Not found on this machine");
+      ? (item.roots?.length ? t("desktop.renderer.accountSources", { count: item.roots.length }) : t("desktop.renderer.requiresToken"))
+      : (detected ? (item.roots?.length === 1 ? t("desktop.renderer.foundOne") : t("desktop.renderer.found", { count: item.roots?.length || 0 })) : t("desktop.renderer.notFound"));
     return `<article class="wizard-source-card ${detected ? "detected" : ""}">
       <div>
         <strong>${sourceName(item.providerId)}</strong>
         <small>${summary}</small>
         <p>${sourceDescription(item.providerId)}</p>
       </div>
-      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-wizard-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? "On" : "Off"}</button>
+      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-wizard-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? t("status.on") : t("status.off")}</button>
     </article>`;
   }).join("");
   container.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.getAttribute("aria-pressed") !== "true";
       button.setAttribute("aria-pressed", String(next));
-      button.textContent = next ? "On" : "Off";
+      button.textContent = next ? t("status.on") : t("status.off");
       button.classList.toggle("ok", next);
       button.classList.toggle("miss", !next);
     });
@@ -260,8 +266,8 @@ function renderWizardSummary() {
     if (button.getAttribute("aria-pressed") === "true") enabledSources.push(sourceName(button.dataset.wizardToggleSource));
   });
   $("#wizard-summary-nickname").textContent = nickname;
-  $("#wizard-summary-sources").textContent = enabledSources.length ? enabledSources.join(", ") : "None";
-  $("#wizard-summary-cloud").textContent = apiBaseUrl || "Local only";
+  $("#wizard-summary-sources").textContent = enabledSources.length ? enabledSources.join(", ") : t("desktop.renderer.none");
+  $("#wizard-summary-cloud").textContent = apiBaseUrl || t("desktop.renderer.localOnly");
 }
 
 async function wizardImportProfile() {
@@ -291,7 +297,7 @@ async function skipWizard() {
   renderConfig(latestConfig);
   await loadToday(true);
   await loadBackgroundStatus();
-  $("#sync-state").textContent = "Profile ready";
+  $("#sync-state").textContent = t("desktop.sync.profileReady");
 }
 
 async function finishWizard() {
@@ -316,14 +322,14 @@ async function finishWizard() {
   renderConfig(latestConfig);
   await loadToday(true);
   await loadBackgroundStatus();
-  $("#sync-state").textContent = "Profile ready";
+  $("#sync-state").textContent = t("desktop.sync.profileReady");
 }
 
 async function resetLocalData() {
-  const ok = window.confirm("Reset this desktop profile, cached usage, aliases, local Cursor tokens, sync queue, and settings? Source files in Codex, Claude Code, and Cursor are not deleted.");
+  const ok = window.confirm(t("desktop.renderer.confirmReset"));
   if (!ok) return;
   $("#reset-local-data").disabled = true;
-  $("#sync-state").textContent = "Resetting local data...";
+  $("#sync-state").textContent = t("desktop.renderer.resetting");
   await api.resetLocalData();
 }
 
@@ -337,7 +343,7 @@ async function boot() {
     await loadBackgroundStatus();
     await loadSystemStatus();
   } else {
-    $("#today-summary").textContent = "Open Settings to start tracking.";
+    $("#today-summary").textContent = t("desktop.renderer.openSettings");
     document.querySelector('[data-section="settings"]').click();
   }
 }
@@ -354,11 +360,11 @@ function setScanState(running, force = false) {
   $("#refresh-today").disabled = running;
   $("#refresh-trend").disabled = running;
   $("#today-summary").textContent = running
-    ? `${force ? "Refreshing" : "Scanning"} local usage. First scan can take a while on large histories.`
+    ? t("desktop.renderer.scanningLocal")
     : $("#today-summary").textContent;
-  $("#today-scan-time").textContent = running ? "Refreshing in background..." : `Last scan ${latestScanAt ? formatDateTime(latestScanAt) : "-"}`;
+  $("#today-scan-time").textContent = running ? t("desktop.renderer.refreshingBg") : t("desktop.renderer.lastScan", { time: latestScanAt ? formatDateTime(latestScanAt) : "-" });
   $("#trend-summary").textContent = running
-    ? "Refreshing in background. You can keep using the app."
+    ? t("desktop.renderer.refreshingBg")
     : $("#trend-summary").textContent;
   renderWizard();
 }
@@ -384,8 +390,8 @@ function pollUsageScan() {
       clearInterval(scanPollTimer);
       scanPollTimer = null;
       setScanState(false);
-      $("#today-summary").textContent = `Refresh status failed: ${error.message}`;
-      $("#trend-summary").textContent = `Refresh status failed: ${error.message}`;
+      $("#today-summary").textContent = t("desktop.renderer.refreshStatusFailed", { error: error.message });
+      $("#trend-summary").textContent = t("desktop.renderer.refreshStatusFailed", { error: error.message });
       console.error(error);
     }
   }, 1000);
@@ -395,8 +401,8 @@ function applyUsageScanStatus(status, { force = false } = {}) {
   if (status.snapshot) applyUsageSnapshot(status.snapshot);
   setScanState(Boolean(status.running), status.force ?? force);
   if (status.error) {
-    $("#today-summary").textContent = `Refresh failed: ${status.error}`;
-    $("#trend-summary").textContent = `Refresh failed: ${status.error}`;
+    $("#today-summary").textContent = t("desktop.renderer.refreshFailed", { error: status.error });
+    $("#trend-summary").textContent = t("desktop.renderer.refreshFailed", { error: status.error });
   }
 }
 
@@ -438,20 +444,24 @@ async function loadHealth() {
 }
 
 async function syncNow() {
-  const button = $("#sync-now");
-  button.disabled = true;
+  const buttons = document.querySelectorAll("[data-sync-now]");
+  buttons.forEach((button) => {
+    button.disabled = true;
+  });
   try {
     if (!confirmSyncUpload()) {
-      $("#sync-state").textContent = "Sync canceled";
+      $("#sync-state").textContent = t("desktop.renderer.syncCanceled");
       return;
     }
-    $("#sync-state").textContent = "Syncing...";
+    $("#sync-state").textContent = t("desktop.renderer.syncing");
     const result = await api.syncUsage();
     latestConfig = await api.getConfig();
     renderSyncStatus(latestConfig, result);
     await loadToday();
   } finally {
-    button.disabled = false;
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
   }
 }
 
@@ -459,20 +469,12 @@ function confirmSyncUpload() {
   const config = latestConfig || {};
   const apiBaseUrl = normalizeApiBaseUrl(config.apiBaseUrl || config.apiConnection?.apiBaseUrl || "");
   if (!apiBaseUrl) {
-    window.alert("Configure Cloud Connection before syncing.");
+    window.alert(t("desktop.renderer.configureCloudFirst"));
     return false;
   }
   const rows = allUsage.length || latestUsage.length || 0;
   const scannedAt = latestScanAt ? formatDateTime(latestScanAt) : "-";
-  return window.confirm([
-    "Upload local aggregate usage to the configured API?",
-    "",
-    `Target: ${apiBaseUrl}`,
-    `Rows: ${rows}`,
-    `Last scan: ${scannedAt}`,
-    "",
-    "No prompts, responses, code, or real paths are uploaded."
-  ].join("\n"));
+  return window.confirm(t("desktop.renderer.confirmUpload", { url: apiBaseUrl, rows, scannedAt }));
 }
 
 async function addProviderRoot(providerId) {
@@ -490,20 +492,20 @@ async function addCursorToken() {
   const error = $("#cursor-token-error");
   const raw = input.value.trim();
   if (!raw) {
-    error.textContent = "Cursor token is required";
+    error.textContent = t("desktop.renderer.cursorTokenRequired");
     return;
   }
   let config;
   try {
     config = await api.addCursorToken(raw);
   } catch (err) {
-    error.textContent = err.message || "Cursor token is invalid";
+    error.textContent = err.message || t("desktop.renderer.cursorTokenInvalid");
     return;
   }
   latestConfig = config;
   renderConfig(config);
   closeCursorTokenModal();
-  setSaveMessage("Cursor token added", "ok");
+  setSaveMessage(t("desktop.renderer.cursorTokenAdded"), "ok");
   await loadHealth();
   await loadToday(true);
 }
@@ -521,7 +523,7 @@ function closeCursorTokenModal() {
 
 function renderConfig(config) {
   latestConfig = config;
-  $("#profile-state").textContent = config?.desktopAutoInitialized ? "First run" : config ? "Ready" : "Not configured";
+  $("#profile-state").textContent = config?.desktopAutoInitialized ? t("desktop.wizard.firstRun") : config ? t("desktop.sync.profileReady") : t("desktop.sync.apiNotConfigured");
   if (config?.nickname) $("#nickname").value = config.nickname;
   $("#apiBaseUrl").value = config?.apiBaseUrl ?? "";
   $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
@@ -553,7 +555,7 @@ async function loadSystemStatus() {
 
 async function checkUpdate() {
   $("#check-update").disabled = true;
-  $("#update-message").textContent = "Checking...";
+  $("#update-message").textContent = t("desktop.renderer.checking");
   try {
     latestUpdateState = await api.checkUpdate();
     renderSystemStatus(latestUpdateState);
@@ -569,16 +571,16 @@ async function checkUpdate() {
 async function downloadUpdate() {
   if (!latestUpdateState?.update?.artifact) return;
   $("#download-update").disabled = true;
-  $("#update-message").textContent = "Downloading...";
+  $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
     const result = await api.downloadUpdate({ artifact: latestUpdateState.update.artifact });
     if (result.canInstall) {
       $("#check-update").disabled = true;
-      $("#update-message").textContent = "Downloaded and verified. Installing update and restarting...";
+      $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
       await api.installAndRestartUpdate();
       return;
     }
-    $("#update-message").textContent = result.handoff || "Downloaded and verified";
+    $("#update-message").textContent = result.handoff || t("desktop.renderer.downloadedVerified");
   } finally {
     $("#download-update").disabled = !latestUpdateState?.update?.updateAvailable;
   }
@@ -588,15 +590,15 @@ async function exportDiagnostics() {
   const button = $("#export-diagnostics");
   button.disabled = true;
   $("#diagnostics-message").dataset.tone = "";
-  $("#diagnostics-message").textContent = "Preparing diagnostics...";
+  $("#diagnostics-message").textContent = t("desktop.renderer.preparingDiag");
   try {
     const result = await api.exportDiagnostics();
     if (result.canceled) {
-      $("#diagnostics-message").textContent = "Export canceled";
+      $("#diagnostics-message").textContent = t("desktop.renderer.diagCanceled");
       return;
     }
     $("#diagnostics-message").dataset.tone = "ok";
-    $("#diagnostics-message").textContent = `Exported ${result.logCount || 0} log events, ${result.usageRowCount || 0} usage rows`;
+    $("#diagnostics-message").textContent = t("desktop.renderer.diagExported", { logs: result.logCount || 0, rows: result.usageRowCount || 0 });
     $("#diagnostics-message").title = result.filePath || "";
   } finally {
     button.disabled = false;
@@ -608,12 +610,12 @@ function renderSystemStatus(state = {}) {
   const server = state.server || {};
   const update = state.update || latestUpdateState?.update || null;
   $("#system-client-version").textContent = client.clientAppVersion
-    ? `Client ${client.clientAppVersion} · protocol ${client.clientProtocolVersion} · ${client.clientPlatform}`
-    : "Client -";
+    ? t("desktop.renderer.client", { version: client.clientAppVersion, protocol: client.clientProtocolVersion, platform: client.clientPlatform })
+    : t("desktop.renderer.clientDash");
   $("#system-latest-version").textContent = update?.latestVersion || server.latestClientVersion
-    ? `Latest ${update?.latestVersion || server.latestClientVersion}`
-    : "Latest -";
-  $("#system-update-checked").textContent = state.checkedAt ? `Last check ${formatDateTime(state.checkedAt)}` : "Last check -";
+    ? t("desktop.renderer.latest", { version: update?.latestVersion || server.latestClientVersion })
+    : t("desktop.renderer.latestDash");
+  $("#system-update-checked").textContent = state.checkedAt ? t("desktop.renderer.lastCheck", { time: formatDateTime(state.checkedAt) }) : t("desktop.renderer.lastCheckDash");
 }
 
 function renderCloudStatus(config = latestConfig) {
@@ -621,24 +623,24 @@ function renderCloudStatus(config = latestConfig) {
   const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || connection.apiBaseUrl || "");
   const compatibility = connection.compatibility || {};
   const release = connection.release || {};
-  $("#cloud-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "Cloud not configured";
+  $("#cloud-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : t("desktop.renderer.cloudNotConfigured");
   $("#cloud-target").title = apiBaseUrl || "";
-  $("#cloud-health").textContent = connection.status ? `Health ${connection.status}` : "Health -";
+  $("#cloud-health").textContent = connection.status ? t("desktop.renderer.health", { status: connection.status }) : t("desktop.renderer.healthDash");
   $("#cloud-health").title = connection.message || "";
-  $("#cloud-server-version").textContent = connection.serverVersion ? `Server ${connection.serverVersion}` : "Server -";
+  $("#cloud-server-version").textContent = connection.serverVersion ? t("desktop.renderer.server", { version: connection.serverVersion }) : t("desktop.renderer.serverDash");
   $("#cloud-protocol").textContent = connection.supportedClientProtocol
-    ? `Protocol ${connection.serverProtocolVersion || "-"} · clients ${connection.supportedClientProtocol.min}-${connection.supportedClientProtocol.max}`
-    : "Protocol -";
-  $("#cloud-compatibility").textContent = compatibility.status ? `Compatibility ${compatibility.status}` : "Compatibility -";
-  $("#cloud-latest-version").textContent = connection.latestClientVersion ? `Latest ${connection.latestClientVersion}` : "Latest -";
-  $("#cloud-release-manifest").textContent = release.manifestUrl ? "Release manifest configured" : "Release manifest -";
+    ? t("desktop.renderer.protocol", { version: connection.serverProtocolVersion || "-", min: connection.supportedClientProtocol.min, max: connection.supportedClientProtocol.max })
+    : t("desktop.renderer.protocolDash");
+  $("#cloud-compatibility").textContent = compatibility.status ? t("desktop.renderer.compatibility", { status: compatibility.status }) : t("desktop.renderer.compatibilityDash");
+  $("#cloud-latest-version").textContent = connection.latestClientVersion ? t("desktop.renderer.latest", { version: connection.latestClientVersion }) : t("desktop.renderer.latestDash");
+  $("#cloud-release-manifest").textContent = release.manifestUrl ? t("desktop.renderer.releaseManifest") : t("desktop.renderer.releaseManifestDash");
   $("#cloud-release-manifest").title = release.manifestUrl || "";
 }
 
 function updateMessage(state = {}) {
-  if (state.code === "cloud_not_configured") return "Configure Cloud Connection before checking updates";
-  if (state.code === "release_not_configured") return "Release manifest is not configured on the app server";
-  return state.message || "Update check finished";
+  if (state.code === "cloud_not_configured") return t("desktop.renderer.configureCloudUpdate");
+  if (state.code === "release_not_configured") return t("desktop.renderer.releaseNotConfigured");
+  return state.message || t("desktop.renderer.updateCheckFinished");
 }
 
 
@@ -648,13 +650,14 @@ function renderCursorTokenSummary(cursorConfig = {}) {
   const configuredAccounts = [...tokens, ...legacy].map((item) => item.accountName || "Cursor").filter(Boolean);
   const detectedAccounts = cursorDetectedAccounts().filter((account) => !configuredAccounts.includes(account));
   if (configuredAccounts.length) {
-    const detectedText = detectedAccounts.length ? `; local account detected · ${detectedAccounts.join(", ")}` : "";
-    $("#cursor-token-summary").textContent = `${configuredAccounts.length} Cursor token${configuredAccounts.length === 1 ? "" : "s"} configured · ${configuredAccounts.join(", ")}${detectedText}`;
+    const detectedText = detectedAccounts.length ? `${t("desktop.renderer.localAccountDetected")} · ${detectedAccounts.join(", ")}` : "";
+    const tokenLabel = configuredAccounts.length === 1 ? t("desktop.renderer.cursorTokensConfiguredOne") : t("desktop.renderer.cursorTokensConfigured", { count: configuredAccounts.length });
+    $("#cursor-token-summary").textContent = `${tokenLabel} · ${configuredAccounts.join(", ")}${detectedText}`;
     return;
   }
   $("#cursor-token-summary").textContent = detectedAccounts.length
-    ? `${detectedAccounts.length} local Cursor account${detectedAccounts.length === 1 ? "" : "s"} detected · ${detectedAccounts.join(", ")}`
-    : "No Cursor token configured and no local Cursor account detected.";
+    ? `${detectedAccounts.length === 1 ? t("desktop.renderer.localCursorAccountsOne") : t("desktop.renderer.localCursorAccounts", { count: detectedAccounts.length })} · ${detectedAccounts.join(", ")}`
+    : t("desktop.renderer.noCursorToken");
 }
 
 function cursorDetectedAccounts() {
@@ -677,42 +680,42 @@ function renderSyncStatus(config, result = null) {
   const state = statusMatchesApi ? status.status || config?.lastSyncStatus || "" : connection.status || "";
   const error = statusMatchesApi ? status.error || config?.lastSyncError || result?.error || "" : connection.message || "";
   const stateLabel = syncStateLabel(state, { scanned, accepted, rejected, queuePending, error });
-  const apiCheckedAt = connection.checkedAt ? `API checked ${formatDateTime(connection.checkedAt)}` : "";
+  const apiCheckedAt = connection.checkedAt ? t("desktop.renderer.apiChecked", { time: formatDateTime(connection.checkedAt) }) : "";
   $("#sync-state").textContent = stateLabel;
-  $("#sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "API not configured";
+  $("#sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : t("desktop.renderer.apiNotConfigured");
   $("#sync-target").title = apiBaseUrl || "";
-  $("#sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : apiCheckedAt || "Last sync -";
-  $("#settings-sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : "API not configured";
+  $("#sync-last").textContent = lastFinishedAt ? t("desktop.renderer.lastSync", { time: formatDateTime(lastFinishedAt) }) : apiCheckedAt || t("desktop.renderer.lastSyncDash");
+  $("#settings-sync-target").textContent = apiBaseUrl ? `API ${apiBaseUrl}` : t("desktop.renderer.apiNotConfigured");
   $("#settings-sync-target").title = apiBaseUrl || "";
-  $("#settings-sync-last").textContent = lastFinishedAt ? `Last sync ${formatDateTime(lastFinishedAt)}` : apiCheckedAt || "Last sync -";
+  $("#settings-sync-last").textContent = lastFinishedAt ? t("desktop.renderer.lastSync", { time: formatDateTime(lastFinishedAt) }) : apiCheckedAt || t("desktop.renderer.lastSyncDash");
   $("#settings-sync-result").textContent = stateLabel;
   $("#settings-sync-result").title = error || stateLabel;
 }
 
 function syncStateLabel(state, { scanned = 0, accepted = 0, rejected = 0, queuePending = 0, error = "" } = {}) {
   if (state === "success") {
-    const rejectedText = rejected ? `, ${rejected} rejected` : "";
-    const queueText = queuePending ? `, ${queuePending} queued` : "";
-    return `Synced ${scanned} rows (${accepted} accepted${rejectedText}${queueText})`;
+    const rejectedText = rejected ? t("desktop.renderer.rejected", { count: rejected }) : "";
+    const queueText = queuePending ? t("desktop.renderer.queued", { count: queuePending }) : "";
+    return t("desktop.renderer.syncedRows", { scanned, accepted, rejected: rejectedText, queued: queueText });
   }
   if (state === "queued") {
-    if (error.includes("unsupported_client")) return `Update required; ${queuePending || scanned} rows kept in queue`;
-    if (error.includes("unsupported_server")) return `Server is not compatible; ${queuePending || scanned} rows kept in queue`;
-    return `Queued ${scanned} rows${queuePending ? ` (${queuePending} pending)` : ""}`;
+    if (error.includes("unsupported_client")) return t("desktop.renderer.updateRequiredQueued", { count: queuePending || scanned });
+    if (error.includes("unsupported_server")) return t("desktop.renderer.serverIncompatible", { count: queuePending || scanned });
+    return t("desktop.renderer.queuedRows", { scanned, pending: queuePending ? t("desktop.renderer.pending", { count: queuePending }) : "" });
   }
   if (state === "failed") {
-    return error ? `Sync failed: ${error}` : "Sync failed";
+    return error ? t("desktop.renderer.syncFailed", { error }) : t("desktop.renderer.syncFailedSimple");
   }
   if (state === "reachable") {
-    return "API reachable; not synced";
+    return t("desktop.renderer.apiReachable");
   }
   if (state === "not_configured") {
-    return "API not configured";
+    return t("desktop.renderer.apiNotConfigured");
   }
   if (state === "unreachable") {
-    return error ? `API unreachable: ${error}` : "API unreachable";
+    return error ? t("desktop.renderer.apiUnreachable", { error }) : t("desktop.renderer.apiUnreachableSimple");
   }
-  return "Not synced";
+  return t("desktop.renderer.notSynced");
 }
 
 function renderToday() {
@@ -724,12 +727,12 @@ function renderToday() {
 
   $("#today-total").textContent = formatToken(total);
   $("#today-total").title = formatTokenRaw(total);
-  $("#today-summary").textContent = latestUsage.length ? `${latestUsage.length} daily rows from local sources` : "No local usage found for today.";
-  $("#today-scan-time").textContent = `Last scan ${latestScanAt ? formatDateTime(latestScanAt) : "-"}`;
+  $("#today-summary").textContent = latestUsage.length ? `${latestUsage.length} daily rows from local sources` : t("desktop.renderer.noLocalUsage");
+  $("#today-scan-time").textContent = t("desktop.renderer.lastScan", { time: latestScanAt ? formatDateTime(latestScanAt) : "-" });
   $("#workdir-count").textContent = String(workdirs.length);
   $("#model-count").textContent = String(models.length);
   $("#today-dominant").textContent = humanDominant(dominantComposition(composition));
-  $("#today-composition-summary").textContent = tokenCompositionSummary(composition) || "No composition";
+  $("#today-composition-summary").textContent = tokenCompositionSummary(composition) || t("desktop.renderer.noComposition");
   $("#today-composition").innerHTML = renderCompositionTiles(composition);
   $("#today-cost-card").hidden = !latestConfig?.showEstimatedCost;
   $("#today-cost").textContent = renderCostValue(cost);
@@ -739,10 +742,10 @@ function renderToday() {
 
   $("#workdir-list").innerHTML = workdirs.length
     ? renderBars(workdirs, { showCost: latestConfig?.showEstimatedCost })
-    : `<article class="empty-state">No workdir usage today.</article>`;
+    : `<article class="empty-state">${t("desktop.renderer.noWorkdirUsage")}</article>`;
   $("#model-list").innerHTML = models.length
     ? renderBars(models, { showCost: latestConfig?.showEstimatedCost })
-    : `<article class="empty-state">No model usage today.</article>`;
+    : `<article class="empty-state">${t("desktop.renderer.noModelUsage")}</article>`;
 }
 
 function renderTrend() {
@@ -756,7 +759,7 @@ function renderTrend() {
   $("#trend-summary").textContent = `${rows.length} ${trendViewMeta().bucketLabel}${rows.length === 1 ? "" : "s"} · ${trendViewMeta().summary}.`;
   $("#trend-chart-panel").innerHTML = rows.length
     ? renderTrendDashboard(rows)
-    : `<article class="empty-state">No local usage found.</article>`;
+    : `<article class="empty-state">${t("desktop.renderer.noLocalUsageFound")}</article>`;
   document.querySelector("#trend-cost-header").hidden = !latestConfig?.showEstimatedCost;
   $("#trend-rows").innerHTML = rows.length
     ? rows
@@ -769,7 +772,7 @@ function renderTrend() {
           ${latestConfig?.showEstimatedCost ? `<td class="numeric" title="${escapeHtml(costTitle(row))}">${renderCost(row)}</td>` : ""}
         </tr>`)
         .join("")
-    : `<tr><td colspan="${latestConfig?.showEstimatedCost ? 6 : 5}" class="empty-cell">No local usage found.</td></tr>`;
+    : `<tr><td colspan="${latestConfig?.showEstimatedCost ? 6 : 5}" class="empty-cell">${t("desktop.renderer.noLocalUsageFound")}</td></tr>`;
   $("#trend-selection-panel").hidden = trendMode === "table";
   $("#trend-selection-panel").innerHTML = trendMode === "chart" && rows.length && selectedTrendBucketKey
     ? renderTrendSelection(rows.find((row) => trendBucketKey(row) === selectedTrendBucketKey))
@@ -796,13 +799,13 @@ function renderAliases() {
         .map((item) => `<article class="alias-row">
           <div>
             <strong>${escapeHtml(item.name)}</strong>
-            <small title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)} tokens</small>
+            <small title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)} ${t("unit.tokens")}</small>
           </div>
-          <input data-alias-input="${escapeHtml(item.workdirHash)}" value="${escapeHtml(latestConfig?.workdirAliases?.[item.workdirHash] || "")}" placeholder="Alias" />
-          <button data-save-alias="${escapeHtml(item.workdirHash)}">Save</button>
+          <input data-alias-input="${escapeHtml(item.workdirHash)}" value="${escapeHtml(latestConfig?.workdirAliases?.[item.workdirHash] || "")}" placeholder="${escapeHtml(t("desktop.workdir.aliasPlaceholder"))}" />
+          <button data-save-alias="${escapeHtml(item.workdirHash)}">${t("desktop.workdir.saveAlias")}</button>
         </article>`)
         .join("")
-    : `<article class="empty-state">No workdirs found in local usage.</article>`;
+    : `<article class="empty-state">${t("desktop.renderer.noWorkdirs")}</article>`;
 }
 
 function renderHealth() {
@@ -816,7 +819,7 @@ function renderHealth() {
         <p>${sourceDescription(item.providerId)}</p>
         ${renderRoots(item.roots)}
       </div>
-      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? "On" : "Off"}</button>
+      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? t("status.on") : t("status.off")}</button>
     </article>`;
     })
     .join("");
@@ -825,7 +828,7 @@ function renderHealth() {
 
 async function toggleSource(providerId) {
   const current = latestConfig || await api.getConfig();
-  if (!current) throw new Error("Open Settings first");
+  if (!current) throw new Error(t("desktop.renderer.openSettingsFirst"));
   const nextEnabled = !sourceEnabledForConfig(current, providerId);
   const previousConfig = current;
   const previousHealth = latestHealth;
@@ -833,11 +836,11 @@ async function toggleSource(providerId) {
   latestHealth = latestHealth.map((item) => item.providerId === providerId ? { ...item, enabled: nextEnabled } : item);
   renderConfig(latestConfig);
   renderHealth();
-  setSaveMessage(`${sourceName(providerId)} ${nextEnabled ? "enabling" : "disabling"}...`, "");
+  setSaveMessage(`${sourceName(providerId)} ${nextEnabled ? t("desktop.renderer.enabling") : t("desktop.renderer.disabling")}`, "");
   try {
     latestConfig = await api.updateConfig(sourceTogglePayload(providerId, nextEnabled, current));
     renderConfig(latestConfig);
-    setSaveMessage(`${sourceName(providerId)} ${nextEnabled ? "enabled" : "disabled"}; refresh usage to update totals`, "ok");
+    setSaveMessage(`${sourceName(providerId)} ${nextEnabled ? t("desktop.renderer.enabled") : t("desktop.renderer.disabled")}`, "ok");
     await loadHealth();
   } catch (error) {
     latestConfig = previousConfig;
@@ -901,8 +904,8 @@ function sourceSummary(item) {
 }
 
 function sourceDescription(providerId) {
-  if (providerId === "cursor_dashboard_usage") return "Uses Cursor dashboard usage events. Project paths are not available from the Cursor API.";
-  return "Scans local usage files from configured and detected locations.";
+  if (providerId === "cursor_dashboard_usage") return t("desktop.sources.cursorDesc");
+  return t("desktop.sources.localDesc");
 }
 
 async function loadBackgroundStatus() {
@@ -913,12 +916,12 @@ async function loadBackgroundStatus() {
     renderSyncStatus(config);
   }
   const parts = [];
-  parts.push(status.enabled ? "Background refresh on" : "Background refresh off");
+  parts.push(status.enabled ? t("desktop.renderer.bgRefreshOn") : t("desktop.renderer.bgRefreshOff"));
   if (status.lastResult) parts.push(status.lastResult);
-  if (status.lastMode === "sync") parts.push("auto upload enabled");
-  if (status.lastMode === "scan") parts.push("local only");
-  if (status.nextRunAt) parts.push(`next ${formatTime(status.nextRunAt)}`);
-  if (status.lastError) parts.push(`error: ${status.lastError}`);
+  if (status.lastMode === "sync") parts.push(t("desktop.renderer.autoUpload"));
+  if (status.lastMode === "scan") parts.push(t("desktop.renderer.localOnlyMode"));
+  if (status.nextRunAt) parts.push(t("desktop.renderer.next", { time: formatTime(status.nextRunAt) }));
+  if (status.lastError) parts.push(t("desktop.renderer.error", { error: status.lastError }));
   $("#background-state").textContent = parts.join(" · ");
   renderSilentUpdateStatus(status.updateCheck, config);
 }
@@ -926,16 +929,16 @@ async function loadBackgroundStatus() {
 function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   const mode = config?.silentUpdateMode || "notify";
   const labels = {
-    notify: "Notify only",
-    auto_download: "Auto-download",
-    auto_apply_on_idle: "Auto-apply when idle"
+    notify: t("desktop.renderer.notifyOnly"),
+    auto_download: t("desktop.renderer.autoDownload"),
+    auto_apply_on_idle: t("desktop.renderer.autoApplyIdle")
   };
-  const parts = [labels[mode] || "Notify only"];
+  const parts = [labels[mode] || t("desktop.renderer.notifyOnly")];
   if (updateCheck?.status) parts.push(updateCheck.status.replaceAll("_", " "));
-  if (updateCheck?.readyPackage) parts.push(`ready ${updateCheck.readyPackage.latestVersion || updateCheck.readyPackage.fileName}`);
-  if (updateCheck?.nextCheckAt) parts.push(`next ${formatTime(updateCheck.nextCheckAt)}`);
-  if (updateCheck?.lastError) parts.push(`error: ${updateCheck.lastError}`);
-  $("#system-silent-update").textContent = `Silent update ${parts.join(" · ")}`;
+  if (updateCheck?.readyPackage) parts.push(t("desktop.renderer.ready", { version: updateCheck.readyPackage.latestVersion || updateCheck.readyPackage.fileName }));
+  if (updateCheck?.nextCheckAt) parts.push(t("desktop.renderer.next", { time: formatTime(updateCheck.nextCheckAt) }));
+  if (updateCheck?.lastError) parts.push(t("desktop.renderer.error", { error: updateCheck.lastError }));
+  $("#system-silent-update").textContent = t("desktop.renderer.silentUpdate", { parts: parts.join(" · ") });
 }
 
 function renderRoots(roots = []) {
@@ -1087,11 +1090,11 @@ function renderTrendSelection(row) {
     </div>
     <div class="detail-grid">
       <section>
-        <h3>Top models</h3>
+        <h3>${t("desktop.renderer.topModels")}</h3>
         <div class="breakdown">${renderCompactBreakdown(row.modelBreakdown)}</div>
       </section>
       <section>
-        <h3>Top workdirs</h3>
+        <h3>${t("desktop.renderer.topWorkdirs")}</h3>
         <div class="breakdown">${renderCompactBreakdown(row.workdirBreakdown)}</div>
       </section>
     </div>
@@ -1141,8 +1144,8 @@ function renderTrendModelDetails(row) {
   if (!details.length) return "";
   return `<section class="trend-model-details">
     <div class="section-title">
-      <h3>Model detail</h3>
-      <p>Grouped by workdir and model for this period.</p>
+      <h3>${t("desktop.renderer.modelDetail")}</h3>
+      <p>${t("desktop.renderer.groupedBy")}</p>
     </div>
     <div class="table-wrap">
       <table class="trend-table model-detail-table">
@@ -1238,14 +1241,14 @@ function renderTrendDashboard(rows) {
   const recent = rows.slice(0, 5);
   return `<div class="trend-dashboard">
     <div class="trend-summary-grid">
-      ${renderTrendMetric("Latest", formatToken(latest.totalTokens), formatTrendPeriod(latest), metricTitle(latest))}
-      ${renderTrendMetric("Peak", formatToken(peak.totalTokens), formatTrendPeriod(peak), metricTitle(peak))}
-      ${renderTrendMetric("View total", formatToken(total), `${rows.length} ${trendViewMeta().bucketLabel}${rows.length === 1 ? "" : "s"}`, formatTokenRaw(total))}
-      ${latestConfig?.showEstimatedCost ? renderTrendMetric("Cost", renderCost(cost), pricingSource, costTitle(cost)) : renderTrendMetric("Dominant", humanDominant(dominantComposition(latest)), tokenCompositionSummary(latest), metricTitle(latest))}
+      ${renderTrendMetric(t("desktop.renderer.latestLabel"), localeTokenCompact(latest.totalTokens), formatTrendPeriod(latest), metricTitle(latest))}
+      ${renderTrendMetric(t("desktop.renderer.peak"), localeTokenCompact(peak.totalTokens), formatTrendPeriod(peak), metricTitle(peak))}
+      ${renderTrendMetric(t("desktop.renderer.viewTotal"), localeTokenCompact(total), `${rows.length} ${trendViewMeta().bucketLabel}${rows.length === 1 ? "" : "s"}`, formatTokenRaw(total))}
+      ${latestConfig?.showEstimatedCost ? renderTrendMetric(t("desktop.renderer.cost"), renderCost(cost), pricingSource, costTitle(cost)) : renderTrendMetric(t("desktop.renderer.dominant"), humanDominant(dominantComposition(latest)), tokenCompositionSummary(latest), metricTitle(latest))}
     </div>
     ${renderTrendTimeline(chronological, latest, peak)}
     <section class="recent-contribution">
-      <h3>Recent contribution</h3>
+      <h3>${t("desktop.renderer.recentContribution")}</h3>
       <div class="recent-list">
         ${recent
           .map((row) => `<article>
@@ -1315,7 +1318,7 @@ function renderTrendTimeline(rows, latest, peak) {
   </div>
   <div class="timeline-axis">
     <span>${formatTrendPeriod(rows[0])}</span>
-    <strong>Peak ${formatTrendPeriod(peak)}</strong>
+    <strong>${t("desktop.renderer.peak")} ${formatTrendPeriod(peak)}</strong>
     <span>${formatTrendPeriod(rows.at(-1))}</span>
   </div>`;
 }
@@ -1331,7 +1334,7 @@ async function run(fn) {
   try {
     await fn();
   } catch (error) {
-    $("#sync-state").textContent = "Action failed";
+    $("#sync-state").textContent = t("desktop.renderer.actionFailed");
     setSaveMessage(error.message, "error");
     console.error(error);
   }
@@ -1417,7 +1420,7 @@ function sortedBreakdown(obj) {
 }
 
 function formatToken(value) {
-  return latestConfig?.showRawTokens ? formatNumber(value) : formatTokenCompact(value);
+  return latestConfig?.showRawTokens ? formatNumber(value) : localeTokenCompact(value);
 }
 
 function metricTitle(row) {
@@ -1446,12 +1449,12 @@ function formatTrendPeriod(row) {
 
 function trendViewMeta() {
   if (trendView === "weekly") {
-    return { grain: "week", heading: t("desktop.trend.weeklyReview"), bucketLabel: "week bucket", summary: "last 12 weeks" };
+    return { grain: "week", heading: t("desktop.trend.weeklyReview"), bucketLabel: t("desktop.renderer.weekBucket"), summary: t("desktop.renderer.last12Weeks") };
   }
   if (trendView === "monthly") {
-    return { grain: "month", heading: t("desktop.trend.monthlyReview"), bucketLabel: "month bucket", summary: "last 12 months" };
+    return { grain: "month", heading: t("desktop.trend.monthlyReview"), bucketLabel: t("desktop.renderer.monthBucket"), summary: t("desktop.renderer.last12Months") };
   }
-  return { grain: "day", heading: t("desktop.trend.dailyReview"), bucketLabel: "day bucket", summary: "last 30 days" };
+  return { grain: "day", heading: t("desktop.trend.dailyReview"), bucketLabel: t("desktop.renderer.dayBucket"), summary: t("desktop.renderer.last30Days") };
 }
 
 function daysForTrendView(view) {
@@ -1467,17 +1470,6 @@ function trailingDays(count) {
     day.setUTCDate(today.getUTCDate() - count + index + 1);
     return toDay(day);
   });
-}
-
-function daysForMonth(offset) {
-  const today = utcToday();
-  const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + offset, 1));
-  const end = offset === 0 ? today : new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0));
-  const days = [];
-  for (const day = new Date(start); day <= end; day.setUTCDate(day.getUTCDate() + 1)) {
-    days.push(toDay(day));
-  }
-  return days;
 }
 
 function daysForLastWeeks(count) {

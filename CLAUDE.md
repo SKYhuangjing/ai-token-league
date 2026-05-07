@@ -9,8 +9,8 @@ Read `AGENTS.md` before starting any work. It contains all project context: prod
 ## Quick Reference
 
 - **Project**: AI Token League — local-first AI coding token usage collector + public leaderboard
-- **Current baseline**: `0.4` (released 2026-05-06)
-- **Next planning**: `0.5` tracked in `doc/0.5-baseline.md` and `doc/0.5-development-tasks.md`
+- **Current baseline**: `0.5` (released 2026-05-07)
+- **Next planning**: `0.6` tracked in `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`
 - **Default mode**: Engineering — implement, verify, deliver end to end
 
 ## Key Commands

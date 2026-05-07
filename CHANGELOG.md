@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.0] - 2026-05-07
+
+### Added
+
+- Added HTTP Basic Auth protection for admin routes (`/admin.html` and `/api/admin/*`), configured via `ADMIN_USERNAME` + `ADMIN_PASSWORD` environment variables.
+- Added `MIN_CLIENT_ENFORCE` to block outdated clients from uploading when enabled.
+- Added admin devices panel showing registered devices per participant.
+- Added multi-language (i18n) support for desktop and web UI.
+- Added admin usage row detail semantic optimization.
+- Added a reworked desktop Settings information architecture: Profile, App, Sources, Cloud, and About.
+- Added cache read price visibility to the admin model pricing UI.
+- Added Missing Price task click-through that fills and focuses the model price input.
+- Added `scripts/bump-version.js` and `npm run bump -- <version>` for coordinated release version updates.
+- Added `scripts/start-server.sh` for local server startup with env selection, smoke mode, detached mode, log, and pid options.
+
+### Changed
+
+- Desktop Settings > App now owns language, estimated cost display, raw token display, and launch-at-login preferences only.
+- Desktop Settings > Sources now owns local sources, Cursor token configuration, workdir aliases, and the local source scan cadence.
+- Desktop Settings > Cloud now owns API base URL, cloud status, manual sync, and sync status.
+- Desktop Settings > About now owns version status, update policy, diagnostics export, and local data reset.
+- Source scan cadence now explicitly means local data source scanning; when cloud is configured, the same cadence also uploads daily aggregates after scanning.
+- Public Web masthead and download controls were compressed to free more first-screen space for the leaderboard table.
+- Public Web download controls now keep platform selection and download action while removing the redundant "Download client" title copy.
+- Admin language switcher was moved into the masthead and aligned to the right on desktop layouts.
+- Desktop language switcher was moved into Settings > App with the other application preferences.
+- Admin model price lists now show input, output, and cache read prices for custom prices and OpenRouter cache entries.
+- Desktop and Web UI text added in this release continues to use `src/shared/i18n.js`.
+
+### Documentation
+
+- Updated `doc/0.5-baseline.md` with the complete 0.5.0 product baseline and temporary/opportunistic change ledger.
+- Updated `doc/0.5-development-tasks.md` with Epic 1 through Epic 10 task status and verification criteria.
+- Updated release/version workflow documentation for `npm run bump`.
+- Updated local development startup guidance for `scripts/start-server.sh`.
+
+### Verification Coverage Added
+
+- Admin Basic Auth 401/200 behavior and public route non-regression.
+- `MIN_CLIENT_ENFORCE` compatibility blocking and default non-blocking behavior.
+- Admin devices route and panel rendering.
+- Public Web, Admin, and Desktop i18n switching.
+- Admin Usage row-click date bucket semantics.
+- Desktop Settings tab ownership and source scan cadence tooltip semantics.
+- Model Price cache read display and Missing Price form fill interaction.
+- Public download controls and language switcher positioning.
+- Version bump script syntax and version-source rules.
+- Local server startup script syntax and option surface.
+
+---
+
 ## [0.4.0] - 2026-05-06
 
 ### Added

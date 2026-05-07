@@ -1,4 +1,14 @@
-import { costQualityLabel, tokenCompositionDetails, tokenCompositionSummary } from "/shared/composition.js";
+import { tokenCompositionDetails } from "/shared/composition.js";
+import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { formatTokenCompact } from "/shared/display.js";
+
+initI18n();
+const langContainer = document.querySelector("#lang-switcher-container");
+if (langContainer) {
+  langContainer.innerHTML = createLangSwitcher();
+  bindLangSwitcher("lang-switcher", () => window.location.reload());
+}
+updatePageTranslations();
 
 const state = {
   grainMode: "auto",
@@ -33,7 +43,7 @@ async function fetchAdmin(url, options) {
 }
 
 function showAuthRequired() {
-  const message = "Admin access requires login. Refresh the page and enter your credentials when the browser prompts you.";
+  const message = t("admin.authRequired");
   statusEl.textContent = message;
   pricingStatus.textContent = message;
   tbody.innerHTML = `<tr><td class="empty" colspan="7">${message}</td></tr>`;
@@ -112,7 +122,7 @@ detailBackdrop.addEventListener("click", closeDetail);
 
 document.querySelector("#pricing-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  pricingStatus.textContent = "Saving...";
+  pricingStatus.textContent = t("admin.saving");
   const body = {
     model: document.querySelector("#price-model").value,
     inputCostPerMTok: document.querySelector("#price-input").value,
@@ -136,7 +146,7 @@ document.querySelector("#refresh-openrouter").addEventListener("click", () => re
 document.querySelector("#refresh-openrouter-recalculate").addEventListener("click", () => refreshOpenRouter(true));
 
 async function refreshOpenRouter(recalculate) {
-  pricingStatus.textContent = recalculate ? "Refreshing and recalculating..." : "Refreshing OpenRouter...";
+  pricingStatus.textContent = recalculate ? t("admin.refreshingRecalc") : t("admin.refreshing");
   const response = await fetchAdmin(`/api/admin/model-prices/refresh-openrouter?recalculate=${recalculate ? "1" : "0"}`, { method: "POST" });
   if (!response.ok) throw new Error((await response.json()).error || "failed to refresh OpenRouter prices");
   await loadPricing();
@@ -146,12 +156,12 @@ async function refreshOpenRouter(recalculate) {
 async function loadUsage() {
   updateAutoGrain();
   syncRangeInputs();
-  statusEl.textContent = "Loading...";
+  statusEl.textContent = t("admin.loading");
   const response = await fetchAdmin(`/api/admin/usage?${queryString()}`);
   const data = await response.json();
   renderParticipantOptions(data.participants || []);
   render(data.items || []);
-  statusEl.textContent = `${data.items.length} aggregate row${data.items.length === 1 ? "" : "s"} · ${data.from || "-"} to ${data.to || "-"}`;
+  statusEl.textContent = t("admin.usage.rows", { count: data.items.length, plural: data.items.length === 1 ? "" : "s", from: data.from || "-", to: data.to || "-" });
   await loadQuality();
 }
 
@@ -164,9 +174,9 @@ async function loadDevices() {
 function renderDevices(devices) {
   const statusEl = document.querySelector("#devices-status");
   const tbody = document.querySelector("#devices-tbody");
-  statusEl.textContent = `${devices.length} device${devices.length === 1 ? "" : "s"}`;
+  statusEl.textContent = devices.length === 1 ? t("admin.devices.countOne") : t("admin.devices.count", { count: devices.length });
   if (!devices.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="6">No devices registered.</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="6">${t("admin.devices.empty")}</td></tr>`;
     return;
   }
   tbody.innerHTML = devices.map((item) => `<tr>
@@ -195,21 +205,27 @@ function renderPricing(data) {
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
   const missingTotal = missing.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
-  pricingStatus.textContent = `${missing.length} missing model${missing.length === 1 ? "" : "s"} · ${aliases.length} alias${aliases.length === 1 ? "" : "es"} · ${custom.length} custom price${custom.length === 1 ? "" : "s"} · ${openrouter.length} OpenRouter price${openrouter.length === 1 ? "" : "s"}`;
+  pricingStatus.textContent = t("admin.pricing.missingModels", { missing: missing.length, p1: missing.length === 1 ? "" : "s", aliases: aliases.length, p2: aliases.length === 1 ? "" : "es", custom: custom.length, p3: custom.length === 1 ? "" : "s", openrouter: openrouter.length, p4: openrouter.length === 1 ? "" : "s" });
   document.querySelector("#remote-pricing-status").innerHTML = renderRemotePricingStatus(data.remote || {});
   document.querySelector("#missing-prices").innerHTML = missing.length
     ? missing
-        .map((item, index) => `<article class="price-suggestion price-task price-alias-task" title="${escapeHtml(renderProviderTitle(item.providers))}">
+        .map((item, index) => `<article class="price-suggestion price-task price-alias-task" data-fill-price-model="${escapeHtml(item.model)}" title="${escapeHtml(renderProviderTitle(item.providers))}">
           <span class="task-rank">#${index + 1}</span>
           <strong>${escapeHtml(item.model)}</strong>
           <span>${formatToken(item.totalTokens)} · ${formatPercent(ratio(item.totalTokens, missingTotal))}</span>
-          <small>${escapeHtml(renderProviderTitle(item.providers) || "No source breakdown")}</small>
-          <input data-alias-target="${escapeHtml(item.model)}" list="price-model-targets" placeholder="Map to existing priced model" autocomplete="off" />
-          <button type="button" data-map-price-alias="${escapeHtml(item.model)}" ${priceTargets.length ? "" : "disabled"}>Map</button>
+          <small>${escapeHtml(renderProviderTitle(item.providers) || t("admin.pricing.noSourceBreakdown"))}</small>
+          <input data-alias-target="${escapeHtml(item.model)}" list="price-model-targets" data-i18n-placeholder="admin.pricing.mapToExisting" placeholder="${escapeHtml(t("admin.pricing.mapToExisting"))}" autocomplete="off" />
+          <button type="button" data-map-price-alias="${escapeHtml(item.model)}" ${priceTargets.length ? "" : "disabled"}>${t("admin.pricing.map")}</button>
         </article>`)
         .join("")
         + `<datalist id="price-model-targets">${priceTargets.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("")}</datalist>`
-    : `<article class="empty-state">No missing prices in this month.</article>`;
+    : `<article class="empty-state">${t("admin.pricing.noMissing")}</article>`;
+  document.querySelectorAll("[data-fill-price-model]").forEach((card) => {
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("input, button, select, textarea, a")) return;
+      fillPriceModel(card.dataset.fillPriceModel);
+    });
+  });
   document.querySelectorAll("[data-map-price-alias]").forEach((button) => {
     button.addEventListener("click", () => {
       const model = button.dataset.mapPriceAlias;
@@ -224,32 +240,32 @@ function renderPricing(data) {
     ? custom
         .map((item) => `<article class="price-row">
           <strong>${escapeHtml(item.model)}</strong>
-          <span>in ${formatUsdPerMillion(item.inputCostPerMTok)} · out ${formatUsdPerMillion(item.outputCostPerMTok)}</span>
-          <button type="button" data-delete-price="${escapeHtml(item.model)}">Delete</button>
+          <span>${t("admin.pricing.priceLine", { input: formatUsdPerMillion(item.inputCostPerMTok), output: formatUsdPerMillion(item.outputCostPerMTok), cacheRead: formatUsdPerMillion(item.cacheReadCostPerMTok) })}</span>
+          <button type="button" data-delete-price="${escapeHtml(item.model)}">${t("admin.pricing.delete")}</button>
         </article>`)
         .join("")
-    : `<article class="empty-state">No custom model prices yet.</article>`;
+    : `<article class="empty-state">${t("admin.pricing.noCustom")}</article>`;
   document.querySelector("#price-aliases").innerHTML = aliases.length
     ? aliases
         .map((item) => `<article class="price-row">
           <strong>${escapeHtml(item.model)}</strong>
-          <span>uses ${escapeHtml(item.targetModel)}</span>
-          <button type="button" data-delete-price-alias="${escapeHtml(item.model)}">Delete</button>
+          <span>${t("admin.pricing.aliasUses", { target: escapeHtml(item.targetModel) })}</span>
+          <button type="button" data-delete-price-alias="${escapeHtml(item.model)}">${t("admin.pricing.delete")}</button>
         </article>`)
         .join("")
-    : `<article class="empty-state">No model aliases yet.</article>`;
+    : `<article class="empty-state">${t("admin.pricing.noAliases")}</article>`;
   document.querySelector("#openrouter-prices").innerHTML = openrouter.length
     ? openrouter
         .slice(0, 20)
         .map((item) => `<article class="price-row">
           <strong>${escapeHtml(item.model)}</strong>
-          <span>in ${formatUsdPerMillion(item.inputCostPerMTok)} · out ${formatUsdPerMillion(item.outputCostPerMTok)}</span>
+          <span>${t("admin.pricing.priceLine", { input: formatUsdPerMillion(item.inputCostPerMTok), output: formatUsdPerMillion(item.outputCostPerMTok), cacheRead: formatUsdPerMillion(item.cacheReadCostPerMTok) })}</span>
         </article>`)
         .join("")
-    : `<article class="empty-state">No OpenRouter prices cached.</article>`;
+    : `<article class="empty-state">${t("admin.pricing.noOpenRouter")}</article>`;
   document.querySelectorAll("[data-delete-price]").forEach((button) => {
     button.addEventListener("click", async () => {
-      pricingStatus.textContent = "Deleting...";
+      pricingStatus.textContent = t("admin.deleting");
       await fetchAdmin(`/api/admin/model-prices/${encodeURIComponent(button.dataset.deletePrice)}`, { method: "DELETE" });
       await loadPricing();
       await loadUsage();
@@ -257,7 +273,7 @@ function renderPricing(data) {
   });
   document.querySelectorAll("[data-delete-price-alias]").forEach((button) => {
     button.addEventListener("click", async () => {
-      pricingStatus.textContent = "Deleting alias...";
+      pricingStatus.textContent = t("admin.deletingAlias");
       await fetchAdmin(`/api/admin/model-price-aliases/${encodeURIComponent(button.dataset.deletePriceAlias)}`, { method: "DELETE" });
       await loadPricing();
       await loadUsage();
@@ -265,9 +281,17 @@ function renderPricing(data) {
   });
 }
 
+function fillPriceModel(model) {
+  const priceModel = document.querySelector("#price-model");
+  const priceInput = document.querySelector("#price-input");
+  priceModel.value = model || "";
+  priceModel.dispatchEvent(new Event("input", { bubbles: true }));
+  priceInput.focus({ preventScroll: true });
+}
+
 async function mapModelPriceAlias(model, targetModel) {
-  if (!targetModel.trim()) throw new Error("Target model is required");
-  pricingStatus.textContent = "Mapping price alias...";
+  if (!targetModel.trim()) throw new Error(t("admin.pricing.targetRequired"));
+  pricingStatus.textContent = t("admin.mappingAlias");
   const response = await fetchAdmin("/api/admin/model-price-aliases", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -284,12 +308,12 @@ function renderRemotePricingStatus(remote) {
   const expiresAt = remote.expiresAt || "-";
   const count = remote.modelCount || 0;
   const error = remote.lastError ? ` · ${escapeHtml(remote.lastError)}` : "";
-  return `<strong>OpenRouter ${escapeHtml(status)}</strong><span>${count} models · fetched ${escapeHtml(fetchedAt)} · expires ${escapeHtml(expiresAt)}${error}</span>`;
+  return `<strong>${t("admin.pricing.openrouterStatus", { status: escapeHtml(status) })}</strong><span>${t("admin.pricing.openrouterDetail", { count, fetched: escapeHtml(fetchedAt), expires: escapeHtml(expiresAt) })}${error}</span>`;
 }
 
 function renderParticipantOptions(participants) {
   const current = participantFilter.value;
-  participantFilter.innerHTML = `<option value="">All users</option>${participants
+  participantFilter.innerHTML = `<option value="">${t("admin.usage.allUsers")}</option>${participants
     .map((item) => `<option value="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</option>`)
     .join("")}`;
   participantFilter.value = current;
@@ -297,7 +321,7 @@ function renderParticipantOptions(participants) {
 
 function render(items) {
   if (!items.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="7">No usage uploaded for this query.</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.usage.noUsage")}</td></tr>`;
     return;
   }
   tbody.innerHTML = items
@@ -306,15 +330,15 @@ function render(items) {
       const expanded = state.expandedUsageKey === key;
       return `<tr>
         <td>${formatPeriod(item)}</td>
-        <td><button class="link-button" data-participant="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</button></td>
+        <td><button class="link-button" data-participant="${escapeHtml(item.participantId)}" data-period-start="${escapeHtml(item.periodStart)}" data-period-end="${escapeHtml(item.periodEnd)}">${escapeHtml(item.nickname)}</button></td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
         <td>${renderCostQuality(item)}</td>
         <td>${renderPrimarySlice(item.workdirs)}</td>
         <td>${renderPrimarySlice(item.models)}</td>
         <td>
           <div class="row-actions">
-            <button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? "Hide details" : "Show details"}</button>
-            <button type="button" class="danger-link" data-delete-participant="${escapeHtml(item.participantId)}" data-delete-nickname="${escapeHtml(item.nickname)}">Reset user</button>
+            <button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? t("admin.usage.collapseRow") : t("admin.usage.expandRow")}</button>
+            <button type="button" class="danger-link" data-delete-participant="${escapeHtml(item.participantId)}" data-delete-nickname="${escapeHtml(item.nickname)}">${t("admin.usage.resetUser")}</button>
           </div>
         </td>
       </tr>
@@ -324,7 +348,12 @@ function render(items) {
     })
     .join("");
   tbody.querySelectorAll("[data-participant]").forEach((button) => {
-    button.addEventListener("click", () => loadDetail(button.dataset.participant));
+    button.addEventListener("click", () => {
+      loadDetail(button.dataset.participant, {
+        start: button.dataset.periodStart,
+        end: button.dataset.periodEnd
+      });
+    });
   });
   tbody.querySelectorAll("[data-expand-row]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -343,9 +372,9 @@ function render(items) {
 
 async function deleteParticipantData(participantId, nickname) {
   const label = nickname || participantId;
-  const confirmed = window.confirm(`Delete all uploaded server data for ${label}?\n\nThe user's client must sync again to re-upload fresh aggregate data.`);
+  const confirmed = window.confirm(t("admin.usage.deleteConfirm", { label }));
   if (!confirmed) return;
-  statusEl.textContent = `Deleting ${label}...`;
+  statusEl.textContent = t("admin.usage.deletingUser", { label });
   const response = await fetchAdmin(`/api/admin/participants/${encodeURIComponent(participantId)}`, { method: "DELETE" });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "failed to delete participant data");
@@ -354,11 +383,11 @@ async function deleteParticipantData(participantId, nickname) {
   await loadUsage();
   await loadPricing();
   statusEl.textContent = result.deleted
-    ? `Deleted ${label}: ${result.removed.usageDaily || 0} usage rows, ${result.removed.uploadBatches || 0} upload batches.`
-    : `No server data found for ${label}.`;
+    ? t("admin.usage.deleted", { label, usage: result.removed.usageDaily || 0, batches: result.removed.uploadBatches || 0 })
+    : t("admin.usage.noData", { label });
 }
 
-async function loadDetail(participantId) {
+async function loadDetail(participantId, rowRange = null) {
   if (detailCloseTimer) clearTimeout(detailCloseTimer);
   detailBoard.hidden = false;
   detailBackdrop.hidden = false;
@@ -367,11 +396,13 @@ async function loadDetail(participantId) {
     detailBackdrop.classList.add("is-open");
     document.body.classList.add("detail-open");
   });
-  document.querySelector("#detail-status").textContent = "Loading...";
-  const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}?${queryString()}`);
+  document.querySelector("#detail-status").textContent = t("admin.loading");
+  const detailRange = normalizeDetailRange(rowRange);
+  const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}?${detailQueryString(detailRange)}`);
   const detail = await response.json();
-  document.querySelector("#detail-title").textContent = `${detail.nickname} · ${selectedRange().label}`;
-  document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${state.grain} grain · ${detail.rows?.length || 0} raw rows`;
+  const detailLabel = detailRange ? formatPeriodRange(detailRange.start, detailRange.end) : selectedRange().label;
+  document.querySelector("#detail-title").textContent = `${detail.nickname} · ${detailLabel}`;
+  document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${state.grain} ${t("admin.detail.grain")} · ${detail.rows?.length || 0} ${t("admin.detail.rawRows")}`;
   document.querySelector("#detail-summary").innerHTML = renderDetailSummary(detail);
   document.querySelector("#detail-composition").innerHTML = renderCompositionBlock(detail);
   document.querySelector("#detail-workdirs").innerHTML = renderBars(detail.workdirs);
@@ -387,7 +418,7 @@ async function loadDetail(participantId) {
       <td class="tokens" title="${formatTokenRaw((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0))}">${renderAccountingToken((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0), sumKnownCosts(row.cacheReadCostUsd, row.cacheWriteCostUsd))}</td>
       <td class="tokens" title="${formatTokenRaw(row.reasoningTokens)}">${renderAccountingToken(row.reasoningTokens, row.reasoningCostUsd)}</td>
       ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(row))}">${renderCost(row)}</td>` : ""}
-      ${state.showCost ? `<td>${escapeHtml(costQualityLabel(row.costQuality))}</td>` : ""}
+      ${state.showCost ? `<td>${escapeHtml(localizedCostQualityLabel(row.costQuality))}</td>` : ""}
       <td>${renderQuality(row.sourceQuality)}</td>
     </tr>`)
     .join("");
@@ -422,6 +453,30 @@ function queryString() {
     if (state.end) params.set("end", state.end);
   }
   return params.toString();
+}
+
+function detailQueryString(rowRange = null) {
+  const params = new URLSearchParams({
+    grain: state.grain,
+    range: rowRange ? "custom" : state.range
+  });
+  if (state.showCost) params.set("includeCost", "1");
+  if (rowRange) {
+    params.set("start", rowRange.start);
+    params.set("end", rowRange.end);
+  } else if (state.range === "custom") {
+    if (state.start) params.set("start", state.start);
+    if (state.end) params.set("end", state.end);
+  }
+  return params.toString();
+}
+
+function normalizeDetailRange(rowRange) {
+  if (!rowRange?.start || !rowRange?.end) return null;
+  return {
+    start: rowRange.start,
+    end: rowRange.end
+  };
 }
 
 function qualityQueryString() {
@@ -488,7 +543,7 @@ function syncRangeInputs() {
     document.querySelector("#start-date").value = start;
     document.querySelector("#end-date").value = end;
   }
-  document.querySelector("#date-range-display").textContent = `${label} · ${state.grain}`;
+  document.querySelector("#date-range-display").textContent = t("admin.usage.grainLabel", { label, grain: grainLabel(state.grain) });
 }
 
 function selectedRange() {
@@ -496,11 +551,19 @@ function selectedRange() {
     return { start: state.start || "", end: state.end || "", label: `${state.start || "-"} - ${state.end || "-"}` };
   }
   const today = utcToday();
-  if (state.range === "today") return { start: toDay(today), end: toDay(today), label: "Today" };
-  if (state.range === "last7") return trailingRange(7, "Last 7 days");
-  if (state.range === "last30") return trailingRange(30, "Last 30 days");
-  if (state.range === "last_month") return monthRange(-1, "Last month");
-  return monthRange(0, "MTD");
+  if (state.range === "today") return { start: toDay(today), end: toDay(today), label: t("admin.usage.today") };
+  if (state.range === "last7") return trailingRange(7, t("admin.usage.last7"));
+  if (state.range === "last30") return trailingRange(30, t("admin.usage.last30"));
+  if (state.range === "last_month") return monthRange(-1, t("admin.usage.lastMonth"));
+  return monthRange(0, t("admin.usage.mtd"));
+}
+
+function grainLabel(value) {
+  return {
+    day: t("admin.usage.grainDay"),
+    week: t("admin.usage.grainWeek"),
+    month: t("admin.usage.grainMonth")
+  }[value] || t("admin.usage.grainAuto");
 }
 
 function trailingRange(count, label) {
@@ -550,12 +613,6 @@ function utcDateToDay(date) {
   return date.toISOString().slice(0, 10);
 }
 
-function renderBreakdown(items = []) {
-  return items
-    .map((item) => `<span class="pill" title="${formatTokenRaw(item.totalTokens)}">${escapeHtml(item.name)} ${formatToken(item.totalTokens)}</span>`)
-    .join("");
-}
-
 function renderBars(items = []) {
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
   return items
@@ -570,29 +627,29 @@ function renderBars(items = []) {
 function renderExpandedUsage(item) {
   return `<div class="detail-grid usage-expanded-grid">
     <section>
-      <h3>Composition detail</h3>
+      <h3>${t("admin.detail.compositionDetail")}</h3>
       ${renderCompositionBlock(item)}
     </section>
     <section>
-      <h3>Top slices</h3>
-      <p>${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</p>
-      <p>Models · ${escapeHtml(renderBreakdownText(item.models))}</p>
-      <p>Workdirs · ${escapeHtml(renderBreakdownText(item.workdirs))}</p>
-      <p>Sources · ${escapeHtml(renderBreakdownText(item.providers))}</p>
-      <p>Pricing · ${escapeHtml(costQualityLabel(item.costQuality))}${state.showCost ? ` · ${stripHtml(renderCost(item))}` : ""}</p>
-      <p>Source quality · ${stripHtml(renderQuality(item.sourceQuality))}</p>
+      <h3>${t("admin.detail.topSlices")}</h3>
+      <p>${escapeHtml(localizedCompositionSummary(item))}</p>
+      <p>${t("admin.detail.modelsLabel")} ${escapeHtml(renderBreakdownText(item.models))}</p>
+      <p>${t("admin.detail.workdirsLabel")} ${escapeHtml(renderBreakdownText(item.workdirs))}</p>
+      <p>${t("admin.detail.sourcesLabel")} ${escapeHtml(renderBreakdownText(item.providers))}</p>
+      <p>${t("admin.detail.pricingLabel")} ${escapeHtml(localizedCostQualityLabel(item.costQuality))}${state.showCost ? ` · ${stripHtml(renderCost(item))}` : ""}</p>
+      <p>${t("admin.detail.sourceQuality")} ${stripHtml(renderQuality(item.sourceQuality))}</p>
     </section>
   </div>`;
 }
 
 function renderDetailSummary(detail) {
   const items = [
-    ["Total", formatToken(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
-    ["Composition", detail.compositionSummary || tokenCompositionSummary(detail)],
-    ["Workdirs", String(detail.workdirs?.length || 0)],
-    ["Models", String(detail.models?.length || 0)]
+    [t("admin.detail.total"), formatToken(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
+    [t("admin.detail.composition"), localizedCompositionSummary(detail)],
+    [t("admin.detail.workdirs"), String(detail.workdirs?.length || 0)],
+    [t("admin.detail.models"), String(detail.models?.length || 0)]
   ];
-  if (state.showCost) items.push(["Est. cost", renderCost(detail), costTitle(detail)]);
+  if (state.showCost) items.push([t("admin.detail.estCost"), renderCost(detail), costTitle(detail)]);
   return items.map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}>
     <span>${escapeHtml(label)}</span>
     <strong class="${summaryValueClass(value)}">${value}</strong>
@@ -602,12 +659,43 @@ function renderDetailSummary(detail) {
 function renderCompositionBlock(item) {
   const rows = tokenCompositionDetails(item)
     .map((entry) => `<article class="summary-tile composition-tile">
-      <span>${escapeHtml(entry.label)}</span>
+      <span>${escapeHtml(compositionFieldLabel(entry.field))}</span>
       <strong title="${formatTokenRaw(entry.tokens)}">${formatToken(entry.tokens)}</strong>
       <small>${Math.round(entry.ratio * 100)}%${state.showCost ? ` · ${formatCost(costValueForField(item, entry.field))}` : ""}</small>
     </article>`)
     .join("");
   return `<div class="detail-summary composition-grid">${rows}</div>`;
+}
+
+function localizedCompositionSummary(item = {}) {
+  const total = Number(item.totalTokens || 0);
+  if (!total) return t("web.composition.noUsage");
+  const parts = [
+    [t("admin.detail.input"), item.inputTokens],
+    [t("admin.detail.output"), item.outputTokens],
+    [t("admin.detail.cache"), Number(item.cacheReadTokens || 0) + Number(item.cacheWriteTokens || 0)],
+    [t("admin.detail.reasoning"), item.reasoningTokens]
+  ];
+  return parts
+    .filter(([, value]) => Number(value || 0) > 0)
+    .map(([label, value]) => `${label} ${Math.round((Number(value || 0) / total) * 100)}%`)
+    .join(" · ");
+}
+
+function compositionFieldLabel(field) {
+  return {
+    inputTokens: t("admin.detail.input"),
+    outputTokens: t("admin.detail.output"),
+    cacheReadTokens: t("admin.detail.cacheRead"),
+    cacheWriteTokens: t("admin.detail.cacheWrite"),
+    reasoningTokens: t("admin.detail.reasoning")
+  }[field] || field;
+}
+
+function localizedCostQualityLabel(value = "") {
+  if (value === "exact_price") return t("admin.cost.exactPrice");
+  if (value === "estimated_price") return t("admin.cost.estimatedPrice");
+  return t("admin.cost.unknownPrice");
 }
 
 function renderAccountingToken(tokens, cost) {
@@ -622,19 +710,19 @@ function sumKnownCosts(...values) {
 }
 
 function renderQualityBoard(data) {
-  document.querySelector("#quality-status").textContent = `${data.from || "-"} to ${data.to || "-"} · ${data.rows || 0} rows`;
+  document.querySelector("#quality-status").textContent = t("admin.quality.status", { from: data.from || "-", to: data.to || "-", rows: data.rows || 0 });
   document.querySelector("#quality-summary").innerHTML = [
-    ["Rows", String(data.rows || 0)],
-    ["Tokens", formatToken(data.totalTokens || 0), formatTokenRaw(data.totalTokens || 0)],
-    ["Composition", ratioSummary(data.compositionRatios || {})],
-    ["Missing price", formatPercent(data.pricingCoverage?.missingTokenRatio || 0)]
+    [t("admin.quality.rows"), String(data.rows || 0)],
+    [t("admin.quality.tokens"), formatToken(data.totalTokens || 0), formatTokenRaw(data.totalTokens || 0)],
+    [t("admin.quality.composition"), ratioSummary(data.compositionRatios || {})],
+    [t("admin.quality.missingPrice"), formatPercent(data.pricingCoverage?.missingTokenRatio || 0)]
   ].map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}><span>${escapeHtml(label)}</span><strong class="${summaryValueClass(value)}">${value}</strong></article>`).join("");
   document.querySelector("#quality-anomalies").innerHTML = (data.anomalies || []).length
     ? renderAnomalyGroups(data.anomalies, data.totalTokens || 1)
-    : `<article class="empty-state">No composition anomaly detected in this range.</article>`;
+    : `<article class="empty-state">${t("admin.quality.noAnomaly")}</article>`;
   document.querySelector("#quality-pricing").innerHTML = renderBars([
-    { name: "Known price", totalTokens: data.pricingCoverage?.knownTokens || 0 },
-    { name: "Missing price", totalTokens: data.pricingCoverage?.missingTokens || 0 }
+    { name: t("admin.quality.knownPrice"), totalTokens: data.pricingCoverage?.knownTokens || 0 },
+    { name: t("admin.quality.missingPriceLabel"), totalTokens: data.pricingCoverage?.missingTokens || 0 }
   ]);
   document.querySelector("#quality-participants").innerHTML = (data.pricingCoverage?.participants || []).length
     ? data.pricingCoverage.participants.slice(0, 8).map((item) => `<article class="bar-row" title="${escapeHtml(formatPercent(item.missingPriceRatio))}">
@@ -642,13 +730,13 @@ function renderQualityBoard(data) {
       <strong>${formatPercent(item.missingPriceRatio)} · ${formatToken(item.missingPriceTokens)}</strong>
       <i style="width:${Math.max(3, item.missingPriceRatio * 100)}%"></i>
     </article>`).join("")
-    : `<article class="empty-state">No participant is impacted by missing pricing.</article>`;
+    : `<article class="empty-state">${t("admin.quality.noParticipant")}</article>`;
   document.querySelector("#quality-explainability").innerHTML = (data.pricingCoverage?.costExplainability || []).length
     ? data.pricingCoverage.costExplainability.map((item) => `<article class="price-row">
       <strong>${escapeHtml(item.label)}</strong>
-      <span>${item.count} rows</span>
+      <span>${t("admin.quality.explainabilityRows", { count: item.count })}</span>
     </article>`).join("")
-    : `<article class="empty-state">No explainability data.</article>`;
+    : `<article class="empty-state">${t("admin.quality.noExplainability")}</article>`;
 }
 
 function renderAnomalyGroups(anomalies, totalTokens) {
@@ -668,7 +756,7 @@ function renderAnomalyGroups(anomalies, totalTokens) {
       return `<section class="quality-group">
         <header>
           <strong>${escapeHtml(anomalyLabel(type))}</strong>
-          <span>${topRows.length} of ${rows.length} rows · ${formatToken(groupTokens(rows))}</span>
+          <span>${t("admin.quality.ofRows", { shown: topRows.length, total: rows.length, tokens: formatToken(groupTokens(rows)) })}</span>
         </header>
         <div class="breakdown">
           ${topRows.map((item) => `<article class="bar-row" title="${escapeHtml(item.compositionSummary)}">
@@ -684,11 +772,11 @@ function renderAnomalyGroups(anomalies, totalTokens) {
 
 function anomalyLabel(type) {
   return {
-    "input-heavy": "Input-heavy rows",
-    "output-heavy": "Output-heavy rows",
-    "cache-heavy": "Cache-heavy rows",
-    "reasoning-heavy": "Reasoning-heavy rows",
-    unclassified: "Unclassified rows"
+    "input-heavy": t("admin.quality.inputHeavy"),
+    "output-heavy": t("admin.quality.outputHeavy"),
+    "cache-heavy": t("admin.quality.cacheHeavy"),
+    "reasoning-heavy": t("admin.quality.reasoningHeavy"),
+    unclassified: t("admin.quality.unclassified")
   }[type] || type;
 }
 
@@ -702,10 +790,10 @@ function usageRowKey(item) {
 
 function ratioSummary(ratios = {}) {
   return [
-    `In ${formatPercent(ratios.inputRatio || 0)}`,
-    `Out ${formatPercent(ratios.outputRatio || 0)}`,
-    `Cache ${formatPercent(ratios.cacheRatio || 0)}`,
-    `Reasoning ${formatPercent(ratios.reasoningRatio || 0)}`
+    `${t("admin.detail.input")} ${formatPercent(ratios.inputRatio || 0)}`,
+    `${t("admin.detail.output")} ${formatPercent(ratios.outputRatio || 0)}`,
+    `${t("admin.detail.cache")} ${formatPercent(ratios.cacheRatio || 0)}`,
+    `${t("admin.detail.reasoning")} ${formatPercent(ratios.reasoningRatio || 0)}`
   ].join(" · ");
 }
 
@@ -737,13 +825,13 @@ function summaryValueClass(value) {
 }
 
 function renderQuality(value) {
-  const label = value === "exact" ? "完整字段" : "部分字段";
-  const title = value === "exact" ? "工具日志提供了明确 token 字段" : "部分 token 字段缺失或只能按可用 usage 字段统计";
+  const label = value === "exact" ? t("admin.quality.exactField") : t("admin.quality.partialField");
+  const title = value === "exact" ? t("admin.quality.exactDesc") : t("admin.quality.partialDesc");
   return `<span class="pill" title="${escapeHtml(title)}">${label}</span>`;
 }
 
 function renderCostQuality(item) {
-  const label = costQualityLabel(item.costQuality);
+  const label = localizedCostQualityLabel(item.costQuality);
   const cost = state.showCost ? renderCost(item) : "";
   return `<span class="cost-quality ${escapeHtml(item.costQuality || "unknown_price")}" title="${escapeHtml(costTitle(item))}">
     <strong>${escapeHtml(label)}</strong>
@@ -766,7 +854,7 @@ function formatPeriod(item) {
 
 function formatPeriodRange(from, to) {
   if (!from && !to) return "-";
-  return from === to ? from : `${from} to ${to}`;
+  return from === to ? from : t("common.dateRange", { from, to });
 }
 
 function formatNumber(value) {
@@ -774,20 +862,13 @@ function formatNumber(value) {
 }
 
 function formatToken(value) {
-  return state.rawTokens ? formatNumber(value) : formatTokenCompact(value);
-}
-
-function formatTokenCompact(value) {
-  const n = Number(value || 0);
-  const abs = Math.abs(n);
-  if (abs >= 100_000_000) return `${Number(n / 100_000_000).toFixed(abs >= 1_000_000_000 ? 1 : 2)}亿`;
-  if (abs >= 10_000) return `${trimFixed(n / 10_000, abs >= 10_000_000 ? 0 : 1)}万`;
-  return formatNumber(n);
+  return state.rawTokens ? formatNumber(value) : formatTokenCompact(value, getCurrentLang());
 }
 
 function formatTokenRaw(value) {
-  return `${formatNumber(value)} tokens`;
+  return `${formatNumber(value)} ${t("unit.tokens")}`;
 }
+
 
 function formatCost(value) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "-";
@@ -798,7 +879,7 @@ function formatCost(value) {
 
 function costTitle(item) {
   const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
-  return `${item.costQuality || "unknown_price"} · ${item.pricingVersion || "no pricing version"}${missing ? ` · missing: ${missing}` : ""}`;
+  return `${localizedCostQualityLabel(item.costQuality)} · ${item.pricingVersion || t("admin.cost.noPricingVersion")}${missing ? ` · ${t("admin.cost.missingModels")}: ${missing}` : ""}`;
 }
 
 function normalizeMissingPriceModels(value) {
@@ -811,11 +892,11 @@ function normalizeMissingPriceModels(value) {
 function renderCost(item) {
   const value = formatCost(item.estimatedCostUsd);
   if (value === "-") return value;
-  return `${value}${item.missingPriceTokens ? `<sup title="Some model prices are missing">*</sup>` : ""}`;
+  return `${value}${item.missingPriceTokens ? `<sup title="${escapeHtml(t("admin.cost.missingModelPrices"))}">*</sup>` : ""}`;
 }
 
 function chartItemTitle(item) {
-  const cost = state.showCost ? ` · cost ${renderCost(item).replace(/<[^>]+>/g, "")}` : "";
+  const cost = state.showCost ? ` · ${t("common.cost")} ${renderCost(item).replace(/<[^>]+>/g, "")}` : "";
   return `${item.name || item.day || ""} · ${formatTokenRaw(item.totalTokens)}${cost}`;
 }
 
@@ -829,10 +910,6 @@ function renderProviderTitle(items = []) {
 
 function stripHtml(value) {
   return String(value || "").replace(/<[^>]+>/g, "");
-}
-
-function trimFixed(value, digits) {
-  return Number(value).toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
 }
 
 function escapeHtml(value) {

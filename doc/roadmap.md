@@ -40,15 +40,17 @@
 - `doc/0.4-baseline.md`
 - `doc/0.4-development-tasks.md`
 
-## 0.5.0 空白基线
+## 0.5.0 已落地
 
-目标：只建立下一版本的空白 baseline/task 入口。0.5.0 当前尚未开启任何产品或工程任务。
+目标：Admin 访问控制、最低客户端版本强制、设备面板可见性、多语言 UI 切换。
 
 | 能力 | 状态 | 产品结果 |
 | --- | --- | --- |
-| 0.5 空白基线 | DONE | `doc/0.5-baseline.md` 明确 0.5.0 尚未开启任务。 |
-| 0.5 空白任务文档 | DONE | `doc/0.5-development-tasks.md` 只记录版本迭代流程，不提前承诺 roadmap 候选项。 |
-| 临时功能入账规则 | DONE | 后续临时加入代码功能时，必须同步记录到 baseline 与 development tasks。 |
+| Admin basicAuth | DONE | `/admin.html` 和 `/api/admin/*` 路由受 HTTP Basic Auth 保护；未配置凭证时向后兼容。 |
+| MIN_CLIENT_ENFORCE | DONE | 开启后低于 latest 的客户端被 HTTP 426 拒绝；默认关闭。 |
+| Admin 设备面板 | DONE | Admin 面板第 4 个 tab 展示所有设备的客户端版本、平台、构建和最后在线时间。 |
+| 多语言 i18n | DONE | `src/shared/i18n.js` 支持 zh-CN + en；public web、desktop、admin 全覆盖；后续功能必须适配。 |
+| Admin Usage 行级详情语义优化 | TODO | 点击昵称打开"该用户 + 当前时间桶"详情，而非全局筛选范围。 |
 
 参考：
 
@@ -74,7 +76,6 @@
 | 客户端诊断数据上报 | Candidate | 面向不同环境的数据问题排查，允许用户主动上报脱敏诊断数据包；开发者可拿到客户端版本、平台、配置摘要、来源检测结果、聚合 usage cache、upload queue 摘要和运行事件，用于复现与修复问题，但不得包含 prompt、回答、源码、真实路径、Cursor token、身份私钥或原始会话内容。 |
 | 自动备份 | Candidate | 备份 identity、config、tokens、aliases、usage cache 和 upload queue，降低换机或升级失败风险。 |
 | 菜单栏程序 | Candidate | 支持隐藏 Dock，仅在菜单栏展示 Today token 简要信息、同步状态和快捷入口。 |
-| 多语言 | Candidate | 优先支持中英文 UI 文案切换，后续再扩展文档和发布说明。 |
 
 ## 暂不纳入
 

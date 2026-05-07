@@ -1,5 +1,10 @@
-import { costQualityLabel, dominantComposition, tokenCompositionDetails, tokenCompositionSummary } from "/shared/composition.js";
-import { initI18n, t, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { dominantComposition, tokenCompositionDetails } from "/shared/composition.js";
+import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { formatTokenCompact } from "/shared/display.js";
+
+function localeTokenCompact(value) {
+  return formatTokenCompact(value, getCurrentLang());
+}
 
 // 初始化多语言
 const currentLang = initI18n();
@@ -72,8 +77,7 @@ async function loadLeaderboard() {
   const response = await fetch(`/api/public-leaderboard?${params.toString()}`);
   const data = await response.json();
   render(data.items || []);
-  const participantText = data.items.length === 1 ? t("web.leaderboard.participants") : t("web.leaderboard.participants") + "s";
-  statusEl.textContent = `${data.items.length} ${participantText}`;
+  statusEl.textContent = t("web.leaderboard.participantCount", { count: data.items.length, plural: data.items.length === 1 ? "" : "s" });
 }
 
 function render(items) {
@@ -90,7 +94,7 @@ function render(items) {
             ${escapeHtml(item.nickname)}
           </button>
         </td>
-        <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatTokenCompact(item.totalTokens)}</td>
+        <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
         ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
         <td>${renderModels(item.models)}</td>
       </tr>`
@@ -120,30 +124,62 @@ function renderReleaseDownloads(manifest) {
     .filter(([, artifact]) => artifact?.url)
     .sort(([left], [right]) => platformSort(left) - platformSort(right));
   const preferred = preferredPlatform();
-  const preferredArtifact = platforms.find(([platform]) => platform === preferred);
-  const platformText = platforms.length === 1 ? t("web.download.platforms") : t("web.download.platforms") + "s";
-  downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version} · ${platforms.length} ${platformText}`;
-  downloadActionsEl.innerHTML = platforms.length
-    ? platforms
-        .map(([platform, artifact]) => {
-          const link = artifact.installer || artifact;
-          const ext = artifact.installer ? artifact.installer.ext : "zip";
-          return `<a class="download-link${platform === preferred ? " primary" : ""}" href="${escapeAttribute(link.url)}" target="_blank" rel="noreferrer">
-            <strong>${escapeHtml(platformLabel(platform))}</strong>
-            <span>${escapeHtml(fileSize(link.size))} · ${ext.toUpperCase()}</span>
-          </a>`;
-        })
-        .join("")
-    : `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
-  if (preferredArtifact) downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version} · ${t("web.download.recommended")}: ${platformLabel(preferred)}`;
-  else if (isMacBrowser() && platforms.some(([platform]) => platform === "darwin-arm64") && platforms.some(([platform]) => platform === "darwin-x64")) {
-    downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version} · ${t("web.download.chooseMac")}`;
+  downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version}`;
+  if (!platforms.length) {
+    downloadActionsEl.innerHTML = `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
+    return;
   }
+  const downloadIcon = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v9m0 0l-3-3m3 3l3-3M3 13h10"/></svg>`;
+  const options = platforms
+    .map(([platform]) => `<option value="${escapeAttribute(platform)}"${platform === preferred ? " selected" : ""}>${escapeHtml(platformLabel(platform))}</option>`)
+    .join("");
+  downloadActionsEl.innerHTML = `<select id="download-platform">${options}</select><a id="download-btn" href="#" target="_blank" rel="noreferrer">${downloadIcon}<span data-i18n="web.download.downloadBtn">${t("web.download.downloadBtn")}</span></a>`;
+  const selectEl = document.querySelector("#download-platform");
+  const btnEl = document.querySelector("#download-btn");
+  function syncDownloadLink() {
+    const platform = selectEl.value;
+    const artifact = platforms.find(([p]) => p === platform);
+    if (artifact) {
+      const link = artifact[1].installer || artifact[1];
+      btnEl.href = link.url;
+    }
+  }
+  selectEl.addEventListener("change", syncDownloadLink);
+  syncDownloadLink();
 }
 
 function renderDownloadUnavailable(reason) {
   downloadStatusEl.textContent = t("web.download.notConfigured");
   downloadActionsEl.innerHTML = `<span class="download-placeholder">${escapeHtml(reason)}</span>`;
+}
+
+function platformSort(platform) {
+  return {
+    "darwin-arm64": 1,
+    "darwin-x64": 2,
+    "win32-x64": 3
+  }[platform] || 99;
+}
+
+function platformLabel(platform) {
+  const labels = {
+    "darwin-arm64": t("platform.darwinArm64"),
+    "darwin-x64": t("platform.darwinX64"),
+    "win32-x64": t("platform.win32X64")
+  };
+  return labels[platform] || platform;
+}
+
+function preferredPlatform() {
+  const userAgent = window.navigator.userAgent || "";
+  if (/Windows/i.test(userAgent)) return "win32-x64";
+  if (/Mac/i.test(userAgent)) {
+    // Apple Silicon: userAgentData.platform or iPad-on-Mac detection
+    if (navigator.userAgentData?.platform === "macOS" && navigator.userAgentData?.architecture === "arm") return "darwin-arm64";
+    if (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) return "darwin-arm64";
+    return "darwin-x64";
+  }
+  return "";
 }
 
 async function loadDetail(participantId) {
@@ -158,24 +194,24 @@ async function loadDetail(participantId) {
     detailBackdrop.classList.add("is-open");
     document.body.classList.add("detail-open");
   });
-  document.querySelector("#detail-status").textContent = "Loading...";
+  document.querySelector("#detail-status").textContent = t("loading");
   const params = new URLSearchParams({ period: state.period });
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}?${params.toString()}`);
   const detail = await response.json();
   document.querySelector("#detail-title").textContent = `${detail.nickname} · ${periodLabel(state.period)}`;
-  document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · leaderboard period detail`;
+  document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.periodDetailLabel")}`;
   renderDetail(detail);
 }
 
 async function loadHistory(participantId) {
-  document.querySelector("#detail-status").textContent = "Loading history...";
+  document.querySelector("#detail-status").textContent = t("web.detail.loadingHistory");
   const params = new URLSearchParams(historyParams(state.historyView));
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}/trend?${params.toString()}`);
   const detail = await response.json();
-  document.querySelector("#detail-title").textContent = `${detail.nickname || "Participant"} · ${historyLabel(state.historyView)}`;
-  document.querySelector("#detail-status").textContent = `${detail.from || "-"} to ${detail.to || "-"} · history window`;
+  document.querySelector("#detail-title").textContent = `${detail.nickname || t("web.detail.participant")} · ${historyLabel(state.historyView)}`;
+  document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.historyWindow")}`;
   renderHistory(detail.items || []);
 }
 
@@ -184,10 +220,10 @@ function renderDetail(detail) {
   document.querySelector("#detail-summary").innerHTML = renderSummary(detail);
   document.querySelector("#detail-composition").innerHTML = renderCompositionBlock(detail, { showCost: state.showCost });
   document.querySelector("#period-chart").innerHTML = detail.isSingleDay
-    ? `<article class="empty-state">Single-day leaderboard periods are explained by composition, not a trend chart.</article>`
+    ? `<article class="empty-state">${t("web.detail.singleDayNote")}</article>`
     : detail.periodRows?.length
-      ? renderCompactTrend([...detail.periodRows].reverse(), { topTitle: "Top date contribution" })
-      : `<article class="empty-state">No usage in this period.</article>`;
+      ? renderCompactTrend([...detail.periodRows].reverse(), { topTitle: t("web.detail.topDate") })
+      : `<article class="empty-state">${t("web.detail.noUsagePeriod")}</article>`;
   document.querySelector("#detail-models").innerHTML = renderBreakdownBars(detail.models);
   document.querySelector("#detail-sources").innerHTML = renderBreakdownBars(detail.providers?.map((item) => ({ ...item, name: sourceName(item.name) })));
   renderRawRows(detail.rows || [], { mode: "period" });
@@ -196,8 +232,8 @@ function renderDetail(detail) {
 function renderHistory(items) {
   document.querySelector("#detail-summary").innerHTML = renderHistorySummary(items);
   document.querySelector("#history-chart").innerHTML = items.length
-    ? renderCompactTrend([...items].reverse(), { topTitle: "Top period contribution" })
-    : `<article class="empty-state">No usage in this history window.</article>`;
+    ? renderCompactTrend([...items].reverse(), { topTitle: t("web.detail.topPeriod") })
+    : `<article class="empty-state">${t("web.detail.noUsageHistory")}</article>`;
   renderRawRows(items, { mode: "history" });
 }
 
@@ -226,12 +262,12 @@ function renderHistorySummary(items) {
     costQuality: ""
   });
   const summary = [
-    ["History buckets", String(items.length)],
-    ["Window tokens", formatTokenCompact(total), formatTokenRaw(total)],
-    ["Peak period", peak ? `${formatPeriod(peak)} · ${formatTokenCompact(peak.totalTokens)}` : "-"],
-    ["Composition", tokenCompositionSummary(aggregate)]
+    [t("web.detail.historyBuckets"), String(items.length)],
+    [t("web.detail.windowTokens"), localeTokenCompact(total), formatTokenRaw(total)],
+    [t("web.detail.peakPeriod"), peak ? `${formatPeriod(peak)} · ${localeTokenCompact(peak.totalTokens)}` : "-"],
+    [t("web.detail.composition"), localizedCompositionSummary(aggregate)]
   ];
-  if (state.showCost) summary.push(["Window cost", renderCost(aggregate), costQualityLabel(aggregate.costQuality)]);
+  if (state.showCost) summary.push([t("web.detail.windowCost"), renderCost(aggregate), localizedCostQualityLabel(aggregate.costQuality)]);
   return summary.map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}>
     <span>${escapeHtml(label)}</span>
     <strong class="${summaryValueClass(value)}">${value}</strong>
@@ -266,13 +302,13 @@ function renderDetailPanels() {
 
 function renderSummary(detail) {
   const items = [
-    ["Rank", detail.rank ? `#${detail.rank}` : "-"],
-    ["Period tokens", formatTokenCompact(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
-    ["Composition", detail.compositionSummary || tokenCompositionSummary(detail)],
-    ["Dominant", humanDominant(detail.dominantComposition || dominantComposition(detail))],
-    ["Models", String(detail.models?.length || 0)]
+    [t("web.detail.rank"), detail.rank ? `#${detail.rank}` : "-"],
+    [t("web.detail.periodTokens"), localeTokenCompact(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
+    [t("web.detail.composition"), localizedCompositionSummary(detail)],
+    [t("web.detail.dominant"), humanDominant(detail.dominantComposition || dominantComposition(detail))],
+    [t("web.detail.models"), String(detail.models?.length || 0)]
   ];
-  if (state.showCost) items.push(["Est. cost", renderCost(detail), costTitle(detail)]);
+  if (state.showCost) items.push([t("web.cost.estimatedPrice"), renderCost(detail), costTitle(detail)]);
   return items
     .map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}>
       <span>${escapeHtml(label)}</span>
@@ -286,27 +322,27 @@ function renderRawRows(items, { mode }) {
     ? items
         .map((item) => `<tr>
           <td>${mode === "history" ? formatPeriod(item) : item.day}</td>
-          <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatTokenCompact(item.totalTokens)}</td>
-          <td>${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</td>
+          <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
+          <td>${escapeHtml(localizedCompositionSummary(item))}</td>
           <td class="tokens" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)}</td>
           <td class="tokens" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)}</td>
           <td class="tokens" title="${formatTokenRaw((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}">${renderAccountingToken((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))}</td>
           <td class="tokens" title="${formatTokenRaw(item.reasoningTokens)}">${renderAccountingToken(item.reasoningTokens, item.reasoningCostUsd)}</td>
           ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
-          ${state.showCost ? `<td>${escapeHtml(costQualityLabel(item.costQuality))}</td>` : ""}
+          ${state.showCost ? `<td>${escapeHtml(localizedCostQualityLabel(item.costQuality))}</td>` : ""}
           <td>${mode === "history" ? renderModels(item.models) : renderModels([{ name: item.model, totalTokens: item.totalTokens }])}</td>
         </tr>`)
         .join("")
-    : `<tr><td class="empty" colspan="${state.showCost ? 10 : 8}">No usage in this period.</td></tr>`;
+    : `<tr><td class="empty" colspan="${state.showCost ? 10 : 8}">${t("web.detail.noUsagePeriod")}</td></tr>`;
 }
 
 function renderBreakdownBars(items = []) {
-  if (!items.length) return `<article class="empty-state">No usage in this slice.</article>`;
+  if (!items.length) return `<article class="empty-state">${t("web.detail.noUsageSlice")}</article>`;
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
   return items
     .map((item) => `<article class="bar-row">
       <span>${escapeHtml(item.name)}</span>
-      <strong title="${formatTokenRaw(item.totalTokens)}">${formatTokenCompact(item.totalTokens)}</strong>
+      <strong title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
       <i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%"></i>
     </article>`)
     .join("");
@@ -329,7 +365,7 @@ function renderCompactTrend(items, { topTitle }) {
     </div>
     <div class="compact-axis">
       <span>${escapeHtml(formatPeriod(sorted[0]))}</span>
-      <strong>Peak ${escapeHtml(formatPeriod(peak))} · ${formatTokenCompact(peak.totalTokens)}</strong>
+      <strong>${t("common.peak")} ${escapeHtml(formatPeriod(peak))} · ${localeTokenCompact(peak.totalTokens)}</strong>
       <span>${escapeHtml(formatPeriod(latest))}</span>
     </div>
     <div class="top-contributors">
@@ -337,8 +373,8 @@ function renderCompactTrend(items, { topTitle }) {
       ${top
         .map((item, index) => `<article>
           <span>#${index + 1} ${escapeHtml(formatPeriod(item))}</span>
-          <strong title="${escapeHtml(trendItemTitle(item))}">${formatTokenCompact(item.totalTokens)}${state.showCost ? ` · ${renderCost(item)}` : ""}</strong>
-          <small>${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</small>
+          <strong title="${escapeHtml(trendItemTitle(item))}">${localeTokenCompact(item.totalTokens)}${state.showCost ? ` · ${renderCost(item)}` : ""}</strong>
+          <small>${escapeHtml(localizedCompositionSummary(item))}</small>
         </article>`)
         .join("")}
     </div>
@@ -350,21 +386,21 @@ function renderCompositionBlock(item, { showCost = false } = {}) {
     .map((entry) => {
       const cost = showCost ? renderCostPart(item, entry.field) : "";
       return `<article class="summary-tile composition-tile">
-        <span>${escapeHtml(entry.label)}</span>
-        <strong title="${formatTokenRaw(entry.tokens)}">${formatTokenCompact(entry.tokens)}</strong>
+        <span>${escapeHtml(compositionFieldLabel(entry.field))}</span>
+        <strong title="${formatTokenRaw(entry.tokens)}">${localeTokenCompact(entry.tokens)}</strong>
         <small>${Math.round(entry.ratio * 100)}%${cost ? ` · ${cost}` : ""}</small>
       </article>`;
     })
     .join("");
   const footer = showCost
-    ? `<p class="composition-note">Total ${renderCost(item)} · ${escapeHtml(costQualityLabel(item.costQuality))}</p>`
-    : `<p class="composition-note">${escapeHtml(item.compositionSummary || tokenCompositionSummary(item))}</p>`;
+    ? `<p class="composition-note">${t("common.total")} ${renderCost(item)} · ${escapeHtml(localizedCostQualityLabel(item.costQuality))}</p>`
+    : `<p class="composition-note">${escapeHtml(localizedCompositionSummary(item))}</p>`;
   return `<div class="detail-summary composition-grid">${rows}</div>${footer}`;
 }
 
 function renderAccountingToken(tokens, cost) {
   const costLine = state.showCost ? `<small>${formatCost(cost)}</small>` : "";
-  return `<span class="token-accounting">${formatTokenCompact(tokens || 0)}${costLine}</span>`;
+  return `<span class="token-accounting">${localeTokenCompact(tokens || 0)}${costLine}</span>`;
 }
 
 function sumKnownCosts(...values) {
@@ -391,7 +427,7 @@ function summaryValueClass(value) {
 
 function renderModels(items = []) {
   return items
-    .map((item) => `<span class="pill" title="${formatTokenRaw(item.totalTokens)}">${escapeHtml(item.name)} ${formatTokenCompact(item.totalTokens)}</span>`)
+    .map((item) => `<span class="pill" title="${formatTokenRaw(item.totalTokens)}">${escapeHtml(item.name)} ${localeTokenCompact(item.totalTokens)}</span>`)
     .join("");
 }
 
@@ -406,7 +442,7 @@ function formatPeriod(item) {
 
 function formatPeriodRange(from, to) {
   if (!from && !to) return "-";
-  return from === to ? from : `${from} to ${to}`;
+  return from === to ? from : t("common.dateRange", { from, to });
 }
 
 function periodLabel(period) {
@@ -428,9 +464,9 @@ function historyParams(view) {
 }
 
 function historyLabel(view) {
-  if (view === "weekly") return "Weekly history";
-  if (view === "monthly") return "Monthly history";
-  return "Daily history";
+  if (view === "weekly") return t("web.detail.weeklyHistory");
+  if (view === "monthly") return t("web.detail.monthlyHistory");
+  return t("web.detail.dailyHistory");
 }
 
 function sourceName(providerId) {
@@ -438,42 +474,6 @@ function sourceName(providerId) {
   if (providerId === "claude_code_local") return t("source.claude");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
-}
-
-function platformSort(platform) {
-  return {
-    "darwin-arm64": 1,
-    "darwin-x64": 2,
-    "win32-x64": 3
-  }[platform] || 99;
-}
-
-function platformLabel(platform) {
-  const labels = {
-    "darwin-arm64": t("platform.darwinArm64"),
-    "darwin-x64": t("platform.darwinX64"),
-    "win32-x64": t("platform.win32X64")
-  };
-  return labels[platform] || platform;
-}
-
-function preferredPlatform() {
-  const userAgent = window.navigator.userAgent || "";
-  if (/Windows/i.test(userAgent)) return "win32-x64";
-  return "";
-}
-
-function isMacBrowser() {
-  return /Mac OS X|Macintosh/i.test(window.navigator.userAgent || "");
-}
-
-function fileSize(bytes) {
-  const value = Number(bytes || 0);
-  if (!value) return "download";
-  if (value >= 1024 * 1024 * 1024) return `${trimFixed(value / 1024 / 1024 / 1024, 1)} GB`;
-  if (value >= 1024 * 1024) return `${trimFixed(value / 1024 / 1024, 0)} MB`;
-  if (value >= 1024) return `${trimFixed(value / 1024, 0)} KB`;
-  return `${value} B`;
 }
 
 function hydratePreferences() {
@@ -507,16 +507,8 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(value || 0);
 }
 
-function formatTokenCompact(value) {
-  const n = Number(value || 0);
-  const abs = Math.abs(n);
-  if (abs >= 100_000_000) return `${Number(n / 100_000_000).toFixed(abs >= 1_000_000_000 ? 1 : 2)}亿`;
-  if (abs >= 10_000) return `${trimFixed(n / 10_000, abs >= 10_000_000 ? 0 : 1)}万`;
-  return formatNumber(n);
-}
-
 function formatTokenRaw(value) {
-  return `${formatNumber(value)} tokens`;
+  return `${formatNumber(value)} ${t("unit.tokens")}`;
 }
 
 function formatCost(value) {
@@ -528,7 +520,7 @@ function formatCost(value) {
 
 function costTitle(item) {
   const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
-  return `${item.costQuality || "unknown_price"} · ${item.pricingVersion || "no pricing version"}${missing ? ` · missing: ${missing}` : ""}`;
+  return `${localizedCostQualityLabel(item.costQuality)} · ${item.pricingVersion || t("web.cost.noPricingVersion")}${missing ? ` · ${t("web.cost.missingModels")}: ${missing}` : ""}`;
 }
 
 function normalizeMissingPriceModels(value) {
@@ -541,7 +533,38 @@ function normalizeMissingPriceModels(value) {
 function renderCost(item) {
   const value = formatCost(item.estimatedCostUsd);
   if (value === "-") return value;
-  return `${value}${item.missingPriceTokens ? `<sup title="Some model prices are missing">*</sup>` : ""}`;
+  return `${value}${item.missingPriceTokens ? `<sup title="${escapeHtml(t("web.cost.missingModelPrices"))}">*</sup>` : ""}`;
+}
+
+function localizedCostQualityLabel(value = "") {
+  if (value === "exact_price") return t("web.cost.exactPrice");
+  if (value === "estimated_price") return t("web.cost.estimatedPrice");
+  return t("web.cost.unknownPrice");
+}
+
+function localizedCompositionSummary(item = {}) {
+  const total = Number(item.totalTokens || 0);
+  if (!total) return t("web.composition.noUsage");
+  const parts = [
+    [t("web.detail.input"), item.inputTokens],
+    [t("web.detail.output"), item.outputTokens],
+    [t("web.detail.cache"), Number(item.cacheReadTokens || 0) + Number(item.cacheWriteTokens || 0)],
+    [t("web.detail.reasoning"), item.reasoningTokens]
+  ];
+  return parts
+    .filter(([, value]) => Number(value || 0) > 0)
+    .map(([label, value]) => `${label} ${Math.round((Number(value || 0) / total) * 100)}%`)
+    .join(" · ");
+}
+
+function compositionFieldLabel(field) {
+  return {
+    inputTokens: t("web.detail.input"),
+    outputTokens: t("web.detail.output"),
+    cacheReadTokens: t("web.detail.cacheRead"),
+    cacheWriteTokens: t("web.detail.cacheWrite"),
+    reasoningTokens: t("web.detail.reasoning")
+  }[field] || field;
 }
 
 function humanDominant(value = "") {
@@ -556,12 +579,8 @@ function humanDominant(value = "") {
 }
 
 function trendItemTitle(item) {
-  const cost = state.showCost ? ` · cost ${renderCost(item).replace(/<[^>]+>/g, "")}` : "";
+  const cost = state.showCost ? ` · ${t("common.cost")} ${renderCost(item).replace(/<[^>]+>/g, "")}` : "";
   return `${formatPeriod(item)} · ${formatTokenRaw(item.totalTokens)}${cost}`;
-}
-
-function trimFixed(value, digits) {
-  return Number(value).toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
 }
 
 function escapeHtml(value) {
