@@ -23,6 +23,18 @@ function parseBool(value) {
   return String(value).toLowerCase() === "true";
 }
 
+function parseProviderEnabled() {
+  const providerEnabled = {};
+  const prefix = "PRESET_PROVIDER_";
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith(prefix) && key.length > prefix.length) {
+      const providerId = key.slice(prefix.length).toLowerCase();
+      providerEnabled[providerId] = parseBool(value);
+    }
+  }
+  return Object.keys(providerEnabled).length > 0 ? providerEnabled : null;
+}
+
 function parsePreset() {
   const preset = {};
   if (process.env.PRESET_API_BASE_URL) preset.apiBaseUrl = process.env.PRESET_API_BASE_URL;
@@ -34,6 +46,8 @@ function parsePreset() {
   if (process.env.PRESET_LAUNCH_AT_LOGIN) preset.launchAtLogin = parseBool(process.env.PRESET_LAUNCH_AT_LOGIN);
   if (process.env.PRESET_SHOW_ESTIMATED_COST) preset.showEstimatedCost = parseBool(process.env.PRESET_SHOW_ESTIMATED_COST);
   if (process.env.PRESET_SHOW_RAW_TOKENS) preset.showRawTokens = parseBool(process.env.PRESET_SHOW_RAW_TOKENS);
+  const providerEnabled = parseProviderEnabled();
+  if (providerEnabled) preset.providerEnabled = providerEnabled;
   return preset;
 }
 
