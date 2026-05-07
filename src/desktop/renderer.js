@@ -2,6 +2,10 @@ import { costQualityLabel, dominantComposition, tokenCompositionDetails, tokenCo
 import { addCostToUsageItem, aggregateCost, createPriceMap } from "../shared/pricing.js";
 import { formatTokenCompact, formatTokenRaw, formatUsd } from "../shared/display.js";
 import { dayToUtcDate, localDay, utcDateToDay } from "../shared/date.js";
+import { initI18n, t, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "../shared/i18n.js";
+
+// 初始化多语言
+const currentLang = initI18n();
 
 const api = window.tokenLeague;
 const $ = (selector) => document.querySelector(selector);
@@ -1194,13 +1198,14 @@ function trendBucketKey(row) {
 }
 
 function humanDominant(value = "") {
-  return {
-    "input-heavy": "Input-heavy",
-    "output-heavy": "Output-heavy",
-    "cache-heavy": "Cache-heavy",
-    "reasoning-heavy": "Reasoning-heavy",
-    "no-usage": "No usage"
-  }[value] || value || "-";
+  const labels = {
+    "input-heavy": t("web.composition.inputHeavy"),
+    "output-heavy": t("web.composition.outputHeavy"),
+    "cache-heavy": t("web.composition.cacheHeavy"),
+    "reasoning-heavy": t("web.composition.reasoningHeavy"),
+    "no-usage": t("web.composition.noUsage")
+  };
+  return labels[value] || value || "-";
 }
 
 function costValueForField(item, field) {
@@ -1316,9 +1321,9 @@ function renderTrendTimeline(rows, latest, peak) {
 }
 
 function sourceName(providerId) {
-  if (providerId === "codex_local") return "Codex";
-  if (providerId === "claude_code_local") return "Claude Code";
-  if (providerId === "cursor_dashboard_usage") return "Cursor";
+  if (providerId === "codex_local") return t("source.codex");
+  if (providerId === "claude_code_local") return t("source.claude");
+  if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }
 
@@ -1441,12 +1446,12 @@ function formatTrendPeriod(row) {
 
 function trendViewMeta() {
   if (trendView === "weekly") {
-    return { grain: "week", heading: "Weekly review", bucketLabel: "week bucket", summary: "last 12 weeks" };
+    return { grain: "week", heading: t("desktop.trend.weeklyReview"), bucketLabel: "week bucket", summary: "last 12 weeks" };
   }
   if (trendView === "monthly") {
-    return { grain: "month", heading: "Monthly review", bucketLabel: "month bucket", summary: "last 12 months" };
+    return { grain: "month", heading: t("desktop.trend.monthlyReview"), bucketLabel: "month bucket", summary: "last 12 months" };
   }
-  return { grain: "day", heading: "Daily review", bucketLabel: "day bucket", summary: "last 30 days" };
+  return { grain: "day", heading: t("desktop.trend.dailyReview"), bucketLabel: "day bucket", summary: "last 30 days" };
 }
 
 function daysForTrendView(view) {
@@ -1552,6 +1557,19 @@ function escapeHtml(value) {
 function cssEscape(value) {
   return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
+
+// 初始化语言切换器
+const langContainer = document.querySelector("#lang-switcher-container");
+if (langContainer) {
+  langContainer.innerHTML = createLangSwitcher();
+  bindLangSwitcher("lang-switcher", () => {
+    // 语言切换后重新加载页面以应用新语言
+    window.location.reload();
+  });
+}
+
+// 应用当前语言翻译
+updatePageTranslations();
 
 boot().catch((error) => {
   $("#sync-state").textContent = error.message;

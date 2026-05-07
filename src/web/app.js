@@ -1,4 +1,8 @@
 import { costQualityLabel, dominantComposition, tokenCompositionDetails, tokenCompositionSummary } from "/shared/composition.js";
+import { initI18n, t, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+
+// 初始化多语言
+const currentLang = initI18n();
 
 const state = {
   period: "today",
@@ -62,18 +66,19 @@ document.querySelector("#show-cost").addEventListener("change", (event) => {
 });
 
 async function loadLeaderboard() {
-  statusEl.textContent = "Loading...";
+  statusEl.textContent = t("loading");
   const params = new URLSearchParams({ period: state.period });
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/public-leaderboard?${params.toString()}`);
   const data = await response.json();
   render(data.items || []);
-  statusEl.textContent = `${data.items.length} ranked participant${data.items.length === 1 ? "" : "s"}`;
+  const participantText = data.items.length === 1 ? t("web.leaderboard.participants") : t("web.leaderboard.participants") + "s";
+  statusEl.textContent = `${data.items.length} ${participantText}`;
 }
 
 function render(items) {
   if (!items.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 4 : 3}">No usage uploaded yet.</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 4 : 3}">${t("web.leaderboard.noUsage")}</td></tr>`;
     return;
   }
   tbody.innerHTML = items
@@ -116,7 +121,8 @@ function renderReleaseDownloads(manifest) {
     .sort(([left], [right]) => platformSort(left) - platformSort(right));
   const preferred = preferredPlatform();
   const preferredArtifact = platforms.find(([platform]) => platform === preferred);
-  downloadStatusEl.textContent = `Latest ${manifest.version} · ${platforms.length} platform${platforms.length === 1 ? "" : "s"}`;
+  const platformText = platforms.length === 1 ? t("web.download.platforms") : t("web.download.platforms") + "s";
+  downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version} · ${platforms.length} ${platformText}`;
   downloadActionsEl.innerHTML = platforms.length
     ? platforms
         .map(([platform, artifact]) => {
@@ -128,15 +134,15 @@ function renderReleaseDownloads(manifest) {
           </a>`;
         })
         .join("")
-    : `<span class="download-placeholder">No downloadable client artifacts</span>`;
-  if (preferredArtifact) downloadStatusEl.textContent = `Latest ${manifest.version} · recommended for this device: ${platformLabel(preferred)}`;
+    : `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
+  if (preferredArtifact) downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version} · ${t("web.download.recommended")}: ${platformLabel(preferred)}`;
   else if (isMacBrowser() && platforms.some(([platform]) => platform === "darwin-arm64") && platforms.some(([platform]) => platform === "darwin-x64")) {
-    downloadStatusEl.textContent = `Latest ${manifest.version} · choose macOS Apple silicon or macOS Intel`;
+    downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version} · ${t("web.download.chooseMac")}`;
   }
 }
 
 function renderDownloadUnavailable(reason) {
-  downloadStatusEl.textContent = "Client downloads are not configured on this app server.";
+  downloadStatusEl.textContent = t("web.download.notConfigured");
   downloadActionsEl.innerHTML = `<span class="download-placeholder">${escapeHtml(reason)}</span>`;
 }
 
@@ -404,14 +410,15 @@ function formatPeriodRange(from, to) {
 }
 
 function periodLabel(period) {
-  return {
-    today: "Today",
-    yesterday: "Yesterday",
-    this_week: "This week",
-    last_week: "Last week",
-    this_month: "This month",
-    last_month: "Last month"
-  }[period] || period;
+  const labels = {
+    today: t("web.period.today"),
+    yesterday: t("web.period.yesterday"),
+    this_week: t("web.period.thisWeek"),
+    last_week: t("web.period.lastWeek"),
+    this_month: t("web.period.thisMonth"),
+    last_month: t("web.period.lastMonth")
+  };
+  return labels[period] || period;
 }
 
 function historyParams(view) {
@@ -427,9 +434,9 @@ function historyLabel(view) {
 }
 
 function sourceName(providerId) {
-  if (providerId === "codex_local") return "Codex";
-  if (providerId === "claude_code_local") return "Claude Code";
-  if (providerId === "cursor_dashboard_usage") return "Cursor";
+  if (providerId === "codex_local") return t("source.codex");
+  if (providerId === "claude_code_local") return t("source.claude");
+  if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }
 
@@ -442,11 +449,12 @@ function platformSort(platform) {
 }
 
 function platformLabel(platform) {
-  return {
-    "darwin-arm64": "macOS Apple silicon",
-    "darwin-x64": "macOS Intel",
-    "win32-x64": "Windows x64"
-  }[platform] || platform;
+  const labels = {
+    "darwin-arm64": t("platform.darwinArm64"),
+    "darwin-x64": t("platform.darwinX64"),
+    "win32-x64": t("platform.win32X64")
+  };
+  return labels[platform] || platform;
 }
 
 function preferredPlatform() {
@@ -537,13 +545,14 @@ function renderCost(item) {
 }
 
 function humanDominant(value = "") {
-  return {
-    "input-heavy": "Input-heavy",
-    "output-heavy": "Output-heavy",
-    "cache-heavy": "Cache-heavy",
-    "reasoning-heavy": "Reasoning-heavy",
-    "no-usage": "No usage"
-  }[value] || value || "-";
+  const labels = {
+    "input-heavy": t("web.composition.inputHeavy"),
+    "output-heavy": t("web.composition.outputHeavy"),
+    "cache-heavy": t("web.composition.cacheHeavy"),
+    "reasoning-heavy": t("web.composition.reasoningHeavy"),
+    "no-usage": t("web.composition.noUsage")
+  };
+  return labels[value] || value || "-";
 }
 
 function trendItemTitle(item) {
@@ -562,6 +571,19 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value);
 }
+
+// 初始化语言切换器
+const langContainer = document.querySelector("#lang-switcher-container");
+if (langContainer) {
+  langContainer.innerHTML = createLangSwitcher();
+  bindLangSwitcher("lang-switcher", () => {
+    // 语言切换后重新加载页面以应用新语言
+    window.location.reload();
+  });
+}
+
+// 应用当前语言翻译
+updatePageTranslations();
 
 loadReleaseDownloads();
 loadLeaderboard().catch((error) => {

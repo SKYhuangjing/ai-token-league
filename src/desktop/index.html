@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Token League</title>
+    <title data-i18n="app.name">AI Token League</title>
     <link rel="icon" type="image/png" href="./favicon.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -11,20 +11,21 @@
     <main class="layout">
       <aside class="rail">
         <div>
-          <p class="eyebrow">AI Token League</p>
-          <h1>Token usage</h1>
-          <p class="rail-copy">Local daily totals, grouped by workdir. No prompts, responses, code, or real paths are uploaded.</p>
+          <p class="eyebrow" data-i18n="app.name">AI Token League</p>
+          <h1 data-i18n="desktop.nav.today">Token usage</h1>
+          <p class="rail-copy" data-i18n="app.tagline">Local daily totals, grouped by workdir. No prompts, responses, code, or real paths are uploaded.</p>
         </div>
         <nav>
-          <button data-section="today" class="active">Today</button>
-          <button data-section="trend">Trend</button>
-          <button data-section="settings">Settings</button>
+          <button data-section="today" class="active" data-i18n="desktop.nav.today">Today</button>
+          <button data-section="trend" data-i18n="desktop.nav.trend">Trend</button>
+          <button data-section="settings" data-i18n="desktop.nav.settings">Settings</button>
         </nav>
+        <div class="lang-switcher-container" id="lang-switcher-container"></div>
         <div class="sync-card">
-          <span id="sync-state">Not synced</span>
+          <span id="sync-state" data-i18n="desktop.sync.notSynced">Not synced</span>
           <small id="sync-target">API -</small>
-          <small id="sync-last">Last sync -</small>
-          <button id="sync-now">Sync now</button>
+          <small id="sync-last" data-i18n="desktop.sync.lastSync">Last sync -</small>
+          <button id="sync-now" data-i18n="desktop.nav.syncNow">Sync now</button>
         </div>
       </aside>
 
@@ -32,56 +33,56 @@
         <section id="today" class="panel active">
           <div class="panel-head hero-head">
             <div>
-              <p class="eyebrow">Today</p>
+              <p class="eyebrow" data-i18n="desktop.today.title">Today</p>
               <h2 id="today-total">0</h2>
-              <p id="today-summary" class="subtle">Scanning local usage...</p>
+              <p id="today-summary" class="subtle" data-i18n="desktop.today.scanning">Scanning local usage...</p>
             </div>
             <div class="head-actions">
-              <span id="today-scan-time" class="badge">Last scan -</span>
-              <button id="refresh-today">Refresh</button>
+              <span id="today-scan-time" class="badge" data-i18n="desktop.today.lastScan">Last scan -</span>
+              <button id="refresh-today" data-i18n="refresh">Refresh</button>
             </div>
           </div>
 
           <section class="cards cards-four">
             <article class="stat-card">
-              <span>Workdirs</span>
+              <span data-i18n="desktop.today.workdirs">Workdirs</span>
               <strong id="workdir-count">0</strong>
             </article>
             <article class="stat-card">
-              <span>Models</span>
+              <span data-i18n="desktop.today.models">Models</span>
               <strong id="model-count">0</strong>
             </article>
             <article class="stat-card">
-              <span>Dominant composition</span>
+              <span data-i18n="desktop.today.dominant">Dominant composition</span>
               <strong id="today-dominant">-</strong>
             </article>
             <article class="stat-card" id="today-cost-card" hidden>
-              <span>Est. cost</span>
+              <span data-i18n="desktop.today.estCost">Est. cost</span>
               <strong id="today-cost">-</strong>
-              <small id="today-cost-note">pricing unavailable</small>
+              <small id="today-cost-note" data-i18n="desktop.today.pricingUnavailable">pricing unavailable</small>
             </article>
           </section>
 
           <section class="section-block">
             <div class="section-title">
-              <h3>Token composition</h3>
-              <p id="today-composition-summary">Today composition is loading.</p>
+              <h3 data-i18n="desktop.composition.tokenComposition">Token composition</h3>
+              <p id="today-composition-summary" data-i18n="desktop.composition.todayLoading">Today composition is loading.</p>
             </div>
             <div id="today-composition" class="detail-summary composition-grid"></div>
           </section>
 
           <section class="section-block">
             <div class="section-title">
-              <h3>Workdir consumption</h3>
-              <p>Only public directory names are shown.</p>
+              <h3 data-i18n="desktop.workdir.consumption">Workdir consumption</h3>
+              <p data-i18n="desktop.workdir.publicNames">Only public directory names are shown.</p>
             </div>
             <div id="workdir-list" class="list"></div>
           </section>
 
           <section class="section-block">
             <div class="section-title">
-              <h3>Model consumption</h3>
-              <p>Token totals grouped by model.</p>
+              <h3 data-i18n="desktop.model.consumption">Model consumption</h3>
+              <p data-i18n="desktop.model.tokenTotals">Token totals grouped by model.</p>
             </div>
             <div id="model-list" class="list"></div>
           </section>
@@ -90,39 +91,39 @@
         <section id="trend" class="panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Trend</p>
-              <h2>Usage rhythm</h2>
+              <p class="eyebrow" data-i18n="desktop.nav.trend">Trend</p>
+              <h2 data-i18n="desktop.trend.title">Usage rhythm</h2>
             </div>
             <div class="panel-actions">
               <div class="segmented-control" id="trend-view">
-                <button data-view="daily" class="active">Daily</button>
-                <button data-view="weekly">Weekly</button>
-                <button data-view="monthly">Monthly</button>
+                <button data-view="daily" class="active" data-i18n="web.detail.daily">Daily</button>
+                <button data-view="weekly" data-i18n="web.detail.weekly">Weekly</button>
+                <button data-view="monthly" data-i18n="web.detail.monthly">Monthly</button>
               </div>
               <div class="segmented-control" id="trend-mode">
-                <button data-mode="chart" class="active">Chart</button>
-                <button data-mode="table">Table</button>
+                <button data-mode="chart" class="active" data-i18n="desktop.trend.chart">Chart</button>
+                <button data-mode="table" data-i18n="desktop.trend.table">Table</button>
               </div>
-              <button id="refresh-trend">Refresh</button>
+              <button id="refresh-trend" data-i18n="refresh">Refresh</button>
             </div>
           </div>
 
           <section class="section-block trend-block">
             <div class="section-title">
-              <h3 id="trend-heading">Daily review</h3>
-              <p id="trend-summary">Grouped from cached local usage rows.</p>
+              <h3 id="trend-heading" data-i18n="desktop.trend.dailyReview">Daily review</h3>
+              <p id="trend-summary" data-i18n="desktop.trend.groupedFromCache">Grouped from cached local usage rows.</p>
             </div>
             <div id="trend-chart-panel" class="trend-chart"></div>
             <div id="trend-table-panel" class="table-wrap" hidden>
               <table class="trend-table">
                 <thead>
                   <tr>
-                    <th>Period</th>
-                    <th>Total Tokens</th>
-                    <th>Composition</th>
-                    <th>Models</th>
-                    <th>Workdirs</th>
-                    <th id="trend-cost-header" hidden>Est. Cost</th>
+                    <th data-i18n="desktop.trend.period">Period</th>
+                    <th data-i18n="web.leaderboard.totalTokens">Total Tokens</th>
+                    <th data-i18n="desktop.trend.composition">Composition</th>
+                    <th data-i18n="web.leaderboard.models">Models</th>
+                    <th data-i18n="desktop.trend.workdirs">Workdirs</th>
+                    <th id="trend-cost-header" hidden data-i18n="desktop.today.estCost">Est. Cost</th>
                   </tr>
                 </thead>
                 <tbody id="trend-rows"></tbody>
@@ -147,70 +148,70 @@
         <section id="settings" class="panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Settings</p>
-              <h2>Account, cloud, and app</h2>
+              <p class="eyebrow" data-i18n="desktop.nav.settings">Settings</p>
+              <h2 data-i18n="desktop.settings.title">Account, cloud, and app</h2>
             </div>
-            <span id="profile-state" class="badge">Not configured</span>
+            <span id="profile-state" class="badge" data-i18n="desktop.settings.notConfigured">Not configured</span>
           </div>
 
           <div class="segmented-control settings-tabs" id="settings-tabs">
-            <button data-settings-tab="account" class="active">Account</button>
-            <button data-settings-tab="sources">Sources</button>
-            <button data-settings-tab="cloud">Cloud</button>
-            <button data-settings-tab="sync">Sync</button>
-            <button data-settings-tab="app">App</button>
+            <button data-settings-tab="account" class="active" data-i18n="desktop.settings.tab.account">Account</button>
+            <button data-settings-tab="sources" data-i18n="desktop.settings.tab.sources">Sources</button>
+            <button data-settings-tab="cloud" data-i18n="desktop.settings.tab.cloud">Cloud</button>
+            <button data-settings-tab="sync" data-i18n="desktop.settings.tab.sync">Sync</button>
+            <button data-settings-tab="app" data-i18n="desktop.settings.tab.app">App</button>
           </div>
 
           <section class="section-block settings-panel active" data-settings-panel="account">
             <div class="form-grid">
               <label>
-                Nickname
+                <span data-i18n="desktop.account.nickname">Nickname</span>
                 <input id="nickname" value="anonymous" />
               </label>
             </div>
             <div class="actions">
-              <button class="save-settings" type="button">Save settings</button>
-              <button id="export">Export config</button>
-              <button id="import">Import config</button>
+              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
+              <button id="export" data-i18n="desktop.account.exportConfig">Export config</button>
+              <button id="import" data-i18n="desktop.account.importConfig">Import config</button>
             </div>
           </section>
 
           <section class="section-block settings-panel" data-settings-panel="sources">
             <div class="section-title">
-              <h3>Local sources</h3>
-              <p>Manage local providers, Cursor tokens, and public workdir aliases.</p>
+              <h3 data-i18n="desktop.sources.localSources">Local sources</h3>
+              <p data-i18n="desktop.sources.manageProviders">Manage local providers, Cursor tokens, and public workdir aliases.</p>
             </div>
             <div class="actions">
-              <button id="refresh-health">Refresh sources</button>
-              <button id="add-codex-root">Add Codex location</button>
-              <button id="add-claude-root">Add Claude Code location</button>
-              <button id="add-cursor-token">Add Cursor token</button>
+              <button id="refresh-health" data-i18n="desktop.sources.refreshSources">Refresh sources</button>
+              <button id="add-codex-root" data-i18n="desktop.sources.addCodex">Add Codex location</button>
+              <button id="add-claude-root" data-i18n="desktop.sources.addClaude">Add Claude Code location</button>
+              <button id="add-cursor-token" data-i18n="desktop.sources.addCursor">Add Cursor token</button>
             </div>
-            <p id="cursor-token-summary" class="sync-note">No Cursor token configured.</p>
+            <p id="cursor-token-summary" class="sync-note" data-i18n="desktop.sources.noCursorToken">No Cursor token configured.</p>
             <div id="settings-source-list" class="source-grid"></div>
             <div class="section-title compact-title">
-              <h3>Workdir aliases</h3>
+              <h3 data-i18n="desktop.sources.workdirAliases">Workdir aliases</h3>
             </div>
             <div id="workdir-alias-list" class="alias-list"></div>
           </section>
 
           <section class="section-block settings-panel" data-settings-panel="cloud">
             <div class="section-title">
-              <h3>Cloud connection</h3>
-              <p>One app-server target is used by sync, pricing, compatibility, and update checks.</p>
+              <h3 data-i18n="desktop.cloud.title">Cloud connection</h3>
+              <p data-i18n="desktop.cloud.description">One app-server target is used by sync, pricing, compatibility, and update checks.</p>
             </div>
             <div class="form-grid">
               <label>
-                API base URL
-                <input id="apiBaseUrl" placeholder="https://your-api.example" />
+                <span data-i18n="desktop.cloud.apiBaseUrl">API base URL</span>
+                <input id="apiBaseUrl" placeholder="https://your-api.example" data-i18n-placeholder="desktop.cloud.apiBaseUrl" />
               </label>
             </div>
             <div class="actions">
-              <button class="save-settings" type="button">Save settings</button>
+              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
               <span id="settings-save-message" class="action-message" aria-live="polite"></span>
             </div>
             <div class="sync-status-box">
-              <strong>Cloud status</strong>
+              <strong data-i18n="desktop.cloud.cloudStatus">Cloud status</strong>
               <span id="cloud-target">API -</span>
               <span id="cloud-health">Health -</span>
               <span id="cloud-server-version">Server -</span>
@@ -223,38 +224,38 @@
 
           <section class="section-block settings-panel" data-settings-panel="sync">
             <div class="section-title">
-              <h3>Sync and refresh</h3>
-              <p>Controls local refresh cadence and upload queue behavior.</p>
+              <h3 data-i18n="desktop.sync.title">Sync and refresh</h3>
+              <p data-i18n="desktop.sync.description">Controls local refresh cadence and upload queue behavior.</p>
             </div>
             <div class="form-grid">
               <label>
-                Refresh interval
+                <span data-i18n="desktop.sync.refreshInterval">Refresh interval (minutes)</span>
                 <input id="refreshIntervalMinutes" type="number" min="1" step="1" value="15" />
               </label>
               <label class="toggle-row">
                 <input id="autoRefreshEnabled" type="checkbox" />
-                Background refresh
+                <span data-i18n="desktop.sync.backgroundRefresh">Background refresh</span>
               </label>
             </div>
             <div class="actions">
-              <button class="save-settings" type="button">Save settings</button>
+              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
             </div>
             <div class="sync-status-box">
-              <strong>Sync status</strong>
+              <strong data-i18n="desktop.sync.syncStatus">Sync status</strong>
               <span id="settings-sync-target">API -</span>
-              <span id="settings-sync-last">Last sync -</span>
-              <span id="settings-sync-result">No upload attempt recorded.</span>
+              <span id="settings-sync-last" data-i18n="desktop.sync.lastSync">Last sync -</span>
+              <span id="settings-sync-result" data-i18n="desktop.sync.result">No upload attempt recorded.</span>
             </div>
-            <p id="background-state" class="sync-note">Background refresh has not run yet.</p>
+            <p id="background-state" class="sync-note" data-i18n="desktop.sync.backgroundState">Background refresh has not run yet.</p>
           </section>
 
           <section class="section-block settings-panel" data-settings-panel="app">
             <div class="section-title">
-              <h3>App</h3>
-              <p>Client version, verified update download, display preferences, and local startup behavior.</p>
+              <h3 data-i18n="desktop.settings.tab.app">App</h3>
+              <p data-i18n="desktop.app.description">Client version, verified update download, display preferences, and local startup behavior.</p>
             </div>
             <div class="sync-status-box">
-              <strong>Version status</strong>
+              <strong data-i18n="desktop.app.versionStatus">Version status</strong>
               <span id="system-client-version">Client -</span>
               <span id="system-latest-version">Latest -</span>
               <span id="system-update-checked">Last check -</span>
@@ -263,25 +264,25 @@
             <div class="silent-update-control" role="radiogroup" aria-label="Silent update">
               <label>
                 <input type="radio" name="silentUpdateMode" value="notify" />
-                <strong>Notify</strong>
+                <strong data-i18n="desktop.app.notifyOnly">Notify</strong>
                 <small>Check only</small>
               </label>
               <label>
                 <input type="radio" name="silentUpdateMode" value="auto_download" />
-                <strong>Prepare</strong>
+                <strong data-i18n="desktop.app.autoDownload">Prepare</strong>
                 <small>Download verified zip</small>
               </label>
               <label>
                 <input type="radio" name="silentUpdateMode" value="auto_apply_on_idle" />
-                <strong>Auto apply</strong>
+                <strong data-i18n="desktop.app.autoApplyIdle">Auto apply</strong>
                 <small>Restart when idle</small>
               </label>
             </div>
             <div class="actions">
-              <button id="check-update" type="button">Check update</button>
-              <button id="download-update" type="button" disabled>Download and restart</button>
-              <button class="save-settings" type="button">Save settings</button>
-              <button id="export-diagnostics" type="button">Export diagnostics</button>
+              <button id="check-update" type="button" data-i18n="desktop.app.checkUpdate">Check update</button>
+              <button id="download-update" type="button" disabled data-i18n="desktop.app.downloadRestart">Download and restart</button>
+              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
+              <button id="export-diagnostics" type="button" data-i18n="desktop.app.exportDiagnostics">Export diagnostics</button>
               <span id="update-message" class="action-message" aria-live="polite"></span>
               <span id="diagnostics-message" class="action-message" aria-live="polite"></span>
             </div>
@@ -289,46 +290,46 @@
               <h3>Risk controls</h3>
               <div class="risk-grid">
                 <article>
-                  <strong>Sync upload</strong>
-                  <p>Sync sends local aggregate usage rows to the configured API. The app shows a target and row-count preview before upload.</p>
+                  <strong data-i18n="desktop.risk.syncUpload">Sync upload</strong>
+                  <p data-i18n="desktop.risk.syncDescription">Sync sends local aggregate usage rows to the configured API. The app shows a target and row-count preview before upload.</p>
                 </article>
                 <article>
-                  <strong>Cursor credentials</strong>
-                  <p>Cursor tokens stay on this computer. Add or rotate them from Sources; they are not rendered back after save.</p>
+                  <strong data-i18n="desktop.risk.cursorCredentials">Cursor credentials</strong>
+                  <p data-i18n="desktop.risk.cursorDescription">Cursor tokens stay on this computer. Add or rotate them from Sources; they are not rendered back after save.</p>
                 </article>
                 <article>
-                  <strong>Profile files</strong>
-                  <p>Import and export move your anonymous profile identity between local files. Keep exported profiles private.</p>
+                  <strong data-i18n="desktop.risk.profileFiles">Profile files</strong>
+                  <p data-i18n="desktop.risk.profileDescription">Import and export move your anonymous profile identity between local files. Keep exported profiles private.</p>
                 </article>
                 <article>
-                  <strong>Reset local data</strong>
-                  <p>Reset clears this app profile, cache, aliases, queue, tokens, and settings. Source app history is not deleted.</p>
+                  <strong data-i18n="desktop.risk.resetData">Reset local data</strong>
+                  <p data-i18n="desktop.risk.resetDescription">Reset clears this app profile, cache, aliases, queue, tokens, and settings. Source app history is not deleted.</p>
                 </article>
               </div>
             </section>
             <div class="form-grid">
               <label class="toggle-row">
                 <input id="showEstimatedCost" type="checkbox" />
-                Show estimated cost
+                <span data-i18n="desktop.display.showEstCost">Show estimated cost</span>
               </label>
               <label class="toggle-row">
                 <input id="showRawTokens" type="checkbox" />
-                Raw token numbers
+                <span data-i18n="desktop.display.showRawTokens">Raw token numbers</span>
               </label>
               <label class="toggle-row">
                 <input id="launchAtLogin" type="checkbox" />
-                Launch at login
+                <span data-i18n="desktop.display.launchAtLogin">Launch at login</span>
               </label>
             </div>
             <div class="actions">
-              <button class="save-settings" type="button">Save settings</button>
+              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
             </div>
             <section class="danger-zone">
               <div>
-                <strong>Reset local data</strong>
-                <p>Clears this desktop profile, upload queue, cached usage scan, local tokens, aliases, and settings. Codex, Claude Code, and Cursor source files are not deleted.</p>
+                <strong data-i18n="desktop.reset.title">Reset local data</strong>
+                <p data-i18n="desktop.reset.description">Clears this desktop profile, upload queue, cached usage scan, local tokens, aliases, and settings. Codex, Claude Code, and Cursor source files are not deleted.</p>
               </div>
-              <button id="reset-local-data" type="button">Reset data</button>
+              <button id="reset-local-data" type="button" data-i18n="desktop.reset.button">Reset data</button>
             </section>
           </section>
         </section>
@@ -343,24 +344,24 @@
           <span class="wizard-step-dot" data-wizard-step-dot="3">4</span>
           <span class="wizard-step-dot" data-wizard-step-dot="4">5</span>
         </div>
-        <a href="#" id="wizard-skip" class="wizard-skip">Skip setup</a>
+        <a href="#" id="wizard-skip" class="wizard-skip" data-i18n="desktop.wizard.skipSetup">Skip setup</a>
 
         <div class="wizard-step active" data-wizard-step="0">
           <p class="eyebrow">Welcome</p>
-          <h2>Welcome to AI Token League</h2>
-          <p>Track your AI coding token usage and compare with the community. The app scans local usage files from Codex, Claude Code, and Cursor, then aggregates daily token counts.</p>
+          <h2 data-i18n="desktop.wizard.welcome">Welcome to AI Token League</h2>
+          <p data-i18n="desktop.wizard.welcomeDesc">Track your AI coding token usage and compare with the community. The app scans local usage files from Codex, Claude Code, and Cursor, then aggregates daily token counts.</p>
           <div class="privacy-callout">
-            <h3>Your data stays private</h3>
+            <h3 data-i18n="desktop.wizard.privacyTitle">Your data stays private</h3>
             <ul>
-              <li>Prompts and assistant responses are never collected.</li>
-              <li>Source code and file content are never collected.</li>
-              <li>Real file paths are replaced with SHA-256 hashes.</li>
-              <li>Cursor session tokens stay on your computer.</li>
-              <li>Your identity private key never leaves your machine.</li>
+              <li data-i18n="desktop.wizard.privacy1">Prompts and assistant responses are never collected.</li>
+              <li data-i18n="desktop.wizard.privacy2">Source code and file content are never collected.</li>
+              <li data-i18n="desktop.wizard.privacy3">Real file paths are replaced with SHA-256 hashes.</li>
+              <li data-i18n="desktop.wizard.privacy4">Cursor session tokens stay on your computer.</li>
+              <li data-i18n="desktop.wizard.privacy5">Your identity private key never leaves your machine.</li>
             </ul>
           </div>
           <div class="wizard-actions">
-            <button id="wizard-next-0" type="button">Next</button>
+            <button id="wizard-next-0" type="button" data-i18n="wizard.next">Next</button>
           </div>
         </div>
 

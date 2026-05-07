@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Token League</title>
+    <title data-i18n="app.name">AI Token League</title>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -11,23 +11,24 @@
     <main class="shell public-shell">
       <section class="masthead public-masthead">
         <div>
-          <p class="eyebrow">Public community board</p>
-          <h1>AI Token League</h1>
-          <p class="summary">Daily token totals from local collectors. The public view now explains period token composition and optional cost composition without turning into an admin report.</p>
+          <p class="eyebrow" data-i18n="web.publicBoard">Public community board</p>
+          <h1 data-i18n="app.name">AI Token League</h1>
+          <p class="summary" data-i18n="app.tagline">AI coding token usage leaderboard</p>
         </div>
         <div class="masthead-side">
           <div class="score-card">
-            <span class="label">Ranking metric</span>
-            <strong>Total tokens</strong>
-            <small>Model totals are shown for context.</small>
+            <span class="label" data-i18n="web.rankingMetric">Ranking metric</span>
+            <strong data-i18n="web.totalTokens">Total tokens</strong>
+            <small data-i18n="web.modelTotalsContext">Model totals are shown for context.</small>
           </div>
+          <div class="lang-switcher-container" id="lang-switcher-container"></div>
           <details class="download-panel">
             <summary>
-              <span>Download client</span>
-              <small id="download-status">Checking latest release...</small>
+              <span data-i18n="web.downloadClient">Download client</span>
+              <small id="download-status" data-i18n="web.checkingRelease">Checking latest release...</small>
             </summary>
             <div class="download-actions" id="download-actions">
-              <span class="download-placeholder">Release metadata loading</span>
+              <span class="download-placeholder" data-i18n="web.releaseMetadata">Release metadata loading</span>
             </div>
           </details>
         </div>
@@ -35,32 +36,32 @@
 
       <section class="toolbar" aria-label="Leaderboard period">
         <div class="segmented" data-filter="period">
-          <button data-value="today" class="active">Today</button>
-          <button data-value="yesterday">Yesterday</button>
-          <button data-value="this_week">This week</button>
-          <button data-value="last_week">Last week</button>
-          <button data-value="this_month">This month</button>
-          <button data-value="last_month">Last month</button>
+          <button data-value="today" class="active" data-i18n="web.period.today">Today</button>
+          <button data-value="yesterday" data-i18n="web.period.yesterday">Yesterday</button>
+          <button data-value="this_week" data-i18n="web.period.thisWeek">This week</button>
+          <button data-value="last_week" data-i18n="web.period.lastWeek">Last week</button>
+          <button data-value="this_month" data-i18n="web.period.thisMonth">This month</button>
+          <button data-value="last_month" data-i18n="web.period.lastMonth">Last month</button>
         </div>
         <label class="inline-toggle">
           <input id="show-cost" type="checkbox" />
-          Estimated cost
+          <span data-i18n="web.estimatedCost">Estimated cost</span>
         </label>
       </section>
 
       <section class="board">
         <div class="board-header">
-          <h2>Community Leaderboard</h2>
-          <p id="status">Loading...</p>
+          <h2 data-i18n="web.leaderboard.title">Community Leaderboard</h2>
+          <p id="status" data-i18n="loading">Loading...</p>
         </div>
         <div class="table-wrap">
           <table class="public-table">
             <thead>
               <tr>
-                <th>Username</th>
-                <th>Total tokens</th>
-                <th class="cost-col" hidden>Est. cost</th>
-                <th>Models</th>
+                <th data-i18n="web.leaderboard.username">Username</th>
+                <th data-i18n="web.leaderboard.totalTokens">Total tokens</th>
+                <th class="cost-col" hidden data-i18n="web.leaderboard.estCost">Est. cost</th>
+                <th data-i18n="web.leaderboard.models">Models</th>
               </tr>
             </thead>
             <tbody id="leaderboard"></tbody>
@@ -71,36 +72,36 @@
       <section class="board detail-board" id="participant-detail" hidden>
         <div class="board-header">
           <div>
-            <h2 id="detail-title">Participant detail</h2>
-            <p id="detail-status">Select a user from the leaderboard.</p>
+            <h2 id="detail-title" data-i18n="web.detail.title">Participant detail</h2>
+            <p id="detail-status" data-i18n="web.detail.selectUser">Select a user from the leaderboard.</p>
           </div>
           <div class="detail-controls">
             <div class="segmented compact" data-detail-tab>
-              <button data-value="period" class="active">Period detail</button>
-              <button data-value="history">History trend</button>
+              <button data-value="period" class="active" data-i18n="web.detail.periodDetail">Period detail</button>
+              <button data-value="history" data-i18n="web.detail.historyTrend">History trend</button>
             </div>
             <div class="segmented compact" data-history-view hidden>
-              <button data-value="daily" class="active">Daily</button>
-              <button data-value="weekly">Weekly</button>
-              <button data-value="monthly">Monthly</button>
+              <button data-value="daily" class="active" data-i18n="web.detail.daily">Daily</button>
+              <button data-value="weekly" data-i18n="web.detail.weekly">Weekly</button>
+              <button data-value="monthly" data-i18n="web.detail.monthly">Monthly</button>
             </div>
-            <button class="drawer-close" id="close-detail" type="button" aria-label="Close detail">Close</button>
+            <button class="drawer-close" id="close-detail" type="button" aria-label="Close detail" data-i18n="close">Close</button>
           </div>
         </div>
         <div id="detail-summary" class="detail-summary"></div>
         <div id="period-detail-panel">
           <section>
-            <h3>Usage composition</h3>
+            <h3 data-i18n="web.detail.usageComposition">Usage composition</h3>
             <div id="detail-composition"></div>
           </section>
           <div id="period-chart" class="detail-chart"></div>
           <div class="detail-grid">
             <section>
-              <h3>Models</h3>
+              <h3 data-i18n="web.detail.models">Models</h3>
               <div id="detail-models" class="breakdown"></div>
             </section>
             <section>
-              <h3>Sources</h3>
+              <h3 data-i18n="web.detail.sources">Sources</h3>
               <div id="detail-sources" class="breakdown"></div>
             </section>
           </div>
@@ -109,21 +110,21 @@
           <div id="history-chart" class="detail-chart"></div>
         </div>
         <details class="raw-data">
-          <summary>Raw data</summary>
+          <summary data-i18n="web.detail.rawData">Raw data</summary>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Period</th>
-                  <th>Total tokens</th>
-                  <th>Composition</th>
-                  <th>Input</th>
-                  <th>Output</th>
-                  <th>Cache</th>
-                  <th>Reasoning</th>
-                  <th class="cost-col" hidden>Est. cost</th>
-                  <th class="cost-col" hidden>Price quality</th>
-                  <th>Models</th>
+                  <th data-i18n="web.detail.period">Period</th>
+                  <th data-i18n="web.leaderboard.totalTokens">Total tokens</th>
+                  <th data-i18n="web.detail.composition">Composition</th>
+                  <th data-i18n="web.detail.input">Input</th>
+                  <th data-i18n="web.detail.output">Output</th>
+                  <th data-i18n="web.detail.cache">Cache</th>
+                  <th data-i18n="web.detail.reasoning">Reasoning</th>
+                  <th class="cost-col" hidden data-i18n="web.leaderboard.estCost">Est. cost</th>
+                  <th class="cost-col" hidden data-i18n="web.detail.priceQuality">Price quality</th>
+                  <th data-i18n="web.leaderboard.models">Models</th>
                 </tr>
               </thead>
               <tbody id="detail-rows"></tbody>
