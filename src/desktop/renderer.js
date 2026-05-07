@@ -346,6 +346,30 @@ async function boot() {
     $("#today-summary").textContent = t("desktop.renderer.openSettings");
     document.querySelector('[data-section="settings"]').click();
   }
+  api.onUpdateProgress((data) => {
+    updateCheckProgress(data);
+  });
+}
+
+function updateCheckProgress(data) {
+  if (data.downloadProgress) {
+    const pct = data.downloadProgress.percent;
+    const speed = data.downloadProgress.bytesPerSecond > 0
+      ? `${Math.round(data.downloadProgress.bytesPerSecond / 1024)} KB/s`
+      : "";
+    $("#update-message").textContent = speed
+      ? `${t("desktop.renderer.downloading")} ${pct}% (${speed})`
+      : `${t("desktop.renderer.downloading")} ${pct}%`;
+  }
+  if (data.status === "downloaded") {
+    $("#download-update").disabled = false;
+    $("#update-message").textContent = t("desktop.renderer.downloadedReady");
+  }
+  if (data.status === "failed" && data.lastError) {
+    $("#update-message").textContent = data.lastError;
+    $("#download-update").disabled = false;
+  }
+  renderSilentUpdateStatus(data, latestConfig);
 }
 
 async function loadToday(force = false) {
@@ -569,20 +593,16 @@ async function checkUpdate() {
 }
 
 async function downloadUpdate() {
-  if (!latestUpdateState?.update?.artifact) return;
   $("#download-update").disabled = true;
   $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
-    const result = await api.downloadUpdate({ artifact: latestUpdateState.update.artifact });
-    if (result.canInstall) {
-      $("#check-update").disabled = true;
-      $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
-      await api.installAndRestartUpdate();
-      return;
-    }
-    $("#update-message").textContent = result.handoff || t("desktop.renderer.downloadedVerified");
-  } finally {
-    $("#download-update").disabled = !latestUpdateState?.update?.updateAvailable;
+    await api.downloadUpdate();
+    $("#check-update").disabled = true;
+    $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
+    await api.installAndRestartUpdate();
+  } catch (error) {
+    $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
+    $("#download-update").disabled = false;
   }
 }
 
@@ -935,7 +955,10 @@ function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   };
   const parts = [labels[mode] || t("desktop.renderer.notifyOnly")];
   if (updateCheck?.status) parts.push(updateCheck.status.replaceAll("_", " "));
-  if (updateCheck?.readyPackage) parts.push(t("desktop.renderer.ready", { version: updateCheck.readyPackage.latestVersion || updateCheck.readyPackage.fileName }));
+  if (updateCheck?.downloadProgress) parts.push(`${updateCheck.downloadProgress.percent}%`);
+  if (updateCheck?.lastResult?.latestVersion && updateCheck?.status === "downloaded") {
+    parts.push(t("desktop.renderer.ready", { version: updateCheck.lastResult.latestVersion }));
+  }
   if (updateCheck?.nextCheckAt) parts.push(t("desktop.renderer.next", { time: formatTime(updateCheck.nextCheckAt) }));
   if (updateCheck?.lastError) parts.push(t("desktop.renderer.error", { error: updateCheck.lastError }));
   $("#system-silent-update").textContent = t("desktop.renderer.silentUpdate", { parts: parts.join(" · ") });

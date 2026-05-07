@@ -1,9 +1,9 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("node:path");
 const fs = require("node:fs");
 const nodeCrypto = require("node:crypto");
 const os = require("node:os");
-const { spawn } = require("node:child_process");
 
 const background = {
   timer: null,
@@ -41,7 +41,7 @@ const updateCheck = {
   lastResult: null,
   lastError: null,
   nextCheckAt: null,
-  readyPackage: null
+  downloadProgress: null
 };
 
 const activity = {
@@ -50,152 +50,13 @@ const activity = {
   identityTransfer: false
 };
 
-const downloadedUpdate = {
-  file: "",
-  sha256: "",
-  artifact: null
-};
-
 function pathToFileUrl(file) {
   return `file://${file.replaceAll("\\", "/")}`;
-}
-
-function canInstallDownloadedUpdate(file) {
-  return ["darwin", "win32"].includes(process.platform) && path.extname(file).toLowerCase() === ".zip";
-}
-
-function currentInstallTargetPath() {
-  if (!app.isPackaged) return "";
-  if (process.platform === "win32") {
-    if (path.basename(process.execPath).toLowerCase() !== "ai token league.exe") return "";
-    return path.dirname(process.execPath);
-  }
-  if (process.platform !== "darwin") return "";
-  const bundle = path.resolve(process.execPath, "../../..");
-  return path.basename(bundle) === "AI Token League.app" ? bundle : "";
-}
-
-function canApplyDownloadedUpdate(file) {
-  return canInstallDownloadedUpdate(file) && Boolean(currentInstallTargetPath());
-}
-
-function writeUpdateScript() {
-  if (process.platform === "win32") return writeWindowsUpdateScript();
-  if (process.platform === "darwin") return writeMacUpdateScript();
-  throw new Error("Direct install is not supported on this platform");
-}
-
-function writeMacUpdateScript() {
-  const dir = path.join(app.getPath("temp"), "ai-token-league-updates");
-  fs.mkdirSync(dir, { recursive: true });
-  const script = path.join(dir, "install-and-restart.sh");
-  fs.writeFileSync(script, `#!/bin/sh
-set -eu
-APP_PID="$1"
-ZIP_FILE="$2"
-DEST_APP="$3"
-LOG_FILE="$4"
-while kill -0 "$APP_PID" 2>/dev/null; do
-  sleep 0.2
-done
-WORK_DIR="$(mktemp -d "\${TMPDIR:-/tmp}/ai-token-league-apply.XXXXXX")"
-cleanup() {
-  rm -rf "$WORK_DIR"
-}
-trap cleanup EXIT
-{
-  /usr/bin/ditto -x -k "$ZIP_FILE" "$WORK_DIR"
-  SRC_APP="$(/usr/bin/find "$WORK_DIR" -maxdepth 4 -name 'AI Token League.app' -type d | /usr/bin/head -n 1)"
-  if [ -z "$SRC_APP" ]; then
-    echo "AI Token League.app not found in update package"
-    exit 1
-  fi
-  DEST_DIR="$(/usr/bin/dirname "$DEST_APP")"
-  STAGED_APP="$DEST_DIR/.AI Token League.app.update.$$"
-  /bin/rm -rf "$STAGED_APP"
-  /usr/bin/ditto "$SRC_APP" "$STAGED_APP"
-  /bin/rm -rf "$DEST_APP"
-  /bin/mv "$STAGED_APP" "$DEST_APP"
-  /usr/bin/open "$DEST_APP"
-} >"$LOG_FILE" 2>&1
-`);
-  fs.chmodSync(script, 0o755);
-  return {
-    command: "/bin/sh",
-    args: [script]
-  };
-}
-
-function writeWindowsUpdateScript() {
-  const dir = path.join(app.getPath("temp"), "ai-token-league-updates");
-  fs.mkdirSync(dir, { recursive: true });
-  const script = path.join(dir, "install-and-restart.ps1");
-  fs.writeFileSync(script, `param(
-  [int]$AppPid,
-  [string]$ZipFile,
-  [string]$DestDir,
-  [string]$LogFile
-)
-$ErrorActionPreference = "Stop"
-function Write-UpdateLog($Message) {
-  Add-Content -LiteralPath $LogFile -Value $Message
-}
-if (Test-Path -LiteralPath $LogFile) {
-  Remove-Item -LiteralPath $LogFile -Force
-}
-Wait-Process -Id $AppPid -ErrorAction SilentlyContinue
-$WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-token-league-apply-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $WorkDir | Out-Null
-try {
-  Expand-Archive -LiteralPath $ZipFile -DestinationPath $WorkDir -Force
-  $SrcExe = Get-ChildItem -LiteralPath $WorkDir -Filter "AI Token League.exe" -Recurse -File | Select-Object -First 1
-  if (-not $SrcExe) {
-    throw "AI Token League.exe not found in update package"
-  }
-  $SrcDir = $SrcExe.Directory.FullName
-  $DestParent = Split-Path -Parent $DestDir
-  $StagedDir = Join-Path $DestParent (".AI Token League.update." + $PID)
-  if (Test-Path -LiteralPath $StagedDir) {
-    Remove-Item -LiteralPath $StagedDir -Recurse -Force
-  }
-  Copy-Item -LiteralPath $SrcDir -Destination $StagedDir -Recurse
-  if (Test-Path -LiteralPath $DestDir) {
-    Remove-Item -LiteralPath $DestDir -Recurse -Force
-  }
-  Move-Item -LiteralPath $StagedDir -Destination $DestDir
-  Start-Process -FilePath (Join-Path $DestDir "AI Token League.exe")
-} catch {
-  Write-UpdateLog $_.Exception.Message
-  throw
-} finally {
-  if (Test-Path -LiteralPath $WorkDir) {
-    Remove-Item -LiteralPath $WorkDir -Recurse -Force
-  }
-}
-`);
-  return {
-    command: "powershell.exe",
-    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script]
-  };
-}
-
-function updateTempDir() {
-  return path.join(app.getPath("temp"), "ai-token-league-updates");
 }
 
 function silentUpdateMode(config = {}) {
   const mode = config.silentUpdateMode || "notify";
   return ["notify", "auto_download", "auto_apply_on_idle"].includes(mode) ? mode : "notify";
-}
-
-function shouldPrepareUpdate(config = {}, state = {}) {
-  const mode = silentUpdateMode(config);
-  return Boolean(state.updateAvailable && state.artifact && (state.mandatory || mode === "auto_download" || mode === "auto_apply_on_idle"));
-}
-
-function shouldApplyPreparedUpdate(config = {}, state = {}) {
-  const mode = silentUpdateMode(config);
-  return Boolean(state.updateAvailable && state.artifact && (state.mandatory || mode === "auto_apply_on_idle"));
 }
 
 function safeIdleForUpdateApply({ ignoreUpdateCheck = false } = {}) {
@@ -219,16 +80,7 @@ function updateStatusSnapshot() {
     lastResult: updateCheck.lastResult,
     lastError: updateCheck.lastError,
     nextCheckAt: updateCheck.nextCheckAt,
-    readyPackage: updateCheck.readyPackage
-      ? {
-          fileName: updateCheck.readyPackage.artifact?.fileName || path.basename(updateCheck.readyPackage.file || ""),
-          sha256: updateCheck.readyPackage.sha256 || "",
-          verifiedAt: updateCheck.readyPackage.verifiedAt || "",
-          latestVersion: updateCheck.readyPackage.latestVersion || "",
-          platform: updateCheck.readyPackage.platform || "",
-          source: updateCheck.readyPackage.source || ""
-        }
-      : null,
+    downloadProgress: updateCheck.downloadProgress,
     safeIdle: safeIdleForUpdateApply()
   };
 }
@@ -240,9 +92,95 @@ async function modules() {
     core: await import(pathToFileUrl(path.join(root, "src/collector/core.js"))),
     crypto: await import(pathToFileUrl(path.join(root, "src/shared/crypto.js"))),
     schema: await import(pathToFileUrl(path.join(root, "src/shared/schema.js"))),
-    version: await import(pathToFileUrl(path.join(root, "src/shared/version.js"))),
-    update: await import(pathToFileUrl(path.join(root, "src/shared/update.js")))
+    version: await import(pathToFileUrl(path.join(root, "src/shared/version.js")))
   };
+}
+
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
+autoUpdater.logger = {
+  info: (msg) => appendRuntimeLog("updater_info", { msg: String(msg) }),
+  warn: (msg) => appendRuntimeLog("updater_warn", { msg: String(msg) }),
+  error: (msg) => appendRuntimeLog("updater_error", { msg: String(msg) })
+};
+
+let cachedConfig = null;
+
+autoUpdater.on("update-available", (info) => {
+  updateCheck.status = "available";
+  updateCheck.lastResult = {
+    updateAvailable: true,
+    latestVersion: info.version,
+    releaseDate: info.releaseDate || ""
+  };
+  updateCheck.lastError = null;
+  appendRuntimeLog("updater_update_available", { version: info.version });
+  const mode = silentUpdateMode(cachedConfig);
+  if (mode === "auto_download" || mode === "auto_apply_on_idle") {
+    autoUpdater.downloadUpdate();
+  }
+  broadcastUpdateProgress();
+});
+
+autoUpdater.on("update-not-available", (info) => {
+  updateCheck.status = "up_to_date";
+  updateCheck.lastResult = { updateAvailable: false, latestVersion: info.version };
+  appendRuntimeLog("updater_up_to_date", { version: info.version });
+  broadcastUpdateProgress();
+});
+
+autoUpdater.on("download-progress", (progress) => {
+  updateCheck.status = "downloading";
+  updateCheck.downloadProgress = {
+    percent: Math.round(progress.percent),
+    bytesPerSecond: progress.bytesPerSecond,
+    total: progress.total,
+    transferred: progress.transferred
+  };
+  broadcastUpdateProgress();
+});
+
+autoUpdater.on("update-downloaded", (info) => {
+  updateCheck.status = "downloaded";
+  updateCheck.downloadRunning = false;
+  updateCheck.downloadProgress = null;
+  updateCheck.lastResult = updateCheck.lastResult || {};
+  updateCheck.lastResult.latestVersion = info.version;
+  appendRuntimeLog("updater_downloaded", { version: info.version });
+  broadcastUpdateProgress();
+  const mode = silentUpdateMode(cachedConfig);
+  const mandatory = updateCheck.lastResult?.mandatory;
+  if (mandatory || mode === "auto_apply_on_idle") {
+    applyReadyUpdateIfIdle({ source: mandatory ? "mandatory" : "background" }).catch(() => {});
+  }
+});
+
+autoUpdater.on("error", (error) => {
+  updateCheck.lastError = error.message;
+  updateCheck.status = "failed";
+  updateCheck.running = false;
+  updateCheck.downloadRunning = false;
+  updateCheck.downloadProgress = null;
+  appendRuntimeLog("updater_error", { error: error.message });
+  broadcastUpdateProgress();
+});
+
+function configureFeedUrl(releaseConfig) {
+  const base = releaseConfig?.release?.publicBaseUrl || "";
+  const feedUrl = base ? `${base}/releases` : "";
+  if (feedUrl) {
+    autoUpdater.setFeedURL({ provider: "generic", url: feedUrl });
+  }
+  return feedUrl;
+}
+
+function broadcastUpdateProgress() {
+  const snapshot = updateStatusSnapshot();
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send("update:progress", snapshot);
+    } catch {}
+  }
 }
 
 function createWindow() {
@@ -554,58 +492,78 @@ ipcMain.handle("app:version", async () => {
 });
 
 ipcMain.handle("update:check", async () => {
-  const { config, version, update } = await modules();
+  if (updateCheck.running) return updateStatusSnapshot();
+  const { config, version } = await modules();
   const current = config.loadConfig();
+  cachedConfig = current;
   const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
   const checkedAt = new Date().toISOString();
   const client = version.clientMetadata({ clientAppVersion: app.getVersion() });
-  const preflight = update.updatePreflightState({ apiBaseUrl, checkedAt, client });
-  if (preflight) return preflight;
-  const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
-  const release = releaseConfig?.release || {};
-  const manifestUrl = release.manifestUrl || "";
-  const releasePreflight = update.updatePreflightState({
-    apiBaseUrl,
-    release,
-    checkedAt,
-    client,
-    server: releaseConfig
-  });
-  if (releasePreflight) return releasePreflight;
-  const manifest = await getJson(manifestUrl);
-  const state = update.updateStateFromManifest(manifest, {
-    currentVersion: app.getVersion(),
-    platform: version.clientPlatform()
-  });
-  return {
-    code: state.updateAvailable ? "update_available" : "up_to_date",
-    checkedAt,
-    client,
-    server: releaseConfig,
-    manifestUrl,
-    manifest,
-    update: state,
-    message: state.updateAvailable ? `Version ${state.latestVersion} is available` : "Current version is up to date"
-  };
+  if (!apiBaseUrl) {
+    return {
+      code: "cloud_not_configured",
+      checkedAt,
+      client,
+      update: null,
+      message: "Configure Cloud Connection before checking updates"
+    };
+  }
+  updateCheck.running = true;
+  updateCheck.status = "checking";
+  updateCheck.lastCheckedAt = checkedAt;
+  updateCheck.lastError = null;
+  try {
+    const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
+    const feedUrl = configureFeedUrl(releaseConfig);
+    if (!feedUrl) {
+      return {
+        code: "release_not_configured",
+        checkedAt,
+        client,
+        server: releaseConfig,
+        update: null,
+        message: "Release feed URL is not configured on the app server"
+      };
+    }
+    const result = await autoUpdater.checkForUpdates();
+    const state = updateCheck.lastResult || {};
+    return {
+      code: state.updateAvailable ? "update_available" : "up_to_date",
+      checkedAt,
+      client,
+      server: releaseConfig,
+      update: state,
+      message: state.updateAvailable ? `Version ${state.latestVersion} is available` : "Current version is up to date"
+    };
+  } catch (error) {
+    updateCheck.lastError = error.message;
+    updateCheck.status = "failed";
+    throw error;
+  } finally {
+    updateCheck.running = false;
+  }
 });
 
-ipcMain.handle("update:download", async (_event, input = {}) => {
-  const artifact = input.artifact;
-  if (!artifact?.url || !artifact.sha256) throw new Error("Update artifact URL and checksum are required");
-  const result = await downloadAndVerifyUpdateArtifact(artifact, { source: "manual", state: latestUpdateStateFromArtifact(artifact) });
-  return {
-    ok: true,
-    file: result.file,
-    sha256: artifact.sha256,
-    canInstall: result.canInstall,
-    handoff: result.canInstall
-      ? "Downloaded and verified. Install and restart to replace the running app."
-      : "Downloaded and verified. Open the package from Finder to install it."
-  };
+ipcMain.handle("update:download", async () => {
+  if (updateCheck.downloadRunning) return { ok: false, message: "Download already in progress" };
+  updateCheck.downloadRunning = true;
+  updateCheck.status = "downloading";
+  try {
+    await autoUpdater.downloadUpdate();
+    return { ok: true, message: "Update downloaded and verified" };
+  } catch (error) {
+    updateCheck.lastError = error.message;
+    updateCheck.status = "failed";
+    throw error;
+  } finally {
+    updateCheck.downloadRunning = false;
+  }
 });
 
 ipcMain.handle("update:install-and-restart", async () => {
-  return launchUpdateApply({ source: "manual" });
+  appendRuntimeLog("updater_quit_and_install", { source: "manual" });
+  autoUpdater.quitAndInstall(false, true);
+  return { ok: true };
 });
 
 ipcMain.handle("app:reset-local-data", async () => {
@@ -642,6 +600,7 @@ async function scheduleBackgroundUpdateCheck(configOverride = null) {
   updateCheck.nextCheckAt = null;
   const current = configOverride || (await modules()).config.loadConfig();
   if (!current || !hasApiBaseUrl(current)) return;
+  cachedConfig = current;
   const intervalMs = 6 * 60 * 60 * 1000;
   updateCheck.nextCheckAt = new Date(Date.now() + intervalMs).toISOString();
   updateCheck.timer = setInterval(() => {
@@ -654,9 +613,10 @@ async function scheduleBackgroundUpdateCheck(configOverride = null) {
 
 async function runUpdateCheck(current, { allowSilent = false } = {}) {
   if (updateCheck.running) return updateCheck.lastResult;
-  const { version, update } = await modules();
+  const { version } = await modules();
   const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
   if (!apiBaseUrl) return null;
+  cachedConfig = current;
   updateCheck.running = true;
   updateCheck.status = "checking";
   updateCheck.lastCheckedAt = new Date().toISOString();
@@ -664,26 +624,16 @@ async function runUpdateCheck(current, { allowSilent = false } = {}) {
   appendRuntimeLog("silent_update_check_start", { mode: silentUpdateMode(current), allowSilent });
   try {
     const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
-    const manifestUrl = releaseConfig?.release?.manifestUrl || "";
-    if (!manifestUrl) throw new Error("Release manifest URL is not configured");
-    const manifest = await getJson(manifestUrl);
-    updateCheck.lastResult = update.updateStateFromManifest(manifest, {
-      currentVersion: app.getVersion(),
-      platform: version.clientPlatform()
-    });
-    updateCheck.status = updateCheck.lastResult.updateAvailable ? "available" : "up_to_date";
+    const feedUrl = configureFeedUrl(releaseConfig);
+    if (!feedUrl) throw new Error("Release feed URL is not configured");
+    const mode = silentUpdateMode(current);
+    autoUpdater.autoDownload = allowSilent && (mode === "auto_download" || mode === "auto_apply_on_idle");
+    await autoUpdater.checkForUpdates();
     appendRuntimeLog("silent_update_check_done", {
-      mode: silentUpdateMode(current),
-      updateAvailable: updateCheck.lastResult.updateAvailable,
-      latestVersion: updateCheck.lastResult.latestVersion,
-      mandatory: updateCheck.lastResult.mandatory
+      mode,
+      updateAvailable: updateCheck.lastResult?.updateAvailable,
+      latestVersion: updateCheck.lastResult?.latestVersion
     });
-    if (allowSilent && shouldPrepareUpdate(current, updateCheck.lastResult)) {
-      await downloadAndVerifyUpdateArtifact(updateCheck.lastResult.artifact, { source: "background", state: updateCheck.lastResult });
-      if (shouldApplyPreparedUpdate(current, updateCheck.lastResult)) {
-        await applyReadyUpdateIfIdle({ source: updateCheck.lastResult.mandatory ? "mandatory" : "background", ignoreUpdateCheck: true });
-      }
-    }
     return updateCheck.lastResult;
   } catch (error) {
     updateCheck.lastError = error.message;
@@ -695,128 +645,26 @@ async function runUpdateCheck(current, { allowSilent = false } = {}) {
   }
 }
 
-function latestUpdateStateFromArtifact(artifact = {}) {
-  return {
-    latestVersion: updateCheck.lastResult?.latestVersion || "",
-    platform: artifact.platform || updateCheck.lastResult?.platform || "",
-    mandatory: Boolean(artifact.mandatory || updateCheck.lastResult?.mandatory)
-  };
-}
-
-async function downloadAndVerifyUpdateArtifact(artifact, { source = "manual", state = {} } = {}) {
-  if (updateCheck.downloadRunning) throw new Error("Update download is already running");
-  if (!artifact?.url || !artifact.sha256) throw new Error("Update artifact URL and checksum are required");
-  updateCheck.downloadRunning = true;
-  updateCheck.status = "downloading";
-  updateCheck.lastError = null;
-  appendRuntimeLog("silent_update_download_start", {
-    source,
-    platform: artifact.platform || state.platform || "",
-    latestVersion: state.latestVersion || "",
-    mandatory: Boolean(state.mandatory || artifact.mandatory)
-  });
-  try {
-    const { update } = await modules();
-    const dir = updateTempDir();
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, artifact.fileName || path.basename(new URL(artifact.url).pathname));
-    const response = await fetch(artifact.url);
-    if (!response.ok) throw new Error(`download failed: ${response.status} ${await response.text()}`);
-    fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
-    await update.verifyFileChecksum(file, artifact.sha256);
-    downloadedUpdate.file = file;
-    downloadedUpdate.sha256 = artifact.sha256;
-    downloadedUpdate.artifact = artifact;
-    updateCheck.readyPackage = {
-      file,
-      sha256: artifact.sha256,
-      artifact,
-      verifiedAt: new Date().toISOString(),
-      latestVersion: state.latestVersion || "",
-      platform: artifact.platform || state.platform || "",
-      source
-    };
-    const canInstall = canApplyDownloadedUpdate(file);
-    updateCheck.status = canInstall ? "ready" : "downloaded";
-    appendRuntimeLog("silent_update_download_done", {
-      source,
-      fileName: path.basename(file),
-      canInstall,
-      latestVersion: state.latestVersion || ""
-    });
-    return {
-      file,
-      sha256: artifact.sha256,
-      canInstall
-    };
-  } catch (error) {
-    updateCheck.lastError = error.message;
-    updateCheck.status = "failed";
-    appendRuntimeLog("silent_update_download_failed", { source, error: error.message });
-    throw error;
-  } finally {
-    updateCheck.downloadRunning = false;
-  }
-}
-
 async function applyReadyUpdateIfIdle({ source = "background", ignoreUpdateCheck = false } = {}) {
-  if (!updateCheck.readyPackage) return false;
+  if (updateCheck.status !== "downloaded") return false;
   if (!safeIdleForUpdateApply({ ignoreUpdateCheck })) {
     updateCheck.status = "ready";
-    appendRuntimeLog("silent_update_apply_deferred", { source, reason: "not_idle" });
+    appendRuntimeLog("updater_apply_deferred", { source, reason: "not_idle" });
     return false;
   }
-  await launchUpdateApply({ source });
+  appendRuntimeLog("updater_quit_and_install", { source });
+  autoUpdater.quitAndInstall(false, true);
   return true;
 }
 
 async function maybeApplyReadyUpdateOnIdle(current = null) {
-  if (!updateCheck.readyPackage) return false;
-  const nextConfig = current || (await modules()).config.loadConfig();
+  if (updateCheck.status !== "downloaded") return false;
+  const nextConfig = current || cachedConfig || (await modules()).config.loadConfig();
   if (!nextConfig || !hasApiBaseUrl(nextConfig)) return false;
   const mode = silentUpdateMode(nextConfig);
   const mandatory = Boolean(updateCheck.lastResult?.mandatory);
   if (!mandatory && mode !== "auto_apply_on_idle") return false;
   return applyReadyUpdateIfIdle({ source: mandatory ? "mandatory" : "background" });
-}
-
-async function launchUpdateApply({ source = "manual" } = {}) {
-  const ready = updateCheck.readyPackage || {
-    file: downloadedUpdate.file,
-    sha256: downloadedUpdate.sha256,
-    artifact: downloadedUpdate.artifact
-  };
-  if (!ready.file) throw new Error("Download and verify an update package first");
-  if (!fs.existsSync(ready.file)) throw new Error("Downloaded update package no longer exists");
-  if (!canApplyDownloadedUpdate(ready.file)) {
-    throw new Error("Direct install is only supported for packaged AI Token League zip updates");
-  }
-  const { update } = await modules();
-  updateCheck.applyRunning = true;
-  updateCheck.status = "applying";
-  updateCheck.lastError = null;
-  appendRuntimeLog("silent_update_apply_start", { source, fileName: path.basename(ready.file) });
-  try {
-    await update.verifyFileChecksum(ready.file, ready.sha256);
-    const installTarget = currentInstallTargetPath();
-    if (!installTarget) throw new Error("Could not locate a packaged AI Token League install path");
-    const script = writeUpdateScript();
-    const logFile = path.join(updateTempDir(), "install.log");
-    const child = spawn(script.command, [...script.args, String(process.pid), ready.file, installTarget, logFile], {
-      detached: true,
-      stdio: "ignore"
-    });
-    child.unref();
-    appendRuntimeLog("silent_update_apply_launched", { source, installTarget });
-    app.exit(0);
-    return { ok: true };
-  } catch (error) {
-    updateCheck.lastError = error.message;
-    updateCheck.status = "failed";
-    updateCheck.applyRunning = false;
-    appendRuntimeLog("silent_update_apply_failed", { source, error: error.message });
-    throw error;
-  }
 }
 
 async function runBackgroundRefresh() {
@@ -1179,7 +1027,7 @@ function resetLocalData(configModule) {
   updateCheck.applyRunning = false;
   updateCheck.status = "idle";
   updateCheck.nextCheckAt = null;
-  updateCheck.readyPackage = null;
+  updateCheck.downloadProgress = null;
   usageCache.loaded = true;
   usageCache.data = null;
   foregroundScan.running = false;

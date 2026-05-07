@@ -22,7 +22,13 @@ contextBridge.exposeInMainWorld("tokenLeague", {
   syncUsage: () => ipcRenderer.invoke("usage:sync"),
   appVersion: () => ipcRenderer.invoke("app:version"),
   checkUpdate: () => ipcRenderer.invoke("update:check"),
-  downloadUpdate: (input) => ipcRenderer.invoke("update:download", input),
+  downloadUpdate: () => ipcRenderer.invoke("update:download"),
   installAndRestartUpdate: () => ipcRenderer.invoke("update:install-and-restart"),
+  onUpdateProgress: (callback) => {
+    ipcRenderer.on("update:progress", (_event, data) => callback(data));
+  },
+  removeUpdateProgressListener: () => {
+    ipcRenderer.removeAllListeners("update:progress");
+  },
   resetLocalData: () => ipcRenderer.invoke("app:reset-local-data")
 });

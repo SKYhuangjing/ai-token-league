@@ -83,6 +83,27 @@ export function sha256File(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+export function sha512Base64(file) {
+  return crypto.createHash("sha512").update(fs.readFileSync(file)).digest("base64");
+}
+
+export function buildLatestYml(version, artifacts) {
+  if (!artifacts.length) throw new Error("no artifacts for latest.yml");
+  const lines = [
+    `version: ${version}`,
+    `files:`
+  ];
+  for (const a of artifacts) {
+    lines.push(`  - url: ${a.fileName}`);
+    lines.push(`    sha512: ${a.sha512}`);
+    lines.push(`    size: ${a.size}`);
+  }
+  lines.push(`path: ${artifacts[0].fileName}`);
+  lines.push(`sha512: ${artifacts[0].sha512}`);
+  lines.push(`releaseDate: '${new Date().toISOString()}'`);
+  return lines.join("\n") + "\n";
+}
+
 export async function verifyFileChecksum(file, expectedSha256) {
   const actual = sha256File(file);
   if (actual !== expectedSha256) {

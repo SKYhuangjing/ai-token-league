@@ -2,6 +2,35 @@
 
 本文件记录产品级路线图。已进入版本基线或开发任务的能力，不再放在散列 TODO 中。
 
+## 0.5.1 进行中
+
+| 能力 | 状态 | 产品结果 |
+| --- | --- | --- |
+| electron-updater 自动更新系统 | DONE | 用 electron-updater 替换自定义 zip 更新机制；Windows 用 NSIS 安装器更新（自带文件锁处理），macOS 用 Squirrel.Mac 更新；支持下载进度推送和三种更新模式。 |
+
+### 0.5.2 待清理：旧版更新系统遗留
+
+以下代码在 0.5.1 引入 electron-updater 后已废弃，应在 0.5.2 清理：
+
+| 废弃项 | 位置 | 原因 | 清理动作 |
+| --- | --- | --- | --- |
+| `RELEASE_MANIFEST_PATH` 环境变量 | `env.example`, `src/shared/update.js`, 发布脚本 | 新客户端通过 `latest.yml` 获取更新，不再需要 `latest.json` manifest | 删除 env 变量和相关代码 |
+| `buildReleaseManifest()` | `src/shared/update.js` | electron-updater 使用 `latest.yml`，不再需要自定义 JSON manifest | 删除函数 |
+| `validateReleaseManifest()` | `src/shared/update.js` | 自定义 manifest 校验，electron-updater 内部校验 | 删除函数 |
+| `selectUpdateArtifact()` | `src/shared/update.js` | electron-updater 内部选择 artifact | 删除函数 |
+| `selectInstallerArtifact()` | `src/shared/update.js` | electron-updater 内部选择 installer | 删除函数 |
+| `updateStateFromManifest()` | `src/shared/update.js` | electron-updater 内部比较版本 | 删除函数 |
+| `RELEASE_PLATFORMS` / `INSTALLER_PLATFORMS` | `src/shared/update.js` | 仅旧 manifest 使用 | 删除常量 |
+| `latest.json` 上传 | `scripts/publish-release.js` | 所有客户端升级后不再需要 | 从发布计划中移除 |
+| 服务端 `manifestUrl` 字段 | `src/shared/update.js`, `src/backend/server.js` | 新客户端通过 `publicBaseUrl` 派生 feedUrl | 从 `releasePublicConfig()` 移除 |
+
+**前提条件**：所有活跃客户端已升级到 0.5.1+，旧 manifest 无消费者。
+
+参考：
+
+- `doc/0.5-baseline.md` §2.11
+- `doc/0.5-development-tasks.md` Epic 11
+
 ## 0.3.0 已落地
 
 目标：让客户端、服务端和发布资源形成统一版本闭环，支持后续强制兼容窗口和可控升级。
@@ -50,7 +79,7 @@
 | MIN_CLIENT_ENFORCE | DONE | 开启后低于 latest 的客户端被 HTTP 426 拒绝；默认关闭。 |
 | Admin 设备面板 | DONE | Admin 面板第 4 个 tab 展示所有设备的客户端版本、平台、构建和最后在线时间。 |
 | 多语言 i18n | DONE | `src/shared/i18n.js` 支持 zh-CN + en；public web、desktop、admin 全覆盖；后续功能必须适配。 |
-| Admin Usage 行级详情语义优化 | TODO | 点击昵称打开"该用户 + 当前时间桶"详情，而非全局筛选范围。 |
+| Admin Usage 行级详情语义优化 | DONE | 点击昵称打开"该用户 + 当前时间桶"详情，而非全局筛选范围。 |
 
 参考：
 

@@ -8,9 +8,11 @@ import {
   RELEASE_PLATFORMS,
   INSTALLER_PLATFORMS,
   buildReleaseManifest,
+  buildLatestYml,
   releaseConfigFromEnv,
   releaseSecretsFromEnv,
   sha256File,
+  sha512Base64,
   validateReleaseConfig
 } from "../src/shared/update.js";
 import { APP_VERSION } from "../src/shared/version.js";
@@ -81,6 +83,18 @@ const manifest = buildReleaseManifest({
 const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
 const manifestKey = joinKey(config.prefix, config.manifestPath);
 
+// Build electron-updater metadata files (latest.yml / latest-mac.yml)
+const winInstaller = installerArtifacts.filter((a) => a.platform === "win32-x64");
+const macZipArtifacts = artifacts.filter((a) => a.platform.startsWith("darwin"));
+const latestYml = winInstaller.length
+  ? buildLatestYml(version, winInstaller.map((a) => ({ fileName: a.fileName, sha512: sha512Base64(a.file), size: a.size })))
+  : "";
+const latestMacYml = macZipArtifacts.length
+  ? buildLatestYml(version, macZipArtifacts.map((a) => ({ fileName: a.fileName, sha512: sha512Base64(a.file), size: a.size })))
+  : "";
+const latestYmlKey = joinKey(config.prefix, "releases", "latest.yml");
+const latestMacYmlKey = joinKey(config.prefix, "releases", "latest-mac.yml");
+
 const plan = [
   ...artifacts.map((artifact) => ({ key: artifact.key, file: artifact.file, size: artifact.size, contentType: "application/zip" })),
   ...installerArtifacts.map((artifact) => ({
@@ -90,6 +104,8 @@ const plan = [
     contentType: artifact.ext === "dmg" ? "application/x-apple-diskimage" : "application/octet-stream"
   })),
   { key: checksumsKey, body: checksums, size: Buffer.byteLength(checksums), contentType: "text/plain; charset=utf-8" },
+  ...(latestYml ? [{ key: latestYmlKey, body: latestYml, size: Buffer.byteLength(latestYml), contentType: "text/yaml; charset=utf-8" }] : []),
+  ...(latestMacYml ? [{ key: latestMacYmlKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
   { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8", last: true }
 ];
 
