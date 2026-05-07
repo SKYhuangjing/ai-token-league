@@ -233,6 +233,8 @@ npm run release:publish
 
 - [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) - 中文更新日志。
 - [CHANGELOG.md](CHANGELOG.md) - English changelog。
+- [doc/0.5-baseline.md](doc/0.5-baseline.md) - 0.5 空白基线，尚未开启产品任务。
+- [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - 0.5 空白任务文档与版本迭代规则。
 - [doc/0.4-baseline.md](doc/0.4-baseline.md) - 当前 0.4 产品基线。
 - [doc/0.4-development-tasks.md](doc/0.4-development-tasks.md) - 0.4 开发任务与验证记录。
 - [doc/0.3-baseline.md](doc/0.3-baseline.md) - 0.3 产品基线。

@@ -40,6 +40,21 @@
 - `doc/0.4-baseline.md`
 - `doc/0.4-development-tasks.md`
 
+## 0.5.0 空白基线
+
+目标：只建立下一版本的空白 baseline/task 入口。0.5.0 当前尚未开启任何产品或工程任务。
+
+| 能力 | 状态 | 产品结果 |
+| --- | --- | --- |
+| 0.5 空白基线 | DONE | `doc/0.5-baseline.md` 明确 0.5.0 尚未开启任务。 |
+| 0.5 空白任务文档 | DONE | `doc/0.5-development-tasks.md` 只记录版本迭代流程，不提前承诺 roadmap 候选项。 |
+| 临时功能入账规则 | DONE | 后续临时加入代码功能时，必须同步记录到 baseline 与 development tasks。 |
+
+参考：
+
+- `doc/0.5-baseline.md`
+- `doc/0.5-development-tasks.md`
+
 ## 0.3.x 发布后补强
 
 | 能力 | 优先级 | 产品目标 |

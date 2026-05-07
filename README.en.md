@@ -233,6 +233,8 @@ Developer commands, API details, storage notes, and verification boundaries live
 
 - [CHANGELOG.md](CHANGELOG.md) - English changelog.
 - [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) - Chinese changelog.
+- [doc/0.5-baseline.md](doc/0.5-baseline.md) - Blank 0.5 baseline; no product tasks are opened yet.
+- [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - Blank 0.5 task document and version-iteration rules.
 - [doc/0.4-baseline.md](doc/0.4-baseline.md) - Current 0.4 product baseline.
 - [doc/0.4-development-tasks.md](doc/0.4-development-tasks.md) - 0.4 development tasks and verification record.
 - [doc/0.3-baseline.md](doc/0.3-baseline.md) - 0.3 product baseline.
