@@ -106,6 +106,7 @@ autoUpdater.logger = {
 };
 
 let cachedConfig = null;
+let cachedReleaseConfig = null;
 
 autoUpdater.on("update-available", (info) => {
   updateCheck.status = "available";
@@ -515,6 +516,7 @@ ipcMain.handle("update:check", async () => {
   updateCheck.lastError = null;
   try {
     const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
+    cachedReleaseConfig = releaseConfig;
     const feedUrl = configureFeedUrl(releaseConfig);
     if (!feedUrl) {
       return {
@@ -565,6 +567,78 @@ ipcMain.handle("update:install-and-restart", async () => {
   appendRuntimeLog("updater_quit_and_install", { source: "manual" });
   autoUpdater.quitAndInstall(false, true);
   return { ok: true };
+});
+
+ipcMain.handle("update:download-installer", async () => {
+  const { version } = await modules();
+  const platform = version.clientPlatform();
+  const { shell, session } = require("electron");
+  if (!cachedReleaseConfig) {
+    const { config: configModule } = await modules();
+    const current = configModule.loadConfig();
+    const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
+    if (!apiBaseUrl) return { ok: false, error: "cloud not configured" };
+    cachedReleaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
+  }
+  const installerInfo = cachedReleaseConfig?.release?.installers?.[platform];
+  if (!installerInfo?.url) return { ok: false, error: `no installer available for ${platform}` };
+  const tmpDir = path.join(os.tmpdir(), "ai-token-league-installer");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const fileName = installerInfo.fileName || path.basename(new URL(installerInfo.url).pathname);
+  const filePath = path.join(tmpDir, fileName);
+  appendRuntimeLog("installer_download_start", { platform, url: installerInfo.url });
+  return new Promise((resolve) => {
+    try {
+      session.defaultSession.once("will-download", (_event, item) => {
+        item.setSavePath(filePath);
+        item.on("updated", (_e, state) => {
+          if (state === "progressing" && item.getTotalBytes() > 0) {
+            const progress = {
+              percent: Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100),
+              bytesPerSecond: item.getCurrentBytesPerSecond(),
+              total: item.getTotalBytes(),
+              transferred: item.getReceivedBytes()
+            };
+            for (const win of BrowserWindow.getAllWindows()) {
+              try { win.webContents.send("update:installer-progress", progress); } catch {}
+            }
+          }
+        });
+        item.once("done", async (_e, state) => {
+          if (state !== "completed") {
+            appendRuntimeLog("installer_download_failed", { state });
+            resolve({ ok: false, error: `installer download ${state}` });
+            return;
+          }
+          try {
+            if (installerInfo.sha256 && installerInfo.sha256 !== "placeholder") {
+              const actual = nodeCrypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+              if (actual !== installerInfo.sha256) {
+                fs.unlinkSync(filePath);
+                resolve({ ok: false, error: `checksum mismatch: expected ${installerInfo.sha256}, got ${actual}` });
+                return;
+              }
+            }
+            appendRuntimeLog("installer_download_completed", { filePath });
+            const openError = await shell.openPath(filePath);
+            if (openError) {
+              appendRuntimeLog("installer_open_failed", { error: openError });
+              resolve({ ok: false, error: openError });
+              return;
+            }
+            resolve({ ok: true, filePath });
+          } catch (err) {
+            appendRuntimeLog("installer_open_failed", { error: err.message });
+            resolve({ ok: false, error: err.message });
+          }
+        });
+      });
+      session.defaultSession.downloadURL(installerInfo.url);
+    } catch (err) {
+      appendRuntimeLog("installer_download_init_failed", { error: err.message });
+      resolve({ ok: false, error: err.message });
+    }
+  });
 });
 
 ipcMain.handle("app:reset-local-data", async () => {
@@ -625,6 +699,7 @@ async function runUpdateCheck(current, { allowSilent = false } = {}) {
   appendRuntimeLog("silent_update_check_start", { mode: silentUpdateMode(current), allowSilent });
   try {
     const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
+    cachedReleaseConfig = releaseConfig;
     const feedUrl = configureFeedUrl(releaseConfig);
     if (!feedUrl) throw new Error("Release feed URL is not configured");
     const mode = silentUpdateMode(current);

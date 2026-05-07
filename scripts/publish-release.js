@@ -5,9 +5,6 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { Agent } from "undici";
 import {
-  RELEASE_PLATFORMS,
-  INSTALLER_PLATFORMS,
-  buildReleaseManifest,
   buildLatestYml,
   releaseConfigFromEnv,
   releaseSecretsFromEnv,
@@ -19,6 +16,7 @@ import { APP_VERSION } from "../src/shared/version.js";
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
+const allowMissingInstallers = args.has("--allow-missing-installers");
 const version = argValue("version") || APP_VERSION;
 const distDir = path.resolve(argValue("dist") || "dist");
 const uploadDispatcher = new Agent({
@@ -31,6 +29,13 @@ const secrets = releaseSecretsFromEnv();
 if (!dryRun && (!secrets.accessKeyId || !secrets.accessKeySecret || secrets.accessKeyId === "change-me")) {
   throw new Error("missing release OSS credentials");
 }
+
+const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64"];
+const INSTALLER_PLATFORMS = {
+  "darwin-arm64": { ext: "dmg", short: "mac-arm64" },
+  "darwin-x64": { ext: "dmg", short: "mac-x64" },
+  "win32-x64": { ext: "exe", short: "win-x64" }
+};
 
 const artifacts = RELEASE_PLATFORMS.map((platform) => {
   const fileName = `AI Token League-${platform}.zip`;
@@ -49,13 +54,14 @@ const artifacts = RELEASE_PLATFORMS.map((platform) => {
 
 const installerDir = path.resolve(argValue("installer-dist") || "dist-installer");
 const installerArtifacts = [];
+const missingInstallerFiles = [];
 for (const platform of RELEASE_PLATFORMS) {
   const installerInfo = INSTALLER_PLATFORMS[platform];
   if (!installerInfo) continue;
   const fileName = buildInstallerFileName(platform, version, installerInfo.ext);
   const file = path.join(installerDir, fileName);
   if (!fs.existsSync(file)) {
-    console.warn(`installer artifact not found (skipping): ${file}`);
+    missingInstallerFiles.push(file);
     continue;
   }
   installerArtifacts.push({
@@ -69,19 +75,21 @@ for (const platform of RELEASE_PLATFORMS) {
     url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(fileName).replaceAll("%20", "%20")}`
   });
 }
+if (missingInstallerFiles.length && !allowMissingInstallers) {
+  throw new Error(`missing installer artifacts:\n${missingInstallerFiles.map((file) => `- ${file}`).join("\n")}`);
+}
+for (const file of missingInstallerFiles) {
+  console.warn(`installer artifact not found (skipping): ${file}`);
+}
 
 const checksums = artifacts.map((artifact) => `${artifact.sha256}  ${artifact.fileName}`).join("\n") + "\n";
 const checksumsKey = joinKey(config.prefix, "releases", version, "checksums.txt");
-const manifest = buildReleaseManifest({
-  version,
-  publicBaseUrl: config.publicBaseUrl,
-  manifestPath: config.manifestPath,
-  artifacts,
-  installerArtifacts,
-  releaseNotesUrl: process.env.RELEASE_NOTES_URL || ""
-});
-const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
-const manifestKey = joinKey(config.prefix, config.manifestPath);
+const installerMeta = { version, generatedAt: new Date().toISOString(), platforms: {} };
+for (const ia of installerArtifacts) {
+  installerMeta.platforms[ia.platform] = { url: ia.url, fileName: ia.fileName, sha256: ia.sha256, size: ia.size, ext: ia.ext };
+}
+const installerJsonText = `${JSON.stringify(installerMeta, null, 2)}\n`;
+const installerJsonKey = joinKey(config.prefix, "releases", "installer.json");
 
 // Build electron-updater metadata files (latest.yml / latest-mac.yml)
 const winInstaller = installerArtifacts.filter((a) => a.platform === "win32-x64");
@@ -106,11 +114,11 @@ const plan = [
   { key: checksumsKey, body: checksums, size: Buffer.byteLength(checksums), contentType: "text/plain; charset=utf-8" },
   ...(latestYml ? [{ key: latestYmlKey, body: latestYml, size: Buffer.byteLength(latestYml), contentType: "text/yaml; charset=utf-8" }] : []),
   ...(latestMacYml ? [{ key: latestMacYmlKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
-  { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8", last: true }
+  { key: installerJsonKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8", last: true }
 ];
 
 if (dryRun) {
-  console.log(JSON.stringify({ dryRun: true, version, manifestUrl: config.manifestUrl, uploads: plan.map(({ key, last }) => ({ key, last: Boolean(last) })), manifest }, null, 2));
+  console.log(JSON.stringify({ dryRun: true, version, uploads: plan.map(({ key, last }) => ({ key, last: Boolean(last) })), installerMeta }, null, 2));
   process.exit(0);
 }
 
@@ -285,10 +293,6 @@ function formatBytes(bytes) {
 }
 
 function buildInstallerFileName(platform, ver, ext) {
-  const names = {
-    "darwin-arm64": `AI Token League-${ver}-mac-arm64-installer.${ext}`,
-    "darwin-x64": `AI Token League-${ver}-mac-x64-installer.${ext}`,
-    "win32-x64": `AI Token League-${ver}-win-x64-installer.${ext}`
-  };
-  return names[platform] || `AI Token League-${ver}-${platform}-installer.${ext}`;
+  const short = INSTALLER_PLATFORMS[platform]?.short || platform;
+  return `AI Token League-${ver}-${short}-installer.${ext}`;
 }

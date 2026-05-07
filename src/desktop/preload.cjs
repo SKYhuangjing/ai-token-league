@@ -30,5 +30,9 @@ contextBridge.exposeInMainWorld("tokenLeague", {
   removeUpdateProgressListener: () => {
     ipcRenderer.removeAllListeners("update:progress");
   },
+  downloadInstaller: () => ipcRenderer.invoke("update:download-installer"),
+  onInstallerProgress: (callback) => {
+    ipcRenderer.on("update:installer-progress", (_event, data) => callback(data));
+  },
   resetLocalData: () => ipcRenderer.invoke("app:reset-local-data")
 });

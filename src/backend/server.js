@@ -5,7 +5,7 @@ import { Store } from "./store.js";
 import { MySqlStore } from "./mysql-store.js";
 import { verifyPayload } from "../shared/crypto.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
-import { releaseConfigFromEnv, releasePublicConfig, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
+import { releaseConfigFromEnv, releasePublicConfig, validateInstallerMetadata, validateReleaseConfig } from "../shared/update.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -190,11 +190,7 @@ async function handleApi(req, res) {
   }
   if (req.method === "GET" && req.url.startsWith("/api/release/config")) {
     const url = new URL(req.url, "http://localhost");
-    return sendJson(res, 200, releaseConfigBody(Object.fromEntries(url.searchParams.entries())));
-  }
-  if (req.method === "GET" && req.url.startsWith("/api/release/latest")) {
-    const url = new URL(req.url, "http://localhost");
-    return sendJson(res, 200, await releaseLatestBody(Object.fromEntries(url.searchParams.entries())));
+    return sendJson(res, 200, await releaseConfigBody(Object.fromEntries(url.searchParams.entries())));
   }
   return sendJson(res, 404, { error: "not found" });
 }
@@ -235,8 +231,19 @@ function healthBody(client = {}) {
   };
 }
 
-function releaseConfigBody(client = {}) {
+async function releaseConfigBody(client = {}) {
   const latestClientVersion = process.env.LATEST_CLIENT_VERSION || SERVER_VERSION;
+  const config = releaseConfigFromEnv();
+  let installers = null;
+  try {
+    validateReleaseConfig(config);
+    const installerUrl = `${config.publicBaseUrl}/releases/installer.json`;
+    const response = await fetch(installerUrl, { cache: "no-store" });
+    if (response.ok) {
+      const meta = await response.json();
+      installers = validateInstallerMetadata(meta, { publicBaseUrl: config.publicBaseUrl });
+    }
+  } catch {}
   return {
     ok: true,
     serverTime: new Date().toISOString(),
@@ -245,65 +252,14 @@ function releaseConfigBody(client = {}) {
     supportedClientProtocol: SUPPORTED_CLIENT_PROTOCOL,
     latestClientVersion,
     compatibility: serverCompatibility(client),
-    release: releasePublicConfig({
-      release: releaseConfigFromEnv(),
-      latestClientVersion,
-      compatibility: serverCompatibility(client)
-    })
-  };
-}
-
-async function releaseLatestBody(client = {}) {
-  const body = releaseConfigBody(client);
-  const config = releaseConfigFromEnv();
-  try {
-    validateReleaseConfig(config);
-  } catch (error) {
-    return {
-      ...body,
-      ok: false,
-      code: "release_not_configured",
-      error: error.message,
-      manifest: null
-    };
-  }
-  let response;
-  try {
-    response = await fetch(config.manifestUrl, { cache: "no-store" });
-  } catch (error) {
-    return {
-      ...body,
-      ok: false,
-      code: "release_manifest_unavailable",
-      error: error.message,
-      manifest: null
-    };
-  }
-  if (!response.ok) {
-    return {
-      ...body,
-      ok: false,
-      code: "release_manifest_unavailable",
-      error: `release manifest request failed: ${response.status}`,
-      manifest: null
-    };
-  }
-  let manifest;
-  try {
-    manifest = validateReleaseManifest(await response.json(), { publicBaseUrl: config.publicBaseUrl });
-  } catch (error) {
-    return {
-      ...body,
-      ok: false,
-      code: "release_manifest_invalid",
-      error: error.message,
-      manifest: null
-    };
-  }
-  return {
-    ...body,
-    ok: true,
-    manifest
+    release: {
+      ...releasePublicConfig({
+        release: config,
+        latestClientVersion,
+        compatibility: serverCompatibility(client)
+      }),
+      installers
+    }
   };
 }
 

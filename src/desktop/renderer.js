@@ -122,6 +122,7 @@ document.querySelectorAll(".save-settings").forEach((button) => button.addEventL
 $("#reset-local-data").addEventListener("click", () => run(resetLocalData));
 $("#check-update").addEventListener("click", () => run(checkUpdate));
 $("#download-update").addEventListener("click", () => run(downloadUpdate));
+$("#download-installer").addEventListener("click", () => run(downloadInstaller));
 $("#export-diagnostics").addEventListener("click", () => run(exportDiagnostics));
 
 function selectSection(section) {
@@ -218,6 +219,7 @@ async function renderWizard() {
     if (latestConfig?.nickname && latestConfig.nickname !== "anonymous") {
       $("#wizard-nickname").value = latestConfig.nickname;
     }
+    $("#wizard-api-base-url").value = latestConfig?.apiBaseUrl || "";
     try {
       wizardDetectedSources = await api.providerHealth();
     } catch {
@@ -234,7 +236,7 @@ async function renderWizardSources() {
   }
   container.innerHTML = wizardDetectedSources.map((item) => {
     const detected = item.detected || (item.roots && item.roots.length > 0);
-    const enabled = item.providerId === "cursor_dashboard_usage" ? false : detected;
+    const enabled = latestConfig ? sourceEnabledForConfig(latestConfig, item.providerId) : sourceEnabled(item);
     const summary = item.providerId === "cursor_dashboard_usage"
       ? (item.roots?.length ? t("desktop.renderer.accountSources", { count: item.roots.length }) : t("desktop.renderer.requiresToken"))
       : (detected ? (item.roots?.length === 1 ? t("desktop.renderer.foundOne") : t("desktop.renderer.found", { count: item.roots?.length || 0 })) : t("desktop.renderer.notFound"));
@@ -283,16 +285,14 @@ async function wizardImportProfile() {
 
 async function skipWizard() {
   const enabledSources = {};
-  wizardDetectedSources.forEach((item) => {
-    if (item.providerId !== "cursor_dashboard_usage" && (item.detected || (item.roots && item.roots.length > 0))) {
-      enabledSources[item.providerId] = true;
-    }
-  });
+  for (const [providerId, enabled] of Object.entries(latestConfig?.providerEnabled || {})) {
+    enabledSources[providerId] = enabled;
+  }
   latestConfig = await api.updateConfig({
-    nickname: "anonymous",
+    nickname: latestConfig?.nickname || "anonymous",
     desktopAutoInitialized: false,
     providerEnabled: enabledSources,
-    cursorDashboardUsage: { enabled: false }
+    cursorDashboardUsage: { enabled: latestConfig?.cursorDashboardUsage?.enabled === true }
   });
   renderConfig(latestConfig);
   await loadToday(true);
@@ -339,6 +339,9 @@ async function boot() {
     latestConfig = config;
     if (config.language) {
       setLang(config.language);
+      updatePageTranslations();
+      const langSwitcher = $("#lang-switcher");
+      if (langSwitcher) langSwitcher.value = config.language;
     }
     renderConfig(config);
     renderWizard();
@@ -366,11 +369,13 @@ function updateCheckProgress(data) {
   }
   if (data.status === "downloaded") {
     $("#download-update").disabled = false;
+    $("#download-installer").hidden = true;
     $("#update-message").textContent = t("desktop.renderer.downloadedReady");
   }
   if (data.status === "failed" && data.lastError) {
     $("#update-message").textContent = data.lastError;
     $("#download-update").disabled = false;
+    $("#download-installer").hidden = false;
   }
   renderSilentUpdateStatus(data, latestConfig);
 }
@@ -582,6 +587,7 @@ async function loadSystemStatus() {
 
 async function checkUpdate() {
   $("#check-update").disabled = true;
+  $("#download-installer").hidden = true;
   $("#update-message").textContent = t("desktop.renderer.checking");
   try {
     latestUpdateState = await api.checkUpdate();
@@ -606,6 +612,32 @@ async function downloadUpdate() {
   } catch (error) {
     $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
     $("#download-update").disabled = false;
+  }
+}
+
+async function downloadInstaller() {
+  $("#download-installer").disabled = true;
+  $("#update-message").textContent = t("desktop.renderer.downloading");
+  api.onInstallerProgress((progress) => {
+    const pct = progress.percent;
+    const speed = progress.bytesPerSecond > 0
+      ? `${Math.round(progress.bytesPerSecond / 1024)} KB/s`
+      : "";
+    $("#update-message").textContent = speed
+      ? `${t("desktop.renderer.downloading")} ${pct}% (${speed})`
+      : `${t("desktop.renderer.downloading")} ${pct}%`;
+  });
+  try {
+    const result = await api.downloadInstaller();
+    if (result && !result.ok) {
+      $("#update-message").textContent = result.error || t("desktop.renderer.downloadFailed");
+      $("#download-installer").disabled = false;
+      return;
+    }
+    $("#update-message").textContent = t("desktop.renderer.downloadedReady");
+  } catch (error) {
+    $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
+    $("#download-installer").disabled = false;
   }
 }
 
@@ -656,8 +688,8 @@ function renderCloudStatus(config = latestConfig) {
     : t("desktop.renderer.protocolDash");
   $("#cloud-compatibility").textContent = compatibility.status ? t("desktop.renderer.compatibility", { status: compatibility.status }) : t("desktop.renderer.compatibilityDash");
   $("#cloud-latest-version").textContent = connection.latestClientVersion ? t("desktop.renderer.latest", { version: connection.latestClientVersion }) : t("desktop.renderer.latestDash");
-  $("#cloud-release-manifest").textContent = release.manifestUrl ? t("desktop.renderer.releaseManifest") : t("desktop.renderer.releaseManifestDash");
-  $("#cloud-release-manifest").title = release.manifestUrl || "";
+  $("#cloud-release-manifest").textContent = release.publicBaseUrl ? t("desktop.renderer.releaseManifest") : t("desktop.renderer.releaseManifestDash");
+  $("#cloud-release-manifest").title = release.publicBaseUrl || "";
 }
 
 function updateMessage(state = {}) {
@@ -880,7 +912,9 @@ function sourceEnabled(item) {
 }
 
 function sourceEnabledForConfig(config, providerId) {
-  if (providerId === "cursor_dashboard_usage") return config.cursorDashboardUsage?.enabled === true;
+  if (providerId === "cursor_dashboard_usage") {
+    return config.cursorDashboardUsage?.enabled === true || config.providerEnabled?.cursor_dashboard_usage === true;
+  }
   return config.providerEnabled?.[providerId] !== false;
 }
 

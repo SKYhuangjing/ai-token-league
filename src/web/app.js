@@ -107,24 +107,25 @@ function render(items) {
 
 async function loadReleaseDownloads() {
   try {
-    const response = await fetch("/api/release/latest");
+    const response = await fetch("/api/release/config");
     const data = await response.json();
-    if (!data.ok || !data.manifest) {
-      renderDownloadUnavailable(data.code || data.error || "release unavailable");
+    if (!data.ok) {
+      renderDownloadUnavailable(data.error || "release unavailable");
       return;
     }
-    renderReleaseDownloads(data.manifest);
+    renderReleaseDownloads(data.release || {}, data.latestClientVersion || "");
   } catch (error) {
     renderDownloadUnavailable(error.message);
   }
 }
 
-function renderReleaseDownloads(manifest) {
-  const platforms = Object.entries(manifest.platforms || {})
-    .filter(([, artifact]) => artifact?.url)
+function renderReleaseDownloads(release, version) {
+  const installers = release.installers || {};
+  const platforms = Object.entries(installers)
+    .filter(([, info]) => info?.url)
     .sort(([left], [right]) => platformSort(left) - platformSort(right));
   const preferred = preferredPlatform();
-  downloadStatusEl.textContent = `${t("web.download.latest")} ${manifest.version}`;
+  downloadStatusEl.textContent = version ? `${t("web.download.latest")} ${version}` : t("web.checkingRelease");
   if (!platforms.length) {
     downloadActionsEl.innerHTML = `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
     return;
@@ -138,11 +139,8 @@ function renderReleaseDownloads(manifest) {
   const btnEl = document.querySelector("#download-btn");
   function syncDownloadLink() {
     const platform = selectEl.value;
-    const artifact = platforms.find(([p]) => p === platform);
-    if (artifact) {
-      const link = artifact[1].installer || artifact[1];
-      btnEl.href = link.url;
-    }
+    const info = installers[platform];
+    if (info) btnEl.href = info.url;
   }
   selectEl.addEventListener("change", syncDownloadLink);
   syncDownloadLink();

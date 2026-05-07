@@ -7,9 +7,9 @@ import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload } from "../src/shared/crypto.js";
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION } from "../src/shared/version.js";
-import { buildReleaseManifest, INSTALLER_PLATFORMS, releasePublicConfig, selectInstallerArtifact, selectUpdateArtifact, updatePreflightState, updateStateFromManifest, validateReleaseConfig, validateReleaseManifest, verifyFileChecksum } from "../src/shared/update.js";
+import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
 import { scanUsage } from "../src/collector/core.js";
-import { addCursorToken, exportConfig, exportIdentity, importIdentity, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
+import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
 import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
 import { codexLocalProvider } from "../src/collector/providers/codex-local.js";
 import { cursorDashboardUsageProvider, eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
@@ -74,6 +74,7 @@ async function testProviderEnabledSwitches() {
   assert.equal(result.items.some((item) => item.providerId === "claude_code_local"), true);
   assert.equal(codexLocalProvider.reportHealth(config).enabled, false);
   assert.equal(claudeCodeLocalProvider.reportHealth(config).enabled, true);
+  assert.equal(cursorDashboardUsageProvider.reportHealth({ providerEnabled: { cursor_dashboard_usage: true } }).enabled, true);
   const updated = updateConfig({ providerEnabled: { codex_local: true } }, config, { persist: false });
   assert.equal(updated.providerEnabled.codex_local, true);
   assert.equal(updated.providerEnabled.claude_code_local, true);
@@ -602,111 +603,79 @@ async function testVersionCompatibilityAndManifest() {
   assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: APP_VERSION }, { latestClientVersion: APP_VERSION, minClientEnforce: true }).server.minClientEnforce, true);
   assert.equal(compatibilityResult({ clientProtocolVersion: 1, clientAppVersion: APP_VERSION }, { latestClientVersion: APP_VERSION }).server.minClientEnforce, false);
 
-  assert.throws(() => validateReleaseConfig({ publicBaseUrl: "", manifestPath: "" }), /missing release config/);
+  assert.throws(() => validateReleaseConfig({ publicBaseUrl: "" }), /missing release config/);
   const artifactFile = path.join(tmp, "AI Token League-darwin-arm64.zip");
   fs.writeFileSync(artifactFile, "test-artifact");
   const expectedSha = "a5db9b186b4b28674910702a72ba352b9e71cd699e8e186b4b7c931412edd5f3";
   await verifyFileChecksum(artifactFile, expectedSha);
   await assert.rejects(() => verifyFileChecksum(artifactFile, "bad"), /checksum mismatch/);
-  const manifest = buildReleaseManifest({
-    version: "0.3.1",
-    publicBaseUrl: "https://example.com/releases",
-    manifestPath: "releases/latest.json",
-    artifacts: [
-      {
-        platform: "darwin-arm64",
-        fileName: "AI Token League-darwin-arm64.zip",
-        url: "https://example.com/releases/releases/0.3.1/AI%20Token%20League-darwin-arm64.zip",
-        sha256: expectedSha,
-        size: fs.statSync(artifactFile).size
-      }
-    ]
-  });
-  assert.equal(validateReleaseManifest(manifest).version, "0.3.1");
-  assert.equal(selectUpdateArtifact(manifest, "darwin-arm64").sha256, expectedSha);
-  assert.equal(updateStateFromManifest(manifest, { currentVersion: "0.3.0", platform: "darwin-arm64" }).updateAvailable, true);
   assert.equal(updatePreflightState({ apiBaseUrl: "" }).code, "cloud_not_configured");
   assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example" }), null);
   assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example", release: {} }).code, "release_not_configured");
-  assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example", release: { manifestUrl: "https://cdn.example/latest.json" } }), null);
+  assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example", release: { publicBaseUrl: "https://cdn.example" } }), null);
   const publicRelease = releasePublicConfig({
     release: {
       endpoint: "oss-cn-shanghai.aliyuncs.com",
       bucket: "private-bucket",
       prefix: "private-prefix",
-      publicBaseUrl: "https://cdn.example",
-      manifestPath: "releases/latest.json",
-      manifestUrl: "https://cdn.example/releases/latest.json"
+      publicBaseUrl: "https://cdn.example"
     },
     latestClientVersion: "0.3.1"
   });
   assert.equal(publicRelease.latestClientVersion, "0.3.1");
-  assert.equal(publicRelease.manifestUrl, "https://cdn.example/releases/latest.json");
+  assert.equal(publicRelease.publicBaseUrl, "https://cdn.example");
   assert.equal(Object.hasOwn(publicRelease, "endpoint"), false);
   assert.equal(Object.hasOwn(publicRelease, "bucket"), false);
   assert.equal(Object.hasOwn(publicRelease, "prefix"), false);
-  assert.throws(() => selectUpdateArtifact(manifest, "win32-x64"), /does not support/);
-  assert.throws(() => buildReleaseManifest({
-    version: "0.3.1",
-    publicBaseUrl: "https://example.com",
-    manifestPath: "releases/latest.json",
-    artifacts: [{ platform: "linux-x64", url: "https://example.com/a.zip", sha256: "x" }]
-  }), /unsupported platform/);
-  assert.throws(() => buildReleaseManifest({
-    version: "0.3.1",
-    publicBaseUrl: "https://example.com",
-    manifestPath: "releases/latest.json",
-    artifacts: [{ platform: "darwin-arm64", url: "https://example.com/a.zip" }]
-  }), /missing checksum/);
+  assert.equal(Object.hasOwn(publicRelease, "manifestUrl"), false);
 
-  // Installer artifacts in manifest
-  assert.equal(INSTALLER_PLATFORMS["darwin-arm64"].ext, "dmg");
-  assert.equal(INSTALLER_PLATFORMS["win32-x64"].ext, "exe");
-  const manifestWithInstaller = buildReleaseManifest({
+  const installerMetadata = {
     version: APP_VERSION,
-    publicBaseUrl: "https://example.com/releases",
-    manifestPath: "releases/latest.json",
-    artifacts: [
-      {
-        platform: "darwin-arm64",
-        fileName: "AI Token League-darwin-arm64.zip",
-        url: `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-darwin-arm64.zip`,
-        sha256: expectedSha,
-        size: 100
-      }
-    ],
-    installerArtifacts: [
-      {
-        platform: "darwin-arm64",
+    platforms: {
+      "darwin-arm64": {
+        url: `https://cdn.example/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-mac-arm64-installer.dmg`,
         fileName: `AI Token League-${APP_VERSION}-mac-arm64-installer.dmg`,
-        url: `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-mac-arm64-installer.dmg`,
         sha256: expectedSha,
         size: 200,
         ext: "dmg"
+      },
+      "darwin-x64": {
+        url: `https://cdn.example/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-mac-x64-installer.dmg`,
+        fileName: `AI Token League-${APP_VERSION}-mac-x64-installer.dmg`,
+        sha256: expectedSha.toUpperCase(),
+        size: 201,
+        ext: "dmg"
+      },
+      "win32-x64": {
+        url: `https://cdn.example/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-win-x64-installer.exe`,
+        fileName: `AI Token League-${APP_VERSION}-win-x64-installer.exe`,
+        sha256: expectedSha,
+        size: 202,
+        ext: "exe"
       }
-    ]
-  });
-  assert.ok(manifestWithInstaller.platforms["darwin-arm64"].installer);
-  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.ext, "dmg");
-  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.url, `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-mac-arm64-installer.dmg`);
-  assert.equal(manifestWithInstaller.platforms["darwin-arm64"].installer.size, 200);
-
-  // selectUpdateArtifact returns zip, not installer
-  const zipArtifact = selectUpdateArtifact(manifestWithInstaller, "darwin-arm64");
-  assert.equal(zipArtifact.url, `https://example.com/releases/releases/${APP_VERSION}/AI%20Token%20League-darwin-arm64.zip`);
-
-  // selectInstallerArtifact returns installer
-  const installerArtifact = selectInstallerArtifact(manifestWithInstaller, "darwin-arm64");
-  assert.ok(installerArtifact);
-  assert.equal(installerArtifact.ext, "dmg");
-  assert.equal(installerArtifact.platform, "darwin-arm64");
-
-  // selectInstallerArtifact returns null when no installer
-  assert.equal(selectInstallerArtifact(manifest, "darwin-arm64"), null);
-
-  // Old manifest without installer field still validates
-  assert.equal(manifest.platforms["darwin-arm64"].installer, undefined);
-  assert.equal(validateReleaseManifest(manifest).version, "0.3.1");
+    }
+  };
+  const installers = validateInstallerMetadata(installerMetadata, { publicBaseUrl: "https://cdn.example" });
+  assert.equal(installers["darwin-arm64"].ext, "dmg");
+  assert.equal(installers["darwin-x64"].sha256, expectedSha);
+  assert.throws(() => validateInstallerMetadata({
+    platforms: {
+      "darwin-arm64": installerMetadata.platforms["darwin-arm64"],
+      "darwin-x64": installerMetadata.platforms["darwin-x64"]
+    }
+  }, { publicBaseUrl: "https://cdn.example" }), /installer win32-x64 missing/);
+  assert.throws(() => validateInstallerMetadata({
+    platforms: {
+      ...installerMetadata.platforms,
+      "darwin-arm64": { ...installerMetadata.platforms["darwin-arm64"], url: "https://evil.example/installer.dmg" }
+    }
+  }, { publicBaseUrl: "https://cdn.example" }), /outside release public base url/);
+  assert.throws(() => validateInstallerMetadata({
+    platforms: {
+      ...installerMetadata.platforms,
+      "win32-x64": { ...installerMetadata.platforms["win32-x64"], fileName: "../installer.exe" }
+    }
+  }, { publicBaseUrl: "https://cdn.example" }), /fileName must be basename/);
 }
 
 function testIdentityImport() {
@@ -767,6 +736,30 @@ function testUpdateConfigKeepsIdentity() {
   assert.equal(normalizeSilentUpdateMode("bad"), "notify");
   const exported = exportConfig(silentUpdated);
   assert.equal(exported.silentUpdateMode, "auto_apply_on_idle");
+}
+
+function testInitConfigKeepsPresetFields() {
+  const config = initConfig({
+    nickname: "preset-user",
+    apiBaseUrl: "https://api.example",
+    language: "en",
+    showEstimatedCost: true,
+    providerEnabled: {
+      codex_local: false,
+      claude_code_local: true,
+      cursor_dashboard_usage: true
+    }
+  }, { persist: false });
+  assert.equal(config.nickname, "preset-user");
+  assert.equal(config.apiBaseUrl, "https://api.example");
+  assert.equal(config.language, "en");
+  assert.equal(config.showEstimatedCost, true);
+  assert.equal(config.cursorDashboardUsage.enabled, true);
+  assert.deepEqual(config.providerEnabled, {
+    claude_code_local: true,
+    codex_local: false,
+    cursor_dashboard_usage: true
+  });
 }
 
 function testAddCursorTokenKeepsMultipleAccounts() {
@@ -906,6 +899,7 @@ testAdminUsageRowRangeFeedsParticipantDetail();
 testSourceFingerprintDedupeKeepsDistinctDays();
 testIdentityImport();
 testUpdateConfigKeepsIdentity();
+testInitConfigKeepsPresetFields();
 testAddCursorTokenKeepsMultipleAccounts();
 await testCursorLocalTokenDetection();
 testCursorDashboardMapping();
