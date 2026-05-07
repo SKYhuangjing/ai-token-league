@@ -32,14 +32,17 @@ export function initConfig({
   apiConnection = {},
   autoRefreshEnabled = false,
   refreshIntervalMinutes = 15,
+  showEstimatedCost = false,
   showRawTokens = false,
   launchAtLogin = false,
   silentUpdateMode = "notify",
   desktopAutoInitialized = false,
-  language = ""
-} = {}) {
+  language = "",
+  providerEnabled = {}
+} = {}, { persist = true } = {}) {
   const identity = generateIdentity();
   const interval = Number(refreshIntervalMinutes);
+  const cursorEnabled = providerEnabled.cursor_dashboard_usage === true;
   const config = {
     participantId: identity.participantId,
     nickname,
@@ -48,7 +51,7 @@ export function initConfig({
     deviceId: newId("d"),
     apiBaseUrl,
     language,
-    showEstimatedCost: false,
+    showEstimatedCost,
     showRawTokens,
     autoRefreshEnabled,
     silentUpdateMode: normalizeSilentUpdateMode(silentUpdateMode),
@@ -56,7 +59,7 @@ export function initConfig({
     launchAtLogin,
     desktopAutoInitialized,
     cursorDashboardUsage: {
-      enabled: false,
+      enabled: cursorEnabled,
       workosSessionToken: "",
       workosSessionTokens: []
     },
@@ -66,11 +69,12 @@ export function initConfig({
     providerRoots: {},
     providerEnabled: {
       claude_code_local: true,
-      codex_local: true
+      codex_local: true,
+      ...providerEnabled
     },
     createdAt: new Date().toISOString()
   };
-  saveConfig(config);
+  if (persist) saveConfig(config);
   return config;
 }
 

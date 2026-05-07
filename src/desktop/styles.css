@@ -372,6 +372,15 @@ button:disabled {
   margin-top: 18px;
 }
 
+.wizard-summary .summary-tile {
+  min-width: 0;
+}
+
+.wizard-summary .summary-tile strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .wizard-source-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

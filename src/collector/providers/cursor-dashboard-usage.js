@@ -17,7 +17,7 @@ export const cursorDashboardUsageProvider = {
 
   scanSessions(config = {}) {
     const cursorConfig = config.cursorDashboardUsage || {};
-    if (cursorConfig.enabled !== true) return [];
+    if (!cursorEnabled(config)) return [];
     const sources = configuredSources(cursorConfig);
     if (cursorConfig.autoDetectLocal !== false) {
       for (const source of discoverAccountSources()) sources.push(source);
@@ -53,12 +53,16 @@ export const cursorDashboardUsageProvider = {
       providerId: this.id,
       toolCode: this.toolCode,
       detected: deduped.length > 0,
-      enabled: cursorConfig.enabled === true,
+      enabled: cursorEnabled(config),
       roots: deduped.map((source) => source.accountName || "Cursor"),
       lastCheckedAt: new Date().toISOString()
     };
   }
 };
+
+function cursorEnabled(config = {}) {
+  return config.cursorDashboardUsage?.enabled === true || config.providerEnabled?.cursor_dashboard_usage === true;
+}
 
 export function eventsToUsageEvents(events = [], source = {}) {
   return events
