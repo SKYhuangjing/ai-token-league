@@ -150,6 +150,16 @@ Source of truth: `src/backend/server.js`. Read the route definitions there; do n
 
 The active upload route is `/api/usage/daily-batch`. Do not document `/api/usage/upload` as current unless the server route is restored.
 
+## Admin Auth
+
+Admin page (`/admin.html`) and `/api/admin/*` routes are protected by HTTP Basic Auth when `ADMIN_USERNAME` is set.
+
+```bash
+ADMIN_USERNAME=admin ADMIN_PASSWORD=secret npm start
+```
+
+When `ADMIN_USERNAME` is empty or unset, admin routes remain open (backward compatible for local dev).
+
 ## Storage
 
 Backend JSON storage defaults to:

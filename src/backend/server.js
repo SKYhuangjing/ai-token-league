@@ -11,11 +11,29 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const SRC_DIR = path.resolve("src");
 const WEB_DIR = path.resolve("src/web");
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const store = await createConfiguredStore();
 
 function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body, null, 2));
+}
+
+function checkBasicAuth(req, res) {
+  if (!ADMIN_USERNAME) return true;
+  const header = req.headers.authorization || "";
+  const [scheme, encoded] = header.split(" ");
+  if (scheme === "Basic" && encoded) {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const sep = decoded.indexOf(":");
+    const user = sep >= 0 ? decoded.slice(0, sep) : decoded;
+    const pass = sep >= 0 ? decoded.slice(sep + 1) : "";
+    if (user === ADMIN_USERNAME && pass === ADMIN_PASSWORD) return true;
+  }
+  res.writeHead(401, { "www-authenticate": "Basic realm=\"Admin\"", "content-type": "text/plain; charset=utf-8" });
+  res.end("401 Unauthorized");
+  return false;
 }
 
 async function readBody(req) {
@@ -26,6 +44,7 @@ async function readBody(req) {
 }
 
 async function handleApi(req, res) {
+  if (req.url.startsWith("/api/admin/") && !checkBasicAuth(req, res)) return;
   if (req.method === "POST" && req.url === "/api/devices/register") {
     const body = await readBody(req);
     const compatibility = serverCompatibility(body.client || body);
@@ -284,6 +303,7 @@ async function releaseLatestBody(client = {}) {
 
 function serveStatic(req, res) {
   const requested = req.url === "/" ? "/web/index.html" : new URL(req.url, "http://localhost").pathname;
+  if (requested === "/admin.html" && !checkBasicAuth(req, res)) return;
   const normalized = requested.startsWith("/web/") || requested.startsWith("/shared/")
     ? requested
     : `/web${requested}`;

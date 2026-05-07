@@ -58,6 +58,33 @@ Expected:
 - API accepts the latest batch.
 - leaderboard total remains `6260`, proving usage is upserted rather than added repeatedly.
 
+## Admin BasicAuth
+
+Start with auth enabled:
+
+```bash
+HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" ADMIN_USERNAME=admin ADMIN_PASSWORD=secret npm start
+```
+
+Verify:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/admin.html
+# expect: 401
+
+curl -s -o /dev/null -w '%{http_code}' -u admin:secret http://127.0.0.1:8787/admin.html
+# expect: 200
+
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/admin/usage
+# expect: 401
+
+curl -s -o /dev/null -w '%{http_code}' -u admin:secret http://127.0.0.1:8787/api/admin/usage
+# expect: 200
+
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/public-leaderboard
+# expect: 200 (public, no auth required)
+```
+
 ## Current MVP Distribution
 
 The MVP is distributed as:

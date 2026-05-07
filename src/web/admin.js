@@ -23,6 +23,22 @@ const participantFilter = document.querySelector("#participant-filter");
 const pricingStatus = document.querySelector("#pricing-status");
 let detailCloseTimer = null;
 
+async function fetchAdmin(url, options) {
+  const response = await fetch(url, options);
+  if (response.status === 401) {
+    showAuthRequired();
+    throw new Error("Authentication required");
+  }
+  return response;
+}
+
+function showAuthRequired() {
+  const message = "Admin access requires login. Refresh the page and enter your credentials when the browser prompts you.";
+  statusEl.textContent = message;
+  pricingStatus.textContent = message;
+  tbody.innerHTML = `<tr><td class="empty" colspan="7">${message}</td></tr>`;
+}
+
 hydratePreferences();
 applyToggleState();
 
@@ -102,7 +118,7 @@ document.querySelector("#pricing-form").addEventListener("submit", async (event)
     cacheWriteCostPerMTok: document.querySelector("#price-cache-write").value,
     source: "admin"
   };
-  const response = await fetch("/api/admin/model-prices", {
+  const response = await fetchAdmin("/api/admin/model-prices", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
@@ -118,7 +134,7 @@ document.querySelector("#refresh-openrouter-recalculate").addEventListener("clic
 
 async function refreshOpenRouter(recalculate) {
   pricingStatus.textContent = recalculate ? "Refreshing and recalculating..." : "Refreshing OpenRouter...";
-  const response = await fetch(`/api/admin/model-prices/refresh-openrouter?recalculate=${recalculate ? "1" : "0"}`, { method: "POST" });
+  const response = await fetchAdmin(`/api/admin/model-prices/refresh-openrouter?recalculate=${recalculate ? "1" : "0"}`, { method: "POST" });
   if (!response.ok) throw new Error((await response.json()).error || "failed to refresh OpenRouter prices");
   await loadPricing();
   if (recalculate) await loadUsage();
@@ -128,7 +144,7 @@ async function loadUsage() {
   updateAutoGrain();
   syncRangeInputs();
   statusEl.textContent = "Loading...";
-  const response = await fetch(`/api/admin/usage?${queryString()}`);
+  const response = await fetchAdmin(`/api/admin/usage?${queryString()}`);
   const data = await response.json();
   renderParticipantOptions(data.participants || []);
   render(data.items || []);
@@ -137,7 +153,7 @@ async function loadUsage() {
 }
 
 async function loadPricing() {
-  const response = await fetch("/api/admin/model-prices");
+  const response = await fetchAdmin("/api/admin/model-prices");
   const data = await response.json();
   renderPricing(data);
 }
@@ -207,7 +223,7 @@ function renderPricing(data) {
   document.querySelectorAll("[data-delete-price]").forEach((button) => {
     button.addEventListener("click", async () => {
       pricingStatus.textContent = "Deleting...";
-      await fetch(`/api/admin/model-prices/${encodeURIComponent(button.dataset.deletePrice)}`, { method: "DELETE" });
+      await fetchAdmin(`/api/admin/model-prices/${encodeURIComponent(button.dataset.deletePrice)}`, { method: "DELETE" });
       await loadPricing();
       await loadUsage();
     });
@@ -215,7 +231,7 @@ function renderPricing(data) {
   document.querySelectorAll("[data-delete-price-alias]").forEach((button) => {
     button.addEventListener("click", async () => {
       pricingStatus.textContent = "Deleting alias...";
-      await fetch(`/api/admin/model-price-aliases/${encodeURIComponent(button.dataset.deletePriceAlias)}`, { method: "DELETE" });
+      await fetchAdmin(`/api/admin/model-price-aliases/${encodeURIComponent(button.dataset.deletePriceAlias)}`, { method: "DELETE" });
       await loadPricing();
       await loadUsage();
     });
@@ -225,7 +241,7 @@ function renderPricing(data) {
 async function mapModelPriceAlias(model, targetModel) {
   if (!targetModel.trim()) throw new Error("Target model is required");
   pricingStatus.textContent = "Mapping price alias...";
-  const response = await fetch("/api/admin/model-price-aliases", {
+  const response = await fetchAdmin("/api/admin/model-price-aliases", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model, targetModel })
@@ -303,7 +319,7 @@ async function deleteParticipantData(participantId, nickname) {
   const confirmed = window.confirm(`Delete all uploaded server data for ${label}?\n\nThe user's client must sync again to re-upload fresh aggregate data.`);
   if (!confirmed) return;
   statusEl.textContent = `Deleting ${label}...`;
-  const response = await fetch(`/api/admin/participants/${encodeURIComponent(participantId)}`, { method: "DELETE" });
+  const response = await fetchAdmin(`/api/admin/participants/${encodeURIComponent(participantId)}`, { method: "DELETE" });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "failed to delete participant data");
   if (state.participantId === participantId) state.participantId = "";
@@ -351,7 +367,7 @@ async function loadDetail(participantId) {
 }
 
 async function loadQuality() {
-  const response = await fetch(`/api/admin/quality?${qualityQueryString()}`);
+  const response = await fetchAdmin(`/api/admin/quality?${qualityQueryString()}`);
   const data = await response.json();
   renderQualityBoard(data);
 }
@@ -797,8 +813,8 @@ function escapeHtml(value) {
 }
 
 loadUsage().catch((error) => {
-  statusEl.textContent = error.message;
+  if (error.message !== "Authentication required") statusEl.textContent = error.message;
 });
 loadPricing().catch((error) => {
-  pricingStatus.textContent = error.message;
+  if (error.message !== "Authentication required") pricingStatus.textContent = error.message;
 });
