@@ -5,6 +5,7 @@ node_modules/
 dist/
 dist-installer/
 *.zip
+assets/preset.json
 
 # Runtime data
 data/

@@ -92,7 +92,8 @@ async function modules() {
     core: await import(pathToFileUrl(path.join(root, "src/collector/core.js"))),
     crypto: await import(pathToFileUrl(path.join(root, "src/shared/crypto.js"))),
     schema: await import(pathToFileUrl(path.join(root, "src/shared/schema.js"))),
-    version: await import(pathToFileUrl(path.join(root, "src/shared/version.js")))
+    version: await import(pathToFileUrl(path.join(root, "src/shared/version.js"))),
+    preset: await import(pathToFileUrl(path.join(root, "src/shared/preset.js")))
   };
 }
 
@@ -217,8 +218,8 @@ app.whenReady().then(async () => {
       });
     return;
   }
-  const { config } = await modules();
-  const current = ensureDesktopConfig(config);
+  const { config, preset } = await modules();
+  const current = ensureDesktopConfig(config, preset);
   appendRuntimeLog("app_ready", {
     appVersion: app.getVersion(),
     platform: process.platform,
@@ -241,8 +242,8 @@ app.on("window-all-closed", () => {
 });
 
 ipcMain.handle("config:get", async () => {
-  const { config } = await modules();
-  return sanitizeConfig(ensureDesktopConfig(config));
+  const { config, preset } = await modules();
+  return sanitizeConfig(ensureDesktopConfig(config, preset));
 });
 
 ipcMain.handle("api:check", async (_event, apiBaseUrl) => {
@@ -444,8 +445,8 @@ ipcMain.handle("workdirs:set-alias", async (_event, input) => {
 });
 
 ipcMain.handle("providers:health", async () => {
-  const { config, core } = await modules();
-  const current = ensureDesktopConfig(config);
+  const { config, core, preset } = await modules();
+  const current = ensureDesktopConfig(config, preset);
   return core.providerHealth(current);
 });
 
@@ -460,14 +461,14 @@ ipcMain.handle("pricing:model-prices", async () => {
 });
 
 ipcMain.handle("usage:scan", async (_event, options = {}) => {
-  const { config, core } = await modules();
-  const current = ensureDesktopConfig(config);
+  const { config, core, preset } = await modules();
+  const current = ensureDesktopConfig(config, preset);
   return getUsageSnapshot({ config, core, current, force: Boolean(options.force) });
 });
 
 ipcMain.handle("usage:scan-start", async (_event, options = {}) => {
-  const { config, core } = await modules();
-  const current = ensureDesktopConfig(config);
+  const { config, core, preset } = await modules();
+  const current = ensureDesktopConfig(config, preset);
   startForegroundScan({ config, core, current, force: Boolean(options.force) });
   return foregroundScanStatus();
 });
@@ -1345,7 +1346,7 @@ function snapshotFingerprint(items = []) {
   return nodeCrypto.createHash("sha256").update(text).digest("hex");
 }
 
-function ensureDesktopConfig(configModule) {
+function ensureDesktopConfig(configModule, presetModule = null) {
   const current = configModule.loadConfig();
   if (current) {
     if (!Object.hasOwn(current, "desktopAutoInitialized") && isUnconfirmedDesktopProfile(current)) {
@@ -1354,8 +1355,9 @@ function ensureDesktopConfig(configModule) {
     }
     return current;
   }
+  const preset = presetModule ? presetModule.loadBuildPreset(app.getAppPath()) : {};
   return configModule.initConfig({
-    apiBaseUrl: "",
+    ...preset,
     desktopAutoInitialized: true,
     apiConnection: {
       ok: true,
