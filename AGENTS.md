@@ -53,7 +53,7 @@ src/backend/      Node.js backend, API, JSON/MySQL stores, OpenRouter pricing
 src/collector/    CLI collector, provider registry, local config, scan/sync logic
 src/desktop/      Electron desktop app
 src/shared/       Shared schema, pricing, crypto, dates, display helpers
-src/web/          Public and admin Web UI
+src/web/          Public and admin Web UI (index.html, admin.html, app.js, admin.js, styles.css)
 tests/            Node-based test runner
 doc/              Product, architecture, deployment, packaging, and smoke docs
 migrations/       MySQL migrations
@@ -85,13 +85,11 @@ Collector:
 
 ```bash
 npm run collector:init -- --nickname sky --api http://127.0.0.1:8787
-npm run collector -- health
 npm run collector -- scan
-npm run collector -- register
 npm run collector -- sync
-npm run collector -- export-identity
-npm run collector -- import-identity --file identity.json
 ```
+
+Run `npm run collector -- --help` for all subcommands (health, register, export-identity, import-identity, etc.).
 
 Desktop:
 
@@ -148,34 +146,9 @@ Windows status: initial verification passed and the app is usable, but Windows h
 
 ## API Surface
 
-Source of truth: `src/backend/server.js`.
+Source of truth: `src/backend/server.js`. Read the route definitions there; do not maintain a separate route list in this file.
 
-Current routes:
-
-```text
-POST /api/devices/register
-POST /api/usage/daily-batch
-POST /api/admin/recalculate-costs
-POST /api/admin/model-prices/refresh-openrouter
-GET  /api/model-prices
-GET  /api/admin/model-prices
-POST /api/admin/model-prices
-POST /api/admin/model-price-aliases
-DELETE /api/admin/model-price-aliases/:model
-DELETE /api/admin/model-prices/:model
-DELETE /api/admin/participants/:participantId
-GET  /api/leaderboard
-GET  /api/public-leaderboard
-GET  /api/admin/usage
-GET  /api/admin/quality
-GET  /api/participants/:participantId
-GET  /api/participants/:participantId/trend
-GET  /api/health
-GET  /api/release/config
-GET  /api/release/latest
-```
-
-Do not document `/api/usage/upload` as current unless the server route is restored. The active upload route is `/api/usage/daily-batch`.
+The active upload route is `/api/usage/daily-batch`. Do not document `/api/usage/upload` as current unless the server route is restored.
 
 ## Storage
 
@@ -223,15 +196,7 @@ HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" npm start
 
 ## MySQL Test Deployment
 
-Run backend/Web with MySQL:
-
-```bash
-docker compose -f docker-compose.mysql.example.yml up --build -d
-```
-
-The compose file reads `env.local` by default. Use `ENV_FILE=env.test` for `ai_token_league`. Both env files set `TZ=Asia/Shanghai` so daily rankings use the business day instead of UTC.
-
-See `doc/test-deployment.md`.
+See `doc/test-deployment.md` for Docker-based MySQL setup, env files, and timezone config.
 
 ## Verification Baseline
 
@@ -249,8 +214,8 @@ Smoke checklist: `doc/smoke-checklist.md`.
 
 - Keep `README.md` optimized for GitHub discovery, product positioning, privacy model, and quick start.
 - Put development commands, route details, storage details, and verification workflow in this file.
-- Treat the highest implemented `doc/<version>-baseline.md` as the current product baseline. As of 2026-05-07, that is `doc/0.4-baseline.md`.
-- Treat the highest planned `doc/<version>-baseline.md` plus `doc/<version>-development-tasks.md` pair as the active next-version plan. As of 2026-05-07, that is `0.5`.
+- Treat the highest implemented `doc/<version>-baseline.md` as the current product baseline.
+- Treat the highest planned `doc/<version>-baseline.md` plus `doc/<version>-development-tasks.md` pair as the active next-version plan.
 - Keep `doc/v0.1-baseline.md` frozen as history.
 - If code and docs disagree, verify code first, then update the docs that are wrong.
 
@@ -275,4 +240,3 @@ During a version, every temporary or opportunistic code feature must be recorded
 - No hook-based live collection yet.
 - Cost is optional display, not primary ranking.
 - Cursor dashboard usage does not provide local workdir attribution.
-- Windows is initially verified and usable, but not yet fully tested.
