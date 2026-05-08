@@ -122,6 +122,7 @@ Run these before treating the package as current:
 ```bash
 node --check src/desktop/main.cjs
 node --check src/desktop/renderer.js
+node --check scripts/publish-release.js
 npm test
 npm run desktop:smoke
 npm run release:dry-run

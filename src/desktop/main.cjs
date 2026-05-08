@@ -4,6 +4,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const nodeCrypto = require("node:crypto");
 const os = require("node:os");
+const { spawn } = require("node:child_process");
 
 const background = {
   timer: null,
@@ -41,7 +42,15 @@ const updateCheck = {
   lastResult: null,
   lastError: null,
   nextCheckAt: null,
-  downloadProgress: null
+  downloadProgress: null,
+  readyPackage: null
+};
+let customMacUpdate = null;
+
+const downloadedUpdate = {
+  file: "",
+  sha256: "",
+  artifact: null
 };
 
 const activity = {
@@ -70,6 +79,71 @@ function safeIdleForUpdateApply({ ignoreUpdateCheck = false } = {}) {
     && !activity.identityTransfer;
 }
 
+function canInstallDownloadedUpdate(file) {
+  return process.platform === "darwin" && path.extname(file).toLowerCase() === ".zip";
+}
+
+function currentInstallTargetPath() {
+  if (!app.isPackaged) return "";
+  if (process.platform !== "darwin") return "";
+  const bundle = path.resolve(process.execPath, "../../..");
+  return path.basename(bundle) === "AI Token League.app" ? bundle : "";
+}
+
+function canApplyDownloadedUpdate(file) {
+  return canInstallDownloadedUpdate(file) && Boolean(currentInstallTargetPath());
+}
+
+function writeUpdateScript() {
+  if (process.platform === "darwin") return writeMacUpdateScript();
+  throw new Error("Direct install is not supported on this platform");
+}
+
+function writeMacUpdateScript() {
+  const dir = updateTempDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const script = path.join(dir, "install-and-restart.sh");
+  fs.writeFileSync(script, `#!/bin/sh
+set -eu
+APP_PID="$1"
+ZIP_FILE="$2"
+DEST_APP="$3"
+LOG_FILE="$4"
+while kill -0 "$APP_PID" 2>/dev/null; do
+  sleep 0.2
+done
+WORK_DIR="$(mktemp -d "\${TMPDIR:-/tmp}/ai-token-league-apply.XXXXXX")"
+cleanup() {
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+{
+  /usr/bin/ditto -x -k "$ZIP_FILE" "$WORK_DIR"
+  SRC_APP="$(/usr/bin/find "$WORK_DIR" -maxdepth 4 -name 'AI Token League.app' -type d | /usr/bin/head -n 1)"
+  if [ -z "$SRC_APP" ]; then
+    echo "AI Token League.app not found in update package"
+    exit 1
+  fi
+  DEST_DIR="$(/usr/bin/dirname "$DEST_APP")"
+  STAGED_APP="$DEST_DIR/.AI Token League.app.update.$$"
+  /bin/rm -rf "$STAGED_APP"
+  /usr/bin/ditto "$SRC_APP" "$STAGED_APP"
+  /bin/rm -rf "$DEST_APP"
+  /bin/mv "$STAGED_APP" "$DEST_APP"
+  /usr/bin/open "$DEST_APP"
+} >"$LOG_FILE" 2>&1
+`);
+  fs.chmodSync(script, 0o755);
+  return {
+    command: "/bin/sh",
+    args: [script]
+  };
+}
+
+function updateTempDir() {
+  return path.join(app.getPath("temp"), "ai-token-league-updates");
+}
+
 function updateStatusSnapshot() {
   return {
     running: updateCheck.running,
@@ -81,6 +155,16 @@ function updateStatusSnapshot() {
     lastError: updateCheck.lastError,
     nextCheckAt: updateCheck.nextCheckAt,
     downloadProgress: updateCheck.downloadProgress,
+    readyPackage: updateCheck.readyPackage
+      ? {
+          fileName: updateCheck.readyPackage.artifact?.fileName || path.basename(updateCheck.readyPackage.file || ""),
+          sha256: updateCheck.readyPackage.sha256 || "",
+          verifiedAt: updateCheck.readyPackage.verifiedAt || "",
+          latestVersion: updateCheck.readyPackage.latestVersion || "",
+          platform: updateCheck.readyPackage.platform || "",
+          source: updateCheck.readyPackage.source || ""
+        }
+      : null,
     safeIdle: safeIdleForUpdateApply()
   };
 }
@@ -92,11 +176,15 @@ async function modules() {
     core: await import(pathToFileUrl(path.join(root, "src/collector/core.js"))),
     crypto: await import(pathToFileUrl(path.join(root, "src/shared/crypto.js"))),
     schema: await import(pathToFileUrl(path.join(root, "src/shared/schema.js"))),
+    update: await import(pathToFileUrl(path.join(root, "src/shared/update.js"))),
     version: await import(pathToFileUrl(path.join(root, "src/shared/version.js"))),
     preset: await import(pathToFileUrl(path.join(root, "src/shared/preset.js")))
   };
 }
 
+// electron-updater lifecycle: active on Windows (latest.yml + NSIS installer).
+// macOS uses a custom zip hot-replace path (customMacUpdate) and does not reach these handlers.
+// Keep this block intact for a future macOS migration to electron-updater.
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 autoUpdater.logger = {
@@ -509,7 +597,7 @@ ipcMain.handle("app:version", async () => {
 
 ipcMain.handle("update:check", async () => {
   if (updateCheck.running) return updateStatusSnapshot();
-  const { config, version } = await modules();
+  const { config, update, version } = await modules();
   const current = config.loadConfig();
   cachedConfig = current;
   const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
@@ -531,6 +619,23 @@ ipcMain.handle("update:check", async () => {
   try {
     const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
     cachedReleaseConfig = releaseConfig;
+    if (process.platform === "darwin") {
+      const latest = await getJson(`${apiBaseUrl}/api/release/latest?${clientQuery(version, app.getVersion())}`);
+      const state = prepareCustomMacUpdateState({ latest, update, version });
+      customMacUpdate = state.updateAvailable ? { manifest: latest.manifest, artifact: state.artifact, filePath: "" } : null;
+      updateCheck.status = state.updateAvailable ? "available" : "up_to_date";
+      updateCheck.lastResult = state;
+      updateCheck.lastError = null;
+      broadcastUpdateProgress();
+      return {
+        code: state.updateAvailable ? "update_available" : "up_to_date",
+        checkedAt,
+        client,
+        server: releaseConfig,
+        update: state,
+        message: state.updateAvailable ? `Version ${state.latestVersion} is available` : "Current version is up to date"
+      };
+    }
     const feedUrl = configureFeedUrl(releaseConfig);
     if (!feedUrl) {
       return {
@@ -563,6 +668,9 @@ ipcMain.handle("update:check", async () => {
 
 ipcMain.handle("update:download", async () => {
   if (updateCheck.downloadRunning) return { ok: false, message: "Download already in progress" };
+  if (process.platform === "darwin" && updateCheck.lastResult?.installMode === "custom_mac") {
+    return downloadCustomMacUpdate();
+  }
   updateCheck.downloadRunning = true;
   updateCheck.status = "downloading";
   try {
@@ -578,6 +686,10 @@ ipcMain.handle("update:download", async () => {
 });
 
 ipcMain.handle("update:install-and-restart", async () => {
+  if (process.platform === "darwin" && updateCheck.lastResult?.installMode === "custom_mac") {
+    await installCustomMacUpdate({ source: "manual" });
+    return { ok: true };
+  }
   appendRuntimeLog("updater_quit_and_install", { source: "manual" });
   autoUpdater.quitAndInstall(false, true);
   return { ok: true };
@@ -702,7 +814,7 @@ async function scheduleBackgroundUpdateCheck(configOverride = null) {
 
 async function runUpdateCheck(current, { allowSilent = false } = {}) {
   if (updateCheck.running) return updateCheck.lastResult;
-  const { version } = await modules();
+  const { update, version } = await modules();
   const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
   if (!apiBaseUrl) return null;
   cachedConfig = current;
@@ -714,6 +826,28 @@ async function runUpdateCheck(current, { allowSilent = false } = {}) {
   try {
     const releaseConfig = await getJson(`${apiBaseUrl}/api/release/config?${clientQuery(version, app.getVersion())}`);
     cachedReleaseConfig = releaseConfig;
+    if (process.platform === "darwin") {
+      const latest = await getJson(`${apiBaseUrl}/api/release/latest?${clientQuery(version, app.getVersion())}`);
+      const state = prepareCustomMacUpdateState({ latest, update, version });
+      customMacUpdate = state.updateAvailable ? { manifest: latest.manifest, artifact: state.artifact, filePath: "" } : null;
+      updateCheck.status = state.updateAvailable ? "available" : "up_to_date";
+      updateCheck.lastResult = state;
+      updateCheck.lastError = null;
+      appendRuntimeLog("silent_update_check_done", {
+        mode: silentUpdateMode(current),
+        updateAvailable: state.updateAvailable,
+        latestVersion: state.latestVersion,
+        installMode: state.installMode
+      });
+      if (allowSilent && state.updateAvailable && ["auto_download", "auto_apply_on_idle"].includes(silentUpdateMode(current))) {
+        await downloadCustomMacUpdate();
+        if (silentUpdateMode(current) === "auto_apply_on_idle") {
+          await applyReadyUpdateIfIdle({ source: "background", ignoreUpdateCheck: true });
+        }
+      }
+      broadcastUpdateProgress();
+      return updateCheck.lastResult;
+    }
     const feedUrl = configureFeedUrl(releaseConfig);
     if (!feedUrl) throw new Error("Release feed URL is not configured");
     const mode = silentUpdateMode(current);
@@ -741,6 +875,10 @@ async function applyReadyUpdateIfIdle({ source = "background", ignoreUpdateCheck
     updateCheck.status = "ready";
     appendRuntimeLog("updater_apply_deferred", { source, reason: "not_idle" });
     return false;
+  }
+  if (process.platform === "darwin" && updateCheck.lastResult?.installMode === "custom_mac") {
+    await installCustomMacUpdate({ source });
+    return true;
   }
   appendRuntimeLog("updater_quit_and_install", { source });
   autoUpdater.quitAndInstall(false, true);
@@ -1548,6 +1686,141 @@ async function uploadQueueEntry(current, entry) {
     ...entry.payload,
     signature: entry.signature
   });
+}
+
+function prepareCustomMacUpdateState({ latest, update, version }) {
+  if (!latest?.manifest) throw new Error(latest?.error || "release manifest is not available");
+  const state = update.updateStateFromManifest(latest.manifest, {
+    currentVersion: app.getVersion(),
+    platform: version.clientPlatform()
+  });
+  return {
+    ...state,
+    installMode: "custom_mac",
+    artifact: {
+      ...state.artifact,
+      platform: state.platform
+    }
+  };
+}
+
+async function downloadCustomMacUpdate() {
+  if (!customMacUpdate?.artifact?.url) throw new Error("No macOS update artifact is ready. Check for updates first.");
+  updateCheck.downloadRunning = true;
+  updateCheck.status = "downloading";
+  updateCheck.downloadProgress = { percent: 0, bytesPerSecond: 0, total: customMacUpdate.artifact.size || 0, transferred: 0 };
+  updateCheck.lastError = null;
+  broadcastUpdateProgress();
+  const tmpDir = path.join(os.tmpdir(), "ai-token-league-updater");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const fileName = customMacUpdate.artifact.fileName || path.basename(new URL(customMacUpdate.artifact.url).pathname);
+  const filePath = path.join(tmpDir, `${Date.now()}-${fileName}`);
+  try {
+    appendRuntimeLog("custom_mac_update_download_start", { url: customMacUpdate.artifact.url, fileName });
+    await downloadUrlToFile(customMacUpdate.artifact.url, filePath);
+    const { update } = await modules();
+    await update.verifyFileChecksum(filePath, customMacUpdate.artifact.sha256);
+    customMacUpdate.filePath = filePath;
+    downloadedUpdate.file = filePath;
+    downloadedUpdate.sha256 = customMacUpdate.artifact.sha256;
+    downloadedUpdate.artifact = customMacUpdate.artifact;
+    updateCheck.readyPackage = {
+      file: filePath,
+      sha256: customMacUpdate.artifact.sha256,
+      artifact: customMacUpdate.artifact,
+      verifiedAt: new Date().toISOString(),
+      latestVersion: customMacUpdate.manifest.version,
+      platform: customMacUpdate.artifact.platform || updateCheck.lastResult?.platform || "",
+      source: "custom_mac"
+    };
+    updateCheck.status = "downloaded";
+    updateCheck.downloadProgress = null;
+    updateCheck.lastResult = {
+      ...(updateCheck.lastResult || {}),
+      updateAvailable: true,
+      latestVersion: customMacUpdate.manifest.version,
+      installMode: "custom_mac",
+      artifact: customMacUpdate.artifact
+    };
+    appendRuntimeLog("custom_mac_update_download_done", { filePath, version: customMacUpdate.manifest.version });
+    broadcastUpdateProgress();
+    return { ok: true, message: "Update downloaded and verified" };
+  } catch (error) {
+    try { fs.rmSync(filePath, { force: true }); } catch {}
+    updateCheck.lastError = error.message;
+    updateCheck.status = "failed";
+    appendRuntimeLog("custom_mac_update_download_failed", { error: error.message });
+    broadcastUpdateProgress();
+    throw error;
+  } finally {
+    updateCheck.downloadRunning = false;
+  }
+}
+
+async function downloadUrlToFile(url, filePath) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`update download failed: ${response.status}`);
+  if (!response.body) throw new Error("update download response has no body");
+  const total = Number(response.headers.get("content-length") || 0);
+  const startedAt = Date.now();
+  let transferred = 0;
+  const out = fs.createWriteStream(filePath, { flags: "wx" });
+  try {
+    for await (const chunk of response.body) {
+      const buffer = Buffer.from(chunk);
+      transferred += buffer.length;
+      if (!out.write(buffer)) await new Promise((resolve) => out.once("drain", resolve));
+      const elapsed = Math.max(1, (Date.now() - startedAt) / 1000);
+      updateCheck.downloadProgress = {
+        percent: total > 0 ? Math.round((transferred / total) * 100) : 0,
+        bytesPerSecond: Math.round(transferred / elapsed),
+        total,
+        transferred
+      };
+      broadcastUpdateProgress();
+    }
+  } finally {
+    await new Promise((resolve, reject) => out.end((error) => error ? reject(error) : resolve()));
+  }
+}
+
+async function installCustomMacUpdate({ source = "manual" } = {}) {
+  const ready = updateCheck.readyPackage || {
+    file: customMacUpdate?.filePath || downloadedUpdate.file,
+    sha256: customMacUpdate?.artifact?.sha256 || downloadedUpdate.sha256,
+    artifact: customMacUpdate?.artifact || downloadedUpdate.artifact
+  };
+  if (!ready.file || !fs.existsSync(ready.file)) {
+    throw new Error("Downloaded macOS update package is missing");
+  }
+  updateCheck.applyRunning = true;
+  updateCheck.status = "applying";
+  updateCheck.lastError = null;
+  broadcastUpdateProgress();
+  appendRuntimeLog("custom_mac_update_install_start", { source, fileName: path.basename(ready.file) });
+  try {
+    const { update } = await modules();
+    await update.verifyFileChecksum(ready.file, ready.sha256);
+    const installTarget = currentInstallTargetPath();
+    if (!installTarget) throw new Error("Could not locate a packaged AI Token League install path");
+    const script = writeUpdateScript();
+    const logFile = path.join(updateTempDir(), "install.log");
+    const child = spawn(script.command, [...script.args, String(process.pid), ready.file, installTarget, logFile], {
+      detached: true,
+      stdio: "ignore"
+    });
+    child.unref();
+    appendRuntimeLog("custom_mac_update_apply_launched", { source, installTarget, logFile });
+    app.exit(0);
+    return { ok: true };
+  } catch (error) {
+    updateCheck.lastError = error.message;
+    updateCheck.status = "failed";
+    updateCheck.applyRunning = false;
+    appendRuntimeLog("custom_mac_update_apply_failed", { source, error: error.message });
+    broadcastUpdateProgress();
+    throw error;
+  }
 }
 
 async function getJson(url) {
