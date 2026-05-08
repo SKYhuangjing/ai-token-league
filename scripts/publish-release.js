@@ -91,6 +91,7 @@ for (const ia of installerArtifacts) {
 }
 const installerJsonText = `${JSON.stringify(installerMeta, null, 2)}\n`;
 const installerJsonKey = joinKey(config.prefix, "releases", "installer.json");
+const installerJsonVersionKey = joinKey(config.prefix, "releases", version, "installer.json");
 
 // Build latest.json manifest for macOS custom zip updater
 const manifest = buildReleaseManifest({
@@ -102,6 +103,7 @@ const manifest = buildReleaseManifest({
 });
 const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
 const manifestKey = joinKey(config.prefix, config.manifestPath);
+const manifestVersionKey = joinKey(config.prefix, "releases", version, "latest.json");
 
 // Build electron-updater metadata files (latest.yml / latest-mac.yml)
 const winInstaller = installerArtifacts.filter((a) => a.platform === "win32-x64");
@@ -131,7 +133,9 @@ const plan = [
   ...(latestMacYml ? [{ key: latestMacYmlKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
   ...(latestMacYml ? [{ key: latestMacYmlVersionKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
   { key: installerJsonKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
-  { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8", last: true }
+  { key: installerJsonVersionKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
+  { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" },
+  { key: manifestVersionKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8", last: true }
 ];
 
 if (dryRun) {
