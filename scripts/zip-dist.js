@@ -12,7 +12,12 @@ if (!fs.existsSync(dist)) {
 for (const entry of fs.readdirSync(dist, { withFileTypes: true })) {
   if (!entry.isDirectory()) continue;
   const zipName = `${entry.name}.zip`;
-  const result = spawnSync("zip", ["-qry", zipName, entry.name], { cwd: dist, stdio: "inherit" });
+  const isMac = entry.name.includes("darwin");
+  // macOS: zip contents directly so .app is at root (required by Squirrel.Mac)
+  // Others: zip the directory itself
+  const result = isMac
+    ? spawnSync("zip", ["-qry", path.join(dist, zipName), "."], { cwd: path.join(dist, entry.name), stdio: "inherit" })
+    : spawnSync("zip", ["-qry", zipName, entry.name], { cwd: dist, stdio: "inherit" });
   if (result.status !== 0) process.exit(result.status);
   console.log(`created dist/${zipName}`);
 }

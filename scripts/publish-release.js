@@ -95,13 +95,15 @@ const installerJsonKey = joinKey(config.prefix, "releases", "installer.json");
 const winInstaller = installerArtifacts.filter((a) => a.platform === "win32-x64");
 const macZipArtifacts = artifacts.filter((a) => a.platform.startsWith("darwin"));
 const latestYml = winInstaller.length
-  ? buildLatestYml(version, winInstaller.map((a) => ({ fileName: a.fileName, sha512: sha512Base64(a.file), size: a.size })))
+  ? buildLatestYml(version, winInstaller.map((a) => ({ fileName: `${version}/${a.fileName}`, sha512: sha512Base64(a.file), size: a.size })))
   : "";
 const latestMacYml = macZipArtifacts.length
-  ? buildLatestYml(version, macZipArtifacts.map((a) => ({ fileName: a.fileName, sha512: sha512Base64(a.file), size: a.size })))
+  ? buildLatestYml(version, macZipArtifacts.map((a) => ({ fileName: `${version}/${a.fileName}`, sha512: sha512Base64(a.file), size: a.size })))
   : "";
 const latestYmlKey = joinKey(config.prefix, "releases", "latest.yml");
 const latestMacYmlKey = joinKey(config.prefix, "releases", "latest-mac.yml");
+const latestYmlVersionKey = joinKey(config.prefix, "releases", version, "latest.yml");
+const latestMacYmlVersionKey = joinKey(config.prefix, "releases", version, "latest-mac.yml");
 
 const plan = [
   ...artifacts.map((artifact) => ({ key: artifact.key, file: artifact.file, size: artifact.size, contentType: "application/zip" })),
@@ -113,7 +115,9 @@ const plan = [
   })),
   { key: checksumsKey, body: checksums, size: Buffer.byteLength(checksums), contentType: "text/plain; charset=utf-8" },
   ...(latestYml ? [{ key: latestYmlKey, body: latestYml, size: Buffer.byteLength(latestYml), contentType: "text/yaml; charset=utf-8" }] : []),
+  ...(latestYml ? [{ key: latestYmlVersionKey, body: latestYml, size: Buffer.byteLength(latestYml), contentType: "text/yaml; charset=utf-8" }] : []),
   ...(latestMacYml ? [{ key: latestMacYmlKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
+  ...(latestMacYml ? [{ key: latestMacYmlVersionKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
   { key: installerJsonKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8", last: true }
 ];
 
