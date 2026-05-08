@@ -14,6 +14,7 @@ RUN npm config set registry "${NPM_REGISTRY}" \
   && npm ci --omit=dev
 
 COPY src ./src
+COPY assets ./assets
 COPY migrations ./migrations
 COPY README.md ./
 COPY doc ./doc

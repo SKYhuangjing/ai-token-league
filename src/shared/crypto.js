@@ -17,6 +17,10 @@ export function sha256Hex(text) {
   return crypto.createHash("sha256").update(text).digest("hex");
 }
 
+export function hmacSha256Hex(key, data) {
+  return crypto.createHmac("sha256", key).update(data).digest("hex");
+}
+
 export function newId(prefix) {
   return `${prefix}_${crypto.randomBytes(12).toString("hex")}`;
 }

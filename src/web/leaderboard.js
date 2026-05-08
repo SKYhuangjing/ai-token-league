@@ -88,8 +88,8 @@ function render(items) {
       (item) => `<tr>
         <td>
           <span class="rank">#${item.rank}</span>
-          <button class="link-button participant-link" data-participant="${escapeHtml(item.participantId)}">
-            ${escapeHtml(item.nickname)}
+          <button class="link-button participant-link" data-display-id="${escapeHtml(item.displayId)}">
+            ${escapeHtml(item.displayName)}
           </button>
         </td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
@@ -98,8 +98,8 @@ function render(items) {
       </tr>`
     )
     .join("");
-  tbody.querySelectorAll("[data-participant]").forEach((button) => {
-    button.addEventListener("click", () => loadDetail(button.dataset.participant));
+  tbody.querySelectorAll("[data-display-id]").forEach((button) => {
+    button.addEventListener("click", () => loadDetail(button.dataset.displayId));
   });
 }
 
@@ -120,7 +120,7 @@ async function loadDetail(participantId) {
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/board/participants/${encodeURIComponent(participantId)}?${params.toString()}`);
   const detail = await response.json();
-  document.querySelector("#detail-title").textContent = `${detail.nickname} · ${periodLabel(state.period)}`;
+  document.querySelector("#detail-title").textContent = `${detail.displayName} · ${periodLabel(state.period)}`;
   document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.periodDetailLabel")}`;
   renderDetail(detail);
 }
@@ -131,7 +131,7 @@ async function loadHistory(participantId) {
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/board/participants/${encodeURIComponent(participantId)}/trend?${params.toString()}`);
   const detail = await response.json();
-  document.querySelector("#detail-title").textContent = `${detail.nickname || t("web.detail.participant")} · ${historyLabel(state.historyView)}`;
+  document.querySelector("#detail-title").textContent = `${detail.displayName || t("web.detail.participant")} · ${historyLabel(state.historyView)}`;
   document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.historyWindow")}`;
   renderHistory(detail.items || []);
 }

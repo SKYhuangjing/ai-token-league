@@ -3,9 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { Store } from "./store.js";
 import { MySqlStore } from "./mysql-store.js";
-import { verifyPayload } from "../shared/crypto.js";
+import { verifyPayload, sha256Hex } from "../shared/crypto.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
 import { releaseConfigFromEnv, releasePublicConfig, validateInstallerMetadata, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
+import { loadOrGenerateSalt, loadNames, BoardAnonymizer } from "./board-anonymizer.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -15,8 +16,92 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const BOARD_AUTH_USERNAME = process.env.PUBLIC_BOARD_AUTH_USERNAME || "";
 const BOARD_AUTH_PASSWORD = process.env.PUBLIC_BOARD_AUTH_PASSWORD || "";
+const BOARD_SECURITY_LEVEL = (process.env.BOARD_SECURITY_LEVEL || "public").toLowerCase();
+const BOARD_ANONYMIZATION_SALT = process.env.BOARD_ANONYMIZATION_SALT || "";
+const BOARD_ANONYMIZATION_SALT_PATH = process.env.BOARD_ANONYMIZATION_SALT_PATH || "data/board-anonymization-salt.key";
+const BOARD_ANONYMIZATION_NAMES_PATH = process.env.BOARD_ANONYMIZATION_NAMES_PATH || "assets/anonymizer-names.json";
 const MIN_CLIENT_ENFORCE = String(process.env.MIN_CLIENT_ENFORCE || "").toLowerCase() === "true";
+
+if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
+  console.error("FATAL: BOARD_SECURITY_LEVEL=authenticated requires PUBLIC_BOARD_AUTH_USERNAME to be set");
+  process.exit(1);
+}
+
 const store = await createConfiguredStore();
+
+let boardAnonymizer = null;
+if (BOARD_SECURITY_LEVEL === "anonymous") {
+  const salt = BOARD_ANONYMIZATION_SALT || loadOrGenerateSalt(BOARD_ANONYMIZATION_SALT_PATH);
+  const names = loadNames(BOARD_ANONYMIZATION_NAMES_PATH);
+  boardAnonymizer = new BoardAnonymizer(salt, names);
+  boardAnonymizer.buildReverseMap(Object.keys(store.db.participants));
+}
+
+function ensureAnonymizerFresh() {
+  if (!boardAnonymizer || !boardAnonymizer.dirty) return;
+  boardAnonymizer.buildReverseMap(Object.keys(store.db.participants));
+}
+
+const AVATAR_COLORS = ["#1c7c54", "#ba3b46", "#006d77", "#8f5f00", "#3d5a80", "#7b2cbf"];
+
+function colorFromId(id) {
+  return AVATAR_COLORS[Number.parseInt(sha256Hex(id).slice(0, 2), 16) % AVATAR_COLORS.length];
+}
+
+function transformBoardItem(item) {
+  const { participantId, nickname, ...rest } = item;
+  if (BOARD_SECURITY_LEVEL !== "anonymous") {
+    return { displayId: participantId, displayName: nickname, ...rest };
+  }
+  const displayId = boardAnonymizer.getPublicId(participantId);
+  const displayName = boardAnonymizer.getDisplayName(displayId);
+  return { displayId, displayName, avatarColor: colorFromId(displayId), ...rest };
+}
+
+function transformBoardDetail(detail) {
+  if (!detail) return detail;
+  const { participantId, nickname, ...rest } = detail;
+  if (BOARD_SECURITY_LEVEL !== "anonymous") {
+    return { displayId: participantId, displayName: nickname, ...rest };
+  }
+  const displayId = boardAnonymizer.getPublicId(participantId);
+  const displayName = boardAnonymizer.getDisplayName(displayId);
+  const result = { displayId, displayName, avatarColor: colorFromId(displayId), ...rest };
+  if (result.rows) {
+    result.rows = result.rows.map((row, i) => {
+      const { workdirDisplayName, ...rowRest } = row;
+      return { ...rowRest, workdirDisplayName: `Workdir ${i + 1}` };
+    });
+  }
+  if (result.workdirs) {
+    result.workdirs = result.workdirs.map((w, i) => ({ name: `Workdir ${i + 1}`, totalTokens: w.totalTokens }));
+  }
+  if (result.periodRows) {
+    result.periodRows = result.periodRows.map((row) => {
+      const { workdirDisplayName, ...rowRest } = row;
+      return rowRest;
+    });
+  }
+  return result;
+}
+
+function transformTrendResult(trend) {
+  if (!trend) return trend;
+  const { participantId, nickname, ...rest } = trend;
+  if (BOARD_SECURITY_LEVEL !== "anonymous") {
+    return { displayId: participantId, displayName: nickname, ...rest };
+  }
+  const displayId = boardAnonymizer.getPublicId(participantId);
+  const displayName = boardAnonymizer.getDisplayName(displayId);
+  const result = { displayId, displayName, ...rest };
+  if (result.items) {
+    result.items = result.items.map((item) => {
+      const { participantId: pid, nickname: nn, workdirs, ...itemRest } = item;
+      return itemRest;
+    });
+  }
+  return result;
+}
 
 function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -40,6 +125,7 @@ function checkBasicAuth(req, res, { username = ADMIN_USERNAME, password = ADMIN_
 }
 
 function checkBoardAuth(req, res) {
+  if (BOARD_SECURITY_LEVEL !== "authenticated") return true;
   return checkBasicAuth(req, res, { username: BOARD_AUTH_USERNAME, password: BOARD_AUTH_PASSWORD, realm: "Board" });
 }
 
@@ -60,7 +146,9 @@ async function handleApi(req, res) {
     const body = await readBody(req);
     const compatibility = serverCompatibility(body.client || body);
     if (!compatibility.compatible) return sendJson(res, 426, { error: compatibility.status, compatibility });
-    return sendJson(res, 200, { ...(await store.registerDevice(body)), compatibility });
+    const result = await store.registerDevice(body);
+    if (boardAnonymizer) boardAnonymizer.markDirty();
+    return sendJson(res, 200, { ...result, compatibility });
   }
   if (req.method === "POST" && req.url === "/api/usage/daily-batch") {
     const body = await readBody(req);
@@ -111,7 +199,9 @@ async function handleApi(req, res) {
   }
   if (req.method === "DELETE" && req.url.startsWith("/api/admin/participants/")) {
     const participantId = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/participants/", ""));
-    return sendJson(res, 200, await store.deleteParticipantData(participantId));
+    const result = await store.deleteParticipantData(participantId);
+    if (boardAnonymizer) boardAnonymizer.markDirty();
+    return sendJson(res, 200, result);
   }
   if (req.method === "GET" && req.url.startsWith("/api/leaderboard")) {
     const url = new URL(req.url, "http://localhost");
@@ -133,6 +223,7 @@ async function handleApi(req, res) {
     const url = new URL(req.url, "http://localhost");
     const period = url.searchParams.get("period") || "";
     const range = url.searchParams.get("range") || "today";
+    ensureAnonymizerFresh();
     return sendJson(res, 200, {
       period: period || range,
       items: store.publicLeaderboard({
@@ -141,7 +232,7 @@ async function handleApi(req, res) {
         startDay: url.searchParams.get("start") || "",
         endDay: url.searchParams.get("end") || "",
         includeCost: includeCost(url)
-      })
+      }).map((item) => transformBoardItem(item))
     });
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/usage")) {
@@ -169,8 +260,10 @@ async function handleApi(req, res) {
   }
   if (req.method === "GET" && req.url.startsWith("/api/board/participants/") && req.url.includes("/trend")) {
     const url = new URL(req.url, "http://localhost");
-    const participantId = decodeURIComponent(url.pathname.replace("/api/board/participants/", "").replace("/trend", ""));
-    const detail = store.participantTrend(participantId, {
+    const displayId = decodeURIComponent(url.pathname.replace("/api/board/participants/", "").replace("/trend", ""));
+    ensureAnonymizerFresh();
+    const realId = BOARD_SECURITY_LEVEL === "anonymous" ? boardAnonymizer?.resolveParticipantId(displayId) || displayId : displayId;
+    const detail = store.participantTrend(realId, {
       grain: url.searchParams.get("grain") || "day",
       range: url.searchParams.get("range") || "last30",
       startDay: url.searchParams.get("start") || "",
@@ -178,13 +271,15 @@ async function handleApi(req, res) {
       includeCost: includeCost(url)
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
-    return sendJson(res, 200, detail);
+    return sendJson(res, 200, transformTrendResult(detail));
   }
   if (req.method === "GET" && req.url.startsWith("/api/board/participants/")) {
     const url = new URL(req.url, "http://localhost");
-    const participantId = decodeURIComponent(url.pathname.replace("/api/board/participants/", ""));
+    const displayId = decodeURIComponent(url.pathname.replace("/api/board/participants/", ""));
+    ensureAnonymizerFresh();
+    const realId = BOARD_SECURITY_LEVEL === "anonymous" ? boardAnonymizer?.resolveParticipantId(displayId) || displayId : displayId;
     const period = url.searchParams.get("period") || "";
-    const detail = store.participantDetail(participantId, {
+    const detail = store.participantDetail(realId, {
       period,
       range: url.searchParams.get("range") || "today",
       startDay: url.searchParams.get("start") || "",
@@ -192,7 +287,7 @@ async function handleApi(req, res) {
       includeCost: includeCost(url)
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
-    return sendJson(res, 200, detail);
+    return sendJson(res, 200, transformBoardDetail(detail));
   }
   if (req.method === "GET" && req.url.startsWith("/api/health")) {
     const url = new URL(req.url, "http://localhost");

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
-import { generateIdentity, newId, signPayload } from "../src/shared/crypto.js";
+import { generateIdentity, newId, signPayload, hmacSha256Hex } from "../src/shared/crypto.js";
+import { BoardAnonymizer, loadOrGenerateSalt, loadNames } from "../src/backend/board-anonymizer.js";
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
 import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
@@ -895,8 +896,104 @@ async function testOpenRouterRefresh() {
   }
 }
 
+function testHmacSha256Hex() {
+  // determinism
+  const a = hmacSha256Hex("salt", "data");
+  const b = hmacSha256Hex("salt", "data");
+  assert.equal(a, b);
+  assert.equal(a.length, 64);
+  // different key produces different output
+  const c = hmacSha256Hex("other-salt", "data");
+  assert.notEqual(a, c);
+  // different data produces different output
+  const d = hmacSha256Hex("salt", "other-data");
+  assert.notEqual(a, d);
+}
+
+function testBoardAnonymizer() {
+  const anonymizer = new BoardAnonymizer("test-salt-12345");
+
+  // publicId stability
+  const id1 = anonymizer.getPublicId("p_abc123");
+  const id2 = anonymizer.getPublicId("p_abc123");
+  assert.equal(id1, id2);
+  assert.equal(id1.length, 16);
+
+  // different participantId → different publicId
+  const id3 = anonymizer.getPublicId("p_def456");
+  assert.notEqual(id1, id3);
+
+  // displayName stability
+  const name1 = anonymizer.getDisplayName(id1);
+  const name2 = anonymizer.getDisplayName(id1);
+  assert.equal(name1, name2);
+  assert.ok(typeof name1 === "string" && name1.length > 0);
+
+  // custom names
+  const custom = new BoardAnonymizer("salt", ["Alpha", "Beta", "Gamma"]);
+  const cname = custom.getDisplayName(id1);
+  assert.ok(["Alpha", "Beta", "Gamma"].includes(cname));
+
+  // deduplication: force collisions by using single-name wordlist
+  const dedup = new BoardAnonymizer("salt", ["火星"]);
+  const pids = ["p_aaa", "p_bbb", "p_ccc"];
+  dedup.buildReverseMap(pids);
+  const names = pids.map((pid) => dedup.getDisplayName(dedup.getPublicId(pid)));
+  assert.equal(names[0], "火星");
+  assert.equal(names[1], "火星 2");
+  assert.equal(names[2], "火星 3");
+
+  // reverse map
+  const ids = ["p_abc123", "p_def456", "p_ghi789"];
+  anonymizer.buildReverseMap(ids);
+  for (const pid of ids) {
+    const pubId = anonymizer.getPublicId(pid);
+    assert.equal(anonymizer.resolveParticipantId(pubId), pid);
+  }
+  assert.equal(anonymizer.resolveParticipantId("nonexistent"), null);
+  assert.equal(anonymizer.dirty, false);
+
+  // markDirty
+  anonymizer.markDirty();
+  assert.equal(anonymizer.dirty, true);
+}
+
+function testLoadNames() {
+  const namesPath = path.join(tmp, "test-names.json");
+  // valid file
+  fs.writeFileSync(namesPath, JSON.stringify(["甲", "乙", "丙"]));
+  const names = loadNames(namesPath);
+  assert.deepEqual(names, ["甲", "乙", "丙"]);
+  // missing file → default
+  const defaultNames = loadNames(path.join(tmp, "nonexistent.json"));
+  assert.ok(defaultNames.length > 10);
+  // empty path → default
+  const emptyPath = loadNames("");
+  assert.ok(emptyPath.length > 10);
+  fs.unlinkSync(namesPath);
+}
+
+function testLoadOrGenerateSalt() {
+  const saltPath = path.join(tmp, "test-salt.key");
+  // clean up if exists
+  try { fs.unlinkSync(saltPath); } catch {}
+  // first call generates
+  const salt1 = loadOrGenerateSalt(saltPath);
+  assert.ok(salt1.length >= 32);
+  assert.ok(fs.existsSync(saltPath));
+  // second call reads same salt
+  const salt2 = loadOrGenerateSalt(saltPath);
+  assert.equal(salt1, salt2);
+  // cleanup
+  fs.unlinkSync(saltPath);
+}
+
 const { identity, items } = await testScan();
 await testProviderEnabledSwitches();
+testHmacSha256Hex();
+testBoardAnonymizer();
+testLoadOrGenerateSalt();
+testLoadNames();
 testBackendUpload(identity, items);
 testDeleteParticipantDataAllowsResync();
 testAdminUsageRowRangeFeedsParticipantDetail();

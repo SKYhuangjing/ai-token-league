@@ -170,21 +170,59 @@ ADMIN_PASSWORD=<your-password>
 
 未设置 `ADMIN_USERNAME` 时，admin 路由保持开放（向后兼容本地开发）。
 
-### 1.7 社区榜单访问控制
+### 1.7 社区榜单安全级别
 
-通过环境变量启用 HTTP Basic Auth 保护 `/leaderboard.html` 和 `/api/board/*` 榜单接口：
+通过 `BOARD_SECURITY_LEVEL` 控制榜单访问模式，支持三档：
+
+| 级别 | 行为 | 说明 |
+| --- | --- | --- |
+| `public`（默认） | 无需鉴权，返回真实用户身份 | 适合本地开发和小型部署 |
+| `anonymous` | 无需鉴权，API 侧匿名化用户身份 | 适合公开部署，保护用户隐私 |
+| `authenticated` | BasicAuth 鉴权，返回真实用户身份 | 适合需要完整管理能力的场景 |
+
+#### 公开模式（默认）
 
 ```text
+BOARD_SECURITY_LEVEL=public
+```
+
+API 返回 `displayId`（等于真实 participantId）和 `displayName`（等于真实 nickname），无需鉴权。
+
+#### 匿名模式
+
+```text
+BOARD_SECURITY_LEVEL=anonymous
+BOARD_ANONYMIZATION_SALT=<server-secret>
+# 可选；默认 data/board-anonymization-salt.key
+BOARD_ANONYMIZATION_SALT_PATH=data/board-anonymization-salt.key
+# 可选；自定义匿名显示名称词库（JSON 字符串数组）
+BOARD_ANONYMIZATION_NAMES_PATH=assets/anonymizer-names.json
+```
+
+API 返回匿名 `displayId`（16 字符 HMAC 短码）和 `displayName`（来自词库名词，重名时自动加数字后缀如"火星 2"）。不返回真实 `participantId`、`nickname`、`workdirDisplayName` 或设备信息。
+
+- `BOARD_ANONYMIZATION_SALT` 可选；未配置时服务端从 `BOARD_ANONYMIZATION_SALT_PATH` 读取或自动生成。
+- Salt 文件独立于 `db.json`，便于运维备份和迁移。
+- 匿名身份在同一部署中稳定：同一用户始终显示相同名称。
+- `BOARD_ANONYMIZATION_NAMES_PATH` 可选；指向一个 JSON 字符串数组文件，例如 `["火星", "DBM", "以终为始"]`。未配置或文件无效时使用内置星体词库。
+
+#### 鉴权模式
+
+```text
+BOARD_SECURITY_LEVEL=authenticated
 PUBLIC_BOARD_AUTH_USERNAME=board
 PUBLIC_BOARD_AUTH_PASSWORD=<your-password>
 ```
 
-- 榜单鉴权与 admin 鉴权独立判定：`ADMIN_USERNAME` 只保护 admin，`PUBLIC_BOARD_AUTH_USERNAME` 只保护社区榜单。
-- 未设置 `PUBLIC_BOARD_AUTH_USERNAME` 时，社区榜单保持公开，即使 `ADMIN_USERNAME` 已配置。
-- 若需榜单和 admin 使用同一账号，需显式将 `PUBLIC_BOARD_AUTH_USERNAME` / `PUBLIC_BOARD_AUTH_PASSWORD` 配成与 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 相同的值。
-- 公开首页 `/`（下载页）和 `/api/release/config` 不受榜单鉴权保护。
-- `/api/devices/register`、`/api/usage/daily-batch`、`/api/health` 不受榜单鉴权保护。
-- 旧接口 `/api/public-leaderboard`、`/api/participants/:id`、`/api/participants/:id/trend` 在 0.6 中返回 `404`。
+需 BasicAuth 登录后才能访问 `/leaderboard.html` 和 `/api/board/*`。未配置凭据时服务端启动失败。
+
+#### 通用规则
+
+- 榜单鉴权与 admin 鉴权独立判定：`ADMIN_USERNAME` 只保护 admin，`PUBLIC_BOARD_AUTH_USERNAME` 只保护社区榜单（仅 `authenticated` 模式生效）。
+- 公开首页 `/`（下载页）和 `/api/release/config` 不受榜单安全级别保护。
+- `/api/board/summary` 始终公开（只返回聚合数据，不涉及用户身份）。
+- `/api/devices/register`、`/api/usage/daily-batch`、`/api/health` 不受榜单安全级别保护。
+- admin API 在三种模式下均返回真实运营数据。
 
 ---
 

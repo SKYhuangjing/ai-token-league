@@ -88,20 +88,53 @@ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/public-leaderbo
 # expect: 404 (removed in 0.6)
 ```
 
-## Board BasicAuth
+## Board Security Levels
 
-Start with board auth enabled:
+### Default (public)
 
 ```bash
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" PUBLIC_BOARD_AUTH_USERNAME=board PUBLIC_BOARD_AUTH_PASSWORD=secret npm start
+HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" npm start
 ```
 
 Verify:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/
-# expect: 200 (public landing page, no auth required)
+curl -s http://127.0.0.1:8787/api/board/leaderboard | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));console.log(d.items[0]?.displayId?'OK: has displayId':'FAIL: missing displayId');console.log(d.items[0]?.displayName?'OK: has displayName':'FAIL: missing displayName')"
+# expect: OK: has displayId, OK: has displayName
 
+curl -s http://127.0.0.1:8787/api/board/leaderboard | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));console.log(d.items[0]?.participantId!==undefined?'FAIL: leaked participantId':'OK: no participantId')"
+# expect: OK: no participantId
+```
+
+### Anonymous mode
+
+```bash
+HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" BOARD_SECURITY_LEVEL=anonymous npm start
+```
+
+Verify:
+
+```bash
+curl -s http://127.0.0.1:8787/api/board/leaderboard | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));const item=d.items[0]||{};console.log(item.displayId?.length===16?'OK: 16-char displayId':'FAIL: bad displayId');console.log(item.displayName?'OK: has displayName':'FAIL: missing displayName');console.log(item.participantId!==undefined?'FAIL: leaked participantId':'OK: no participantId');console.log(item.nickname!==undefined?'FAIL: leaked nickname':'OK: no nickname')"
+# expect: all OK
+```
+
+### Authenticated mode (startup failure without credentials)
+
+```bash
+HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" BOARD_SECURITY_LEVEL=authenticated npm start 2>&1
+# expect: FATAL error and process exit
+```
+
+### Authenticated mode (with credentials)
+
+```bash
+HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" BOARD_SECURITY_LEVEL=authenticated PUBLIC_BOARD_AUTH_USERNAME=board PUBLIC_BOARD_AUTH_PASSWORD=secret npm start
+```
+
+Verify:
+
+```bash
 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/leaderboard.html
 # expect: 401
 
