@@ -170,6 +170,22 @@ ADMIN_PASSWORD=<your-password>
 
 未设置 `ADMIN_USERNAME` 时，admin 路由保持开放（向后兼容本地开发）。
 
+### 1.7 社区榜单访问控制
+
+通过环境变量启用 HTTP Basic Auth 保护 `/leaderboard.html` 和 `/api/board/*` 榜单接口：
+
+```text
+PUBLIC_BOARD_AUTH_USERNAME=board
+PUBLIC_BOARD_AUTH_PASSWORD=<your-password>
+```
+
+- 榜单鉴权与 admin 鉴权独立判定：`ADMIN_USERNAME` 只保护 admin，`PUBLIC_BOARD_AUTH_USERNAME` 只保护社区榜单。
+- 未设置 `PUBLIC_BOARD_AUTH_USERNAME` 时，社区榜单保持公开，即使 `ADMIN_USERNAME` 已配置。
+- 若需榜单和 admin 使用同一账号，需显式将 `PUBLIC_BOARD_AUTH_USERNAME` / `PUBLIC_BOARD_AUTH_PASSWORD` 配成与 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 相同的值。
+- 公开首页 `/`（下载页）和 `/api/release/config` 不受榜单鉴权保护。
+- `/api/devices/register`、`/api/usage/daily-batch`、`/api/health` 不受榜单鉴权保护。
+- 旧接口 `/api/public-leaderboard`、`/api/participants/:id`、`/api/participants/:id/trend` 在 0.6 中返回 `404`。
+
 ---
 
 ## 2. 下载通道配置

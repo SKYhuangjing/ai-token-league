@@ -81,7 +81,40 @@ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/admin/usage
 curl -s -o /dev/null -w '%{http_code}' -u admin:secret http://127.0.0.1:8787/api/admin/usage
 # expect: 200
 
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/board/leaderboard
+# expect: 200 (public when PUBLIC_BOARD_AUTH_USERNAME is not set)
+
 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/public-leaderboard
+# expect: 404 (removed in 0.6)
+```
+
+## Board BasicAuth
+
+Start with board auth enabled:
+
+```bash
+HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" PUBLIC_BOARD_AUTH_USERNAME=board PUBLIC_BOARD_AUTH_PASSWORD=secret npm start
+```
+
+Verify:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/
+# expect: 200 (public landing page, no auth required)
+
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/leaderboard.html
+# expect: 401
+
+curl -s -o /dev/null -w '%{http_code}' -u board:secret http://127.0.0.1:8787/leaderboard.html
+# expect: 200
+
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/board/leaderboard
+# expect: 401
+
+curl -s -o /dev/null -w '%{http_code}' -u board:secret http://127.0.0.1:8787/api/board/leaderboard
+# expect: 200
+
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/release/config
 # expect: 200 (public, no auth required)
 ```
 

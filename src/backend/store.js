@@ -304,6 +304,30 @@ export class Store {
     return this.cachedAggregate("publicLeaderboard", { period, range, startDay, endDay, includeCost }, () => this.computePublicLeaderboard({ period, range, startDay, endDay, includeCost }));
   }
 
+  boardSummary() {
+    return this.cachedAggregate("boardSummary", {}, () => this.computeBoardSummary());
+  }
+
+  computeBoardSummary() {
+    const todayItems = this.publicLeaderboard({ range: "today", includeCost: true });
+    const weekItems = this.publicLeaderboard({ range: "this_week", includeCost: true });
+    const monthItems = this.publicLeaderboard({ range: "this_month", includeCost: true });
+    const lastMonthItems = this.publicLeaderboard({ range: "last_month", includeCost: true });
+    const sumTokens = (items) => items.reduce((s, i) => s + i.totalTokens, 0);
+    const sumCost = (items) => items.reduce((s, i) => s + (i.estimatedCostUsd || 0), 0);
+    return {
+      participantCount: Object.keys(this.db.participants).length,
+      todayTokens: sumTokens(todayItems),
+      weekTokens: sumTokens(weekItems),
+      thisMonthTokens: sumTokens(monthItems),
+      lastMonthTokens: sumTokens(lastMonthItems),
+      todayCost: sumCost(todayItems),
+      weekCost: sumCost(weekItems),
+      thisMonthCost: sumCost(monthItems),
+      lastMonthCost: sumCost(lastMonthItems)
+    };
+  }
+
   computePublicLeaderboard({ period, range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
     const days = daysForQuery({ period, range, startDay, endDay });
     const rows = Object.values(this.db.usageDaily).filter((item) => days.includes(item.day));
@@ -845,6 +869,9 @@ function daysForRange(range, { startDay = "", endDay = "" } = {}) {
   const today = localDay();
   if (range === "custom" && isDay(startDay) && isDay(endDay)) {
     return daysBetween(startDay, endDay);
+  }
+  if (range === "today" || range === "yesterday" || range === "this_week" || range === "last_week" || range === "this_month" || range === "last_month") {
+    return daysForPeriod(range);
   }
   if (range === "month" || range === "lastMonth") {
     const todayDate = dayToUtcDate(today);

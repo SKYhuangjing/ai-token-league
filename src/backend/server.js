@@ -13,6 +13,8 @@ const SRC_DIR = path.resolve("src");
 const WEB_DIR = path.resolve("src/web");
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+const BOARD_AUTH_USERNAME = process.env.PUBLIC_BOARD_AUTH_USERNAME || "";
+const BOARD_AUTH_PASSWORD = process.env.PUBLIC_BOARD_AUTH_PASSWORD || "";
 const MIN_CLIENT_ENFORCE = String(process.env.MIN_CLIENT_ENFORCE || "").toLowerCase() === "true";
 const store = await createConfiguredStore();
 
@@ -21,8 +23,8 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body, null, 2));
 }
 
-function checkBasicAuth(req, res) {
-  if (!ADMIN_USERNAME) return true;
+function checkBasicAuth(req, res, { username = ADMIN_USERNAME, password = ADMIN_PASSWORD, realm = "Admin" } = {}) {
+  if (!username) return true;
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
   if (scheme === "Basic" && encoded) {
@@ -30,11 +32,15 @@ function checkBasicAuth(req, res) {
     const sep = decoded.indexOf(":");
     const user = sep >= 0 ? decoded.slice(0, sep) : decoded;
     const pass = sep >= 0 ? decoded.slice(sep + 1) : "";
-    if (user === ADMIN_USERNAME && pass === ADMIN_PASSWORD) return true;
+    if (user === username && pass === password) return true;
   }
-  res.writeHead(401, { "www-authenticate": "Basic realm=\"Admin\"", "content-type": "text/plain; charset=utf-8" });
+  res.writeHead(401, { "www-authenticate": `Basic realm="${realm}"`, "content-type": "text/plain; charset=utf-8" });
   res.end("401 Unauthorized");
   return false;
+}
+
+function checkBoardAuth(req, res) {
+  return checkBasicAuth(req, res, { username: BOARD_AUTH_USERNAME, password: BOARD_AUTH_PASSWORD, realm: "Board" });
 }
 
 async function readBody(req) {
@@ -46,6 +52,10 @@ async function readBody(req) {
 
 async function handleApi(req, res) {
   if (req.url.startsWith("/api/admin/") && !checkBasicAuth(req, res)) return;
+  if (req.method === "GET" && req.url.startsWith("/api/board/summary")) {
+    return sendJson(res, 200, store.boardSummary());
+  }
+  if (req.url.startsWith("/api/board/") && !checkBoardAuth(req, res)) return;
   if (req.method === "POST" && req.url === "/api/devices/register") {
     const body = await readBody(req);
     const compatibility = serverCompatibility(body.client || body);
@@ -119,7 +129,7 @@ async function handleApi(req, res) {
       })
     });
   }
-  if (req.method === "GET" && req.url.startsWith("/api/public-leaderboard")) {
+  if (req.method === "GET" && req.url.startsWith("/api/board/leaderboard")) {
     const url = new URL(req.url, "http://localhost");
     const period = url.searchParams.get("period") || "";
     const range = url.searchParams.get("range") || "today";
@@ -157,9 +167,9 @@ async function handleApi(req, res) {
   if (req.method === "GET" && req.url.startsWith("/api/admin/devices")) {
     return sendJson(res, 200, store.adminDevices());
   }
-  if (req.method === "GET" && req.url.startsWith("/api/participants/") && req.url.includes("/trend")) {
+  if (req.method === "GET" && req.url.startsWith("/api/board/participants/") && req.url.includes("/trend")) {
     const url = new URL(req.url, "http://localhost");
-    const participantId = decodeURIComponent(url.pathname.replace("/api/participants/", "").replace("/trend", ""));
+    const participantId = decodeURIComponent(url.pathname.replace("/api/board/participants/", "").replace("/trend", ""));
     const detail = store.participantTrend(participantId, {
       grain: url.searchParams.get("grain") || "day",
       range: url.searchParams.get("range") || "last30",
@@ -170,9 +180,9 @@ async function handleApi(req, res) {
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
     return sendJson(res, 200, detail);
   }
-  if (req.method === "GET" && req.url.startsWith("/api/participants/")) {
+  if (req.method === "GET" && req.url.startsWith("/api/board/participants/")) {
     const url = new URL(req.url, "http://localhost");
-    const participantId = decodeURIComponent(url.pathname.replace("/api/participants/", ""));
+    const participantId = decodeURIComponent(url.pathname.replace("/api/board/participants/", ""));
     const period = url.searchParams.get("period") || "";
     const detail = store.participantDetail(participantId, {
       period,
@@ -294,8 +304,9 @@ async function releaseLatestBody() {
 }
 
 function serveStatic(req, res) {
-  const requested = req.url === "/" ? "/web/index.html" : new URL(req.url, "http://localhost").pathname;
+  const requested = req.url === "/" ? "/web/download.html" : new URL(req.url, "http://localhost").pathname;
   if (requested === "/admin.html" && !checkBasicAuth(req, res)) return;
+  if (requested === "/leaderboard.html" && !checkBoardAuth(req, res)) return;
   const normalized = requested.startsWith("/web/") || requested.startsWith("/shared/")
     ? requested
     : `/web${requested}`;

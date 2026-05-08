@@ -22,8 +22,6 @@ const storageKeys = {
 
 const tbody = document.querySelector("#leaderboard");
 const statusEl = document.querySelector("#status");
-const downloadStatusEl = document.querySelector("#download-status");
-const downloadActionsEl = document.querySelector("#download-actions");
 const detailEl = document.querySelector("#participant-detail");
 const detailBackdrop = document.querySelector("#detail-backdrop");
 let detailCloseTimer = null;
@@ -74,7 +72,7 @@ async function loadLeaderboard() {
   statusEl.textContent = t("loading");
   const params = new URLSearchParams({ period: state.period });
   if (state.showCost) params.set("includeCost", "1");
-  const response = await fetch(`/api/public-leaderboard?${params.toString()}`);
+  const response = await fetch(`/api/board/leaderboard?${params.toString()}`);
   const data = await response.json();
   render(data.items || []);
   statusEl.textContent = t("web.leaderboard.participantCount", { count: data.items.length, plural: data.items.length === 1 ? "" : "s" });
@@ -105,81 +103,6 @@ function render(items) {
   });
 }
 
-async function loadReleaseDownloads() {
-  try {
-    const response = await fetch("/api/release/config");
-    const data = await response.json();
-    if (!data.ok) {
-      renderDownloadUnavailable(data.error || "release unavailable");
-      return;
-    }
-    renderReleaseDownloads(data.release || {}, data.latestClientVersion || "");
-  } catch (error) {
-    renderDownloadUnavailable(error.message);
-  }
-}
-
-function renderReleaseDownloads(release, version) {
-  const installers = release.installers || {};
-  const platforms = Object.entries(installers)
-    .filter(([, info]) => info?.url)
-    .sort(([left], [right]) => platformSort(left) - platformSort(right));
-  const preferred = preferredPlatform();
-  downloadStatusEl.textContent = version ? `${t("web.download.latest")} ${version}` : t("web.checkingRelease");
-  if (!platforms.length) {
-    downloadActionsEl.innerHTML = `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
-    return;
-  }
-  const downloadIcon = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v9m0 0l-3-3m3 3l3-3M3 13h10"/></svg>`;
-  const options = platforms
-    .map(([platform]) => `<option value="${escapeAttribute(platform)}"${platform === preferred ? " selected" : ""}>${escapeHtml(platformLabel(platform))}</option>`)
-    .join("");
-  downloadActionsEl.innerHTML = `<select id="download-platform">${options}</select><a id="download-btn" href="#" target="_blank" rel="noreferrer">${downloadIcon}<span data-i18n="web.download.downloadBtn">${t("web.download.downloadBtn")}</span></a>`;
-  const selectEl = document.querySelector("#download-platform");
-  const btnEl = document.querySelector("#download-btn");
-  function syncDownloadLink() {
-    const platform = selectEl.value;
-    const info = installers[platform];
-    if (info) btnEl.href = info.url;
-  }
-  selectEl.addEventListener("change", syncDownloadLink);
-  syncDownloadLink();
-}
-
-function renderDownloadUnavailable(reason) {
-  downloadStatusEl.textContent = t("web.download.notConfigured");
-  downloadActionsEl.innerHTML = `<span class="download-placeholder">${escapeHtml(reason)}</span>`;
-}
-
-function platformSort(platform) {
-  return {
-    "darwin-arm64": 1,
-    "darwin-x64": 2,
-    "win32-x64": 3
-  }[platform] || 99;
-}
-
-function platformLabel(platform) {
-  const labels = {
-    "darwin-arm64": t("platform.darwinArm64"),
-    "darwin-x64": t("platform.darwinX64"),
-    "win32-x64": t("platform.win32X64")
-  };
-  return labels[platform] || platform;
-}
-
-function preferredPlatform() {
-  const userAgent = window.navigator.userAgent || "";
-  if (/Windows/i.test(userAgent)) return "win32-x64";
-  if (/Mac/i.test(userAgent)) {
-    // Apple Silicon: userAgentData.platform or iPad-on-Mac detection
-    if (navigator.userAgentData?.platform === "macOS" && navigator.userAgentData?.architecture === "arm") return "darwin-arm64";
-    if (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) return "darwin-arm64";
-    return "darwin-x64";
-  }
-  return "";
-}
-
 async function loadDetail(participantId) {
   if (detailCloseTimer) clearTimeout(detailCloseTimer);
   state.detailParticipantId = participantId;
@@ -195,7 +118,7 @@ async function loadDetail(participantId) {
   document.querySelector("#detail-status").textContent = t("loading");
   const params = new URLSearchParams({ period: state.period });
   if (state.showCost) params.set("includeCost", "1");
-  const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}?${params.toString()}`);
+  const response = await fetch(`/api/board/participants/${encodeURIComponent(participantId)}?${params.toString()}`);
   const detail = await response.json();
   document.querySelector("#detail-title").textContent = `${detail.nickname} · ${periodLabel(state.period)}`;
   document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.periodDetailLabel")}`;
@@ -206,7 +129,7 @@ async function loadHistory(participantId) {
   document.querySelector("#detail-status").textContent = t("web.detail.loadingHistory");
   const params = new URLSearchParams(historyParams(state.historyView));
   if (state.showCost) params.set("includeCost", "1");
-  const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}/trend?${params.toString()}`);
+  const response = await fetch(`/api/board/participants/${encodeURIComponent(participantId)}/trend?${params.toString()}`);
   const detail = await response.json();
   document.querySelector("#detail-title").textContent = `${detail.nickname || t("web.detail.participant")} · ${historyLabel(state.historyView)}`;
   document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.historyWindow")}`;
@@ -602,7 +525,6 @@ if (langContainer) {
 // 应用当前语言翻译
 updatePageTranslations();
 
-loadReleaseDownloads();
 loadLeaderboard().catch((error) => {
   statusEl.textContent = error.message;
 });

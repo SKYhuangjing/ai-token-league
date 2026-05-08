@@ -39,3 +39,4 @@ release/
 *.dmg
 *.exe
 *.blockmap
+assets/preset.json
