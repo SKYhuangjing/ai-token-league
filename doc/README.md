@@ -4,9 +4,11 @@ This directory keeps the project documents after the v0.1 phase freeze.
 
 ## Current Baseline
 
-- `0.5-baseline.md` - blank 0.5 baseline; no 0.5.0 product tasks are opened yet.
-- `0.5-development-tasks.md` - blank 0.5 task document and version-iteration process record.
-- `0.4-baseline.md` - current implemented 0.4 product baseline.
+- `0.6-baseline.md` - 0.6 product baseline (in progress).
+- `0.6-development-tasks.md` - 0.6 development tasks and verification record.
+- `0.5-baseline.md` - frozen 0.5 product baseline with 11 features.
+- `0.5-development-tasks.md` - 0.5 development tasks and verification record.
+- `0.4-baseline.md` - implemented 0.4 product baseline.
 - `0.4-development-tasks.md` - 0.4 development tasks and verification record.
 - `0.3-baseline.md` - implemented 0.3 client/server compatibility and update baseline.
 - `0.3-development-tasks.md` - 0.3 development tasks and verification record.
@@ -20,6 +22,7 @@ This directory keeps the project documents after the v0.1 phase freeze.
 
 ## Operations
 
+- `operations.md` - 运维手册：服务端部署、下载通道配置、客户端预置配置。
 - `test-deployment.md` - Docker + external MySQL test deployment notes.
 - `smoke-checklist.md` - local MVP smoke checklist.
 - `packaging.md` - desktop distribution build, verification, and launch checklist.
@@ -27,6 +30,6 @@ This directory keeps the project documents after the v0.1 phase freeze.
 
 ## Rule
 
-New version work must add a paired `doc/<version>-baseline.md` and `doc/<version>-development-tasks.md` instead of appending unrelated requirements to old baselines.
+New product baseline work must add a paired `doc/<baseline>-baseline.md` and `doc/<baseline>-development-tasks.md` instead of appending unrelated requirements to old baselines.
 
 When a temporary feature is added during a version, record it in both the baseline and the task document before treating it as part of the release scope.

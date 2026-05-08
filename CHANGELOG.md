@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.2] - 2026-05-07
+
+### Fixed
+
+- Fixed electron-updater download path, macOS update bundle detection, and restart button behavior.
+- Restored macOS zip updater with dual-path update architecture: Windows uses electron-updater + NSIS, macOS uses custom zip updater (no Developer ID required).
+- Restored `/api/release/latest` endpoint and `latest.json` manifest for macOS zip updater compatibility.
+- Fixed cursor provider enabled check logic.
+
+### Changed
+
+- Release script now archives `installer.json` and `latest.json` to versioned folder in OSS.
+
+---
+
+## [0.5.1] - 2026-05-07
+
+### Changed
+
+- Replaced custom update system with `electron-updater` for Windows desktop updates.
+- Windows now uses NSIS installer updates with built-in file lock handling.
+- Added three update modes: `notify`, `auto_download`, `auto_apply_on_idle`.
+- Added download progress push via IPC `update:progress` events.
+
+---
+
 ## [0.5.0] - 2026-05-07
 
 ### Added

@@ -2,32 +2,22 @@
 
 本文件记录产品级路线图。已进入版本基线或开发任务的能力，不再放在散列 TODO 中。
 
-## 0.5.1 已落地
-
-| 能力 | 状态 | 产品结果 |
-| --- | --- | --- |
-| electron-updater 自动更新系统 | DONE | 用 electron-updater 替换自定义 zip 更新机制；Windows 用 NSIS 安装器更新（自带文件锁处理），macOS 用 Squirrel.Mac 更新；支持下载进度推送和三种更新模式。 |
-
-参考：
-
-- `doc/0.5-baseline.md` §2.11
-- `doc/0.5-development-tasks.md` Epic 11
-
 ## 0.6 进行中
 
-目标：清理旧版更新系统遗留代码，引入构建时预置配置能力。
+目标：清理旧版更新系统遗留代码，引入构建时预置配置能力，热更新失败安装包下载兜底。
 
 | 能力 | 状态 | 产品结果 |
 | --- | --- | --- |
-| 旧版更新系统遗留清理 | TODO | 删除 `RELEASE_MANIFEST_PATH`、`buildReleaseManifest()` 等废弃函数和常量；删除 `latest.json` 上传；删除服务端 `manifestUrl` 字段。 |
-| 构建时预置配置系统 | TODO | 打包时注入 `preset.json`，桌面客户端首次启动时用预置值替代硬编码默认值；支持渠道分发式配置。 |
+| 旧版更新系统遗留清理 | DEFERRED | 0.5.2 恢复了 `/api/release/latest` 和 `latest.json` 以支持 macOS zip updater dual-path；清理待所有活跃客户端迁移后执行。 |
+| 构建时预置配置系统 | DONE | 打包时注入 `preset.json`，桌面客户端首次启动时用预置值替代硬编码默认值；支持渠道分发式配置。 |
+| 安装包下载兜底 | PARTIAL | `installer.json` 生成、服务端透传、桌面端 IPC 下载、web 下载面板已实现；`/api/release/latest` 保留。 |
 
 参考：
 
 - `doc/0.6-baseline.md`
 - `doc/0.6-development-tasks.md`
 
-## 0.3.0 已落地
+## 0.3 已落地
 
 目标：让客户端、服务端和发布资源形成统一版本闭环，支持后续强制兼容窗口和可控升级。
 
@@ -48,7 +38,7 @@
 - `doc/0.3-development-tasks.md`
 - `doc/packaging.md`
 
-## 0.4.0 已落地
+## 0.4 已落地
 
 目标：将首次启动体验从静默初始化改为知情同意的引导流程，让用户在数据采集前理解产品用途和隐私模型。
 
@@ -65,9 +55,9 @@
 - `doc/0.4-baseline.md`
 - `doc/0.4-development-tasks.md`
 
-## 0.5.0 已落地
+## 0.5 已落地
 
-目标：Admin 访问控制、最低客户端版本强制、设备面板可见性、多语言 UI 切换。
+目标：Admin 访问控制、最低客户端版本强制、设备面板可见性、多语言 UI 切换、electron-updater 自动更新。Client releases: 0.5.0, 0.5.1, 0.5.2。
 
 | 能力 | 状态 | 产品结果 |
 | --- | --- | --- |
@@ -76,13 +66,14 @@
 | Admin 设备面板 | DONE | Admin 面板第 4 个 tab 展示所有设备的客户端版本、平台、构建和最后在线时间。 |
 | 多语言 i18n | DONE | `src/shared/i18n.js` 支持 zh-CN + en；public web、desktop、admin 全覆盖；后续功能必须适配。 |
 | Admin Usage 行级详情语义优化 | DONE | 点击昵称打开"该用户 + 当前时间桶"详情，而非全局筛选范围。 |
+| electron-updater 自动更新系统 | DONE | Windows 用 electron-updater + NSIS 安装器更新（自带文件锁处理）；macOS 因无 Developer ID 保留自研 zip updater（读取 `latest.json` → 下载 zip → 校验 SHA-256 → shell 脚本替换）；支持下载进度推送和三种更新模式。 |
 
 参考：
 
 - `doc/0.5-baseline.md`
 - `doc/0.5-development-tasks.md`
 
-## 0.3.x 发布后补强
+## 0.3 发布后补强
 
 | 能力 | 优先级 | 产品目标 |
 | --- | --- | --- |

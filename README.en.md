@@ -12,7 +12,7 @@ A local-first AI coding token usage collector and public leaderboard for **Codex
 
 **Officially supported platforms**: macOS Apple silicon, macOS Intel, and Windows x64.
 
-Current version: `0.5.1`
+Current version: `0.5.2`
 
 ---
 
@@ -37,7 +37,7 @@ Current version: `0.5.1`
 
 - **Today**: view today's local usage, model totals, workdir totals, and last scan status.
 - **Trend**: review personal Daily 30d, Weekly 12w, and Monthly 12m trends.
-- **Settings**: Account, Sources, Cloud, Sync, and App settings are separated by ownership.
+- **Settings**: Profile, App, Sources, Cloud, and About settings are separated by ownership.
 - **First-run wizard**: new users confirm identity, privacy, sources, and cloud connection before collection starts.
 - **Diagnostics export**: write a sanitized local diagnostics bundle for scan/sync/cloud reconciliation.
 - **App updates**: supports manual check, checksum-verified download, restart update, and configurable silent update.
@@ -120,9 +120,9 @@ Practical safety tips:
 
 Go to [GitHub Releases](https://github.com/SKYhuangjing/ai-token-league/releases) and download the installer for your system:
 
-- **macOS Apple silicon**: `AI Token League-0.5.1-mac-arm64-installer.dmg`
-- **macOS Intel**: `AI Token League-0.5.1-mac-x64-installer.dmg`
-- **Windows x64**: `AI Token League-0.5.1-win-x64-installer.exe`
+- **macOS Apple silicon**: `AI Token League-0.5.2-mac-arm64-installer.dmg`
+- **macOS Intel**: `AI Token League-0.5.2-mac-x64-installer.dmg`
+- **Windows x64**: `AI Token League-0.5.2-win-x64-installer.exe`
 
 ### Option B: Download Zip Packages
 
@@ -233,17 +233,21 @@ Developer commands, API details, storage notes, and verification boundaries live
 
 - [CHANGELOG.md](CHANGELOG.md) - English changelog.
 - [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) - Chinese changelog.
-- [doc/0.5-baseline.md](doc/0.5-baseline.md) - Blank 0.5 baseline; no product tasks are opened yet.
-- [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - Blank 0.5 task document and version-iteration rules.
-- [doc/0.4-baseline.md](doc/0.4-baseline.md) - Current 0.4 product baseline.
+- [doc/0.6-baseline.md](doc/0.6-baseline.md) - 0.6 product baseline (in progress).
+- [doc/0.6-development-tasks.md](doc/0.6-development-tasks.md) - 0.6 development tasks and verification record.
+- [doc/0.5-baseline.md](doc/0.5-baseline.md) - 0.5 product baseline (frozen).
+- [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - 0.5 development tasks and verification record.
+- [doc/0.4-baseline.md](doc/0.4-baseline.md) - 0.4 product baseline.
 - [doc/0.4-development-tasks.md](doc/0.4-development-tasks.md) - 0.4 development tasks and verification record.
 - [doc/0.3-baseline.md](doc/0.3-baseline.md) - 0.3 product baseline.
 - [doc/0.3-development-tasks.md](doc/0.3-development-tasks.md) - 0.3 development tasks and verification record.
 - [doc/0.2-baseline.md](doc/0.2-baseline.md) - 0.2 product baseline.
 - [doc/v0.1-baseline.md](doc/v0.1-baseline.md) - Frozen 0.1 MVP baseline.
+- [doc/er-diagram.md](doc/er-diagram.md) - Local and remote storage model diagrams.
 - [doc/usage-composition-design.md](doc/usage-composition-design.md) - Token and cost composition design.
 - [doc/openrouter-pricing-design.md](doc/openrouter-pricing-design.md) - OpenRouter pricing design.
 - [doc/packaging.md](doc/packaging.md) - Desktop packaging and verification.
+- [doc/operations.md](doc/operations.md) - Operations manual: server deployment, download channel configuration, and client preset setup.
 - [doc/test-deployment.md](doc/test-deployment.md) - Docker and MySQL test deployment.
 
 ---

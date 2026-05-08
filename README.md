@@ -12,7 +12,7 @@
 
 **官方支持平台**：macOS Apple silicon、macOS Intel、Windows x64。
 
-当前版本：`0.5.1`
+当前版本：`0.5.2`
 
 ---
 
@@ -37,7 +37,7 @@
 
 - **Today**：查看本地当天用量、模型分布、workdir 分布和最近扫描状态。
 - **Trend**：查看个人 Daily 30d、Weekly 12w、Monthly 12m 趋势。
-- **Settings**：Account、Sources、Cloud、Sync、App 分域配置。
+- **Settings**：Profile、App、Sources、Cloud、About 分域配置。
 - **首次启动向导**：新用户先确认身份、隐私、来源和云端连接，再开始采集。
 - **诊断导出**：本地导出脱敏诊断包，用于排查客户端扫描、同步和云端数据差异。
 - **应用更新**：支持手动检查、下载校验、重启升级和可配置静默更新。
@@ -120,9 +120,9 @@ reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
 
 前往 [GitHub Releases](https://github.com/SKYhuangjing/ai-token-league/releases) 下载对应系统的安装包：
 
-- **macOS Apple silicon**：`AI Token League-0.5.1-mac-arm64-installer.dmg`
-- **macOS Intel**：`AI Token League-0.5.1-mac-x64-installer.dmg`
-- **Windows x64**：`AI Token League-0.5.1-win-x64-installer.exe`
+- **macOS Apple silicon**：`AI Token League-0.5.2-mac-arm64-installer.dmg`
+- **macOS Intel**：`AI Token League-0.5.2-mac-x64-installer.dmg`
+- **Windows x64**：`AI Token League-0.5.2-win-x64-installer.exe`
 
 ### 选项 B：下载 zip 包
 
@@ -233,17 +233,21 @@ npm run release:publish
 
 - [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) - 中文更新日志。
 - [CHANGELOG.md](CHANGELOG.md) - English changelog。
-- [doc/0.5-baseline.md](doc/0.5-baseline.md) - 0.5 空白基线，尚未开启产品任务。
-- [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - 0.5 空白任务文档与版本迭代规则。
-- [doc/0.4-baseline.md](doc/0.4-baseline.md) - 当前 0.4 产品基线。
+- [doc/0.6-baseline.md](doc/0.6-baseline.md) - 0.6 产品基线（进行中）。
+- [doc/0.6-development-tasks.md](doc/0.6-development-tasks.md) - 0.6 开发任务与验证记录。
+- [doc/0.5-baseline.md](doc/0.5-baseline.md) - 0.5 产品基线（已冻结）。
+- [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - 0.5 开发任务与验证记录。
+- [doc/0.4-baseline.md](doc/0.4-baseline.md) - 0.4 产品基线。
 - [doc/0.4-development-tasks.md](doc/0.4-development-tasks.md) - 0.4 开发任务与验证记录。
 - [doc/0.3-baseline.md](doc/0.3-baseline.md) - 0.3 产品基线。
 - [doc/0.3-development-tasks.md](doc/0.3-development-tasks.md) - 0.3 开发任务与验证记录。
 - [doc/0.2-baseline.md](doc/0.2-baseline.md) - 0.2 产品基线。
 - [doc/v0.1-baseline.md](doc/v0.1-baseline.md) - 冻结的 0.1 MVP 基线。
+- [doc/er-diagram.md](doc/er-diagram.md) - 本地与远程存储模型图。
 - [doc/usage-composition-design.md](doc/usage-composition-design.md) - token 和成本组成设计。
 - [doc/openrouter-pricing-design.md](doc/openrouter-pricing-design.md) - OpenRouter 价格设计。
 - [doc/packaging.md](doc/packaging.md) - 桌面打包和验证。
+- [doc/operations.md](doc/operations.md) - 运维手册：服务端部署、下载通道配置、客户端预置配置。
 - [doc/test-deployment.md](doc/test-deployment.md) - Docker 和 MySQL 测试部署。
 
 ---

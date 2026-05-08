@@ -19,6 +19,17 @@ export function packageVersion(cwd = process.cwd()) {
 export const APP_VERSION = packageVersion();
 export const SERVER_VERSION = APP_VERSION;
 
+export function productBaseline(cwd = process.cwd()) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(cwd, "package.json"), "utf8"));
+    return String(pkg.productBaseline || pkg.version?.replace(/\.\d+$/, "") || "0.0");
+  } catch {
+    return "0.0";
+  }
+}
+
+export const PRODUCT_BASELINE = productBaseline();
+
 export function clientPlatform({ platform = process.platform, arch = process.arch } = {}) {
   if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
   if (platform === "darwin" && arch === "x64") return "darwin-x64";

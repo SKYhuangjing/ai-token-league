@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload } from "../src/shared/crypto.js";
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
-import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION } from "../src/shared/version.js";
+import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
 import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
 import { scanUsage } from "../src/collector/core.js";
 import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
@@ -678,6 +678,10 @@ async function testVersionCompatibilityAndManifest() {
   }, { publicBaseUrl: "https://cdn.example" }), /fileName must be basename/);
 }
 
+function testProductBaseline() {
+  assert.match(PRODUCT_BASELINE, /^\d+\.\d+$/, "PRODUCT_BASELINE should be major.minor format");
+}
+
 function testIdentityImport() {
   const identity = generateIdentity();
   const config = {
@@ -906,6 +910,7 @@ testCursorDashboardMapping();
 await testCodexLocalSkipsUnknownModel();
 await testCodexLocalNormalizesInputTokens();
 testForbiddenUploadFields();
+testProductBaseline();
 await testVersionCompatibilityAndManifest();
 testDisplayAndPricing();
 await testOpenRouterRefresh();

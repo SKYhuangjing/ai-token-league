@@ -1,6 +1,7 @@
 {
   "name": "ai-token-league",
   "version": "0.5.2",
+  "productBaseline": "0.5",
   "private": true,
   "type": "module",
   "main": "src/desktop/main.cjs",

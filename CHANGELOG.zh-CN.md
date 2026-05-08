@@ -6,6 +6,32 @@
 
 ---
 
+## [0.5.2] - 2026-05-07
+
+### 修复
+
+- 修复 electron-updater 下载路径、macOS 更新包检测和重启按钮行为。
+- 恢复 macOS zip 更新器，采用双路径更新架构：Windows 使用 electron-updater + NSIS，macOS 使用自研 zip 更新器（无需 Developer ID）。
+- 恢复 `/api/release/latest` 端点和 `latest.json` manifest，供 macOS zip 更新器使用。
+- 修复 Cursor provider 启用状态检查逻辑。
+
+### 变更
+
+- 发布脚本将 `installer.json` 和 `latest.json` 归档到 OSS 版本目录。
+
+---
+
+## [0.5.1] - 2026-05-07
+
+### 变更
+
+- 用 `electron-updater` 替换自定义更新系统，用于 Windows 桌面端更新。
+- Windows 使用 NSIS 安装器更新，自带文件锁处理。
+- 新增三种更新模式：`notify`（仅通知）、`auto_download`（自动下载）、`auto_apply_on_idle`（空闲时自动安装）。
+- 新增下载进度通过 IPC `update:progress` 事件推送到渲染进程。
+
+---
+
 ## [0.5.0] - 2026-05-07
 
 ### 新增

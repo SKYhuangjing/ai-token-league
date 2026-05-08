@@ -19,8 +19,8 @@ Before changing behavior, identify the real source of truth in code and docs. Do
 
 AI Token League is a local-first AI coding token usage collector plus public leaderboard for Codex, Claude Code, and Cursor.
 
-Current implemented baseline: `0.5`, released as `0.5.1` on `2026-05-07`.
-Current planning baseline: `0.6`, tracked by `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`.
+Current product baseline: `0.5`; client version: `0.5.2` (released 2026-05-07).
+Next product baseline: `0.6`, tracked by `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`.
 
 Core behavior:
 
@@ -146,23 +146,33 @@ Windows status: initial verification passed and the app is usable, but Windows h
 
 ## Release Flow
 
-Version number lives in one place: `package.json` `"version"`. All other references derive from it or are updated by the bump script.
+Two version axes are intentionally separate:
 
-### Step 1: Bump version
+- Client version: `package.json` `"version"`; controls desktop/CLI/server package version, installer filenames, release manifests, update checks, and changelog entries.
+- Product baseline: `package.json` `"productBaseline"`; controls product iteration docs such as `doc/<baseline>-baseline.md`, `doc/<baseline>-development-tasks.md`, and roadmap sections.
+
+### Step 1: Bump client version or product baseline
 
 ```bash
-npm run bump -- <new-version>          # e.g. npm run bump -- 0.6.0
-npm run bump -- <new-version> --date 2026-06-01  # explicit date
+npm run bump -- <new-version>                         # client release only, e.g. 0.5.3
+npm run bump -- --baseline <major.minor>              # product iteration only, e.g. 0.6
+npm run bump -- <new-version> --baseline <major.minor> # release and move baseline together
+npm run bump -- <new-version> --date 2026-06-01       # explicit release date
 ```
 
-This updates: `package.json`, `README.md`, `README.en.md`, `CLAUDE.md`, `AGENTS.md`, `doc/roadmap.md`.
+Client-only bumps must not create or rename product baseline documents. Baseline-only bumps must not change installer filenames or README current-version strings.
+
+The script updates only the files that match the selected mode:
+
+- Client version mode: `package.json`, `README.md`, `README.en.md`, `CLAUDE.md`, `AGENTS.md`.
+- Product baseline mode: `package.json`, `CLAUDE.md`, `AGENTS.md`, `doc/roadmap.md`.
 
 ### Step 2: Manual steps (script output lists these)
 
-1. Write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new version.
-2. Create `doc/<version>-baseline.md` from current product state.
-3. Create `doc/<version>-development-tasks.md` with task plan.
-4. Run `npm install --package-lock-only` to sync lock file.
+1. For client releases, write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new client version.
+2. For product baseline changes, create `doc/<baseline>-baseline.md` from current product state.
+3. For product baseline changes, create `doc/<baseline>-development-tasks.md` with task plan.
+4. Run `npm install --package-lock-only` if `package.json` version changed.
 5. Run `npm test` to verify.
 
 ### Step 3: Build and publish
@@ -179,8 +189,9 @@ Or combined: `npm run release:publish` (build + upload).
 
 - `--app-version` is NOT hardcoded in npm scripts; `electron-packager` reads `package.json` version automatically.
 - Tests use `APP_VERSION` constant from `src/shared/version.js`, not hardcoded strings.
+- Product baseline tests validate `PRODUCT_BASELINE` format only; they must not require it to match `APP_VERSION` major/minor.
 - Installer filenames embed version via `electron-builder.yml` `${version}` template.
-- Documentation filenames in README use the bump script; no manual editing needed.
+- Documentation filenames use product baseline, not client semver.
 
 ## API Surface
 
@@ -260,6 +271,10 @@ MYSQL_PASSWORD='h0uBPTVtmzF>1xuW'
 
 Docker Compose `env_file` does NOT interpret shell metacharacters, so quoting is only needed for local `source` / `. ./env.test` usage. Always quote env values with special characters to avoid silent credential truncation.
 
+## Operations Manual
+
+For server deployment, release channel configuration, and client preset setup, see `doc/operations.md`.
+
 ## Verification Baseline
 
 Use the smallest verification that covers the touched surface:
@@ -288,8 +303,8 @@ All user-facing UI text must support `zh-CN` and `en` via `src/shared/i18n.js`.
 
 - Keep `README.md` optimized for GitHub discovery, product positioning, privacy model, and quick start.
 - Put development commands, route details, storage details, and verification workflow in this file.
-- Treat the highest implemented `doc/<version>-baseline.md` as the current product baseline.
-- Treat the highest planned `doc/<version>-baseline.md` plus `doc/<version>-development-tasks.md` pair as the active next-version plan.
+- Treat the highest implemented `doc/<baseline>-baseline.md` as the current product baseline.
+- Treat the highest planned `doc/<baseline>-baseline.md` plus `doc/<baseline>-development-tasks.md` pair as the active next-version plan.
 - Keep `doc/v0.1-baseline.md` frozen as history.
 - If code and docs disagree, verify code first, then update the docs that are wrong.
 
