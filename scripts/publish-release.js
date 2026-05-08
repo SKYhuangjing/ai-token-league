@@ -6,6 +6,7 @@ import { Transform } from "node:stream";
 import { Agent } from "undici";
 import {
   buildLatestYml,
+  buildReleaseManifest,
   releaseConfigFromEnv,
   releaseSecretsFromEnv,
   sha256File,
@@ -91,6 +92,17 @@ for (const ia of installerArtifacts) {
 const installerJsonText = `${JSON.stringify(installerMeta, null, 2)}\n`;
 const installerJsonKey = joinKey(config.prefix, "releases", "installer.json");
 
+// Build latest.json manifest for macOS custom zip updater
+const manifest = buildReleaseManifest({
+  version,
+  publicBaseUrl: config.publicBaseUrl,
+  manifestPath: config.manifestPath,
+  artifacts,
+  installerArtifacts
+});
+const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+const manifestKey = joinKey(config.prefix, config.manifestPath);
+
 // Build electron-updater metadata files (latest.yml / latest-mac.yml)
 const winInstaller = installerArtifacts.filter((a) => a.platform === "win32-x64");
 const macZipArtifacts = artifacts.filter((a) => a.platform.startsWith("darwin"));
@@ -118,7 +130,8 @@ const plan = [
   ...(latestYml ? [{ key: latestYmlVersionKey, body: latestYml, size: Buffer.byteLength(latestYml), contentType: "text/yaml; charset=utf-8" }] : []),
   ...(latestMacYml ? [{ key: latestMacYmlKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
   ...(latestMacYml ? [{ key: latestMacYmlVersionKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
-  { key: installerJsonKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8", last: true }
+  { key: installerJsonKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
+  { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8", last: true }
 ];
 
 if (dryRun) {

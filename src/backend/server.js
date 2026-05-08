@@ -5,7 +5,7 @@ import { Store } from "./store.js";
 import { MySqlStore } from "./mysql-store.js";
 import { verifyPayload } from "../shared/crypto.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
-import { releaseConfigFromEnv, releasePublicConfig, validateInstallerMetadata, validateReleaseConfig } from "../shared/update.js";
+import { releaseConfigFromEnv, releasePublicConfig, validateInstallerMetadata, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -192,6 +192,11 @@ async function handleApi(req, res) {
     const url = new URL(req.url, "http://localhost");
     return sendJson(res, 200, await releaseConfigBody(Object.fromEntries(url.searchParams.entries())));
   }
+  // macOS custom zip updater fetches the signed manifest via this endpoint.
+  // Windows uses electron-updater with latest.yml and does not call this.
+  if (req.method === "GET" && req.url.startsWith("/api/release/latest")) {
+    return sendJson(res, 200, await releaseLatestBody());
+  }
   return sendJson(res, 404, { error: "not found" });
 }
 
@@ -261,6 +266,31 @@ async function releaseConfigBody(client = {}) {
       installers
     }
   };
+}
+
+async function releaseLatestBody() {
+  const config = releaseConfigFromEnv();
+  try {
+    validateReleaseConfig(config);
+  } catch (error) {
+    return { ok: false, code: "release_not_configured", error: error.message, manifest: null };
+  }
+  let response;
+  try {
+    response = await fetch(config.manifestUrl, { cache: "no-store" });
+  } catch (error) {
+    return { ok: false, code: "release_manifest_unavailable", error: error.message, manifest: null };
+  }
+  if (!response.ok) {
+    return { ok: false, code: "release_manifest_unavailable", error: `release manifest request failed: ${response.status}`, manifest: null };
+  }
+  let manifest;
+  try {
+    manifest = validateReleaseManifest(await response.json(), { publicBaseUrl: config.publicBaseUrl });
+  } catch (error) {
+    return { ok: false, code: "release_manifest_invalid", error: error.message, manifest: null };
+  }
+  return { ok: true, manifest };
 }
 
 function serveStatic(req, res) {
