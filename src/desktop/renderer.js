@@ -363,6 +363,12 @@ function updateCheckProgress(data) {
   }
   if (data.status === "downloaded") {
     $("#download-update").disabled = false;
+    $("#download-update").textContent = t("desktop.app.installRestart");
+    $("#download-update").onclick = async () => {
+      $("#download-update").disabled = true;
+      $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
+      await api.installAndRestartUpdate();
+    };
     $("#update-message").textContent = t("desktop.renderer.downloadedReady");
   }
   if (data.status === "failed" && data.lastError) {
@@ -585,6 +591,8 @@ async function checkUpdate() {
     renderSystemStatus(latestUpdateState);
     $("#update-message").textContent = updateMessage(latestUpdateState);
     $("#download-update").disabled = !latestUpdateState.update?.updateAvailable;
+    $("#download-update").textContent = t("desktop.app.downloadRestart");
+    $("#download-update").onclick = downloadUpdate;
     latestConfig = await api.getConfig();
     renderCloudStatus(latestConfig);
   } finally {
@@ -597,9 +605,13 @@ async function downloadUpdate() {
   $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
     await api.downloadUpdate();
-    $("#check-update").disabled = true;
-    $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
-    await api.installAndRestartUpdate();
+    $("#download-update").textContent = t("desktop.app.installRestart");
+    $("#download-update").disabled = false;
+    $("#download-update").onclick = async () => {
+      $("#download-update").disabled = true;
+      $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
+      await api.installAndRestartUpdate();
+    };
   } catch (error) {
     $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
     $("#download-update").disabled = false;

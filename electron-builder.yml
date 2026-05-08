@@ -47,7 +47,3 @@ nsis:
   artifactName: "${productName}-${version}-win-x64-installer.${ext}"
   oneClick: false
   allowToChangeInstallationDirectory: true
-publish:
-  provider: generic
-  url: "${RELEASE_FEED_URL}"
-  channel: latest

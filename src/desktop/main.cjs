@@ -104,6 +104,20 @@ autoUpdater.logger = {
   error: (msg) => appendRuntimeLog("updater_error", { msg: String(msg) })
 };
 
+// Fallback when app-update.yml is missing (not generated without a publish config).
+// electron-updater reads this file during download to get updaterCacheDirName.
+const originalLoadUpdateConfig = autoUpdater.loadUpdateConfig.bind(autoUpdater);
+autoUpdater.loadUpdateConfig = async function () {
+  try {
+    return await originalLoadUpdateConfig();
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return { provider: "generic", updaterCacheDirName: "ai-token-league-updater" };
+    }
+    throw error;
+  }
+};
+
 let cachedConfig = null;
 
 autoUpdater.on("update-available", (info) => {
