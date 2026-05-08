@@ -203,7 +203,7 @@ API 返回匿名 `displayId`（16 字符 HMAC 短码）和 `displayName`（来�
 
 - `BOARD_ANONYMIZATION_SALT` 可选；未配置时服务端从 `BOARD_ANONYMIZATION_SALT_PATH` 读取或自动生成。
 - Salt 文件独立于 `db.json`，便于运维备份和迁移。
-- 匿名身份在同一部署中稳定：同一用户始终显示相同名称。
+- 匿名身份在同一部署中同一天内稳定：同一用户当天显示相同名称，次日自动轮换为新名称（每日轮换，增强隐私保护）。
 - `BOARD_ANONYMIZATION_NAMES_PATH` 可选；指向一个 JSON 字符串数组文件，例如 `["火星", "DBM", "以终为始"]`。未配置或文件无效时使用内置星体词库。
 
 #### 鉴权模式

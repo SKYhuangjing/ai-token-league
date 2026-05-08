@@ -5,7 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload, hmacSha256Hex } from "../src/shared/crypto.js";
-import { BoardAnonymizer, loadOrGenerateSalt, loadNames } from "../src/backend/board-anonymizer.js";
+import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
 import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
@@ -958,6 +958,34 @@ function testBoardAnonymizer() {
   assert.equal(anonymizer.dirty, true);
 }
 
+function testBoardAnonymizerDailyRotation() {
+  // todayStr returns YYYY-MM-DD in Asia/Shanghai by default
+  const today = todayStr();
+  assert.match(today, /^\d{4}-\d{2}-\d{2}$/);
+
+  // same day: publicId is stable
+  const anon = new BoardAnonymizer("daily-test-salt", ["甲", "乙", "丙"]);
+  const id1 = anon.getPublicId("p_user1");
+  const id2 = anon.getPublicId("p_user1");
+  assert.equal(id1, id2);
+
+  // stale is false when _buildDate matches today
+  anon.buildReverseMap(["p_user1", "p_user2"]);
+  assert.equal(anon.stale, false);
+
+  // stale is true when _buildDate is set to a past date
+  anon._buildDate = "2020-01-01";
+  assert.equal(anon.stale, true);
+
+  // after rebuild, stale is false again
+  anon.buildReverseMap(["p_user1", "p_user2"]);
+  assert.equal(anon.stale, false);
+
+  // todayStr with custom timezone returns valid date
+  const todayUtc = todayStr("UTC");
+  assert.match(todayUtc, /^\d{4}-\d{2}-\d{2}$/);
+}
+
 function testLoadNames() {
   const namesPath = path.join(tmp, "test-names.json");
   // valid file
@@ -992,6 +1020,7 @@ const { identity, items } = await testScan();
 await testProviderEnabledSwitches();
 testHmacSha256Hex();
 testBoardAnonymizer();
+testBoardAnonymizerDailyRotation();
 testLoadOrGenerateSalt();
 testLoadNames();
 testBackendUpload(identity, items);

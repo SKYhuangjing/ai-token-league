@@ -33,12 +33,14 @@ let boardAnonymizer = null;
 if (BOARD_SECURITY_LEVEL === "anonymous") {
   const salt = BOARD_ANONYMIZATION_SALT || loadOrGenerateSalt(BOARD_ANONYMIZATION_SALT_PATH);
   const names = loadNames(BOARD_ANONYMIZATION_NAMES_PATH);
-  boardAnonymizer = new BoardAnonymizer(salt, names);
+  const tz = process.env.TZ || "Asia/Shanghai";
+  boardAnonymizer = new BoardAnonymizer(salt, names, tz);
   boardAnonymizer.buildReverseMap(Object.keys(store.db.participants));
 }
 
 function ensureAnonymizerFresh() {
-  if (!boardAnonymizer || !boardAnonymizer.dirty) return;
+  if (!boardAnonymizer) return;
+  if (!boardAnonymizer.dirty && !boardAnonymizer.stale) return;
   boardAnonymizer.buildReverseMap(Object.keys(store.db.participants));
 }
 

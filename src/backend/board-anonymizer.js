@@ -46,17 +46,24 @@ export function loadOrGenerateSalt(saltPath) {
   return salt;
 }
 
+export function todayStr(tz) {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: tz || "Asia/Shanghai" });
+}
+
 export class BoardAnonymizer {
-  constructor(salt, names = DEFAULT_NAMES) {
+  constructor(salt, names = DEFAULT_NAMES, tz = "Asia/Shanghai") {
     this.salt = salt;
     this.names = names;
+    this.tz = tz;
     this._reverseMap = null;
     this._displayNameMap = null;
+    this._buildDate = null;
     this._dirty = true;
   }
 
   getPublicId(participantId) {
-    return hmacSha256Hex(this.salt, participantId).slice(0, 16);
+    const date = todayStr(this.tz);
+    return hmacSha256Hex(this.salt, `${participantId}|${date}`).slice(0, 16);
   }
 
   _baseName(publicId) {
@@ -84,6 +91,7 @@ export class BoardAnonymizer {
     }
     this._reverseMap = reverseMap;
     this._displayNameMap = displayNameMap;
+    this._buildDate = todayStr(this.tz);
     this._dirty = false;
     return reverseMap;
   }
@@ -96,6 +104,10 @@ export class BoardAnonymizer {
     return this._dirty;
   }
 
+  get stale() {
+    return this._buildDate !== null && this._buildDate !== todayStr(this.tz);
+  }
+
   markDirty() {
     this._dirty = true;
   }
@@ -103,6 +115,7 @@ export class BoardAnonymizer {
   clearCache() {
     this._reverseMap = null;
     this._displayNameMap = null;
+    this._buildDate = null;
     this._dirty = true;
   }
 
