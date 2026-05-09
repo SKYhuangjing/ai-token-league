@@ -623,6 +623,18 @@ ipcMain.handle("usage:sync", async () => {
   return syncCurrentUsage({ config, core, crypto, current });
 });
 
+ipcMain.handle("my-identity", async () => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
+  if (!apiBaseUrl || !current?.participantId) return { identityMode: "public", displayName: "" };
+  try {
+    return await getJson(`${apiBaseUrl}/api/board/my-identity?participantId=${encodeURIComponent(current.participantId)}`);
+  } catch {
+    return { identityMode: "public", displayName: "" };
+  }
+});
+
 ipcMain.handle("app:version", async () => {
   const { version } = await modules();
   return version.clientMetadata({

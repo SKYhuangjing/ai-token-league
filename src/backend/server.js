@@ -143,6 +143,16 @@ async function handleApi(req, res) {
   if (req.method === "GET" && req.url.startsWith("/api/board/summary")) {
     return sendJson(res, 200, store.boardSummary());
   }
+  if (req.method === "GET" && req.url.startsWith("/api/board/my-identity")) {
+    const url = new URL(req.url, "http://localhost");
+    const participantId = url.searchParams.get("participantId") || "";
+    if (!boardAnonymizer) return sendJson(res, 200, { identityMode: "public", displayName: "" });
+    if (!participantId) return sendJson(res, 400, { error: "participantId required" });
+    ensureAnonymizerFresh();
+    const publicId = boardAnonymizer.getPublicId(participantId);
+    const displayName = boardAnonymizer.getDisplayName(publicId);
+    return sendJson(res, 200, { identityMode: "anonymous", publicId, displayName });
+  }
   if (req.url.startsWith("/api/board/") && !checkBoardAuth(req, res)) return;
   if (req.method === "POST" && req.url === "/api/devices/register") {
     const body = await readBody(req);

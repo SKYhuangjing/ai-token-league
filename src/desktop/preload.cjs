@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("tokenLeague", {
   startUsageScan: (options) => ipcRenderer.invoke("usage:scan-start", options),
   usageScanStatus: () => ipcRenderer.invoke("usage:scan-status"),
   syncUsage: () => ipcRenderer.invoke("usage:sync"),
+  getMyIdentity: () => ipcRenderer.invoke("my-identity"),
   appVersion: () => ipcRenderer.invoke("app:version"),
   checkUpdate: () => ipcRenderer.invoke("update:check"),
   downloadUpdate: () => ipcRenderer.invoke("update:download"),

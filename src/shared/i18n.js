@@ -161,6 +161,7 @@ const translations = {
 
     // 桌面端 - 今日面板
     "desktop.today.title": "今日",
+    "desktop.today.codename": "今日代号",
     "desktop.today.scanning": "扫描本地使用中...",
     "desktop.today.lastScan": "上次扫描",
     "desktop.today.workdirs": "工作目录",
@@ -809,6 +810,7 @@ const translations = {
 
     // Desktop - Today Panel
     "desktop.today.title": "Today",
+    "desktop.today.codename": "Today's codename",
     "desktop.today.scanning": "Scanning local usage...",
     "desktop.today.lastScan": "Last scan",
     "desktop.today.workdirs": "Workdirs",

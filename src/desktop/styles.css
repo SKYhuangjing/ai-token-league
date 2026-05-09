@@ -74,6 +74,51 @@ h1 {
   line-height: 0.95;
 }
 
+.identity-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+.identity-block.identity-reveal {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.identity-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--red);
+  flex-shrink: 0;
+}
+
+.identity-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.identity-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+  line-height: 1;
+  animation: identity-pulse 2s ease-out 0.4s;
+}
+
+@keyframes identity-pulse {
+  0% { color: var(--red); }
+  100% { color: var(--ink); }
+}
+
 .rail-copy,
 .subtle,
 .section-title p {

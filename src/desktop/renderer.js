@@ -548,6 +548,7 @@ async function boot() {
     renderConfig(config);
     renderWizard();
     await loadToday();
+    await loadMyIdentity();
     await loadBackgroundStatus();
     await loadSystemStatus();
   } else {
@@ -593,6 +594,27 @@ async function loadToday(force = false) {
   const status = await api.startUsageScan({ force });
   applyUsageScanStatus(status, { force });
   pollUsageScan();
+}
+
+async function loadMyIdentity() {
+  const block = $("#my-identity-block");
+  const nameEl = $("#my-identity-name");
+  if (!block || !nameEl) return;
+  try {
+    const data = await api.getMyIdentity();
+    if (data?.identityMode === "anonymous" && data.displayName) {
+      nameEl.textContent = data.displayName;
+      block.hidden = false;
+      block.classList.remove("identity-reveal");
+      void block.offsetWidth;
+      block.classList.add("identity-reveal");
+    } else {
+      block.hidden = true;
+      nameEl.textContent = "";
+    }
+  } catch {
+    block.hidden = true;
+  }
 }
 
 function setScanState(running, force = false) {
@@ -699,6 +721,7 @@ async function syncNow() {
     latestConfig = await api.getConfig();
     renderSyncStatus(latestConfig, result);
     await loadToday();
+    await loadMyIdentity();
   } finally {
     buttons.forEach((button) => {
       button.disabled = false;
