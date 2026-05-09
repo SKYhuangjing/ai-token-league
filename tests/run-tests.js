@@ -475,6 +475,47 @@ function testDeleteParticipantDataAllowsResync() {
   assert.equal(second.accepted, 1);
 }
 
+async function testParticipantDataDeleteMissingIsNoop() {
+  const dbPath = path.join(tmp, "db-participant-delete-missing.json");
+  const originalDbPath = process.env.DB_PATH;
+  const originalOpenRouterAutoRefresh = process.env.OPENROUTER_PRICING_AUTO_REFRESH;
+  process.env.DB_PATH = dbPath;
+  process.env.OPENROUTER_PRICING_AUTO_REFRESH = "false";
+  let server;
+  try {
+    const { createServer } = await import(`../src/backend/server.js?participant-delete-missing=${Date.now()}`);
+    server = createServer();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: "p_missing",
+        timestamp: new Date().toISOString(),
+        signature: "missing-participant-signature"
+      })
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.deleted, false);
+    assert.equal(body.participantId, "p_missing");
+    assert.deepEqual(body.removed, {
+      participants: 0,
+      devices: 0,
+      workdirs: 0,
+      usageDaily: 0,
+      uploadBatches: 0
+    });
+  } finally {
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    if (originalDbPath === undefined) delete process.env.DB_PATH;
+    else process.env.DB_PATH = originalDbPath;
+    if (originalOpenRouterAutoRefresh === undefined) delete process.env.OPENROUTER_PRICING_AUTO_REFRESH;
+    else process.env.OPENROUTER_PRICING_AUTO_REFRESH = originalOpenRouterAutoRefresh;
+  }
+}
+
 function testAdminUsageRowRangeFeedsParticipantDetail() {
   const identity = generateIdentity();
   const store = new Store(path.join(tmp, "db-admin-row-detail.json"));
@@ -1054,6 +1095,7 @@ testLoadOrGenerateSalt();
 testLoadNames();
 testBackendUpload(identity, items);
 testDeleteParticipantDataAllowsResync();
+await testParticipantDataDeleteMissingIsNoop();
 testAdminUsageRowRangeFeedsParticipantDetail();
 testSourceFingerprintDedupeKeepsDistinctDays();
 testIdentityImport();

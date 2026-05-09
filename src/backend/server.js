@@ -215,7 +215,7 @@ async function handleApi(req, res) {
       return sendJson(res, 401, { error: "timestamp is too old or invalid" });
     }
     const participant = store.getParticipant(body.participantId);
-    if (!participant) return sendJson(res, 404, { error: "participant is not registered" });
+    if (!participant) return sendJson(res, 200, store.deleteParticipantData(body.participantId));
     const payload = { participantId: body.participantId, timestamp: body.timestamp };
     if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
       return sendJson(res, 401, { error: "invalid signature" });
