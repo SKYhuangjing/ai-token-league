@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.3] - 2026-05-09
+
+### Added
+
+- Settings effect model: display preferences (showRawTokens, showEstimatedCost) now auto-save instantly on toggle.
+- Dirty state tracking for save-required settings (nickname, API base URL, launch at login, auto-refresh, update mode) with visual Save button highlight.
+- Reset data confirmation modal with "Local only" and "Local + Cloud" deletion options.
+- New `DELETE /api/participant/data` API endpoint for server-side participant data deletion.
+- Unsaved API base URL warning before Sync now / Check update actions.
+
+### Changed
+
+- Source toggle buttons now use icon-only design instead of ON/OFF text labels.
+- Trend dashboard metrics respect showRawTokens setting for consistent formatting.
+
+---
+
 ## [0.5.2] - 2026-05-07
 
 ### Fixed

@@ -9,7 +9,7 @@ Read `AGENTS.md` before starting any work. It contains all project context: prod
 ## Quick Reference
 
 - **Project**: AI Token League — local-first AI coding token usage collector + public leaderboard
-- **Product baseline**: `0.5` | **Client version**: `0.5.2` (released 2026-05-07)
+- **Product baseline**: `0.5` | **Client version**: `0.5.3` (released 2026-05-09)
 - **Next baseline**: `0.6` tracked in `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`
 - **Default mode**: Engineering — implement, verify, deliver end to end
 
