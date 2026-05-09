@@ -800,7 +800,7 @@ table {
 }
 
 .public-table {
-  min-width: 720px;
+  min-width: 820px;
 }
 
 .public-table td:first-child strong {
@@ -809,10 +809,13 @@ table {
 }
 
 .participant-link {
-  display: block;
-  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--ink);
   font-weight: 800;
+  line-height: 1.25;
+  white-space: nowrap;
 }
 
 th,
@@ -841,7 +844,15 @@ td {
 
 .public-table th:first-child,
 .public-table td:first-child {
-  min-width: 120px;
+  min-width: 190px;
+  width: 190px;
+  white-space: nowrap;
+}
+
+.public-table tbody td:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .anonymous-banner {
@@ -858,19 +869,50 @@ td {
 }
 
 .anonymous-name {
-  background: rgba(0, 0, 0, 0.03);
-  border: 1px dotted var(--line);
-  border-radius: 4px;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.alias-text {
+  position: relative;
+  display: inline-block;
+  padding-right: 16px;
 }
 
 .alias-mark {
-  font-size: 11px;
-  color: var(--muted);
-  margin-left: 4px;
-  font-weight: 400;
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  display: flex;
+  align-items: center;
+  min-height: 14px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 2px;
+  box-shadow: 0 1px 0 var(--paper);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  text-transform: lowercase;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.detail-alias-name {
+  color: var(--ink);
+  font-size: 0.9em;
+  vertical-align: middle;
+}
+
+.detail-title-separator,
+.detail-title-context {
+  margin-left: 8px;
 }
 
 .detail-identity-note {
@@ -914,6 +956,13 @@ td {
   padding: 0;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.link-button.anonymous-name {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-decoration: underline;
 }
 
 .row-actions {

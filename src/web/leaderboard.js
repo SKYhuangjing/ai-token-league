@@ -103,7 +103,7 @@ function render(items) {
         <td>
           <span class="rank">#${item.rank}</span>
           <button class="link-button participant-link${isAnon ? " anonymous-name" : ""}" data-display-id="${escapeHtml(item.displayId)}">
-            ${escapeHtml(item.displayName)}${isAnon ? ` <span class="alias-mark">${t("web.leaderboard.aliasMark")}</span>` : ""}
+            ${renderDisplayName(item.displayName)}
           </button>
         </td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
@@ -134,7 +134,7 @@ async function loadDetail(participantId) {
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/board/participants/${encodeURIComponent(participantId)}?${params.toString()}`);
   const detail = await response.json();
-  document.querySelector("#detail-title").textContent = `${detail.displayName} · ${periodLabel(state.period)}`;
+  renderDetailTitle(detail.displayName, periodLabel(state.period));
   const identityNote = document.querySelector("#detail-identity-note");
   identityNote.hidden = state.identityMode !== "anonymous";
   identityNote.textContent = state.identityMode === "anonymous" ? t("web.leaderboard.aliasRotatesDaily") : "";
@@ -148,9 +148,25 @@ async function loadHistory(participantId) {
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/board/participants/${encodeURIComponent(participantId)}/trend?${params.toString()}`);
   const detail = await response.json();
-  document.querySelector("#detail-title").textContent = `${detail.displayName || t("web.detail.participant")} · ${historyLabel(state.historyView)}`;
+  renderDetailTitle(detail.displayName || t("web.detail.participant"), historyLabel(state.historyView));
+  const identityNote = document.querySelector("#detail-identity-note");
+  identityNote.hidden = state.identityMode !== "anonymous";
+  identityNote.textContent = state.identityMode === "anonymous" ? t("web.leaderboard.aliasRotatesDaily") : "";
   document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.historyWindow")}`;
   renderHistory(detail.items || []);
+}
+
+function renderDisplayName(displayName) {
+  const name = escapeHtml(displayName);
+  if (state.identityMode !== "anonymous") return name;
+  return `<span class="alias-text">${name}<span class="alias-mark">${t("web.leaderboard.aliasMark")}</span></span>`;
+}
+
+function renderDetailTitle(displayName, contextLabel) {
+  const nameHtml = state.identityMode === "anonymous"
+    ? `<span class="anonymous-name detail-alias-name">${renderDisplayName(displayName)}</span>`
+    : escapeHtml(displayName);
+  document.querySelector("#detail-title").innerHTML = `${nameHtml}<span class="detail-title-separator">·</span><span class="detail-title-context">${escapeHtml(contextLabel)}</span>`;
 }
 
 function renderDetail(detail) {
