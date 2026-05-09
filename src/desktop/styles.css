@@ -558,19 +558,30 @@ h3 {
 }
 
 .source-toggle.ok {
+  background: #e9f5ed;
   border-color: var(--green);
   color: var(--green);
 }
 
 .source-toggle.miss {
+  background: var(--panel);
   border-color: var(--muted);
   color: var(--muted);
 }
 
-.source-toggle.ok:hover,
-.source-toggle.miss:hover {
+.source-toggle.ok:hover:not(:disabled),
+.source-toggle.miss:hover:not(:disabled) {
   border-color: var(--ink);
   color: var(--paper);
+}
+
+.source-toggle:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.source-card.source-disabled {
+  opacity: 0.65;
 }
 
 .bar-row em {
