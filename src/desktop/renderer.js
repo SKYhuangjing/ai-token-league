@@ -47,10 +47,9 @@ $("#onboarding-sources").addEventListener("click", () => {
 $("#add-codex-root").addEventListener("click", () => run(() => addProviderRoot("codex_local")));
 $("#add-claude-root").addEventListener("click", () => run(() => addProviderRoot("claude_code_local")));
 $("#add-cursor-token").addEventListener("click", openCursorTokenModal);
-$("#cancel-cursor-token").addEventListener("click", closeCursorTokenModal);
 $("#save-cursor-token").addEventListener("click", () => run(addCursorToken));
 $("#cursor-token-modal").addEventListener("click", (event) => {
-  if (event.target.id === "cursor-token-modal") closeCursorTokenModal();
+  if (event.target.id === "cursor-token-modal" || event.target.closest("#cancel-cursor-token")) closeCursorTokenModal();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#cursor-token-modal").hidden) closeCursorTokenModal();
@@ -548,14 +547,17 @@ function renderHealth() {
   const html = latestHealth
     .map((item) => {
       const enabled = sourceEnabled(item);
-      return `<article class="source-card">
+      const forcedOn = item.providerId === "claude_code_local" || item.providerId === "codex_local";
+      const disabledAttr = forcedOn ? " disabled" : "";
+      const titleAttr = forcedOn ? ' title="Always enabled"' : "";
+      return `<article class="source-card${enabled ? "" : " source-disabled"}">
       <div>
         <strong>${sourceName(item.providerId)}</strong>
         <small>${sourceSummary(item)}</small>
         <p>${sourceDescription(item.providerId)}</p>
         ${renderRoots(item.roots)}
       </div>
-      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? "On" : "Off"}</button>
+      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}" data-source-state="${enabled ? "enabled" : "disabled"}"${disabledAttr}${titleAttr}>${enabled ? "On" : "Off"}</button>
     </article>`;
     })
     .join("");
@@ -563,6 +565,7 @@ function renderHealth() {
 }
 
 async function toggleSource(providerId) {
+  if (providerId === "claude_code_local" || providerId === "codex_local") return;
   const current = latestConfig || await api.getConfig();
   if (!current) throw new Error("Open Settings first");
   const nextEnabled = !sourceEnabledForConfig(current, providerId);
