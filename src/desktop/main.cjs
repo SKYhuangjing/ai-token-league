@@ -165,11 +165,29 @@ ipcMain.handle("providers:add-root", async (_event, providerId) => {
   return sanitizeConfig(next);
 });
 
+ipcMain.handle("config:remove-provider-root", async (_event, providerId, rootPath) => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  if (!current) throw new Error("Open Settings first");
+  const next = config.removeProviderRoot(providerId, rootPath, current);
+  invalidateUsageCache();
+  return sanitizeConfig(next);
+});
+
 ipcMain.handle("cursor:add-token", async (_event, rawInput) => {
   const { config } = await modules();
   const current = config.loadConfig();
   if (!current) throw new Error("Open Settings first");
   const next = config.addCursorToken(rawInput, current);
+  invalidateUsageCache();
+  return sanitizeConfig(next);
+});
+
+ipcMain.handle("cursor:remove-token", async (_event, tokenValue) => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  if (!current) throw new Error("Open Settings first");
+  const next = config.removeCursorToken(tokenValue, current);
   invalidateUsageCache();
   return sanitizeConfig(next);
 });

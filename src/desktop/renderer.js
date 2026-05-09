@@ -103,6 +103,40 @@ document.querySelectorAll(".save-settings").forEach((button) => button.addEventL
 
 $("#reset-local-data").addEventListener("click", () => run(resetLocalData));
 
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-remove-root]");
+  if (!btn) return;
+  const rootPath = btn.dataset.removeRoot;
+  const providerId = btn.dataset.providerId;
+  if (!rootPath || !providerId) return;
+  if (!confirm(`Remove "${rootPath}"?`)) return;
+  try {
+    latestConfig = await api.removeProviderRoot(providerId, rootPath);
+    renderConfig(latestConfig);
+    setSaveMessage(`Removed ${rootPath}`, "ok");
+    await loadHealth();
+  } catch (err) {
+    setSaveMessage(err.message || "Failed to remove", "error");
+  }
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-remove-cursor-token]");
+  if (!btn) return;
+  const tokenValue = btn.dataset.removeCursorToken;
+  if (!tokenValue) return;
+  if (!confirm(`Remove this Cursor token?`)) return;
+  try {
+    latestConfig = await api.removeCursorToken(tokenValue);
+    renderConfig(latestConfig);
+    setSaveMessage("Cursor token removed", "ok");
+    await loadHealth();
+    await loadToday(true);
+  } catch (err) {
+    setSaveMessage(err.message || "Failed to remove", "error");
+  }
+});
+
 function selectSection(section) {
   document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.section === section));
   document.querySelectorAll(".panel").forEach((item) => item.classList.toggle("active", item.id === section));
@@ -398,9 +432,17 @@ function renderCursorTokenSummary(cursorConfig = {}) {
   const tokens = cursorConfig?.workosSessionTokens || [];
   const legacy = cursorConfig?.workosSessionToken ? [{ accountName: "legacy token" }] : [];
   const accounts = [...tokens, ...legacy].map((item) => item.accountName || "Cursor").filter(Boolean);
-  $("#cursor-token-summary").textContent = accounts.length
-    ? `${accounts.length} Cursor token${accounts.length === 1 ? "" : "s"} configured · ${accounts.join(", ")}`
+  const summary = accounts.length
+    ? `${accounts.length} Cursor token${accounts.length === 1 ? "" : "s"} configured`
     : "No Cursor token configured. Local Cursor state can still be detected automatically.";
+  let html = `<p>${escapeHtml(summary)}</p>`;
+  if (tokens.length) {
+    html += `<ul class="root-list">${tokens.map((item, idx) => {
+      const name = escapeHtml(item.accountName || "Cursor");
+      return `<li><span class="root-path">${name}</span><button class="root-remove" type="button" data-remove-cursor-token="${idx}" title="Remove">×</button></li>`;
+    }).join("")}</ul>`;
+  }
+  $("#cursor-token-summary").innerHTML = html;
 }
 
 function renderSyncStatus(config, result = null) {
@@ -553,7 +595,7 @@ function renderHealth() {
         <strong>${sourceName(item.providerId)}</strong>
         <small>${sourceSummary(item)}</small>
         <p>${sourceDescription(item.providerId)}</p>
-        ${renderRoots(item.roots)}
+        ${renderRoots(item.roots, item.providerId)}
       </div>
       <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? "On" : "Off"}</button>
     </article>`;
@@ -661,9 +703,9 @@ async function loadBackgroundStatus() {
   $("#background-state").textContent = parts.join(" · ");
 }
 
-function renderRoots(roots = []) {
+function renderRoots(roots = [], providerId = "") {
   if (!roots.length) return "";
-  return `<ul class="root-list">${roots.map((root) => `<li>${escapeHtml(root)}</li>`).join("")}</ul>`;
+  return `<ul class="root-list">${roots.map((root) => `<li><span class="root-path">${escapeHtml(root)}</span><button class="root-remove" type="button" data-remove-root="${escapeHtml(root)}" data-provider-id="${escapeHtml(providerId)}" title="Remove">×</button></li>`).join("")}</ul>`;
 }
 
 function groupBy(items, key) {
