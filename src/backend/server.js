@@ -199,6 +199,19 @@ async function handleApi(req, res) {
     const model = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/model-prices/", ""));
     return sendJson(res, 200, await store.deleteModelPrice(model));
   }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/participants/") && !req.url.includes("/trend")) {
+    const url = new URL(req.url, "http://localhost");
+    const participantId = decodeURIComponent(url.pathname.replace("/api/admin/participants/", ""));
+    const detail = store.participantDetail(participantId, {
+      period: url.searchParams.get("grain") || "",
+      range: url.searchParams.get("range") || "today",
+      startDay: url.searchParams.get("start") || "",
+      endDay: url.searchParams.get("end") || "",
+      includeCost: includeCost(url)
+    });
+    if (!detail) return sendJson(res, 404, { error: "participant not found" });
+    return sendJson(res, 200, detail);
+  }
   if (req.method === "DELETE" && req.url.startsWith("/api/admin/participants/")) {
     const participantId = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/participants/", ""));
     const result = await store.deleteParticipantData(participantId);

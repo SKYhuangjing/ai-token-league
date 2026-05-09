@@ -399,7 +399,7 @@ async function loadDetail(participantId, rowRange = null) {
   });
   document.querySelector("#detail-status").textContent = t("admin.loading");
   const detailRange = normalizeDetailRange(rowRange);
-  const response = await fetch(`/api/participants/${encodeURIComponent(participantId)}?${detailQueryString(detailRange)}`);
+  const response = await fetchAdmin(`/api/admin/participants/${encodeURIComponent(participantId)}?${detailQueryString(detailRange)}`);
   const detail = await response.json();
   const detailLabel = detailRange ? formatPeriodRange(detailRange.start, detailRange.end) : selectedRange().label;
   document.querySelector("#detail-title").textContent = `${detail.nickname} · ${detailLabel}`;
