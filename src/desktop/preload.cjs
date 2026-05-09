@@ -38,5 +38,6 @@ contextBridge.exposeInMainWorld("tokenLeague", {
   onInstallerProgress: (callback) => {
     ipcRenderer.on("update:installer-progress", (_event, data) => callback(data));
   },
-  resetLocalData: () => ipcRenderer.invoke("app:reset-local-data")
+  resetLocalData: () => ipcRenderer.invoke("app:reset-local-data"),
+  resetWithCloud: () => ipcRenderer.invoke("app:reset-with-cloud")
 });

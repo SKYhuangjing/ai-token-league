@@ -42,7 +42,6 @@ document.querySelectorAll("nav button").forEach((button) => {
 $("#refresh-today").addEventListener("click", () => run(() => loadToday(true)));
 $("#refresh-trend").addEventListener("click", () => run(() => loadTrend(true)));
 $("#refresh-health").addEventListener("click", () => run(async () => {
-  await saveSettings({ reloadToday: false });
   await loadHealth();
 }));
 document.querySelectorAll("[data-sync-now]").forEach((button) => button.addEventListener("click", () => run(syncNow)));
@@ -65,8 +64,14 @@ $("#save-cursor-token").addEventListener("click", () => run(addCursorToken));
 $("#cursor-token-modal").addEventListener("click", (event) => {
   if (event.target.id === "cursor-token-modal" || event.target.closest("#cancel-cursor-token")) closeCursorTokenModal();
 });
+$("#reset-confirm-modal").addEventListener("click", (event) => {
+  if (event.target.id === "reset-confirm-modal" || event.target.closest("#reset-cancel")) closeResetConfirmModal();
+});
+$("#reset-local-only").addEventListener("click", () => run(resetLocalOnly));
+$("#reset-with-cloud").addEventListener("click", () => run(resetWithCloud));
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#cursor-token-modal").hidden) closeCursorTokenModal();
+  if (event.key === "Escape" && !$("#reset-confirm-modal").hidden) closeResetConfirmModal();
   if (event.key === "Escape" && !$("#trend-drawer").hidden) closeTrendDrawer();
 });
 $("#close-trend-drawer").addEventListener("click", closeTrendDrawer);
@@ -115,10 +120,111 @@ $("#workdir-alias-list").addEventListener("click", (event) => {
 });
 
 document.querySelectorAll(".save-settings").forEach((button) => button.addEventListener("click", async () => run(async () => {
-  await saveSettings({ reloadToday: true });
+  await saveSettings();
 })));
 
-$("#reset-local-data").addEventListener("click", () => run(resetLocalData));
+// instant_autosave: display preferences
+$("#showRawTokens").addEventListener("change", async () => {
+  await saveInstantPreference("showRawTokens", $("#showRawTokens").checked);
+});
+$("#showEstimatedCost").addEventListener("change", async () => {
+  await saveInstantPreference("showEstimatedCost", $("#showEstimatedCost").checked);
+});
+
+// Dirty state tracking for save_required + next_cycle fields
+const DIRTY_TRACKED_FIELDS = ["nickname", "apiBaseUrl", "launchAtLogin", "autoRefreshEnabled", "refreshIntervalMinutes", "silentUpdateMode"];
+
+function readDomValue(field) {
+  if (field === "silentUpdateMode") return document.querySelector("input[name='silentUpdateMode']:checked")?.value || "notify";
+  const el = document.getElementById(field);
+  if (!el) return undefined;
+  if (el.type === "checkbox") return el.checked;
+  return el.value.trim ? el.value.trim() : el.value;
+}
+
+function readConfigValue(field) {
+  if (field === "silentUpdateMode") return latestConfig?.silentUpdateMode || "notify";
+  return latestConfig?.[field];
+}
+
+function isFieldDirty(field) {
+  const dom = readDomValue(field);
+  const config = readConfigValue(field);
+  if (typeof dom === "boolean") return dom !== !!config;
+  return String(dom || "") !== String(config || "");
+}
+
+function getDirtyFields() {
+  return DIRTY_TRACKED_FIELDS.filter(isFieldDirty);
+}
+
+function updateDirtyState() {
+  const dirtyFields = getDirtyFields();
+  const hasUnsaved = dirtyFields.length > 0;
+  document.querySelectorAll(".save-settings").forEach((btn) => {
+    btn.classList.toggle("has-unsaved", hasUnsaved);
+    btn.title = hasUnsaved ? t("desktop.sync.unsavedChanges") : "";
+    let note = btn.parentElement?.querySelector(".settings-dirty-note");
+    if (hasUnsaved && !note) {
+      note = document.createElement("span");
+      note.className = "settings-dirty-note";
+      btn.insertAdjacentElement("afterend", note);
+    }
+    if (note) {
+      note.textContent = hasUnsaved ? t("desktop.sync.unsavedChanges") : "";
+      note.hidden = !hasUnsaved;
+    }
+  });
+}
+
+function isApiBaseUrlDirty() {
+  return isFieldDirty("apiBaseUrl");
+}
+
+async function saveInstantPreference(field, value) {
+  const previousConfig = latestConfig || {};
+  const previousValue = previousConfig[field] ?? false;
+  latestConfig = { ...previousConfig, [field]: value };
+  const input = document.getElementById(field);
+
+  try {
+    if (field === "showEstimatedCost" && value) await refreshPricing();
+    renderInstantPreferenceViews();
+    const config = await api.updateConfig({ [field]: value });
+    latestConfig = config;
+    renderInstantPreferenceViews();
+    updateDirtyState();
+  } catch (error) {
+    latestConfig = { ...previousConfig, [field]: previousValue };
+    if (input) input.checked = Boolean(previousValue);
+    renderInstantPreferenceViews();
+    setSaveMessage(error.message || t("desktop.renderer.actionFailed"), "error");
+  }
+}
+
+function renderInstantPreferenceViews() {
+  renderToday();
+  renderTrend();
+  renderAliases();
+}
+
+for (const field of DIRTY_TRACKED_FIELDS) {
+  const el = field === "silentUpdateMode"
+    ? document.querySelector("input[name='silentUpdateMode']")
+    : document.getElementById(field);
+  if (!el) continue;
+  const eventType = el.type === "checkbox" || el.type === "radio" ? "change" : "input";
+  // radio group needs all radios
+  if (field === "silentUpdateMode") {
+    document.querySelectorAll("input[name='silentUpdateMode']").forEach((radio) => {
+      radio.addEventListener("change", updateDirtyState);
+    });
+  } else {
+    el.addEventListener(eventType, updateDirtyState);
+  }
+}
+
+$("#reset-local-data").addEventListener("click", openResetConfirmModal);
 $("#check-update").addEventListener("click", () => run(checkUpdate));
 $("#download-update").addEventListener("click", () => run(downloadUpdate));
 $("#download-installer").addEventListener("click", () => run(downloadInstaller));
@@ -202,15 +308,21 @@ function selectSettingsTab(tab) {
   document.querySelectorAll("[data-settings-panel]").forEach((item) => item.classList.toggle("active", item.dataset.settingsPanel === tab));
 }
 
-async function saveSettings({ reloadToday = true } = {}) {
+async function saveSettings() {
   const payload = settingsPayload();
+  const dirtyBeforeSave = getDirtyFields();
+  const nextCycleDirty = dirtyBeforeSave.some((f) => f === "autoRefreshEnabled" || f === "refreshIntervalMinutes" || f === "silentUpdateMode");
   setSaveMessage(payload.apiBaseUrl ? t("desktop.renderer.checkingApi") : t("desktop.renderer.savingSettings"), "");
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
   renderConfig(config);
-  setSaveMessage(t("desktop.sync.settingsSaved"), "ok");
+  updateDirtyState();
+  if (nextCycleDirty) {
+    setSaveMessage(t("desktop.sync.settingsSavedNextCycle"), "ok");
+  } else {
+    setSaveMessage(t("desktop.sync.settingsSaved"), "ok");
+  }
   $("#sync-state").textContent = t("desktop.sync.settingsSaved");
-  if (reloadToday) await loadToday(true);
   await loadBackgroundStatus();
   return config;
 }
@@ -219,8 +331,6 @@ function settingsPayload() {
   return {
     nickname: $("#nickname").value || "anonymous",
     apiBaseUrl: $("#apiBaseUrl").value.trim(),
-    showEstimatedCost: $("#showEstimatedCost").checked,
-    showRawTokens: $("#showRawTokens").checked,
     autoRefreshEnabled: $("#autoRefreshEnabled").checked,
     silentUpdateMode: document.querySelector("input[name='silentUpdateMode']:checked")?.value || "notify",
     refreshIntervalMinutes: $("#refreshIntervalMinutes").value || 15,
@@ -392,6 +502,37 @@ async function resetLocalData() {
   await api.resetLocalData();
 }
 
+function openResetConfirmModal() {
+  $("#reset-confirm-error").textContent = "";
+  $("#reset-confirm-modal").hidden = false;
+}
+
+function closeResetConfirmModal() {
+  $("#reset-confirm-modal").hidden = true;
+}
+
+async function resetLocalOnly() {
+  closeResetConfirmModal();
+  $("#reset-local-data").disabled = true;
+  $("#sync-state").textContent = t("desktop.renderer.resetting");
+  await api.resetLocalData();
+}
+
+async function resetWithCloud() {
+  const errorEl = $("#reset-confirm-error");
+  errorEl.textContent = "";
+  $("#reset-local-data").disabled = true;
+  $("#sync-state").textContent = t("desktop.reset.cloudClearing");
+  try {
+    await api.resetWithCloud();
+  } catch (error) {
+    $("#reset-local-data").disabled = false;
+    $("#sync-state").textContent = "";
+    errorEl.textContent = t("desktop.reset.cloudFailed", { error: error.message });
+    throw error;
+  }
+}
+
 async function boot() {
   const config = await api.getConfig();
   if (config) {
@@ -541,6 +682,7 @@ async function loadHealth() {
 }
 
 async function syncNow() {
+  if (isApiBaseUrlDirty() && !window.confirm(t("desktop.sync.unsavedApiBaseUrl"))) return;
   const buttons = document.querySelectorAll("[data-sync-now]");
   buttons.forEach((button) => {
     button.disabled = true;
@@ -637,6 +779,7 @@ function renderConfig(config) {
   renderSystemStatus({ client: null, server: config?.apiConnection || null, update: latestUpdateState });
   renderSilentUpdateStatus(null, config);
   renderWizard();
+  updateDirtyState();
 }
 
 async function loadCloudStatus() {
@@ -651,6 +794,7 @@ async function loadSystemStatus() {
 }
 
 async function checkUpdate() {
+  if (isApiBaseUrlDirty() && !window.confirm(t("desktop.sync.unsavedApiBaseUrl"))) return;
   $("#check-update").disabled = true;
   $("#download-installer").hidden = true;
   $("#update-message").textContent = t("desktop.renderer.checking");
@@ -950,7 +1094,7 @@ function renderHealth() {
         <p>${sourceDescription(item.providerId)}</p>
         ${renderSourceList(autoSources, manualSources, ignoredSources, item.providerId)}
       </div>
-      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}" data-source-state="${enabled ? "enabled" : "disabled"}">${enabled ? t("status.on") : t("status.off")}</button>
+      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}" data-source-state="${enabled ? "enabled" : "disabled"}" title="${escapeHtml(sourceToggleTitle(enabled))}" aria-label="${escapeHtml(sourceToggleTitle(enabled))}">${sourceToggleIcon()}</button>
     </article>`;
     })
     .join("");
@@ -989,6 +1133,17 @@ function sourceEnabled(item) {
 function sourceEnabledForConfig(config, providerId) {
   if (providerId === "cursor_dashboard_usage") return config.providerEnabled?.cursor_dashboard_usage === true;
   return config.providerEnabled?.[providerId] !== false;
+}
+
+function sourceToggleTitle(enabled) {
+  return enabled ? t("desktop.sources.toggleEnabledTitle") : t("desktop.sources.toggleDisabledTitle");
+}
+
+function sourceToggleIcon() {
+  return `<svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+    <path d="M12 3v9"></path>
+    <path d="M7.05 7.05a7 7 0 1 0 9.9 0"></path>
+  </svg>`;
 }
 
 function sourceTogglePayload(providerId, enabled, config) {
@@ -1388,9 +1543,9 @@ function renderTrendDashboard(rows) {
   const recent = rows.slice(0, 5);
   return `<div class="trend-dashboard">
     <div class="trend-summary-grid">
-      ${renderTrendMetric(t("desktop.renderer.latestLabel"), localeTokenCompact(latest.totalTokens), formatTrendPeriod(latest), metricTitle(latest))}
-      ${renderTrendMetric(t("desktop.renderer.peak"), localeTokenCompact(peak.totalTokens), formatTrendPeriod(peak), metricTitle(peak))}
-      ${renderTrendMetric(t("desktop.renderer.viewTotal"), localeTokenCompact(total), `${rows.length} ${trendViewMeta().bucketLabel}${rows.length === 1 ? "" : "s"}`, formatTokenRaw(total))}
+      ${renderTrendMetric(t("desktop.renderer.latestLabel"), formatToken(latest.totalTokens), formatTrendPeriod(latest), metricTitle(latest))}
+      ${renderTrendMetric(t("desktop.renderer.peak"), formatToken(peak.totalTokens), formatTrendPeriod(peak), metricTitle(peak))}
+      ${renderTrendMetric(t("desktop.renderer.viewTotal"), formatToken(total), `${rows.length} ${trendViewMeta().bucketLabel}${rows.length === 1 ? "" : "s"}`, formatTokenRaw(total))}
       ${latestConfig?.showEstimatedCost ? renderTrendMetric(t("desktop.renderer.cost"), renderCost(cost), pricingSource, costTitle(cost)) : renderTrendMetric(t("desktop.renderer.dominant"), humanDominant(dominantComposition(latest)), tokenCompositionSummary(latest), metricTitle(latest))}
     </div>
     ${renderTrendTimeline(chronological, latest, peak)}

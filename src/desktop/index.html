@@ -496,6 +496,20 @@
         </div>
       </section>
     </div>
+    <div id="reset-confirm-modal" class="modal-backdrop" hidden>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="reset-confirm-title">
+        <div class="section-title">
+          <h3 id="reset-confirm-title" data-i18n="desktop.reset.modalTitle">Reset data</h3>
+          <p data-i18n="desktop.reset.modalDescription">Choose whether to also delete your uploaded data from the cloud server. Source files in Codex, Claude Code, and Cursor are never deleted.</p>
+        </div>
+        <p id="reset-confirm-error" class="form-error" aria-live="polite"></p>
+        <div class="actions modal-actions">
+          <button id="reset-cancel" type="button" data-i18n="cancel">Cancel</button>
+          <button id="reset-local-only" type="button" data-i18n="desktop.reset.localOnly">Local only</button>
+          <button id="reset-with-cloud" type="button" class="danger-button" data-i18n="desktop.reset.localAndCloud">Local + Cloud</button>
+        </div>
+      </section>
+    </div>
     <script type="module" src="./renderer.js"></script>
   </body>
 </html>

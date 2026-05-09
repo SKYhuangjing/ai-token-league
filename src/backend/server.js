@@ -205,6 +205,25 @@ async function handleApi(req, res) {
     if (boardAnonymizer) boardAnonymizer.markDirty();
     return sendJson(res, 200, result);
   }
+  if (req.method === "DELETE" && req.url === "/api/participant/data") {
+    const body = await readBody(req);
+    if (!body.participantId || !body.timestamp || !body.signature) {
+      return sendJson(res, 400, { error: "participantId, timestamp, and signature are required" });
+    }
+    const ageMs = Date.now() - new Date(body.timestamp).getTime();
+    if (!Number.isFinite(ageMs) || Math.abs(ageMs) > 5 * 60 * 1000) {
+      return sendJson(res, 401, { error: "timestamp is too old or invalid" });
+    }
+    const participant = store.getParticipant(body.participantId);
+    if (!participant) return sendJson(res, 404, { error: "participant is not registered" });
+    const payload = { participantId: body.participantId, timestamp: body.timestamp };
+    if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
+      return sendJson(res, 401, { error: "invalid signature" });
+    }
+    const result = await store.deleteParticipantData(body.participantId);
+    if (boardAnonymizer) boardAnonymizer.markDirty();
+    return sendJson(res, 200, result);
+  }
   if (req.method === "GET" && req.url.startsWith("/api/leaderboard")) {
     const url = new URL(req.url, "http://localhost");
     const period = url.searchParams.get("period") || "";

@@ -811,6 +811,28 @@ ipcMain.handle("app:reset-local-data", async () => {
   return { ok: true };
 });
 
+ipcMain.handle("app:reset-with-cloud", async () => {
+  const { config, crypto } = await modules();
+  const current = config.loadConfig();
+  if (!current?.participantId) throw new Error("No participant identity found");
+  if (!hasApiBaseUrl(current)) throw new Error("Configure API base URL first");
+  const apiBaseUrl = String(current.apiBaseUrl || "").trim();
+  const timestamp = new Date().toISOString();
+  const payload = { participantId: current.participantId, timestamp };
+  const signature = crypto.signPayload(current.identityPrivateKey, payload);
+  const response = await fetch(`${apiBaseUrl}/api/participant/data`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...payload, signature })
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Cloud delete failed: ${response.status} ${text}`);
+  resetLocalData(config);
+  app.relaunch();
+  app.exit(0);
+  return { ok: true };
+});
+
 async function scheduleBackgroundRefresh(configOverride = null) {
   if (background.timer) clearInterval(background.timer);
   background.timer = null;

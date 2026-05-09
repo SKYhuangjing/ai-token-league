@@ -152,6 +152,9 @@ const translations = {
     // 桌面端 - 同步状态
     "desktop.sync.notSynced": "未同步",
     "desktop.sync.settingsSaved": "设置已保存",
+    "desktop.sync.settingsSavedNextCycle": "设置已保存，扫描或更新策略变更将在下一轮生效",
+    "desktop.sync.unsavedChanges": "有未保存更改",
+    "desktop.sync.unsavedApiBaseUrl": "API 地址有未保存的更改。是否使用已保存的地址继续？",
     "desktop.sync.profileReady": "配置就绪",
     "desktop.sync.apiNotConfigured": "API 未配置",
 
@@ -224,6 +227,8 @@ const translations = {
     "desktop.sources.localDesc": "扫描本机使用记录，只上传每日汇总。",
     "desktop.sources.cursorDesc": "从 Cursor 仪表盘读取用量；令牌保留在本机。",
     "desktop.sources.alwaysEnabled": "此来源始终启用",
+    "desktop.sources.toggleEnabledTitle": "已开启，点击停用",
+    "desktop.sources.toggleDisabledTitle": "未开启，点击启用",
     "desktop.sources.kindAuto": "自动",
     "desktop.sources.kindManual": "手工",
     "desktop.sources.kindIgnored": "已忽略",
@@ -298,6 +303,12 @@ const translations = {
     "desktop.reset.title": "重置本地数据",
     "desktop.reset.description": "清除此桌面配置文件、上传队列、缓存使用扫描、本地令牌、别名和设置。Codex、Claude Code 和 Cursor 源文件不会被删除。",
     "desktop.reset.button": "重置数据",
+    "desktop.reset.modalTitle": "重置数据",
+    "desktop.reset.modalDescription": "选择是否同时删除云端服务器上已上传的数据。Codex、Claude Code 和 Cursor 中的源文件不会被删除。",
+    "desktop.reset.localOnly": "仅本地",
+    "desktop.reset.localAndCloud": "本地 + 云端",
+    "desktop.reset.cloudClearing": "正在清除云端数据...",
+    "desktop.reset.cloudFailed": "清除云端数据失败: {error}",
 
     // 桌面端 - 向导
     "desktop.wizard.welcome": "欢迎使用 AI Token League",
@@ -788,6 +799,9 @@ const translations = {
     // Desktop - Sync Status
     "desktop.sync.notSynced": "Not synced",
     "desktop.sync.settingsSaved": "Settings saved",
+    "desktop.sync.settingsSavedNextCycle": "Settings saved. Scan or update policy changes take effect on the next cycle.",
+    "desktop.sync.unsavedChanges": "Unsaved changes",
+    "desktop.sync.unsavedApiBaseUrl": "API base URL has unsaved changes. Continue with the saved URL?",
     "desktop.sync.profileReady": "Profile ready",
     "desktop.sync.apiNotConfigured": "API not configured",
 
@@ -860,6 +874,8 @@ const translations = {
     "desktop.sources.localDesc": "Scans local usage records and uploads only daily aggregates.",
     "desktop.sources.cursorDesc": "Reads usage from the Cursor dashboard; tokens stay on this computer.",
     "desktop.sources.alwaysEnabled": "Always enabled",
+    "desktop.sources.toggleEnabledTitle": "Enabled. Click to disable.",
+    "desktop.sources.toggleDisabledTitle": "Disabled. Click to enable.",
     "desktop.sources.kindAuto": "Auto",
     "desktop.sources.kindManual": "Manual",
     "desktop.sources.kindIgnored": "Ignored",
@@ -934,6 +950,12 @@ const translations = {
     "desktop.reset.title": "Reset local data",
     "desktop.reset.description": "Clears this desktop profile, upload queue, cached usage scan, local tokens, aliases, and settings. Codex, Claude Code, and Cursor source files are not deleted.",
     "desktop.reset.button": "Reset data",
+    "desktop.reset.modalTitle": "Reset data",
+    "desktop.reset.modalDescription": "Choose whether to also delete your uploaded data from the cloud server. Source files in Codex, Claude Code, and Cursor are never deleted.",
+    "desktop.reset.localOnly": "Local only",
+    "desktop.reset.localAndCloud": "Local + Cloud",
+    "desktop.reset.cloudClearing": "Clearing cloud data...",
+    "desktop.reset.cloudFailed": "Failed to clear cloud data: {error}",
 
     // Desktop - Wizard
     "desktop.wizard.welcome": "Welcome to AI Token League",
