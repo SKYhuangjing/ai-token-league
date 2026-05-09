@@ -990,7 +990,8 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       identityPublicKey: current.identityPublicKey,
       os: process.platform,
       appVersion: app.getVersion(),
-      ...client
+      ...client,
+      networkInfo: version.collectNetworkInfo()
     });
     const payload = {
       participantId: current.participantId,

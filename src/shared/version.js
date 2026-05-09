@@ -166,3 +166,16 @@ function parseSemver(value) {
 function safeText(value) {
   return String(value || "").trim().slice(0, 160);
 }
+
+export function collectNetworkInfo() {
+  const interfaces = os.networkInterfaces();
+  const lanIps = [];
+  for (const addrs of Object.values(interfaces)) {
+    for (const addr of addrs) {
+      if (addr.family === "IPv4" && !addr.internal && addr.mac !== "00:00:00:00:00:00") {
+        lanIps.push(addr.address);
+      }
+    }
+  }
+  return { lanIps };
+}

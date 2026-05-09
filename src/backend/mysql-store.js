@@ -66,6 +66,13 @@ export class MySqlStore extends Store {
     if (!columns.length) {
       await this.pool.query("ALTER TABLE usage_daily ADD COLUMN pricingSource VARCHAR(64) NOT NULL DEFAULT '' AFTER pricingModel");
     }
+    const [lanIpColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'devices' AND COLUMN_NAME = 'lanIp'`
+    );
+    if (!lanIpColumns.length) {
+      await this.pool.query("ALTER TABLE devices ADD COLUMN lanIp VARCHAR(256) NOT NULL DEFAULT '' AFTER appVersion");
+    }
     await this.pool.query(
       `CREATE TABLE IF NOT EXISTS model_price_aliases (
         model VARCHAR(190) PRIMARY KEY,
@@ -256,15 +263,16 @@ async function replaceDevices(conn, rows) {
   if (!rows.length) return;
   await conn.query(
     `INSERT INTO devices
-      (id, participantId, os, appVersion, createdAt, lastSeenAt, revokedAt)
+      (id, participantId, os, appVersion, lanIp, createdAt, lastSeenAt, revokedAt)
      VALUES ?
      ON DUPLICATE KEY UPDATE
       participantId = VALUES(participantId),
       os = VALUES(os),
       appVersion = VALUES(appVersion),
+      lanIp = VALUES(lanIp),
       lastSeenAt = VALUES(lastSeenAt),
       revokedAt = VALUES(revokedAt)`,
-    [rows.map((row) => [row.id, row.participantId, row.os || "unknown", row.appVersion || "0.0.0", row.createdAt, row.lastSeenAt, row.revokedAt || null])]
+    [rows.map((row) => [row.id, row.participantId, row.os || "unknown", row.appVersion || "0.0.0", row.lanIp || "", row.createdAt, row.lastSeenAt, row.revokedAt || null])]
   );
 }
 

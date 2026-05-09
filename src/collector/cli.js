@@ -4,7 +4,7 @@ import readline from "node:readline";
 import { initConfig, loadConfig, saveConfig, exportIdentity, importIdentity } from "./config.js";
 import { scanUsage, providerHealth } from "./core.js";
 import { signPayload } from "../shared/crypto.js";
-import { clientMetadata } from "../shared/version.js";
+import { clientMetadata, collectNetworkInfo } from "../shared/version.js";
 
 const command = process.argv[2] || "help";
 
@@ -144,7 +144,8 @@ async function main() {
       identityPublicKey: config.identityPublicKey,
       os: process.platform,
       appVersion: clientMetadata().clientAppVersion,
-      ...clientMetadata()
+      ...clientMetadata(),
+      networkInfo: collectNetworkInfo()
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -159,7 +160,8 @@ async function main() {
       identityPublicKey: config.identityPublicKey,
       os: process.platform,
       appVersion: clientMetadata().clientAppVersion,
-      ...clientMetadata()
+      ...clientMetadata(),
+      networkInfo: collectNetworkInfo()
     });
     const scanned = await scanUsage(config);
     const payload = {

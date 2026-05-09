@@ -176,12 +176,13 @@ function renderDevices(devices) {
   const tbody = document.querySelector("#devices-tbody");
   statusEl.textContent = devices.length === 1 ? t("admin.devices.countOne") : t("admin.devices.count", { count: devices.length });
   if (!devices.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="6">${t("admin.devices.empty")}</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.devices.empty")}</td></tr>`;
     return;
   }
   tbody.innerHTML = devices.map((item) => `<tr>
     <td>${escapeHtml(item.nickname)}</td>
     <td><span class="pill" title="${escapeHtml(item.deviceId)}">${escapeHtml(String(item.deviceId || "").slice(-8))}</span></td>
+    <td>${escapeHtml(item.lanIp || "-")}</td>
     <td>${escapeHtml(item.clientAppVersion || "-")}</td>
     <td>${escapeHtml(item.clientPlatform || item.os || "-")}</td>
     <td>${escapeHtml(item.clientBuild || "-")}</td>

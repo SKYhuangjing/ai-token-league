@@ -71,6 +71,7 @@ export class Store {
       clientProtocolVersion: input.clientProtocolVersion ?? input.client?.clientProtocolVersion ?? null,
       clientPlatform: input.clientPlatform || input.client?.clientPlatform || input.os || "unknown",
       clientBuild: input.clientBuild || input.client?.clientBuild || "",
+      lanIp: input.networkInfo?.lanIps?.join(", ") || this.db.devices[input.deviceId]?.lanIp || "",
       createdAt: this.db.devices[input.deviceId]?.createdAt || now,
       lastSeenAt: now
     };
@@ -691,6 +692,7 @@ export class Store {
         clientPlatform: device.clientPlatform || device.os || "",
         clientBuild: device.clientBuild || "",
         os: device.os || "",
+        lanIp: device.lanIp || "",
         lastSeenAt: device.lastSeenAt || "",
         createdAt: device.createdAt || ""
       };
