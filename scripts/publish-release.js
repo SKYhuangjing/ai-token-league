@@ -24,11 +24,18 @@ const uploadDispatcher = new Agent({
   headersTimeout: Number(process.env.RELEASE_UPLOAD_HEADERS_TIMEOUT_MS || 20 * 60 * 1000),
   bodyTimeout: Number(process.env.RELEASE_UPLOAD_BODY_TIMEOUT_MS || 20 * 60 * 1000)
 });
-loadEnvFile(path.resolve(argValue("env") || "env.local"));
-const config = validateReleaseConfig(releaseConfigFromEnv(), { requireOss: true });
+const envPath = argValue("env");
+if (envPath) loadEnvFile(path.resolve(envPath));
+let config;
+try {
+  config = validateReleaseConfig(releaseConfigFromEnv(), { requireOss: true });
+} catch (error) {
+  if (!envPath) throw new Error(`${error.message} (use --env FILE or set RELEASE_* env vars)`);
+  throw error;
+}
 const secrets = releaseSecretsFromEnv();
 if (!dryRun && (!secrets.accessKeyId || !secrets.accessKeySecret || secrets.accessKeyId === "change-me")) {
-  throw new Error("missing release OSS credentials");
+  throw new Error("missing release OSS credentials (use --env FILE or set RELEASE_* env vars)");
 }
 
 const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64"];

@@ -124,11 +124,17 @@ rm -rf dist-installer
 npm run package:installer:all
 ```
 
-Release dry run and publish:
+Interactive release (recommended):
 
 ```bash
-npm run release:dry-run
-npm run release:publish
+npm run release
+```
+
+Manual release dry run and publish:
+
+```bash
+node scripts/publish-release.js --env env.local --dry-run
+node scripts/publish-release.js --env env.local
 ```
 
 Generated artifacts:
@@ -178,12 +184,16 @@ The script updates only the files that match the selected mode:
 ### Step 3: Build and publish
 
 ```bash
-npm run release:build     # clean build: zip + installer artifacts
-npm run release:dry-run   # verify manifest without uploading
-npm run release:upload    # upload to OSS (requires credentials)
+npm run release           # interactive: guides through platform, env, installers, upload
 ```
 
-Or combined: `npm run release:publish` (build + upload).
+Or manually:
+
+```bash
+npm run release:build     # clean build: zip + installer artifacts
+node scripts/publish-release.js --env env.local --dry-run   # verify manifest
+node scripts/publish-release.js --env env.local             # upload to OSS
+```
 
 ### Design rules
 
@@ -273,11 +283,14 @@ Docker Compose `env_file` does NOT interpret shell metacharacters, so quoting is
 
 ### `env.local` as Build Preset Source
 
-`npm run preset` (and `npm run release:build`) automatically reads `env.local` to generate `assets/preset.json` — the build-time configuration baked into the desktop app. This means developers do **not** need to export `PRESET_*` variables manually; just keep them in `env.local`.
+`npm run release` prompts for an env file and passes it to `build-preset.js` and `publish-release.js`. When running manually, pass `--env` explicitly:
 
-- If `env.local` is missing or contains no `PRESET_*` keys, the preset is empty and the app falls back to runtime defaults — no error.
+```bash
+node scripts/build-preset.js --env env.local
+```
+
+- If no `--env` is provided and no `PRESET_*` keys are in the environment, the preset is empty and the app falls back to runtime defaults — no error.
 - `env.local` is excluded from the Electron package (`electron-builder.yml` excludes `env.*`), so secrets never ship.
-- Override with an explicit file: `node scripts/build-preset.js --env path/to/other.env`.
 
 ## Operations Manual
 

@@ -551,57 +551,76 @@ h3 {
   line-height: 1.35;
 }
 
-.source-toggle {
-  width: 38px;
-  height: 38px;
-  display: inline-grid;
-  place-items: center;
+.source-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
   padding: 0;
-  font-weight: 700;
-  border-radius: 50%;
+  border-radius: 999px;
+  border: 0;
+  background: #aaa195;
+  color: inherit;
+  box-shadow: inset 0 0 0 1px rgba(22, 21, 18, 0.18);
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
-.source-toggle.ok {
+.source-switch.is-on {
   background: var(--green);
-  border-color: var(--green);
-  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(22, 21, 18, 0.1);
 }
 
-.source-toggle.miss {
-  background: #f4f1ea;
-  border-color: #c8c2b5;
-  color: #7a7163;
+.source-switch.is-off {
+  background: #aaa195;
 }
 
-.source-toggle svg {
-  width: 18px;
-  height: 18px;
-  stroke: currentColor;
-  stroke-width: 2.35;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  fill: none;
+.source-switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fffdf7;
+  box-shadow: 0 1px 2px rgba(22, 21, 18, 0.22);
+  transition: transform 0.16s ease;
 }
 
-.source-toggle.ok:hover:not(:disabled) {
-  background: #1a7a50;
-  border-color: #1a7a50;
-  color: #fff;
+.source-switch.is-on::before {
+  transform: translateX(20px);
 }
 
-.source-toggle.miss:hover:not(:disabled) {
-  background: #e8f1ff;
-  border-color: var(--blue);
-  color: var(--blue);
+.source-switch:hover:not(:disabled) {
+  background: #aaa195;
+  color: inherit;
+  box-shadow: inset 0 0 0 1px rgba(22, 21, 18, 0.18), 0 0 0 3px rgba(46, 111, 183, 0.12);
 }
 
-.source-toggle:disabled {
+.source-switch.is-on:hover:not(:disabled) {
+  background: var(--green);
+}
+
+.source-switch.is-off:hover:not(:disabled) {
+  background: #9c9387;
+}
+
+.source-switch:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+
+.source-switch:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
 
 .source-card.source-disabled {
-  opacity: 0.65;
+  border-color: #8f877b;
+  background: #f1eee8;
+}
+
+.source-card.source-disabled strong {
+  color: #3f3d38;
 }
 
 .bar-row em {

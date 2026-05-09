@@ -22,6 +22,7 @@ npm test             # Run tests
 npm run smoke        # Backend smoke test
 npm run desktop      # Launch Electron desktop app
 npm run package:all  # Package desktop bundles
+npm run release      # Interactive release builder (version/platform/env/installers/upload)
 ```
 
 ## Rules

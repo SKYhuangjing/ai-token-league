@@ -8,7 +8,42 @@ This document is the operational checklist for rebuilding desktop distribution a
 - Dependencies installed with `npm install`.
 - Run commands from the project root.
 
-## Build
+## Interactive Release Script
+
+The primary way to build and release is through the interactive script:
+
+```bash
+npm run release
+# or directly:
+bash scripts/release.sh
+```
+
+The script guides you through:
+
+1. **Version** — keep current or bump to a new version
+2. **Platform** — macOS arm64, macOS Intel, macOS All, Windows, or All
+3. **Env file** — skip presets or load from an env file (for `PRESET_*` vars and OSS credentials)
+4. **Installers** — whether to build DMG / NSIS installers
+5. **Upload** — whether to upload artifacts to OSS
+6. **Confirmation** — review selections before executing
+
+CLI flags for non-interactive use:
+
+```bash
+bash scripts/release.sh --version 0.6.0 --platform all --yes
+bash scripts/release.sh --platform mac-arm64 --env env.local --installers --upload --yes
+```
+
+| Flag | Description |
+|------|-------------|
+| `--version VER` | Version to release (default: current from package.json) |
+| `--platform PLAT` | `mac-arm64` / `mac-intel` / `mac-all` / `win` / `all` |
+| `--env FILE` | Env file for presets and upload credentials |
+| `--installers` | Build native installers (DMG / NSIS) |
+| `--upload` | Upload artifacts to OSS |
+| `--yes` | Skip confirmation prompt |
+
+## Manual Build
 
 Use a clean `dist` rebuild when validating UI or desktop packaging changes:
 
@@ -83,10 +118,10 @@ npm run package:installer:win
 
 ## Release Manifest Dry Run
 
-Release resource configuration is read from env. `scripts/publish-release.js` loads `env.local` by default for local runs; CI should inject the same keys through secrets.
+Release resource configuration is read from env. `scripts/publish-release.js` requires an explicit `--env` flag or `RELEASE_*` environment variables; it does not default to `env.local`.
 
 ```bash
-npm run release:dry-run
+node scripts/publish-release.js --env env.local --dry-run
 ```
 
 Expected behavior:
@@ -101,16 +136,14 @@ Expected behavior:
 Publish only from a trusted release environment:
 
 ```bash
-npm run release:publish
+node scripts/publish-release.js --env env.local
 ```
-
-`release:publish` runs `release:build` then `release:upload`. The build step removes old `dist/` and `dist-installer/`, rebuilds zip packages and native installers. The upload step uploads all artifacts to OSS with a progress bar.
 
 To rebuild and upload separately:
 
 ```bash
 npm run release:build    # clean build zip + installer artifacts
-npm run release:upload   # upload with progress bar
+node scripts/publish-release.js --env env.local   # upload with progress bar
 ```
 
 The upload script reads `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_SECRET` from env. These values must not be committed or exposed through app-server responses.
@@ -125,7 +158,7 @@ node --check src/desktop/renderer.js
 node --check scripts/publish-release.js
 npm test
 npm run desktop:smoke
-npm run release:dry-run
+node scripts/publish-release.js --env env.local --dry-run
 ```
 
 After `npm run package:all`, verify the packaged macOS main process:

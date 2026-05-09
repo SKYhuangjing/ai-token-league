@@ -419,16 +419,13 @@ async function renderWizardSources() {
         <small>${summary}</small>
         <p>${sourceDescription(item.providerId)}</p>
       </div>
-      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-wizard-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}">${enabled ? t("status.on") : t("status.off")}</button>
+      ${sourceSwitchButton(enabled, `data-wizard-toggle-source="${escapeHtml(item.providerId)}"`)}
     </article>`;
   }).join("");
   container.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.getAttribute("aria-pressed") !== "true";
-      button.setAttribute("aria-pressed", String(next));
-      button.textContent = next ? t("status.on") : t("status.off");
-      button.classList.toggle("ok", next);
-      button.classList.toggle("miss", !next);
+      updateSourceSwitchButton(button, next);
     });
   });
 }
@@ -504,11 +501,16 @@ async function resetLocalData() {
 
 function openResetConfirmModal() {
   $("#reset-confirm-error").textContent = "";
+  $("#reset-with-cloud").hidden = !hasConfiguredApiBaseUrl(latestConfig);
   $("#reset-confirm-modal").hidden = false;
 }
 
 function closeResetConfirmModal() {
   $("#reset-confirm-modal").hidden = true;
+}
+
+function hasConfiguredApiBaseUrl(config) {
+  return Boolean(String(config?.apiBaseUrl || "").trim());
 }
 
 async function resetLocalOnly() {
@@ -1094,7 +1096,7 @@ function renderHealth() {
         <p>${sourceDescription(item.providerId)}</p>
         ${renderSourceList(autoSources, manualSources, ignoredSources, item.providerId)}
       </div>
-      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}" data-source-state="${enabled ? "enabled" : "disabled"}" title="${escapeHtml(sourceToggleTitle(enabled))}" aria-label="${escapeHtml(sourceToggleTitle(enabled))}">${sourceToggleIcon()}</button>
+      ${sourceSwitchButton(enabled, `data-toggle-source="${escapeHtml(item.providerId)}" data-source-state="${enabled ? "enabled" : "disabled"}"`)}
     </article>`;
     })
     .join("");
@@ -1139,11 +1141,19 @@ function sourceToggleTitle(enabled) {
   return enabled ? t("desktop.sources.toggleEnabledTitle") : t("desktop.sources.toggleDisabledTitle");
 }
 
-function sourceToggleIcon() {
-  return `<svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
-    <path d="M12 3v9"></path>
-    <path d="M7.05 7.05a7 7 0 1 0 9.9 0"></path>
-  </svg>`;
+function sourceSwitchButton(enabled, attributes) {
+  const state = enabled ? "true" : "false";
+  return `<button class="source-switch ${enabled ? "is-on" : "is-off"}" type="button" ${attributes} role="switch" aria-checked="${state}" aria-pressed="${state}" title="${escapeHtml(sourceToggleTitle(enabled))}" aria-label="${escapeHtml(sourceToggleTitle(enabled))}"></button>`;
+}
+
+function updateSourceSwitchButton(button, enabled) {
+  const state = enabled ? "true" : "false";
+  button.setAttribute("aria-checked", state);
+  button.setAttribute("aria-pressed", state);
+  button.title = sourceToggleTitle(enabled);
+  button.setAttribute("aria-label", sourceToggleTitle(enabled));
+  button.classList.toggle("is-on", enabled);
+  button.classList.toggle("is-off", !enabled);
 }
 
 function sourceTogglePayload(providerId, enabled, config) {

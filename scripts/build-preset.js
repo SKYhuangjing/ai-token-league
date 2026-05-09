@@ -51,8 +51,8 @@ function parsePreset() {
   return preset;
 }
 
-const envFile = process.argv.includes("--env") ? process.argv[process.argv.indexOf("--env") + 1] : "env.local";
-loadEnvFile(path.resolve(ROOT, envFile));
+const envFile = process.argv.includes("--env") ? process.argv[process.argv.indexOf("--env") + 1] : "";
+if (envFile) loadEnvFile(path.resolve(ROOT, envFile));
 
 const preset = parsePreset();
 const outDir = path.join(ROOT, "assets");

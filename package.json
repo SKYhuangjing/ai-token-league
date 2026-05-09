@@ -32,6 +32,7 @@
     "release:dry-run": "node scripts/publish-release.js --dry-run",
     "release:upload": "node scripts/publish-release.js",
     "release:publish": "npm run release:build && npm run release:upload",
+    "release": "bash scripts/release.sh",
     "bump": "node scripts/bump-version.js"
   },
   "engines": {
