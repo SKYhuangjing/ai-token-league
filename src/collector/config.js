@@ -178,6 +178,22 @@ export function addProviderRoot(providerId, rootPath, current = loadConfig()) {
   return config;
 }
 
+export function removeProviderRoot(providerId, rootPath, current = loadConfig()) {
+  if (!current) throw new Error("Initialize identity first");
+  const normalized = path.resolve(rootPath);
+  const roots = current.providerRoots?.[providerId];
+  const nextRoots = Array.isArray(roots) ? roots.filter(r => r !== normalized) : [];
+  const config = {
+    ...current,
+    providerRoots: {
+      ...(current.providerRoots || {}),
+      [providerId]: nextRoots
+    }
+  };
+  saveConfig(config);
+  return config;
+}
+
 export function setWorkdirAlias(workdirHash, alias, current = loadConfig()) {
   if (!current) throw new Error("Initialize identity first");
   const workdirAliases = { ...(current.workdirAliases || {}) };
@@ -263,6 +279,25 @@ export function addCursorToken(rawInput, current = loadConfig(), { persist = tru
     updatedAt: new Date().toISOString()
   };
   if (persist) saveConfig(config);
+  return config;
+}
+
+export function removeCursorToken(tokenValue, current = loadConfig()) {
+  if (!current) throw new Error("Initialize identity first");
+  const tokens = current.cursorDashboardUsage?.workosSessionTokens || [];
+  const idx = Number(tokenValue);
+  const nextTokens = Number.isInteger(idx) && idx >= 0 && idx < tokens.length
+    ? tokens.filter((_, i) => i !== idx)
+    : tokens.filter(t => t.token !== tokenValue);
+  const config = {
+    ...current,
+    cursorDashboardUsage: {
+      ...(current.cursorDashboardUsage || {}),
+      workosSessionTokens: nextTokens
+    },
+    updatedAt: new Date().toISOString()
+  };
+  saveConfig(config);
   return config;
 }
 
