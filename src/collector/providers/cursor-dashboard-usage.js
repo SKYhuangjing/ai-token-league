@@ -18,12 +18,18 @@ export const cursorDashboardUsageProvider = {
   scanSessions(config = {}) {
     const cursorConfig = config.cursorDashboardUsage || {};
     if (!cursorEnabled(config)) return [];
-    const sources = configuredSources(cursorConfig);
+    const manualSources = configuredManualSources(cursorConfig);
+    const autoSources = [];
     if (cursorConfig.autoDetectLocal !== false) {
-      for (const source of discoverAccountSources()) sources.push(source);
-      for (const source of discoverLocalCursorSources()) sources.push(source);
+      const ignored = config.providerIgnoredAutoSources?.cursor_dashboard_usage || [];
+      for (const source of discoverAccountSources()) {
+        if (!ignored.includes(sourceAccountKey(source))) autoSources.push(source);
+      }
+      for (const source of discoverLocalCursorSources()) {
+        if (!ignored.includes(sourceAccountKey(source))) autoSources.push(source);
+      }
     }
-    return dedupeSources(sources);
+    return dedupeSources([...manualSources, ...autoSources]);
   },
 
   async parseUsage(source, config = {}) {
@@ -43,25 +49,39 @@ export const cursorDashboardUsageProvider = {
 
   reportHealth(config = {}) {
     const cursorConfig = config.cursorDashboardUsage || {};
-    const sources = [
-      ...configuredSources(cursorConfig),
-      ...(cursorConfig.autoDetectLocal === false ? [] : discoverAccountSources()),
-      ...(cursorConfig.autoDetectLocal === false ? [] : discoverLocalCursorSources())
-    ];
-    const deduped = dedupeSources(sources);
+    const ignored = config.providerIgnoredAutoSources?.cursor_dashboard_usage || [];
+    const manualSources = configuredManualSources(cursorConfig);
+    const autoAccountSources = cursorConfig.autoDetectLocal === false ? [] : discoverAccountSources();
+    const autoLocalSources = cursorConfig.autoDetectLocal === false ? [] : discoverLocalCursorSources();
+    const allAutoSources = [...autoAccountSources, ...autoLocalSources];
+    const deduped = dedupeSources([...manualSources, ...allAutoSources]);
+    const sources = deduped.map(source => {
+      const key = sourceAccountKey(source);
+      const isManual = source.sourceKind === "manual_workos_cookie";
+      return {
+        kind: isManual ? "manual" : "auto",
+        id: key,
+        label: source.accountName || "Cursor",
+        accountName: source.accountName || "Cursor",
+        sourceKind: source.sourceKind,
+        ignored: !isManual && ignored.includes(key),
+        ...(source.tokenIndex !== undefined ? { tokenIndex: source.tokenIndex } : {})
+      };
+    });
     return {
       providerId: this.id,
       toolCode: this.toolCode,
       detected: deduped.length > 0,
       enabled: cursorEnabled(config),
       roots: deduped.map((source) => source.accountName || "Cursor"),
+      sources,
       lastCheckedAt: new Date().toISOString()
     };
   }
 };
 
 function cursorEnabled(config = {}) {
-  return config.cursorDashboardUsage?.enabled === true || config.providerEnabled?.cursor_dashboard_usage === true;
+  return config.providerEnabled?.cursor_dashboard_usage === true;
 }
 
 export function eventsToUsageEvents(events = [], source = {}) {
@@ -204,7 +224,7 @@ function discoverLocalCursorSources() {
   return sources;
 }
 
-function configuredSources(cursorConfig = {}) {
+function configuredManualSources(cursorConfig = {}) {
   const sources = [];
   if (cursorConfig.workosSessionToken) {
     const cookie = cursorTokenToCookie(cursorConfig.workosSessionToken);
@@ -216,19 +236,18 @@ function configuredSources(cursorConfig = {}) {
       });
     }
   }
-  for (const item of cursorConfig.workosSessionTokens || []) {
+  for (let i = 0; i < (cursorConfig.workosSessionTokens || []).length; i++) {
+    const item = cursorConfig.workosSessionTokens[i];
     const token = typeof item === "string" ? item : item?.token;
     const cookie = cursorTokenToCookie(token);
     if (cookie) {
       sources.push({
         sourceKind: "manual_workos_cookie",
         accountName: typeof item === "object" ? item.accountName || cursorAccountNameFromToken(token) : cursorAccountNameFromToken(token),
-        cookie
+        cookie,
+        tokenIndex: i
       });
     }
-  }
-  if (cursorConfig.autoDetectLocal !== false) {
-    for (const source of discoverLocalCursorSources()) sources.push(source);
   }
   return sources;
 }
@@ -414,7 +433,7 @@ function dedupeSources(sources) {
   return [...byAccount.values()];
 }
 
-function sourceAccountKey(source = {}) {
+export function sourceAccountKey(source = {}) {
   const account = String(source.accountName || "").trim().toLowerCase();
   if (account && account !== "cursor") return account;
   const token = safeDecodeURIComponent(String(source.cookie || "").replace(/^WorkosCursorSessionToken=/, ""));

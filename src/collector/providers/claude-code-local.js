@@ -23,10 +23,20 @@ export const claudeCodeLocalProvider = {
 
   roots(config = {}) {
     if (config.providerRootsOnly && config.providerRoots?.claude_code_local) return normalizeCustomRoots(config.providerRoots.claude_code_local);
+    const auto = autoRoots(config);
+    const customRoots = normalizeCustomRoots(config.providerRoots?.claude_code_local);
+    return [...new Set([...auto, ...customRoots])];
+  },
+
+  autoRoots(config = {}) {
+    if (config.providerRootsOnly) return [];
     const realRoots = [path.join(os.homedir(), ".config", "claude", "projects"), path.join(os.homedir(), ".claude", "projects")];
     const existingRealRoots = realRoots.filter((root) => fs.existsSync(root));
-    const customRoots = normalizeCustomRoots(config.providerRoots?.claude_code_local);
-    return [...new Set([...(existingRealRoots.length ? existingRealRoots : [path.resolve("samples/claude/projects")]), ...customRoots])];
+    return existingRealRoots.length ? existingRealRoots : [path.resolve("samples/claude/projects")];
+  },
+
+  manualRoots(config = {}) {
+    return normalizeCustomRoots(config.providerRoots?.claude_code_local);
   },
 
   detect(config) {
@@ -36,7 +46,10 @@ export const claudeCodeLocalProvider = {
 
   scanSessions(config) {
     if (config.providerEnabled?.claude_code_local === false) return [];
-    return this.roots(config).flatMap((root) => walkFiles(root, (file) => file.endsWith(".jsonl")));
+    const ignored = config.providerIgnoredAutoSources?.claude_code_local || [];
+    const auto = this.autoRoots(config).filter(r => !ignored.includes(r));
+    const manual = this.manualRoots(config);
+    return [...auto, ...manual].flatMap((root) => walkFiles(root, (file) => file.endsWith(".jsonl")));
   },
 
   async parseUsage(file) {
@@ -81,13 +94,21 @@ export const claudeCodeLocalProvider = {
   },
 
   reportHealth(config) {
-    const detection = this.detect(config);
+    const auto = this.autoRoots(config);
+    const manual = this.manualRoots(config);
+    const ignored = config.providerIgnoredAutoSources?.claude_code_local || [];
+    const allRoots = [...auto, ...manual];
+    const sources = [
+      ...auto.map(r => ({ kind: "auto", id: r, label: shortenPath(r), path: r, ignored: ignored.includes(r) })),
+      ...manual.map(r => ({ kind: "manual", id: r, label: shortenPath(r), path: r, ignored: false }))
+    ];
     return {
       providerId: this.id,
       toolCode: this.toolCode,
-      detected: detection.detected,
+      detected: allRoots.length > 0,
       enabled: config.providerEnabled?.claude_code_local !== false,
-      roots: detection.roots,
+      roots: allRoots,
+      sources,
       lastCheckedAt: new Date().toISOString()
     };
   }
@@ -96,4 +117,9 @@ export const claudeCodeLocalProvider = {
 function normalizeCustomRoots(value) {
   if (!value) return [];
   return Array.isArray(value) ? value : [value];
+}
+
+function shortenPath(p) {
+  const home = os.homedir();
+  return p.startsWith(home) ? "~" + p.slice(home.length) : p;
 }

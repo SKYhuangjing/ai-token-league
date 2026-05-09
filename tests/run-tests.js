@@ -10,7 +10,7 @@ import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION 
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
 import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
 import { scanUsage } from "../src/collector/core.js";
-import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
+import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, migrateLegacyCursorProviderEnabled, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
 import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
 import { codexLocalProvider } from "../src/collector/providers/codex-local.js";
 import { cursorDashboardUsageProvider, eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
@@ -79,6 +79,33 @@ async function testProviderEnabledSwitches() {
   const updated = updateConfig({ providerEnabled: { codex_local: true } }, config, { persist: false });
   assert.equal(updated.providerEnabled.codex_local, true);
   assert.equal(updated.providerEnabled.claude_code_local, true);
+  const cursorToggled = updateConfig({
+    providerEnabled: { cursor_dashboard_usage: true },
+    cursorDashboardUsage: { enabled: false }
+  }, { providerEnabled: { cursor_dashboard_usage: false }, cursorDashboardUsage: { enabled: true } }, { persist: false });
+  assert.equal(cursorToggled.providerEnabled.cursor_dashboard_usage, true);
+  assert.equal(Object.hasOwn(cursorToggled.cursorDashboardUsage, "enabled"), false);
+}
+
+function testLegacyCursorEnabledMigration() {
+  const enabled = migrateLegacyCursorProviderEnabled({
+    providerEnabled: {},
+    cursorDashboardUsage: { enabled: true, workosSessionToken: "", workosSessionTokens: [] }
+  }, { persist: false });
+  assert.equal(enabled.providerEnabled.cursor_dashboard_usage, true);
+  assert.equal(Object.hasOwn(enabled.cursorDashboardUsage, "enabled"), false);
+  const disabled = migrateLegacyCursorProviderEnabled({
+    providerEnabled: {},
+    cursorDashboardUsage: { enabled: false, workosSessionToken: "", workosSessionTokens: [] }
+  }, { persist: false });
+  assert.equal(disabled.providerEnabled.cursor_dashboard_usage, false);
+  assert.equal(Object.hasOwn(disabled.cursorDashboardUsage, "enabled"), false);
+  const explicit = migrateLegacyCursorProviderEnabled({
+    providerEnabled: { cursor_dashboard_usage: false },
+    cursorDashboardUsage: { enabled: true, workosSessionToken: "", workosSessionTokens: [] }
+  }, { persist: false });
+  assert.equal(explicit.providerEnabled.cursor_dashboard_usage, false);
+  assert.equal(Object.hasOwn(explicit.cursorDashboardUsage, "enabled"), false);
 }
 
 function testCursorDashboardMapping() {
@@ -130,8 +157,8 @@ function testCursorDashboardMapping() {
   ], { accountName: "cursor@example.com" });
   assert.equal(namedItems[0].workdirCandidate, "virtual:cursor-dashboard:Cursor · cursor@example.com");
   const duplicateSources = cursorDashboardUsageProvider.scanSessions({
+    providerEnabled: { cursor_dashboard_usage: true },
     cursorDashboardUsage: {
-      enabled: true,
       autoDetectLocal: false,
       workosSessionTokens: [
         { token: "user_01TESTCURSOR::manual", accountName: "user_01TESTCURSOR" },
@@ -142,8 +169,8 @@ function testCursorDashboardMapping() {
   assert.equal(duplicateSources.length, 1);
   assert.equal(duplicateSources[0].accountName, "cursor@example.com");
   const duplicateAccounts = cursorDashboardUsageProvider.scanSessions({
+    providerEnabled: { cursor_dashboard_usage: true },
     cursorDashboardUsage: {
-      enabled: true,
       autoDetectLocal: false,
       workosSessionTokens: [
         { token: "user_01TESTCURSOR::state-token", accountName: "cursor@example.com" },
@@ -165,11 +192,11 @@ async function testCursorLocalTokenDetection() {
   db.close();
   process.env.CURSOR_STATE_DB_PATH = dbPath;
   try {
-    const sources = cursorDashboardUsageProvider.scanSessions({ cursorDashboardUsage: { enabled: true } });
+    const sources = cursorDashboardUsageProvider.scanSessions({ providerEnabled: { cursor_dashboard_usage: true } });
     const localSource = sources.find((source) => source.sourceKind === "local_cursor_state");
     assert.ok(localSource);
     assert.ok(decodeURIComponent(localSource.cookie).includes("user_01TESTCURSOR::"));
-    const health = cursorDashboardUsageProvider.reportHealth({ cursorDashboardUsage: { enabled: false } });
+    const health = cursorDashboardUsageProvider.reportHealth({ providerEnabled: { cursor_dashboard_usage: false } });
     assert.equal(health.detected, true);
     assert.equal(health.enabled, false);
     assert.ok(health.roots.includes("user_01TESTCURSOR"));
@@ -759,7 +786,7 @@ function testInitConfigKeepsPresetFields() {
   assert.equal(config.apiBaseUrl, "https://api.example");
   assert.equal(config.language, "en");
   assert.equal(config.showEstimatedCost, true);
-  assert.equal(config.cursorDashboardUsage.enabled, true);
+  assert.equal(Object.hasOwn(config.cursorDashboardUsage, "enabled"), false);
   assert.deepEqual(config.providerEnabled, {
     claude_code_local: true,
     codex_local: false,
@@ -775,7 +802,7 @@ function testAddCursorTokenKeepsMultipleAccounts() {
     identityPublicKey: identity.identityPublicKey,
     identityPrivateKey: identity.identityPrivateKey,
     deviceId: newId("d"),
-    cursorDashboardUsage: { enabled: false, workosSessionToken: "", workosSessionTokens: [] }
+    cursorDashboardUsage: { workosSessionToken: "", workosSessionTokens: [] }
   };
   const first = addCursorToken(JSON.stringify({
     email: "a@example.com",
@@ -785,7 +812,8 @@ function testAddCursorTokenKeepsMultipleAccounts() {
     email: "b@example.com",
     access_token: jwtWithSub("auth0|user_01B")
   }), first, { persist: false });
-  assert.equal(second.cursorDashboardUsage.enabled, true);
+  assert.equal(Object.hasOwn(second.cursorDashboardUsage, "enabled"), false);
+  assert.equal(second.providerEnabled.cursor_dashboard_usage, true);
   assert.equal(second.cursorDashboardUsage.workosSessionTokens.length, 2);
   assert.deepEqual(second.cursorDashboardUsage.workosSessionTokens.map((item) => item.accountName), ["a@example.com", "b@example.com"]);
   assert.throws(() => addCursorToken("not-a-token", current, { persist: false }), /Cursor token is empty or invalid/);
@@ -1018,6 +1046,7 @@ function testLoadOrGenerateSalt() {
 
 const { identity, items } = await testScan();
 await testProviderEnabledSwitches();
+testLegacyCursorEnabledMigration();
 testHmacSha256Hex();
 testBoardAnonymizer();
 testBoardAnonymizerDailyRotation();

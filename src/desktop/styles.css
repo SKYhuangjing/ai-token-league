@@ -555,24 +555,32 @@ h3 {
   min-width: 58px;
   padding: 8px 12px;
   text-align: center;
+  font-weight: 700;
+  border-radius: 4px;
 }
 
 .source-toggle.ok {
-  background: #e9f5ed;
+  background: var(--green);
   border-color: var(--green);
-  color: var(--green);
+  color: #fff;
 }
 
 .source-toggle.miss {
-  background: var(--panel);
-  border-color: var(--muted);
-  color: var(--muted);
+  background: #eee;
+  border-color: #bbb;
+  color: #666;
 }
 
-.source-toggle.ok:hover:not(:disabled),
+.source-toggle.ok:hover:not(:disabled) {
+  background: #1a7a50;
+  border-color: #1a7a50;
+  color: #fff;
+}
+
 .source-toggle.miss:hover:not(:disabled) {
-  border-color: var(--ink);
-  color: var(--paper);
+  background: #ddd;
+  border-color: #999;
+  color: #444;
 }
 
 .source-toggle:disabled {
@@ -605,6 +613,90 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-kind-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.source-kind-badge.auto {
+  background: #e3edf7;
+  color: #3a6ea5;
+}
+
+.source-kind-badge.manual {
+  background: #e9f5ed;
+  color: #2a7a4a;
+}
+
+.source-kind-badge.ignored {
+  background: #f0f0f0;
+  color: #888;
+}
+
+.source-action-btn {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid;
+}
+
+.source-action-btn.delete {
+  background: #fff0f0;
+  border-color: #d88;
+  color: #a44;
+}
+
+.source-action-btn.delete:hover {
+  background: #fcc;
+  border-color: #c66;
+}
+
+.source-action-btn.ignore {
+  background: #f5f5f5;
+  border-color: #ccc;
+  color: #777;
+}
+
+.source-action-btn.ignore:hover {
+  background: #eee;
+  border-color: #aaa;
+}
+
+.source-action-btn.unignore {
+  background: #e3edf7;
+  border-color: #8ab;
+  color: #3a6ea5;
+  font-size: 10px;
+}
+
+.source-action-btn.unignore:hover {
+  background: #d0e0f0;
+}
+
+.root-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ignored-section {
+  color: #999;
+  font-style: italic;
 }
 
 .bar-row i {

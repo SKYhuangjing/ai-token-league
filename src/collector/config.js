@@ -43,7 +43,6 @@ export function initConfig({
 } = {}, { persist = true } = {}) {
   const identity = generateIdentity();
   const interval = Number(refreshIntervalMinutes);
-  const cursorEnabled = providerEnabled.cursor_dashboard_usage === true;
   const config = {
     participantId: identity.participantId,
     nickname,
@@ -60,20 +59,15 @@ export function initConfig({
     refreshIntervalMinutes: Number.isFinite(interval) ? Math.max(1, Math.round(interval)) : 15,
     launchAtLogin,
     desktopAutoInitialized,
-    cursorDashboardUsage: {
-      enabled: cursorEnabled,
-      workosSessionToken: "",
-      workosSessionTokens: []
-    },
+    cursorDashboardUsage: normalizeCursorDashboardUsageConfig(),
     apiConnection,
     syncStatus: {},
     workdirAliases: {},
     providerRoots: {},
     providerEnabled: {
-      claude_code_local: true,
-      codex_local: true,
       ...providerEnabled
     },
+    providerIgnoredAutoSources: {},
     createdAt: new Date().toISOString()
   };
   if (persist) saveConfig(config);
@@ -106,15 +100,14 @@ export function importIdentity(identity, current = {}, { persist = true } = {}) 
     refreshIntervalMinutes: current.refreshIntervalMinutes || 15,
     launchAtLogin: current.launchAtLogin ?? false,
     desktopAutoInitialized: false,
-    cursorDashboardUsage: current.cursorDashboardUsage || { enabled: false, workosSessionToken: "", workosSessionTokens: [] },
+    cursorDashboardUsage: normalizeCursorDashboardUsageConfig(current.cursorDashboardUsage),
     syncStatus: current.syncStatus || {},
     workdirAliases: current.workdirAliases || {},
     providerRoots: current.providerRoots || {},
     providerEnabled: {
-      claude_code_local: true,
-      codex_local: true,
       ...(current.providerEnabled || {})
     },
+    providerIgnoredAutoSources: current.providerIgnoredAutoSources || {},
     importedAt: new Date().toISOString()
   };
   if (persist) saveConfig(config);
@@ -145,16 +138,15 @@ export function importConfig(imported) {
     refreshIntervalMinutes: imported.refreshIntervalMinutes || 15,
     launchAtLogin: imported.launchAtLogin ?? false,
     desktopAutoInitialized: false,
-    cursorDashboardUsage: imported.cursorDashboardUsage || { enabled: false, workosSessionToken: "", workosSessionTokens: [] },
+    cursorDashboardUsage: normalizeCursorDashboardUsageConfig(imported.cursorDashboardUsage),
     apiConnection: {},
     syncStatus: {},
     workdirAliases: imported.workdirAliases || {},
     providerRoots: imported.providerRoots || {},
     providerEnabled: {
-      claude_code_local: true,
-      codex_local: true,
       ...(imported.providerEnabled || {})
     },
+    providerIgnoredAutoSources: imported.providerIgnoredAutoSources || {},
     importedAt: new Date().toISOString()
   };
   saveConfig(config);
@@ -211,10 +203,10 @@ export function setWorkdirAlias(workdirHash, alias, current = loadConfig()) {
 export function updateConfig(input = {}, current = loadConfig(), { persist = true } = {}) {
   if (!current) return initConfig(input);
   const refreshIntervalMinutes = Number(input.refreshIntervalMinutes ?? current.refreshIntervalMinutes ?? 15);
-  const cursorDashboardUsage = {
+  const cursorDashboardUsage = normalizeCursorDashboardUsageConfig({
     ...(current.cursorDashboardUsage || {}),
     ...(input.cursorDashboardUsage || {})
-  };
+  });
   if (input.cursorDashboardUsage && !Object.hasOwn(input.cursorDashboardUsage, "workosSessionToken")) {
     cursorDashboardUsage.workosSessionToken = current.cursorDashboardUsage?.workosSessionToken || "";
   }
@@ -234,11 +226,10 @@ export function updateConfig(input = {}, current = loadConfig(), { persist = tru
     launchAtLogin: input.launchAtLogin ?? current.launchAtLogin ?? false,
     desktopAutoInitialized: input.desktopAutoInitialized ?? current.desktopAutoInitialized ?? false,
     providerEnabled: {
-      claude_code_local: true,
-      codex_local: true,
       ...(current.providerEnabled || {}),
       ...(input.providerEnabled || {})
     },
+    providerIgnoredAutoSources: input.providerIgnoredAutoSources ?? current.providerIgnoredAutoSources ?? {},
     refreshIntervalMinutes: Number.isFinite(refreshIntervalMinutes)
       ? Math.max(1, Math.round(refreshIntervalMinutes))
       : 15,
@@ -253,6 +244,19 @@ export function updateConfig(input = {}, current = loadConfig(), { persist = tru
   };
   if (persist) saveConfig(config);
   return config;
+}
+
+export function migrateLegacyCursorProviderEnabled(current = loadConfig(), { persist = true } = {}) {
+  if (!current) return current;
+  const hasLegacyEnabled = Object.hasOwn(current.cursorDashboardUsage || {}, "enabled");
+  const hasProviderEnabled = Object.hasOwn(current.providerEnabled || {}, "cursor_dashboard_usage");
+  if (!hasLegacyEnabled && hasProviderEnabled) return current;
+  // FIXME: remove this compatibility migration after all active clients have
+  // upgraded past the cursorDashboardUsage.enabled config shape.
+  const input = hasProviderEnabled
+    ? {}
+    : { providerEnabled: { cursor_dashboard_usage: current.cursorDashboardUsage?.enabled === true } };
+  return updateConfig(input, current, { persist });
 }
 
 export function addCursorToken(rawInput, current = loadConfig(), { persist = true } = {}) {
@@ -270,12 +274,15 @@ export function addCursorToken(rawInput, current = loadConfig(), { persist = tru
   }
   const config = {
     ...current,
-    cursorDashboardUsage: {
+    providerEnabled: {
+      ...(current.providerEnabled || {}),
+      cursor_dashboard_usage: true
+    },
+    cursorDashboardUsage: normalizeCursorDashboardUsageConfig({
       ...(current.cursorDashboardUsage || {}),
-      enabled: true,
       workosSessionToken: "",
       workosSessionTokens: [...byToken.values()]
-    },
+    }),
     updatedAt: new Date().toISOString()
   };
   if (persist) saveConfig(config);
@@ -291,14 +298,56 @@ export function removeCursorToken(tokenValue, current = loadConfig()) {
     : tokens.filter(t => t.token !== tokenValue);
   const config = {
     ...current,
-    cursorDashboardUsage: {
+    cursorDashboardUsage: normalizeCursorDashboardUsageConfig({
       ...(current.cursorDashboardUsage || {}),
       workosSessionTokens: nextTokens
-    },
+    }),
     updatedAt: new Date().toISOString()
   };
   saveConfig(config);
   return config;
+}
+
+export function ignoreAutoSource(providerId, sourceId, current = loadConfig()) {
+  if (!current) throw new Error("Initialize identity first");
+  const ignored = { ...(current.providerIgnoredAutoSources || {}) };
+  const list = ignored[providerId] || [];
+  if (!list.includes(sourceId)) list.push(sourceId);
+  ignored[providerId] = list;
+  const config = {
+    ...current,
+    providerIgnoredAutoSources: ignored,
+    updatedAt: new Date().toISOString()
+  };
+  saveConfig(config);
+  return config;
+}
+
+export function unignoreAutoSource(providerId, sourceId, current = loadConfig()) {
+  if (!current) throw new Error("Initialize identity first");
+  const ignored = { ...(current.providerIgnoredAutoSources || {}) };
+  const list = (ignored[providerId] || []).filter(id => id !== sourceId);
+  if (list.length) {
+    ignored[providerId] = list;
+  } else {
+    delete ignored[providerId];
+  }
+  const config = {
+    ...current,
+    providerIgnoredAutoSources: ignored,
+    updatedAt: new Date().toISOString()
+  };
+  saveConfig(config);
+  return config;
+}
+
+function normalizeCursorDashboardUsageConfig(cursorDashboardUsage = {}) {
+  const { enabled, ...rest } = cursorDashboardUsage || {};
+  return {
+    workosSessionToken: "",
+    workosSessionTokens: [],
+    ...rest
+  };
 }
 
 function normalizeCursorTokenRecords(cursorDashboardUsage = {}) {

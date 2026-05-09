@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("tokenLeague", {
   removeProviderRoot: (providerId, rootPath) => ipcRenderer.invoke("config:remove-provider-root", providerId, rootPath),
   addCursorToken: (rawInput) => ipcRenderer.invoke("cursor:add-token", rawInput),
   removeCursorToken: (tokenValue) => ipcRenderer.invoke("cursor:remove-token", tokenValue),
+  ignoreAutoSource: (providerId, sourceId) => ipcRenderer.invoke("config:ignore-auto-source", providerId, sourceId),
+  unignoreAutoSource: (providerId, sourceId) => ipcRenderer.invoke("config:unignore-auto-source", providerId, sourceId),
   setWorkdirAlias: (workdirHash, alias) => ipcRenderer.invoke("workdirs:set-alias", { workdirHash, alias }),
   providerHealth: () => ipcRenderer.invoke("providers:health"),
   modelPrices: () => ipcRenderer.invoke("pricing:model-prices"),

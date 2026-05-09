@@ -10,10 +10,20 @@ export const codexLocalProvider = {
 
   roots(config = {}) {
     if (config.providerRootsOnly && config.providerRoots?.codex_local) return normalizeCustomRoots(config.providerRoots.codex_local);
+    const auto = autoRoots(config);
+    const customRoots = normalizeCustomRoots(config.providerRoots?.codex_local);
+    return [...new Set([...auto, ...customRoots])];
+  },
+
+  autoRoots(config = {}) {
+    if (config.providerRootsOnly) return [];
     const realRoots = [process.env.CODEX_HOME, path.join(os.homedir(), ".codex")].filter(Boolean);
     const existingRealRoots = realRoots.filter((root) => fs.existsSync(root));
-    const customRoots = normalizeCustomRoots(config.providerRoots?.codex_local);
-    return [...new Set([...(existingRealRoots.length ? existingRealRoots : [path.resolve("samples/codex")]), ...customRoots])];
+    return existingRealRoots.length ? existingRealRoots : [path.resolve("samples/codex")];
+  },
+
+  manualRoots(config = {}) {
+    return normalizeCustomRoots(config.providerRoots?.codex_local);
   },
 
   detect(config) {
@@ -23,7 +33,10 @@ export const codexLocalProvider = {
 
   scanSessions(config) {
     if (config.providerEnabled?.codex_local === false) return [];
-    return this.roots(config).flatMap((root) => walkFiles(root, (file) => file.endsWith(".jsonl")));
+    const ignored = config.providerIgnoredAutoSources?.codex_local || [];
+    const auto = this.autoRoots(config).filter(r => !ignored.includes(r));
+    const manual = this.manualRoots(config);
+    return [...auto, ...manual].flatMap((root) => walkFiles(root, (file) => file.endsWith(".jsonl")));
   },
 
   async parseUsage(file) {
@@ -74,13 +87,21 @@ export const codexLocalProvider = {
   },
 
   reportHealth(config) {
-    const detection = this.detect(config);
+    const auto = this.autoRoots(config);
+    const manual = this.manualRoots(config);
+    const ignored = config.providerIgnoredAutoSources?.codex_local || [];
+    const allRoots = [...auto, ...manual];
+    const sources = [
+      ...auto.map(r => ({ kind: "auto", id: r, label: shortenPath(r), path: r, ignored: ignored.includes(r) })),
+      ...manual.map(r => ({ kind: "manual", id: r, label: shortenPath(r), path: r, ignored: false }))
+    ];
     return {
       providerId: this.id,
       toolCode: this.toolCode,
-      detected: detection.detected,
+      detected: allRoots.length > 0,
       enabled: config.providerEnabled?.codex_local !== false,
-      roots: detection.roots,
+      roots: allRoots,
+      sources,
       lastCheckedAt: new Date().toISOString()
     };
   }
@@ -95,6 +116,11 @@ function normalizeCodexModel(model) {
 function normalizeCustomRoots(value) {
   if (!value) return [];
   return Array.isArray(value) ? value : [value];
+}
+
+function shortenPath(p) {
+  const home = os.homedir();
+  return p.startsWith(home) ? "~" + p.slice(home.length) : p;
 }
 
 function extractUsage(row) {

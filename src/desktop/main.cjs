@@ -542,6 +542,24 @@ ipcMain.handle("cursor:remove-token", async (_event, tokenValue) => {
   return sanitizeConfig(next);
 });
 
+ipcMain.handle("config:ignore-auto-source", async (_event, providerId, sourceId) => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  if (!current) throw new Error("Open Settings first");
+  const next = config.ignoreAutoSource(providerId, sourceId, current);
+  invalidateUsageCache();
+  return sanitizeConfig(next);
+});
+
+ipcMain.handle("config:unignore-auto-source", async (_event, providerId, sourceId) => {
+  const { config } = await modules();
+  const current = config.loadConfig();
+  if (!current) throw new Error("Open Settings first");
+  const next = config.unignoreAutoSource(providerId, sourceId, current);
+  invalidateUsageCache();
+  return sanitizeConfig(next);
+});
+
 ipcMain.handle("background:status", async () => {
   const { config } = await modules();
   const current = config.loadConfig();
@@ -1474,7 +1492,7 @@ function diagnosticsConfig(config = {}) {
     ])),
     workdirAliasCount: Object.keys(config.workdirAliases || {}).length,
     cursorDashboardUsage: {
-      enabled: config.cursorDashboardUsage?.enabled ?? false,
+      enabled: config.providerEnabled?.cursor_dashboard_usage === true,
       tokenCount: cursorTokens.length + (config.cursorDashboardUsage?.workosSessionToken ? 1 : 0),
       accounts: cursorTokens.map((item) => item.accountName || "").filter(Boolean)
     },
@@ -1548,10 +1566,10 @@ function configLogSummary(config = {}) {
     deviceId: config.deviceId || "",
     apiConfigured: hasApiBaseUrl(config),
 	    autoRefreshEnabled: config.autoRefreshEnabled ?? false,
-	    silentUpdateMode: silentUpdateMode(config),
-	    refreshIntervalMinutes: config.refreshIntervalMinutes || 15,
+    silentUpdateMode: silentUpdateMode(config),
+    refreshIntervalMinutes: config.refreshIntervalMinutes || 15,
     providerEnabled: config.providerEnabled || {},
-    cursorEnabled: config.cursorDashboardUsage?.enabled ?? false,
+    cursorEnabled: config.providerEnabled?.cursor_dashboard_usage === true,
     cursorTokenCount: config.cursorDashboardUsage?.workosSessionTokens?.length || 0
   };
 }
@@ -1592,8 +1610,9 @@ function snapshotFingerprint(items = []) {
 }
 
 async function ensureDesktopConfig(configModule, presetModule = null) {
-  const current = configModule.loadConfig();
+  let current = configModule.loadConfig();
   if (current) {
+    current = configModule.migrateLegacyCursorProviderEnabled(current);
     if (!Object.hasOwn(current, "desktopAutoInitialized") && isUnconfirmedDesktopProfile(current)) {
       const next = configModule.updateConfig({ desktopAutoInitialized: true }, current);
       return next;

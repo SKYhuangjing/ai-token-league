@@ -130,11 +130,11 @@ document.addEventListener("click", async (e) => {
   const rootPath = btn.dataset.removeRoot;
   const providerId = btn.dataset.providerId;
   if (!rootPath || !providerId) return;
-  if (!confirm(`Remove "${rootPath}"?`)) return;
+  if (!confirm(t("desktop.sources.removeConfirm"))) return;
   try {
     latestConfig = await api.removeProviderRoot(providerId, rootPath);
     renderConfig(latestConfig);
-    setSaveMessage(`Removed ${rootPath}`, "ok");
+    setSaveMessage(t("desktop.sources.sourceRemoved"), "ok");
     await loadHealth();
   } catch (err) {
     setSaveMessage(err.message || "Failed to remove", "error");
@@ -146,15 +146,48 @@ document.addEventListener("click", async (e) => {
   if (!btn) return;
   const tokenValue = btn.dataset.removeCursorToken;
   if (!tokenValue) return;
-  if (!confirm(`Remove this Cursor token?`)) return;
+  if (!confirm(t("desktop.sources.removeConfirm"))) return;
   try {
     latestConfig = await api.removeCursorToken(tokenValue);
     renderConfig(latestConfig);
-    setSaveMessage("Cursor token removed", "ok");
+    setSaveMessage(t("desktop.sources.sourceRemoved"), "ok");
     await loadHealth();
     await loadToday(true);
   } catch (err) {
     setSaveMessage(err.message || "Failed to remove", "error");
+  }
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-ignore-source]");
+  if (!btn) return;
+  const sourceId = btn.dataset.ignoreSource;
+  const providerId = btn.dataset.providerId;
+  if (!sourceId || !providerId) return;
+  if (!confirm(t("desktop.sources.ignoreConfirm"))) return;
+  try {
+    latestConfig = await api.ignoreAutoSource(providerId, sourceId);
+    renderConfig(latestConfig);
+    setSaveMessage(t("desktop.sources.sourceIgnored"), "ok");
+    await loadHealth();
+  } catch (err) {
+    setSaveMessage(err.message || "Failed to ignore", "error");
+  }
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-unignore-source]");
+  if (!btn) return;
+  const sourceId = btn.dataset.unignoreSource;
+  const providerId = btn.dataset.providerId;
+  if (!sourceId || !providerId) return;
+  try {
+    latestConfig = await api.unignoreAutoSource(providerId, sourceId);
+    renderConfig(latestConfig);
+    setSaveMessage(t("desktop.sources.sourceRestored"), "ok");
+    await loadHealth();
+  } catch (err) {
+    setSaveMessage(err.message || "Failed to restore", "error");
   }
 });
 
@@ -193,10 +226,7 @@ function settingsPayload() {
     refreshIntervalMinutes: $("#refreshIntervalMinutes").value || 15,
     launchAtLogin: $("#launchAtLogin").checked,
     desktopAutoInitialized: false,
-    providerEnabled: latestConfig?.providerEnabled || {},
-    cursorDashboardUsage: {
-      enabled: latestConfig?.cursorDashboardUsage?.enabled ?? false
-    }
+    providerEnabled: latestConfig?.providerEnabled || {}
   };
 }
 
@@ -324,8 +354,7 @@ async function skipWizard() {
   latestConfig = await api.updateConfig({
     nickname: latestConfig?.nickname || "anonymous",
     desktopAutoInitialized: false,
-    providerEnabled: enabledSources,
-    cursorDashboardUsage: { enabled: latestConfig?.cursorDashboardUsage?.enabled === true }
+    providerEnabled: enabledSources
   });
   renderConfig(latestConfig);
   await loadToday(true);
@@ -337,20 +366,17 @@ async function finishWizard() {
   const nickname = $("#wizard-nickname").value.trim() || "anonymous";
   const apiBaseUrl = $("#wizard-api-base-url").value.trim();
   const providerEnabled = {};
-  let cursorEnabled = false;
   document.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
     const pid = button.dataset.wizardToggleSource;
     const on = button.getAttribute("aria-pressed") === "true";
-    if (pid === "cursor_dashboard_usage") cursorEnabled = on;
-    else providerEnabled[pid] = on;
+    providerEnabled[pid] = on;
   });
   $("#nickname").value = nickname;
   latestConfig = await api.updateConfig({
     nickname,
     apiBaseUrl,
     desktopAutoInitialized: false,
-    providerEnabled,
-    cursorDashboardUsage: { enabled: cursorEnabled }
+    providerEnabled
   });
   renderConfig(latestConfig);
   await loadToday(true);
@@ -755,7 +781,7 @@ function renderCursorTokenSummary(cursorConfig = {}) {
   if (tokens.length) {
     html += `<ul class="root-list">${tokens.map((item, idx) => {
       const name = escapeHtml(item.accountName || "Cursor");
-      return `<li><span class="root-path">${name}</span><button class="root-remove" type="button" data-remove-cursor-token="${idx}" title="Remove">×</button></li>`;
+      return `<li><span class="root-path">${name}</span><button class="source-action-btn delete" type="button" data-remove-cursor-token="${idx}" title="${t("desktop.sources.removeTitle")}">${t("desktop.sources.deleteBtn")}</button></li>`;
     }).join("")}</ul>`;
   }
   $("#cursor-token-summary").innerHTML = html;
@@ -913,17 +939,18 @@ function renderHealth() {
   const html = latestHealth
     .map((item) => {
       const enabled = sourceEnabled(item);
-      const forcedOn = item.providerId === "claude_code_local" || item.providerId === "codex_local";
-      const disabledAttr = forcedOn ? " disabled" : "";
-      const titleAttr = forcedOn ? ` title="${t("desktop.sources.alwaysEnabled")}"` : "";
+      const sources = item.sources || [];
+      const autoSources = sources.filter(s => s.kind === "auto" && !s.ignored);
+      const manualSources = sources.filter(s => s.kind === "manual");
+      const ignoredSources = sources.filter(s => s.ignored);
       return `<article class="source-card${enabled ? "" : " source-disabled"}">
       <div>
         <strong>${sourceName(item.providerId)}</strong>
         <small>${sourceSummary(item)}</small>
         <p>${sourceDescription(item.providerId)}</p>
-        ${renderRoots(item.roots, item.providerId)}
+        ${renderSourceList(autoSources, manualSources, ignoredSources, item.providerId)}
       </div>
-      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}" data-source-state="${enabled ? "enabled" : "disabled"}"${disabledAttr}${titleAttr}>${enabled ? t("status.on") : t("status.off")}</button>
+      <button class="source-toggle ${enabled ? "ok" : "miss"}" type="button" data-toggle-source="${escapeHtml(item.providerId)}" aria-pressed="${enabled ? "true" : "false"}" data-source-state="${enabled ? "enabled" : "disabled"}">${enabled ? t("status.on") : t("status.off")}</button>
     </article>`;
     })
     .join("");
@@ -931,7 +958,6 @@ function renderHealth() {
 }
 
 async function toggleSource(providerId) {
-  if (providerId === "claude_code_local" || providerId === "codex_local") return;
   const current = latestConfig || await api.getConfig();
   if (!current) throw new Error(t("desktop.renderer.openSettingsFirst"));
   const nextEnabled = !sourceEnabledForConfig(current, providerId);
@@ -957,25 +983,15 @@ async function toggleSource(providerId) {
 }
 
 function sourceEnabled(item) {
-  if (item.providerId === "cursor_dashboard_usage") return item.enabled === true;
   return item.enabled !== false;
 }
 
 function sourceEnabledForConfig(config, providerId) {
-  if (providerId === "cursor_dashboard_usage") {
-    return config.cursorDashboardUsage?.enabled === true || config.providerEnabled?.cursor_dashboard_usage === true;
-  }
+  if (providerId === "cursor_dashboard_usage") return config.providerEnabled?.cursor_dashboard_usage === true;
   return config.providerEnabled?.[providerId] !== false;
 }
 
 function sourceTogglePayload(providerId, enabled, config) {
-  if (providerId === "cursor_dashboard_usage") {
-    return {
-      cursorDashboardUsage: {
-        enabled
-      }
-    };
-  }
   return {
     providerEnabled: {
       ...(config.providerEnabled || {}),
@@ -985,29 +1001,26 @@ function sourceTogglePayload(providerId, enabled, config) {
 }
 
 function applySourceEnabled(config, providerId, enabled) {
-  if (providerId === "cursor_dashboard_usage") {
-    return {
-      ...config,
-      cursorDashboardUsage: {
-        ...(config.cursorDashboardUsage || {}),
-        enabled
-      }
-    };
-  }
   return {
     ...config,
-    ...sourceTogglePayload(providerId, enabled, config)
+    providerEnabled: {
+      ...(config.providerEnabled || {}),
+      [providerId]: enabled
+    }
   };
 }
 
 function sourceSummary(item) {
-  const count = (item.roots || []).length;
+  const sources = item.sources || [];
+  const autoCount = sources.filter(s => s.kind === "auto" && !s.ignored).length;
+  const manualCount = sources.filter(s => s.kind === "manual").length;
+  const totalCount = autoCount + manualCount;
   if (item.providerId === "cursor_dashboard_usage") {
-    if (!count) return "No Cursor account detected";
-    return `${count} account source${count === 1 ? "" : "s"}`;
+    if (!totalCount) return t("desktop.sources.noCursorAccountDetected");
+    return totalCount === 1 ? t("desktop.sources.accountSourceOne") : t("desktop.sources.accountSources", { count: totalCount });
   }
-  if (!item.detected) return "Not found";
-  return `${count} location${count === 1 ? "" : "s"}`;
+  if (!item.detected) return t("desktop.renderer.notFound");
+  return totalCount === 1 ? t("desktop.sources.locationOne") : t("desktop.sources.locations", { count: totalCount });
 }
 
 function sourceDescription(providerId) {
@@ -1051,9 +1064,33 @@ function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   $("#system-silent-update").textContent = t("desktop.renderer.silentUpdate", { parts: parts.join(" · ") });
 }
 
-function renderRoots(roots = [], providerId = "") {
-  if (!roots.length) return "";
-  return `<ul class="root-list">${roots.map((root) => `<li><span class="root-path">${escapeHtml(root)}</span><button class="root-remove" type="button" data-remove-root="${escapeHtml(root)}" data-provider-id="${escapeHtml(providerId)}" title="Remove">×</button></li>`).join("")}</ul>`;
+function renderSourceList(autoSources, manualSources, ignoredSources, providerId) {
+  const allVisible = [...manualSources, ...autoSources];
+  if (!allVisible.length && !ignoredSources.length) return "";
+  let html = '<ul class="root-list">';
+  for (const source of manualSources) {
+    const label = escapeHtml(source.label);
+    const id = escapeHtml(source.id);
+    if (providerId === "cursor_dashboard_usage" && source.tokenIndex !== undefined) {
+      html += `<li><span class="source-kind-badge manual">${t("desktop.sources.kindManual")}</span><span class="root-path" title="${label}">${label}</span><button class="source-action-btn delete" type="button" data-remove-cursor-token="${source.tokenIndex}" title="${t("desktop.sources.removeTitle")}">${t("desktop.sources.deleteBtn")}</button></li>`;
+    } else {
+      html += `<li><span class="source-kind-badge manual">${t("desktop.sources.kindManual")}</span><span class="root-path" title="${label}">${label}</span><button class="source-action-btn delete" type="button" data-remove-root="${id}" data-provider-id="${escapeHtml(providerId)}" title="${t("desktop.sources.removeTitle")}">${t("desktop.sources.deleteBtn")}</button></li>`;
+    }
+  }
+  for (const source of autoSources) {
+    const label = escapeHtml(source.label);
+    const id = escapeHtml(source.id);
+    html += `<li><span class="source-kind-badge auto">${t("desktop.sources.kindAuto")}</span><span class="root-path" title="${label}">${label}</span><button class="source-action-btn ignore" type="button" data-ignore-source="${id}" data-provider-id="${escapeHtml(providerId)}" title="${t("desktop.sources.ignoreTitle")}">${t("desktop.sources.ignore")}</button></li>`;
+  }
+  if (ignoredSources.length) {
+    html += `<li class="ignored-section"><span class="source-kind-badge ignored">${t("desktop.sources.kindIgnored")} (${ignoredSources.length})</span>`;
+    for (const source of ignoredSources) {
+      html += `<button class="source-action-btn unignore" type="button" data-unignore-source="${escapeHtml(source.id)}" data-provider-id="${escapeHtml(providerId)}">${source.label ? escapeHtml(source.label) : t("desktop.sources.unignore")}</button>`;
+    }
+    html += '</li>';
+  }
+  html += '</ul>';
+  return html;
 }
 
 function groupBy(items, key) {
