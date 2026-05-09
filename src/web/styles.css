@@ -87,7 +87,7 @@ body {
   font-size: 17px;
 }
 
-.admin-masthead .lang-switcher-container {
+.admin-masthead .masthead-nav {
   grid-column: 2;
   justify-self: end;
   align-self: start;
@@ -1572,7 +1572,7 @@ h3 {
     font-size: 48px;
   }
 
-  .admin-masthead .lang-switcher-container {
+  .admin-masthead .masthead-nav {
     grid-column: auto;
     justify-self: start;
   }
@@ -1634,6 +1634,34 @@ h3 {
     padding-inline: 8px;
   }
 
+}
+
+/* Masthead nav (home/admin link + lang switcher) */
+.masthead-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.masthead-side .masthead-nav {
+  justify-content: flex-end;
+}
+
+.nav-link {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 6px 12px;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  background: var(--paper);
+  transition: background 0.15s;
+}
+
+.nav-link:hover {
+  background: rgba(22, 21, 18, 0.06);
 }
 
 /* Language Switcher */
