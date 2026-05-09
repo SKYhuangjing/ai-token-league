@@ -839,6 +839,47 @@ td {
   font-weight: 800;
 }
 
+.public-table th:first-child,
+.public-table td:first-child {
+  min-width: 120px;
+}
+
+.anonymous-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--paper);
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+.anonymous-name {
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px dotted var(--line);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.alias-mark {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 4px;
+  font-weight: 400;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: lowercase;
+}
+
+.detail-identity-note {
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+  margin: 2px 0 0;
+}
+
 .tokens {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 800;

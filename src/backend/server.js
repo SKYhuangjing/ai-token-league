@@ -228,6 +228,8 @@ async function handleApi(req, res) {
     ensureAnonymizerFresh();
     return sendJson(res, 200, {
       period: period || range,
+      identityMode: BOARD_SECURITY_LEVEL,
+      identityLabel: BOARD_SECURITY_LEVEL === "anonymous" ? "anonymousDisplayName" : "nickname",
       items: store.publicLeaderboard({
         period,
         range,

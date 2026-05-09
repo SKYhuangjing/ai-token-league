@@ -11,6 +11,7 @@ const currentLang = initI18n();
 
 const state = {
   period: "today",
+  identityMode: "public",
   detailParticipantId: "",
   detailTab: "period",
   historyView: "daily",
@@ -74,8 +75,20 @@ async function loadLeaderboard() {
   if (state.showCost) params.set("includeCost", "1");
   const response = await fetch(`/api/board/leaderboard?${params.toString()}`);
   const data = await response.json();
+  if (data.identityMode) {
+    state.identityMode = data.identityMode;
+    applyIdentityMode(data.identityMode);
+  }
   render(data.items || []);
   statusEl.textContent = t("web.leaderboard.participantCount", { count: data.items.length, plural: data.items.length === 1 ? "" : "s" });
+}
+
+function applyIdentityMode(mode) {
+  const banner = document.querySelector("#anonymous-banner");
+  banner.hidden = mode !== "anonymous";
+  const colName = document.querySelector("#col-name");
+  colName.setAttribute("data-i18n", mode === "anonymous" ? "web.leaderboard.colAlias" : "web.leaderboard.colNickname");
+  colName.textContent = t(colName.getAttribute("data-i18n"));
 }
 
 function render(items) {
@@ -83,13 +96,14 @@ function render(items) {
     tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 4 : 3}">${t("web.leaderboard.noUsage")}</td></tr>`;
     return;
   }
+  const isAnon = state.identityMode === "anonymous";
   tbody.innerHTML = items
     .map(
       (item) => `<tr>
         <td>
           <span class="rank">#${item.rank}</span>
-          <button class="link-button participant-link" data-display-id="${escapeHtml(item.displayId)}">
-            ${escapeHtml(item.displayName)}
+          <button class="link-button participant-link${isAnon ? " anonymous-name" : ""}" data-display-id="${escapeHtml(item.displayId)}">
+            ${escapeHtml(item.displayName)}${isAnon ? ` <span class="alias-mark">${t("web.leaderboard.aliasMark")}</span>` : ""}
           </button>
         </td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
@@ -121,6 +135,9 @@ async function loadDetail(participantId) {
   const response = await fetch(`/api/board/participants/${encodeURIComponent(participantId)}?${params.toString()}`);
   const detail = await response.json();
   document.querySelector("#detail-title").textContent = `${detail.displayName} · ${periodLabel(state.period)}`;
+  const identityNote = document.querySelector("#detail-identity-note");
+  identityNote.hidden = state.identityMode !== "anonymous";
+  identityNote.textContent = state.identityMode === "anonymous" ? t("web.leaderboard.aliasRotatesDaily") : "";
   document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${t("web.detail.periodDetailLabel")}`;
   renderDetail(detail);
 }

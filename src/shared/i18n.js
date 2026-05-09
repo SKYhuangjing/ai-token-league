@@ -45,7 +45,12 @@ const translations = {
     "web.leaderboard.models": "模型",
     "web.leaderboard.noUsage": "暂无使用数据上传",
     "web.leaderboard.participantCount": "{count} 位参与者",
-    "web.leaderboard.anonymousBadge": "匿名榜",
+    "web.leaderboard.anonymousTitle": "匿名公开榜",
+    "web.leaderboard.anonymousDesc": "名称为系统生成的匿名展示名，真实昵称不会公开。",
+    "web.leaderboard.colNickname": "昵称",
+    "web.leaderboard.colAlias": "匿名名",
+    "web.leaderboard.aliasMark": "匿名",
+    "web.leaderboard.aliasRotatesDaily": "匿名展示名 · 今日有效",
 
     // Web 端 - 详情面板
     "web.detail.title": "参与者详情",
@@ -657,7 +662,12 @@ const translations = {
     "web.leaderboard.models": "Models",
     "web.leaderboard.noUsage": "No usage uploaded yet",
     "web.leaderboard.participantCount": "{count} ranked participant{plural}",
-    "web.leaderboard.anonymousBadge": "Anonymous",
+    "web.leaderboard.anonymousTitle": "Anonymous public board",
+    "web.leaderboard.anonymousDesc": "Names are generated aliases. Real nicknames are not shown.",
+    "web.leaderboard.colNickname": "Nickname",
+    "web.leaderboard.colAlias": "Alias",
+    "web.leaderboard.aliasMark": "Alias",
+    "web.leaderboard.aliasRotatesDaily": "Generated alias · rotates daily",
 
     // Web - Detail Panel
     "web.detail.title": "Participant detail",

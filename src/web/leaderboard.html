@@ -43,13 +43,17 @@
       <section class="board">
         <div class="board-header">
           <h2 data-i18n="web.leaderboard.title">Community Leaderboard</h2>
+          <div id="anonymous-banner" class="anonymous-banner" hidden>
+            <strong data-i18n="web.leaderboard.anonymousTitle">Anonymous public board</strong>
+            <span data-i18n="web.leaderboard.anonymousDesc">Names are generated aliases. Real nicknames are not shown.</span>
+          </div>
           <p id="status" data-i18n="loading">Loading...</p>
         </div>
         <div class="table-wrap">
           <table class="public-table">
             <thead>
               <tr>
-                <th data-i18n="web.leaderboard.username">Username</th>
+                <th id="col-name" data-i18n="web.leaderboard.colNickname">Nickname</th>
                 <th data-i18n="web.leaderboard.totalTokens">Total tokens</th>
                 <th class="cost-col" hidden data-i18n="web.leaderboard.estCost">Est. cost</th>
                 <th data-i18n="web.leaderboard.models">Models</th>
@@ -64,6 +68,7 @@
         <div class="board-header">
           <div>
             <h2 id="detail-title" data-i18n="web.detail.title">Participant detail</h2>
+            <p id="detail-identity-note" class="detail-identity-note" hidden></p>
             <p id="detail-status" data-i18n="web.detail.selectUser">Select a user from the leaderboard.</p>
           </div>
           <div class="detail-controls">
