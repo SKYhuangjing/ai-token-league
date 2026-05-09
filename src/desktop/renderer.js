@@ -915,7 +915,7 @@ function renderHealth() {
       const enabled = sourceEnabled(item);
       const forcedOn = item.providerId === "claude_code_local" || item.providerId === "codex_local";
       const disabledAttr = forcedOn ? " disabled" : "";
-      const titleAttr = forcedOn ? ' title="Always enabled"' : "";
+      const titleAttr = forcedOn ? ` title="${t("desktop.sources.alwaysEnabled")}"` : "";
       return `<article class="source-card${enabled ? "" : " source-disabled"}">
       <div>
         <strong>${sourceName(item.providerId)}</strong>
