@@ -12,7 +12,14 @@
       <section class="masthead landing-masthead">
         <div class="masthead-copy">
           <h1 data-i18n="app.name">AI Token League</h1>
-          <p class="summary" data-i18n="app.tagline">AI coding token usage leaderboard</p>
+          <div class="masthead-tagline-row">
+            <p class="summary" data-i18n="app.tagline">AI coding token usage leaderboard</p>
+            <span class="landing-participant-badge" id="landing-participant-badge">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg>
+              <span class="lpb-count" id="preview-participants">--</span>
+              <span class="lpb-label" data-i18n="web.landing.participants">Participants</span>
+            </span>
+          </div>
         </div>
         <div class="masthead-side">
           <div class="lang-switcher-container" id="lang-switcher-container"></div>
@@ -21,34 +28,35 @@
 
       <section class="preview-section" id="preview-section">
         <div class="preview-grid" id="board-preview">
-          <div class="preview-metric type-people">
-            <svg class="preview-metric-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg>
-            <span class="preview-value" id="preview-participants">--</span>
-            <span class="preview-label" data-i18n="web.landing.participants">Participants</span>
-          </div>
           <div class="preview-metric period-today">
-            <svg class="preview-metric-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4zM18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z"/></svg>
             <span class="preview-value" id="preview-today-tokens">--</span>
             <span class="preview-cost" id="preview-today-cost">--</span>
-            <span class="preview-label" data-i18n="web.landing.todayTokens">Today's tokens</span>
+            <span class="preview-label" data-i18n="web.period.today">Today</span>
+          </div>
+          <div class="preview-metric period-yesterday">
+            <span class="preview-value" id="preview-yesterday-tokens">--</span>
+            <span class="preview-cost" id="preview-yesterday-cost">--</span>
+            <span class="preview-label" data-i18n="web.period.yesterday">Yesterday</span>
           </div>
           <div class="preview-metric period-week">
-            <svg class="preview-metric-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4zM18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z"/></svg>
             <span class="preview-value" id="preview-week-tokens">--</span>
             <span class="preview-cost" id="preview-week-cost">--</span>
-            <span class="preview-label" data-i18n="web.landing.weekTokens">This week's tokens</span>
+            <span class="preview-label" data-i18n="web.period.thisWeek">This week</span>
+          </div>
+          <div class="preview-metric period-last-week">
+            <span class="preview-value" id="preview-last-week-tokens">--</span>
+            <span class="preview-cost" id="preview-last-week-cost">--</span>
+            <span class="preview-label" data-i18n="web.period.lastWeek">Last week</span>
           </div>
           <div class="preview-metric period-month">
-            <svg class="preview-metric-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4zM18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z"/></svg>
             <span class="preview-value" id="preview-month-tokens">--</span>
             <span class="preview-cost" id="preview-month-cost">--</span>
-            <span class="preview-label" data-i18n="web.landing.monthTokens">This month's tokens</span>
+            <span class="preview-label" data-i18n="web.period.thisMonth">This month</span>
           </div>
           <div class="preview-metric period-last-month">
-            <svg class="preview-metric-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4zM18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z"/></svg>
             <span class="preview-value" id="preview-last-month-tokens">--</span>
             <span class="preview-cost" id="preview-last-month-cost">--</span>
-            <span class="preview-label" data-i18n="web.landing.lastMonthTokens">Last month's tokens</span>
+            <span class="preview-label" data-i18n="web.period.lastMonth">Last month</span>
           </div>
         </div>
         <a href="/leaderboard.html" class="board-link" data-i18n="web.landing.viewLeaderboard">View community leaderboard</a>

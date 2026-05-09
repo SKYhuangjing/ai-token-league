@@ -311,7 +311,9 @@ export class Store {
 
   computeBoardSummary() {
     const todayItems = this.publicLeaderboard({ range: "today", includeCost: true });
+    const yesterdayItems = this.publicLeaderboard({ range: "yesterday", includeCost: true });
     const weekItems = this.publicLeaderboard({ range: "this_week", includeCost: true });
+    const lastWeekItems = this.publicLeaderboard({ range: "last_week", includeCost: true });
     const monthItems = this.publicLeaderboard({ range: "this_month", includeCost: true });
     const lastMonthItems = this.publicLeaderboard({ range: "last_month", includeCost: true });
     const sumTokens = (items) => items.reduce((s, i) => s + i.totalTokens, 0);
@@ -319,11 +321,15 @@ export class Store {
     return {
       participantCount: Object.keys(this.db.participants).length,
       todayTokens: sumTokens(todayItems),
+      yesterdayTokens: sumTokens(yesterdayItems),
       weekTokens: sumTokens(weekItems),
+      lastWeekTokens: sumTokens(lastWeekItems),
       thisMonthTokens: sumTokens(monthItems),
       lastMonthTokens: sumTokens(lastMonthItems),
       todayCost: sumCost(todayItems),
+      yesterdayCost: sumCost(yesterdayItems),
       weekCost: sumCost(weekItems),
+      lastWeekCost: sumCost(lastWeekItems),
       thisMonthCost: sumCost(monthItems),
       lastMonthCost: sumCost(lastMonthItems)
     };

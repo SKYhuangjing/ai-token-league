@@ -119,7 +119,9 @@ function renderPreview(data) {
   if (participantsEl) participantsEl.textContent = data.participantCount ?? "--";
 
   setTokens("preview-today-tokens", "preview-today-cost", data.todayTokens, data.todayCost);
+  setTokens("preview-yesterday-tokens", "preview-yesterday-cost", data.yesterdayTokens, data.yesterdayCost);
   setTokens("preview-week-tokens", "preview-week-cost", data.weekTokens, data.weekCost);
+  setTokens("preview-last-week-tokens", "preview-last-week-cost", data.lastWeekTokens, data.lastWeekCost);
   setTokens("preview-month-tokens", "preview-month-cost", data.thisMonthTokens, data.thisMonthCost);
   setTokens("preview-last-month-tokens", "preview-last-month-cost", data.lastMonthTokens, data.lastMonthCost);
 }

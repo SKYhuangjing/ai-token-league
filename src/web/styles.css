@@ -225,6 +225,48 @@ h1 {
   padding: 14px 0 18px;
 }
 
+.masthead-tagline-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.landing-participant-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  background: #fffaf0;
+  padding: 6px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+  box-shadow: 3px 3px 0 var(--ink);
+}
+
+.landing-participant-badge svg {
+  width: 16px;
+  height: 16px;
+  color: #3b82f6;
+  flex-shrink: 0;
+}
+
+.landing-participant-badge .lpb-count {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.landing-participant-badge .lpb-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+
 .landing-section {
   padding: 24px 0;
 }
@@ -486,7 +528,7 @@ html[lang="en"] .feature-copy strong::after {
 
 .preview-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
   width: 100%;
 }
@@ -520,7 +562,7 @@ html[lang="en"] .feature-copy strong::after {
 }
 
 .preview-value {
-  font-size: 31px;
+  font-size: 36px;
   font-weight: 800;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   line-height: 1;
@@ -535,17 +577,17 @@ html[lang="en"] .feature-copy strong::after {
 
 .preview-value.size-10yi {
   color: #2563eb;
-  font-size: 34px;
+  font-size: 39px;
 }
 
 .preview-value.size-50yi {
   color: #7c3aed;
-  font-size: 35px;
+  font-size: 40px;
 }
 
 .preview-value.size-100yi {
   color: #dc2626;
-  font-size: 36px;
+  font-size: 41px;
 }
 
 .preview-metric.period-today {
@@ -553,9 +595,19 @@ html[lang="en"] .feature-copy strong::after {
   border-color: #fed7aa;
 }
 
+.preview-metric.period-yesterday {
+  background: #fef9c3;
+  border-color: #fde047;
+}
+
 .preview-metric.period-week {
   background: #fefce8;
   border-color: #fde68a;
+}
+
+.preview-metric.period-last-week {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
 }
 
 .preview-metric.period-month {
@@ -569,7 +621,7 @@ html[lang="en"] .feature-copy strong::after {
 }
 
 .preview-cost {
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 800;
   line-height: 1.15;
   color: #16a34a;
@@ -597,7 +649,7 @@ html[lang="en"] .feature-copy strong::after {
   .preview-value.size-10yi,
   .preview-value.size-50yi,
   .preview-value.size-100yi {
-    font-size: 30px;
+    font-size: 32px;
   }
 }
 
