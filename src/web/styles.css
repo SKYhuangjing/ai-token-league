@@ -850,9 +850,17 @@ td {
 }
 
 .public-table tbody td:first-child {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  vertical-align: middle;
+}
+
+.public-table tbody td:first-child .rank {
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.public-table tbody td:first-child .participant-link {
+  vertical-align: middle;
 }
 
 .anonymous-banner {
@@ -879,17 +887,15 @@ td {
 }
 
 .alias-text {
-  position: relative;
-  display: inline-block;
-  padding-right: 16px;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 2px;
 }
 
 .alias-mark {
-  position: absolute;
-  top: -11px;
-  right: -11px;
   display: flex;
   align-items: center;
+  margin-top: -5px;
   min-height: 14px;
   font-size: 9px;
   font-weight: 700;
@@ -962,7 +968,12 @@ td {
   border: 0;
   background: transparent;
   padding: 0;
+  text-decoration: none;
+}
+
+.link-button.anonymous-name .alias-name-text {
   text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .row-actions {

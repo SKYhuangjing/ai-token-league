@@ -159,7 +159,7 @@ async function loadHistory(participantId) {
 function renderDisplayName(displayName) {
   const name = escapeHtml(displayName);
   if (state.identityMode !== "anonymous") return name;
-  return `<span class="alias-text">${name}<span class="alias-mark">${t("web.leaderboard.aliasMark")}</span></span>`;
+  return `<span class="alias-text"><span class="alias-name-text">${name}</span><span class="alias-mark">${t("web.leaderboard.aliasMark")}</span></span>`;
 }
 
 function renderDetailTitle(displayName, contextLabel) {
