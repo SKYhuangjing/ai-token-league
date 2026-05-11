@@ -155,9 +155,6 @@ function resolvePriceKey(model = "", priceMap = {}) {
   for (const candidate of createMatchingCandidates(normalized)) {
     if (priceMap[candidate]) return { key: candidate, exact: false };
   }
-  for (const key of Object.keys(priceMap)) {
-    if (key.includes(normalized) || normalized.includes(key)) return { key, exact: false };
-  }
   return null;
 }
 

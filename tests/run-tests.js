@@ -1016,6 +1016,11 @@ function testDisplayAndPricing() {
   }));
   assert.equal(custom.costQuality, "exact_price");
   assert.equal(custom.estimatedCostUsd, 0.003);
+  const autoReview = estimateUsageCost({ model: "codex-auto-review", inputTokens: 1000, outputTokens: 1000 }, createPriceMap({
+    auto: { model: "auto", inputCostPerMTok: 1.25, outputCostPerMTok: 6 }
+  }));
+  assert.equal(autoReview.costQuality, "unknown_price");
+  assert.equal(autoReview.estimatedCostUsd, null);
   const cachedInput = estimateUsageCost({
     model: "custom-test-model",
     inputTokens: 100,
