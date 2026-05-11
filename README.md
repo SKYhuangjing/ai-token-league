@@ -16,6 +16,20 @@
 
 ---
 
+## 效果截图
+
+![AI Token League 桌面客户端趋势页](assets/screenshots/desktop-client.png)
+
+| 公开首页 | 社区排行榜 |
+| --- | --- |
+| ![AI Token League 公开首页](assets/screenshots/web-home.png) | ![AI Token League 社区排行榜](assets/screenshots/web-leaderboard.png) |
+
+| Admin 使用量运营 | Admin 客户端设备 |
+| --- | --- |
+| ![AI Token League Admin 使用量运营](assets/screenshots/admin-usage.png) | ![AI Token League Admin 客户端设备](assets/screenshots/admin-devices.png) |
+
+---
+
 ## 功能概览
 
 ### 1. 公开排行榜
