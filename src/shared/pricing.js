@@ -20,7 +20,7 @@ export function estimateUsageCost(item, priceMap = {}) {
   const price = priceMap[match.key];
   const cacheReadTokens = Number(item.cacheReadTokens || 0);
   const cacheWriteTokens = Number(item.cacheWriteTokens || 0);
-  // inputTokens is the normalized non-cache input fact. Cache remains priced separately.
+  // inputTokens is the provider-verified input fact. Cache remains priced separately.
   const input = tokenCost(item.inputTokens, price.input_cost_per_token);
   const output = tokenCost(item.outputTokens, price.output_cost_per_token);
   const cacheRead = tokenCost(cacheReadTokens, price.cache_read_input_token_cost ?? price.input_cost_per_token);

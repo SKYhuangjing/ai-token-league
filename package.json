@@ -13,6 +13,7 @@
     "collector:init": "node src/collector/cli.js init",
     "collector:scan": "node src/collector/cli.js scan",
     "collector:sync": "node src/collector/cli.js sync",
+    "collector:verify-ccusage": "node scripts/verify-collector-ccusage.js",
     "test": "node tests/run-tests.js",
     "smoke": "node tests/run-tests.js && node src/backend/server.js --smoke",
     "icons": "node scripts/generate-icons.js",

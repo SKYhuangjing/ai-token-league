@@ -347,6 +347,7 @@ For server deployment, release channel configuration, and client preset setup, s
 Use the smallest verification that covers the touched surface:
 
 - README or docs only: inspect rendered Markdown-sensitive links and run `git diff --check`.
+- Claude Code or Codex collector changes: run `npm test`, then run `npm run collector:verify-ccusage -- --day <YYYY-MM-DD>`. The verifier runs `ccusage@latest` and `@ccusage/codex@latest` through `npx --yes` against local data; token totals and provider-specific input/cache fields must match the script output.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop UI changes: run `node --check src/desktop/main.cjs`, `node --check src/desktop/renderer.js`, `npm test`, and `npm run desktop:smoke`.
 - Packaging, updater, preset, install/download UX, or package-resource changes: run tests, then build one current-machine zip with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.

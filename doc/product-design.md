@@ -263,7 +263,7 @@ Claude Code 第一版支持。
 - 参考 ccusage 的本地日志扫描方式。
 - 读取 Claude Code 本地 project/session 数据。
 - 解析 token usage。
-- 将 `inputTokens` 归一化为 `raw input - cacheReadTokens - cacheWriteTokens`，cache 继续保留在独立字段。
+- `inputTokens` 直接使用 `message.usage.input_tokens`，cache 继续保留在独立字段，统计结果必须通过 `npm run collector:verify-ccusage -- --day <YYYY-MM-DD>` 对账。
 - 将 project 或 cwd 映射为本地 workdir。
 
 工作目录维护：
@@ -282,7 +282,7 @@ Codex 第一版支持。
 - 参考 ccusage/codex 的本地 session JSONL 扫描方式。
 - 读取 Codex 本地数据目录，默认从用户的 Codex home 识别。
 - 从 session 中的 token 事件计算 token 增量。
-- 将 `inputTokens` 归一化为 `raw input - cacheReadTokens - cacheWriteTokens`，cache 继续保留在独立字段。
+- Codex 日志中的 input 可能包含 cache，采集时将 `inputTokens` 归一化为 `raw input - cacheReadTokens - cacheWriteTokens`，cache 继续保留在独立字段，`totalTokens` 需对齐 `@ccusage/codex` daily JSON。
 - 按日期、工具、模型、工作目录聚合。
 
 工作目录维护：

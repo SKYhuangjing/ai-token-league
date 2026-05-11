@@ -18,6 +18,7 @@ import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
 import { addDays, localDay } from "../src/shared/date.js";
 import { currentBusinessDay } from "../src/backend/day-context.js";
+import { runVerification } from "../scripts/verify-collector-ccusage.js";
 
 const require = createRequire(import.meta.url);
 const initSqlJs = require("sql.js/dist/sql-asm.js");
@@ -47,7 +48,7 @@ async function testScan() {
   assert.ok(claude.totalTokens > 0);
   assert.equal(codex.workdirDisplayName, "codex-project");
   assert.equal(claude.workdirDisplayName, "claude-project");
-  assert.equal(claude.inputTokens, 1540);
+  assert.equal(claude.inputTokens, 2000);
   assert.equal(claude.cacheReadTokens, 260);
   assert.equal(claude.cacheWriteTokens, 200);
   assert.equal(claude.totalTokens, claude.inputTokens + claude.outputTokens + claude.cacheReadTokens + claude.cacheWriteTokens);
@@ -59,6 +60,26 @@ async function testScan() {
   assert.equal(cachedResult.items.length, 2);
   assert.ok(cachedResult.health.some((item) => item.reusedFiles > 0));
   return { identity, items: result.items };
+}
+
+async function testCollectorCcusageVerification() {
+  const day = localDay();
+  const codexSource = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const claudeSource = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  if (!fs.existsSync(codexSource) || !fs.existsSync(path.join(claudeSource, "projects"))) return;
+  const snapshot = path.join(tmp, "ccusage-local-snapshot");
+  const codexRoot = path.join(snapshot, "codex");
+  const claudeConfigDir = path.join(snapshot, "claude");
+  fs.cpSync(codexSource, codexRoot, { recursive: true });
+  fs.mkdirSync(claudeConfigDir, { recursive: true });
+  fs.cpSync(path.join(claudeSource, "projects"), path.join(claudeConfigDir, "projects"), { recursive: true });
+  const result = await runVerification({
+    day,
+    codexRoot,
+    claudeConfigDir,
+    claudeRoot: path.join(claudeConfigDir, "projects")
+  });
+  assert.equal(result.success, true, JSON.stringify(result.checks, null, 2));
 }
 
 async function testProviderEnabledSwitches() {
@@ -1243,6 +1264,7 @@ await testCursorLocalTokenDetection();
 testCursorDashboardMapping();
 await testCodexLocalSkipsUnknownModel();
 await testCodexLocalNormalizesInputTokens();
+await testCollectorCcusageVerification();
 testForbiddenUploadFields();
 testProductBaseline();
 await testVersionCompatibilityAndManifest();

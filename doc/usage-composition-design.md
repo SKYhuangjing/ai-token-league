@@ -58,7 +58,7 @@ DEFERRED    延后，不进入当前阶段
 Usage Composition 能力完成时必须同时满足：
 
 - 同一 participant、同一 day，在 Public Web detail、Desktop daily trend、Admin usage 中 token composition 合计一致。
-- `totalTokens` 统一作为展示和排序主口径，等于 `inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`；其中 `inputTokens` 表示已扣除 cache 的输入 token。reasoning 只作为 composition/cost 明细，不进入 total。
+- `totalTokens` 统一作为展示和排序主口径，等于 `inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`；其中 `inputTokens` 使用 provider 的可核验输入口径，Claude Code 对齐 ccusage 的 `message.usage.input_tokens`，Codex 对 gross input 扣除 cache 后入账。reasoning 只作为 composition/cost 明细，不进入 total。
 - 价格完整时，`estimatedCostUsd = inputCostUsd + outputCostUsd + cacheReadCostUsd + cacheWriteCostUsd`，`reasoningCostUsd=0`。
 - cost-off 模式下所有美元数隐藏，但 token composition 仍可见。
 - cost-on 模式下 full composition 视图显示 per-type cost、总成本、price quality 和 missing price 影响。
@@ -76,7 +76,7 @@ Usage Composition 能力完成时必须同时满足：
 
 | 字段 | 含义 |
 | --- | --- |
-| `inputTokens` | 输入 token，统一表示 non-cache input；Claude/Codex 采集时按 `raw input - cacheReadTokens - cacheWriteTokens` 归一化，Cursor 保持 provider 当前定义 |
+| `inputTokens` | 输入 token；Claude Code 直接使用 `message.usage.input_tokens` 以对齐 ccusage，Codex 对 `raw input - cacheReadTokens - cacheWriteTokens` 归一化，Cursor 保持 provider 当前定义 |
 | `outputTokens` | 输出 token |
 | `cacheReadTokens` | cache read token |
 | `cacheWriteTokens` | cache write token |

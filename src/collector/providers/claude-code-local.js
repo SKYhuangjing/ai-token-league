@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { dayFromRecord, deepFindNumber, deepFindString, readJsonLinesAsync, sourceMetadataAsync, walkFiles } from "./common.js";
+import { dayFromRecord, deepFindString, readJsonLinesAsync, sourceMetadataAsync, walkFiles } from "./common.js";
 
 function decodeProjectDir(file) {
   const parts = file.split(path.sep);
@@ -19,7 +19,7 @@ function decodeProjectDir(file) {
 export const claudeCodeLocalProvider = {
   id: "claude_code_local",
   toolCode: "claude_code",
-  version: "0.1.0",
+  version: "0.1.1",
 
   roots(config = {}) {
     if (config.providerRootsOnly && config.providerRoots?.claude_code_local) return normalizeCustomRoots(config.providerRoots.claude_code_local);
@@ -59,17 +59,19 @@ export const claudeCodeLocalProvider = {
     let lastModel = "";
     return rows
       .map((row) => {
-        const detectedModel = deepFindString(row, ["model"]);
+        const usage = extractUsage(row);
+        if (!usage) return null;
+        const detectedModel = row?.message?.model || deepFindString(row, ["model"]);
         if (detectedModel) lastModel = detectedModel;
-        const rawInputTokens = deepFindNumber(row, ["input_tokens", "inputTokens", "prompt_tokens"]);
-        const outputTokens = deepFindNumber(row, ["output_tokens", "outputTokens", "completion_tokens"]);
-        const cacheReadTokens = deepFindNumber(row, ["cache_read_input_tokens", "cacheReadTokens", "cache_read_tokens"]);
-        const cacheWriteTokens = deepFindNumber(row, ["cache_creation_input_tokens", "cacheWriteTokens", "cache_write_tokens"]);
-        const reasoningTokens = deepFindNumber(row, ["reasoning_tokens", "reasoningTokens"]);
-        // Claude local logs expose gross input and cache counters separately.
-        // Normalize here so inputTokens always means non-cache input.
-        const inputTokens = Math.max(0, rawInputTokens - cacheReadTokens - cacheWriteTokens);
-        const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens || deepFindNumber(row, ["total_tokens", "totalTokens"]);
+        const rawInputTokens = tokenNumber(usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens);
+        const outputTokens = tokenNumber(usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens);
+        const cacheReadTokens = tokenNumber(usage.cache_read_input_tokens ?? usage.cacheReadTokens ?? usage.cache_read_tokens);
+        const cacheWriteTokens = tokenNumber(usage.cache_creation_input_tokens ?? usage.cacheWriteTokens ?? usage.cache_write_tokens);
+        const reasoningTokens = tokenNumber(usage.reasoning_tokens ?? usage.reasoningTokens);
+        // Claude Code usage follows ccusage semantics: input_tokens is counted
+        // alongside cache read/write tokens instead of being reduced by them.
+        const inputTokens = rawInputTokens;
+        const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens || tokenNumber(usage.total_tokens ?? usage.totalTokens);
         if (!totalTokens) return null;
         return {
           providerId: this.id,
@@ -113,6 +115,15 @@ export const claudeCodeLocalProvider = {
     };
   }
 };
+
+function extractUsage(row) {
+  return row?.message?.usage || row?.usage || null;
+}
+
+function tokenNumber(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
 
 function normalizeCustomRoots(value) {
   if (!value) return [];
