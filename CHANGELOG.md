@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added interactive `scripts/release.sh` release builder with platform, env, installer, and upload options.
+- Added bilingual `mac-install-readme.txt` injection into generated macOS DMGs.
+- Added anonymous identity display in the desktop rail and refined anonymous leaderboard labels.
+- Added home navigation links to Admin and leaderboard mastheads.
+- Added admin participant detail route that works under board authentication.
 - Settings effect model: display preferences (showRawTokens, showEstimatedCost) now auto-save instantly on toggle.
 - Dirty state tracking for save-required settings (nickname, API base URL, launch at login, auto-refresh, update mode) with visual Save button highlight.
 - Reset data confirmation modal with "Local only" and "Local + Cloud" deletion options.
@@ -18,8 +23,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Redesigned public download preview cards and participant badge presentation.
+- Source toggle controls now use a switch-style UI.
+- Participant cloud reset is now idempotent.
+- Board views now refresh against the active business-day state.
+- Completed Chinese locale coverage for current UI surfaces.
+- `scripts/release.sh --platform current` now builds a single zip for the current machine.
 - Source toggle buttons now use icon-only design instead of ON/OFF text labels.
 - Trend dashboard metrics respect showRawTokens setting for consistent formatting.
+
+### Documentation
+
+- Updated developer docs to prefer `scripts/start-server.sh` for local service startup and `scripts/release.sh` for local packaging/release flows.
+- Documented the local development rule that package-related work should produce one current-machine zip artifact for fast debugging.
 
 ---
 

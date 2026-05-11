@@ -16,14 +16,16 @@ Read `AGENTS.md` before starting any work. It contains all project context: prod
 ## Key Commands
 
 ```bash
-npm install          # Install dependencies
-npm start            # Start backend + public web (http://127.0.0.1:8787)
-npm test             # Run tests
-npm run smoke        # Backend smoke test
-npm run desktop      # Launch Electron desktop app
-npm run package:all  # Package desktop bundles
-npm run release      # Interactive release builder (version/platform/env/installers/upload)
+npm install                         # Install dependencies
+scripts/start-server.sh --env env.local  # Start backend + public web with env/port handling
+npm test                            # Run tests
+npm run smoke                       # Backend smoke test
+npm run desktop                     # Launch Electron desktop app
+scripts/release.sh                  # Interactive release builder (version/platform/env/installers/upload)
+scripts/release.sh --platform all --yes  # Non-interactive zip build
 ```
+
+Use project scripts as the first-line operational interface: service startup goes through `scripts/start-server.sh`; packaging and release go through `scripts/release.sh`. Raw `npm start`, `npm run package:*`, and `npm run release:*` are low-level commands for focused verification or debugging.
 
 ## Rules
 

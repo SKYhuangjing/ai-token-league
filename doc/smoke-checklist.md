@@ -5,7 +5,7 @@
 ```bash
 npm test
 npm run desktop:smoke
-npm start
+scripts/start-server.sh --env env.local
 ```
 
 Open:
@@ -21,7 +21,12 @@ Use an isolated home directory for smoke runs:
 ```bash
 rm -rf .tmp-smoke
 mkdir -p .tmp-smoke/home .tmp-smoke/data
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" PORT=8787 npm start
+cat > .tmp-smoke/env.smoke << EOF
+HOME=$PWD/.tmp-smoke/home
+DB_PATH=$PWD/.tmp-smoke/data/db.json
+PORT=8787
+EOF
+scripts/start-server.sh --env .tmp-smoke/env.smoke
 ```
 
 In another terminal:
@@ -63,7 +68,13 @@ Expected:
 Start with auth enabled:
 
 ```bash
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" ADMIN_USERNAME=admin ADMIN_PASSWORD=secret npm start
+cat > .tmp-smoke/env.admin << EOF
+HOME=$PWD/.tmp-smoke/home
+DB_PATH=$PWD/.tmp-smoke/data/db.json
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=secret
+EOF
+scripts/start-server.sh --env .tmp-smoke/env.admin
 ```
 
 Verify:
@@ -93,7 +104,7 @@ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/public-leaderbo
 ### Default (public)
 
 ```bash
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" npm start
+scripts/start-server.sh --env .tmp-smoke/env.smoke
 ```
 
 Verify:
@@ -109,7 +120,12 @@ curl -s http://127.0.0.1:8787/api/board/leaderboard | node -e "const d=JSON.pars
 ### Anonymous mode
 
 ```bash
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" BOARD_SECURITY_LEVEL=anonymous npm start
+cat > .tmp-smoke/env.board-anonymous << EOF
+HOME=$PWD/.tmp-smoke/home
+DB_PATH=$PWD/.tmp-smoke/data/db.json
+BOARD_SECURITY_LEVEL=anonymous
+EOF
+scripts/start-server.sh --env .tmp-smoke/env.board-anonymous
 ```
 
 Verify:
@@ -122,14 +138,26 @@ curl -s http://127.0.0.1:8787/api/board/leaderboard | node -e "const d=JSON.pars
 ### Authenticated mode (startup failure without credentials)
 
 ```bash
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" BOARD_SECURITY_LEVEL=authenticated npm start 2>&1
+cat > .tmp-smoke/env.board-auth-missing << EOF
+HOME=$PWD/.tmp-smoke/home
+DB_PATH=$PWD/.tmp-smoke/data/db.json
+BOARD_SECURITY_LEVEL=authenticated
+EOF
+scripts/start-server.sh --env .tmp-smoke/env.board-auth-missing 2>&1
 # expect: FATAL error and process exit
 ```
 
 ### Authenticated mode (with credentials)
 
 ```bash
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" BOARD_SECURITY_LEVEL=authenticated PUBLIC_BOARD_AUTH_USERNAME=board PUBLIC_BOARD_AUTH_PASSWORD=secret npm start
+cat > .tmp-smoke/env.board-auth << EOF
+HOME=$PWD/.tmp-smoke/home
+DB_PATH=$PWD/.tmp-smoke/data/db.json
+BOARD_SECURITY_LEVEL=authenticated
+PUBLIC_BOARD_AUTH_USERNAME=board
+PUBLIC_BOARD_AUTH_PASSWORD=secret
+EOF
+scripts/start-server.sh --env .tmp-smoke/env.board-auth
 ```
 
 Verify:
@@ -155,13 +183,13 @@ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/release/config
 
 The MVP is distributed as:
 
-- Backend and Web: `npm start`
+- Backend and Web: `scripts/start-server.sh --env env.local`
 - Collector CLI: `npm run collector -- <command>`
 - Desktop collector UI: `npm run desktop`
 - macOS arm64 app bundle: `dist/AI Token League-darwin-arm64.zip`
 - macOS Intel x64 app bundle: `dist/AI Token League-darwin-x64.zip`
 - Windows x64 app bundle: `dist/AI Token League-win32-x64.zip`
 - Release checksum file: `dist/checksums.txt`
-- Release manifest dry run: `npm run release:dry-run`
+- Release manifest dry run: `node scripts/publish-release.js --env env.local --dry-run`
 
 The Windows x64 bundle is produced on macOS and has been validated by external users on real Windows machines.

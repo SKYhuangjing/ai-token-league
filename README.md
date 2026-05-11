@@ -159,7 +159,8 @@ npm install
 启动后端和公开 Web 排行榜：
 
 ```bash
-npm start
+[ -f env.local ] || cp env.example env.local
+scripts/start-server.sh --env env.local
 ```
 
 打开：
@@ -191,6 +192,22 @@ npm run desktop
 
 ## 开发与构建
 
+项目脚本是服务和发布流程的首选入口：
+
+- 启动服务：`scripts/start-server.sh --env env.local`
+- 打包/发布：`scripts/release.sh`
+- 版本或产品基线更新：`npm run bump -- <version>` 或 `npm run bump -- --baseline <major.minor>`
+- 预置配置生成：`npm run preset -- --env env.local`
+- 发布 manifest dry run：`node scripts/publish-release.js --env env.local --dry-run`
+
+`npm start`、`npm run package:*`、`npm run release:*` 是底层命令，适合定向验证或排障；日常服务启动和完整发布优先使用上面的脚本入口。
+
+本地开发如果改到桌面打包资源、预置配置、更新/发布元数据、安装或下载体验，只需要构建当前电脑可用的一个 zip 包；平台由脚本自动识别：
+
+```bash
+scripts/release.sh --platform current --env env.local --yes
+```
+
 常用命令：
 
 ```bash
@@ -202,27 +219,25 @@ npm run desktop:smoke
 构建 zip 包：
 
 ```bash
-rm -rf dist
-npm run package:all
+scripts/release.sh --platform all --yes
 ```
 
 构建原生安装包：
 
 ```bash
-rm -rf dist-installer
-npm run package:installer:all
+scripts/release.sh --platform all --installers --yes
 ```
 
 发布 dry run：
 
 ```bash
-npm run release:dry-run
+node scripts/publish-release.js --env env.local --dry-run
 ```
 
 完整发布：
 
 ```bash
-npm run release:publish
+scripts/release.sh --env env.local --installers --upload
 ```
 
 更多开发命令、API 细节、存储说明和验证边界见 [AGENTS.md](AGENTS.md)。

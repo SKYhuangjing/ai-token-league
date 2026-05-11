@@ -22,7 +22,7 @@ Without flags, runs in interactive mode with prompts.
 
 Options:
   --version VER     Version to release (default: current from package.json)
-  --platform PLAT   Platform: mac-arm64 | mac-intel | mac-all | win | all (default: all)
+  --platform PLAT   Platform: current | mac-arm64 | mac-intel | mac-all | win | all (default: all)
   --env FILE        Env file for presets and upload credentials
   --installers      Build native installers (DMG / NSIS)
   --upload          Upload artifacts to OSS after build
@@ -31,6 +31,7 @@ Options:
 
 Examples:
   $(basename "$0")                                      # fully interactive
+  $(basename "$0") --platform current --yes             # quick current-machine zip
   $(basename "$0") --platform mac-arm64 --yes           # quick mac-arm64 build
   $(basename "$0") --version 0.6.0 --upload --yes      # bump + build + upload
   $(basename "$0") --env env.prod --installers --upload # full release with env
@@ -78,6 +79,22 @@ prompt_yn() {
   esac
 }
 
+detect_current_platform() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os:$arch" in
+    Darwin:arm64)  echo "mac-arm64" ;;
+    Darwin:x86_64) echo "mac-intel" ;;
+    MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) echo "win" ;;
+    *)
+      echo "Error: unsupported current platform: $os $arch" >&2
+      echo "Use --platform mac-arm64, mac-intel, mac-all, win, or all." >&2
+      exit 1
+      ;;
+  esac
+}
+
 # --- check Node.js ---
 NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
 if [[ "$NODE_VERSION" -lt 22 ]]; then
@@ -112,9 +129,14 @@ if [[ -z "$PLATFORM" ]]; then
   echo "    3) macOS All   (arm64 + Intel)"
   echo "    4) Windows x64"
   echo "    5) All platforms"
+  echo "    6) Current machine"
   echo ""
   prompt PLATFORM "Select platform [5]: " "5"
 fi
+
+case "$PLATFORM" in
+  6|current)    PLATFORM="$(detect_current_platform)" ;;
+esac
 
 case "$PLATFORM" in
   1|mac-arm64)  PLATFORM="mac-arm64";  PLATFORM_LABEL="macOS arm64" ;;

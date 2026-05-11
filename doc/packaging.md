@@ -37,7 +37,7 @@ bash scripts/release.sh --platform mac-arm64 --env env.local --installers --uplo
 | Flag | Description |
 |------|-------------|
 | `--version VER` | Version to release (default: current from package.json) |
-| `--platform PLAT` | `mac-arm64` / `mac-intel` / `mac-all` / `win` / `all` |
+| `--platform PLAT` | `current` / `mac-arm64` / `mac-intel` / `mac-all` / `win` / `all` |
 | `--env FILE` | Env file for presets and upload credentials |
 | `--installers` | Build native installers (DMG / NSIS) |
 | `--upload` | Upload artifacts to OSS |
@@ -45,7 +45,25 @@ bash scripts/release.sh --platform mac-arm64 --env env.local --installers --uplo
 
 ## Manual Build
 
-Use a clean `dist` rebuild when validating UI or desktop packaging changes:
+For normal release builds, prefer `scripts/release.sh` because it also handles preset generation, platform selection, installer choice, and optional upload. Use the low-level npm commands below only when validating a specific packaging layer.
+
+During local development, if a change touches packaged desktop behavior, bundled assets, `assets/preset.json`, update/release metadata, installer README content, or public download/install UX, produce exactly one zip for the current machine before closing the work. The script detects the platform; the user should only care about the final artifact:
+
+```bash
+scripts/release.sh --platform current --env env.local --yes
+```
+
+Expected quick-debug zip output is one of:
+
+```text
+dist/AI Token League-darwin-arm64.zip
+dist/AI Token League-darwin-x64.zip
+dist/AI Token League-win32-x64.zip
+```
+
+Use `--platform all` only for explicit cross-platform packaging or release-facing changes.
+
+Use a clean `dist` rebuild when validating UI or desktop zip packaging changes:
 
 ```bash
 rm -rf dist
@@ -84,7 +102,13 @@ If a zip grows back to several hundred MB, inspect `app.asar` first. Local env f
 
 ## Native Installers
 
-Build native installers (DMG for macOS, NSIS exe for Windows):
+Build native installers (DMG for macOS, NSIS exe for Windows). In normal release flow, prefer:
+
+```bash
+scripts/release.sh --platform all --installers --yes
+```
+
+Use the low-level command for installer-only verification:
 
 ```bash
 rm -rf dist-installer
@@ -142,7 +166,7 @@ node scripts/publish-release.js --env env.local
 To rebuild and upload separately:
 
 ```bash
-npm run release:build    # clean build zip + installer artifacts
+scripts/release.sh --platform all --installers --yes   # clean build zip + installer artifacts
 node scripts/publish-release.js --env env.local   # upload with progress bar
 ```
 

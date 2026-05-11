@@ -59,9 +59,12 @@ doc/              Product, architecture, deployment, packaging, and smoke docs
 migrations/       MySQL migrations
 samples/          Sample usage data
 assets/           App icons and source image
+scripts/          Operational scripts for server startup, release, presets, packaging helpers, and diagnostics
 ```
 
 ## Commands
+
+Prefer the project scripts for service and release workflows. They encode env loading, version checks, port handling, preset generation, platform selection, and upload options that raw npm commands do not cover.
 
 Install:
 
@@ -72,7 +75,7 @@ npm install
 Start backend and public Web:
 
 ```bash
-npm start
+scripts/start-server.sh --env env.local
 ```
 
 Open:
@@ -110,24 +113,34 @@ Backend smoke:
 npm run smoke
 ```
 
-Package desktop bundles:
+Package or release desktop artifacts:
+
+```bash
+scripts/release.sh
+```
+
+Common non-interactive release examples:
+
+```bash
+scripts/release.sh --platform all --yes
+scripts/release.sh --platform mac-arm64 --env env.local --installers --upload --yes
+```
+
+For local development changes that touch packaged desktop behavior, presets, updater/release metadata, or install/download UX, build exactly one current-machine zip before treating the work as done. The agent or script must identify the environment; the user should not have to choose a platform:
+
+```bash
+scripts/release.sh --platform current --env env.local --yes
+```
+
+Use `--platform all` only for explicit release-facing verification, not routine local debugging.
+
+Low-level package commands are still useful for targeted verification, but they are not the preferred release entrypoint:
 
 ```bash
 rm -rf dist
 npm run package:all
-```
-
-Package native installers:
-
-```bash
 rm -rf dist-installer
 npm run package:installer:all
-```
-
-Interactive release (recommended):
-
-```bash
-npm run release
 ```
 
 Manual release dry run and publish:
@@ -149,6 +162,24 @@ dist-installer/AI Token League-<version>-win-x64-installer.exe
 ```
 
 Windows status: initial verification passed and the app is usable, but Windows host coverage is not yet full.
+
+## Scripts Directory
+
+All scripts are run from the project root unless noted. Reflect new scripts here when adding operational entrypoints.
+
+| Script | Primary use | Preferred command |
+| --- | --- | --- |
+| `scripts/start-server.sh` | Start backend + public Web with env loading, Node >= 22 check, occupied-port fallback, optional smoke, detach/log/pid support. | `scripts/start-server.sh --env env.local` |
+| `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, platform build, installers, and OSS upload. | `scripts/release.sh` or `npm run release` |
+| `scripts/bump-version.js` | Client version and/or product baseline bump across package/docs metadata. | `npm run bump -- <version>` or `npm run bump -- --baseline <major.minor>` |
+| `scripts/build-preset.js` | Generate `assets/preset.json` from `PRESET_*` env values or an env file before packaging. | `npm run preset -- --env env.local` |
+| `scripts/publish-release.js` | Build release manifests and upload zip/installer artifacts to OSS; supports dry run. | `node scripts/publish-release.js --env env.local --dry-run` |
+| `scripts/zip-dist.js` | Zip `dist/` platform folders and write `dist/checksums.txt`; normally called by package/release scripts. | `node scripts/zip-dist.js` |
+| `scripts/patch-dmg-readme.js` | Add `assets/mac-install-readme.txt` into generated macOS DMGs; normally called by installer npm scripts. | `node scripts/patch-dmg-readme.js` |
+| `scripts/generate-icons.js` | Regenerate desktop and web icon assets from `assets/app-icon-source.png`. | `npm run icons` |
+| `scripts/network-probe.mjs` | Print local network interfaces for LAN/server access diagnostics. | `node scripts/network-probe.mjs` |
+
+Raw `npm start` runs `src/backend/server.js` directly. Use it only when intentionally bypassing `scripts/start-server.sh`, for example inside focused test commands or when a wrapper would hide the behavior being debugged.
 
 ## Release Flow
 
@@ -184,7 +215,7 @@ The script updates only the files that match the selected mode:
 ### Step 3: Build and publish
 
 ```bash
-npm run release           # interactive: guides through platform, env, installers, upload
+scripts/release.sh        # interactive: guides through platform, env, installers, upload
 ```
 
 Or manually:
@@ -213,8 +244,17 @@ The active upload route is `/api/usage/daily-batch`. Do not document `/api/usage
 
 Admin page (`/admin.html`) and `/api/admin/*` routes are protected by HTTP Basic Auth when `ADMIN_USERNAME` is set.
 
+Set auth in the env file used by `scripts/start-server.sh`:
+
+```text
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=secret
+```
+
+Then start the service:
+
 ```bash
-ADMIN_USERNAME=admin ADMIN_PASSWORD=secret npm start
+scripts/start-server.sh --env env.local
 ```
 
 When `ADMIN_USERNAME` is empty or unset, admin routes remain open (backward compatible for local dev).
@@ -260,7 +300,13 @@ User-selected local JSON file named ai-token-league-diagnostics-<timestamp>.json
 Use isolated paths during smoke runs:
 
 ```bash
-HOME="$PWD/.tmp-smoke/home" DB_PATH="$PWD/.tmp-smoke/data/db.json" npm start
+mkdir -p .tmp-smoke/home .tmp-smoke/data
+cat > .tmp-smoke/env.smoke << EOF
+HOME=$PWD/.tmp-smoke/home
+DB_PATH=$PWD/.tmp-smoke/data/db.json
+PORT=8787
+EOF
+scripts/start-server.sh --env .tmp-smoke/env.smoke
 ```
 
 ## MySQL Test Deployment
@@ -283,7 +329,7 @@ Docker Compose `env_file` does NOT interpret shell metacharacters, so quoting is
 
 ### `env.local` as Build Preset Source
 
-`npm run release` prompts for an env file and passes it to `build-preset.js` and `publish-release.js`. When running manually, pass `--env` explicitly:
+`scripts/release.sh` prompts for an env file and passes it to `build-preset.js` and `publish-release.js`. When running manually, pass `--env` explicitly:
 
 ```bash
 node scripts/build-preset.js --env env.local
@@ -303,7 +349,7 @@ Use the smallest verification that covers the touched surface:
 - README or docs only: inspect rendered Markdown-sensitive links and run `git diff --check`.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop UI changes: run `node --check src/desktop/main.cjs`, `node --check src/desktop/renderer.js`, `npm test`, and `npm run desktop:smoke`.
-- Packaging changes: run `npm run package:all` after tests, then follow `doc/packaging.md`.
+- Packaging, updater, preset, install/download UX, or package-resource changes: run tests, then build one current-machine zip with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.
 
 Smoke checklist: `doc/smoke-checklist.md`.

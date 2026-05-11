@@ -10,6 +10,11 @@
 
 ### 新增
 
+- 新增交互式 `scripts/release.sh` 发布构建脚本，支持平台、env、安装包和上传选项。
+- 新增 macOS DMG 中双语 `mac-install-readme.txt` 注入。
+- 新增桌面侧栏匿名身份展示，并优化匿名排行榜标签。
+- 新增 Admin 和排行榜 masthead 的首页导航入口。
+- 新增可绕过 board 鉴权边界的 Admin 参与者详情路由。
 - 设置生效模型：展示偏好（showRawTokens、showEstimatedCost）切换后即时自动保存，无需点击保存。
 - 保存型设置（昵称、API 地址、开机启动、自动刷新、更新模式）dirty state 跟踪，Save 按钮高亮提示未保存更改。
 - 重置数据确认弹窗，支持"仅本地"和"本地 + 云端"两种删除方式。
@@ -18,8 +23,19 @@
 
 ### 变更
 
+- 重设计公开下载页预览卡片和参与者徽标展示。
+- 来源开关控件改为 switch 风格。
+- 参与者云端重置改为幂等行为。
+- Board 视图按当前业务日状态刷新。
+- 补齐当前 UI 界面的中文 locale 覆盖。
+- `scripts/release.sh --platform current` 支持自动识别当前电脑并只构建一个 zip 包。
 - 来源开关按钮改为图标样式，不再使用 ON/OFF 文字标签。
 - Trend 仪表盘指标统一使用 showRawTokens 设置格式化令牌数。
+
+### 文档
+
+- 更新开发文档，明确本地服务启动优先使用 `scripts/start-server.sh`，本地打包/发布优先使用 `scripts/release.sh`。
+- 记录本地开发约定：涉及打包的变更只需要产出当前电脑可用的一个 zip 包，用于快速调试。
 
 ---
 

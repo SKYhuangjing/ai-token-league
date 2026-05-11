@@ -261,7 +261,20 @@ RELEASE_PUBLIC_BASE_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-
 
 ### 2.2 发布流程
 
-构建和发布分四步：
+首选入口是交互式发布脚本，它会按顺序处理版本确认、平台选择、env/preset、安装包和上传：
+
+```bash
+scripts/release.sh
+```
+
+常用非交互示例：
+
+```bash
+scripts/release.sh --platform all --yes
+scripts/release.sh --platform all --env env.local --installers --upload --yes
+```
+
+底层构建和发布仍可拆成四步，用于定向验证或排障：
 
 ```bash
 # 1. 构建所有产物（zip + 安装包 + preset）
@@ -406,11 +419,11 @@ PRESET_API_BASE_URL=https://league.example.com PRESET_LANGUAGE=zh-CN npm run pre
 npm run preset -- --env env.local
 ```
 
-方式二：通过 `npm run release:build` 自动执行（preset 在 package 之前）：
+方式二：通过 `scripts/release.sh` 自动执行（preset 在 package 之前）：
 
 ```bash
 # 设置环境变量后构建
-PRESET_API_BASE_URL=https://league.example.com npm run release:build
+PRESET_API_BASE_URL=https://league.example.com scripts/release.sh --platform all --yes
 ```
 
 验证生成结果：
@@ -422,7 +435,7 @@ cat assets/preset.json
 验证打包结果：
 
 ```bash
-npm run release:build
+scripts/release.sh --platform mac-arm64 --yes
 npx asar list "dist/AI Token League-darwin-arm64/AI Token League.app/Contents/Resources/app.asar" | rg "^/assets/preset.json$"
 ```
 
@@ -444,7 +457,7 @@ PRESET_PROVIDER_CURSOR_DASHBOARD_USAGE=false
 EOF
 
 npm run preset -- --env env.preset-team
-npm run release:build
+scripts/release.sh --platform all --yes
 ```
 
 **公开测试渠道**（禁用静默更新，保留手动控制）：
@@ -458,7 +471,7 @@ PRESET_AUTO_REFRESH=false
 EOF
 
 npm run preset -- --env env.preset-beta
-npm run release:build
+scripts/release.sh --platform all --yes
 ```
 
 **只读监控渠道**（仅开启 Cursor 来源，适合监控仪表盘）：
@@ -474,7 +487,7 @@ PRESET_SHOW_RAW_TOKENS=true
 EOF
 
 npm run preset -- --env env.preset-monitor
-npm run release:build
+scripts/release.sh --platform all --yes
 ```
 
 ### 3.5 禁止预置的字段
