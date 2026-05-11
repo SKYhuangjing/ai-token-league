@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { hmacSha256Hex, sha256Hex } from "../shared/crypto.js";
+import { currentBusinessDay } from "./day-context.js";
 
 const DEFAULT_NAMES = [
   "水星", "金星", "地球", "火星", "木星", "土星", "天王星", "海王星", "冥王星",
@@ -51,19 +52,24 @@ export function todayStr(tz) {
 }
 
 export class BoardAnonymizer {
-  constructor(salt, names = DEFAULT_NAMES, tz = "Asia/Shanghai") {
+  constructor(salt, names = DEFAULT_NAMES, businessDaySource = currentBusinessDay) {
     this.salt = salt;
     this.names = names;
-    this.tz = tz;
+    this.businessDayProvider = typeof businessDaySource === "function"
+      ? businessDaySource
+      : () => todayStr(businessDaySource);
     this._reverseMap = null;
     this._displayNameMap = null;
     this._buildDate = null;
     this._dirty = true;
   }
 
+  businessDay() {
+    return this.businessDayProvider();
+  }
+
   getPublicId(participantId) {
-    const date = todayStr(this.tz);
-    return hmacSha256Hex(this.salt, `${participantId}|${date}`).slice(0, 16);
+    return hmacSha256Hex(this.salt, `${participantId}|${this.businessDay()}`).slice(0, 16);
   }
 
   _baseName(publicId) {
@@ -91,7 +97,7 @@ export class BoardAnonymizer {
     }
     this._reverseMap = reverseMap;
     this._displayNameMap = displayNameMap;
-    this._buildDate = todayStr(this.tz);
+    this._buildDate = this.businessDay();
     this._dirty = false;
     return reverseMap;
   }
@@ -105,7 +111,7 @@ export class BoardAnonymizer {
   }
 
   get stale() {
-    return this._buildDate !== null && this._buildDate !== todayStr(this.tz);
+    return this._buildDate !== null && this._buildDate !== this.businessDay();
   }
 
   markDirty() {

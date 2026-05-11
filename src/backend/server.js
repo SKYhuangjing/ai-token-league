@@ -7,6 +7,7 @@ import { verifyPayload, sha256Hex } from "../shared/crypto.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
 import { releaseConfigFromEnv, releasePublicConfig, validateInstallerMetadata, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
 import { loadOrGenerateSalt, loadNames, BoardAnonymizer } from "./board-anonymizer.js";
+import { currentBusinessDay } from "./day-context.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -33,8 +34,7 @@ let boardAnonymizer = null;
 if (BOARD_SECURITY_LEVEL === "anonymous") {
   const salt = BOARD_ANONYMIZATION_SALT || loadOrGenerateSalt(BOARD_ANONYMIZATION_SALT_PATH);
   const names = loadNames(BOARD_ANONYMIZATION_NAMES_PATH);
-  const tz = process.env.TZ || "Asia/Shanghai";
-  boardAnonymizer = new BoardAnonymizer(salt, names, tz);
+  boardAnonymizer = new BoardAnonymizer(salt, names, currentBusinessDay);
   boardAnonymizer.buildReverseMap(Object.keys(store.db.participants));
 }
 
@@ -58,6 +58,10 @@ function transformBoardItem(item) {
   const displayId = boardAnonymizer.getPublicId(participantId);
   const displayName = boardAnonymizer.getDisplayName(displayId);
   return { displayId, displayName, avatarColor: colorFromId(displayId), ...rest };
+}
+
+function withBusinessDay(body = {}) {
+  return { businessDay: currentBusinessDay(), ...body };
 }
 
 function transformBoardDetail(detail) {
@@ -141,17 +145,17 @@ async function readBody(req) {
 async function handleApi(req, res) {
   if (req.url.startsWith("/api/admin/") && !checkBasicAuth(req, res)) return;
   if (req.method === "GET" && req.url.startsWith("/api/board/summary")) {
-    return sendJson(res, 200, store.boardSummary());
+    return sendJson(res, 200, withBusinessDay(store.boardSummary()));
   }
   if (req.method === "GET" && req.url.startsWith("/api/board/my-identity")) {
     const url = new URL(req.url, "http://localhost");
     const participantId = url.searchParams.get("participantId") || "";
-    if (!boardAnonymizer) return sendJson(res, 200, { identityMode: "public", displayName: "" });
+    if (!boardAnonymizer) return sendJson(res, 200, withBusinessDay({ identityMode: "public", displayName: "" }));
     if (!participantId) return sendJson(res, 400, { error: "participantId required" });
     ensureAnonymizerFresh();
     const publicId = boardAnonymizer.getPublicId(participantId);
     const displayName = boardAnonymizer.getDisplayName(publicId);
-    return sendJson(res, 200, { identityMode: "anonymous", publicId, displayName });
+    return sendJson(res, 200, withBusinessDay({ identityMode: "anonymous", publicId, displayName }));
   }
   if (req.url.startsWith("/api/board/") && !checkBoardAuth(req, res)) return;
   if (req.method === "POST" && req.url === "/api/devices/register") {
@@ -268,7 +272,7 @@ async function handleApi(req, res) {
     const period = url.searchParams.get("period") || "";
     const range = url.searchParams.get("range") || "today";
     ensureAnonymizerFresh();
-    return sendJson(res, 200, {
+    return sendJson(res, 200, withBusinessDay({
       period: period || range,
       identityMode: BOARD_SECURITY_LEVEL,
       identityLabel: BOARD_SECURITY_LEVEL === "anonymous" ? "anonymousDisplayName" : "nickname",
@@ -279,7 +283,7 @@ async function handleApi(req, res) {
         endDay: url.searchParams.get("end") || "",
         includeCost: includeCost(url)
       }).map((item) => transformBoardItem(item))
-    });
+    }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/usage")) {
     const url = new URL(req.url, "http://localhost");
@@ -317,7 +321,7 @@ async function handleApi(req, res) {
       includeCost: includeCost(url)
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
-    return sendJson(res, 200, transformTrendResult(detail));
+    return sendJson(res, 200, withBusinessDay(transformTrendResult(detail)));
   }
   if (req.method === "GET" && req.url.startsWith("/api/board/participants/")) {
     const url = new URL(req.url, "http://localhost");
@@ -333,7 +337,7 @@ async function handleApi(req, res) {
       includeCost: includeCost(url)
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
-    return sendJson(res, 200, transformBoardDetail(detail));
+    return sendJson(res, 200, withBusinessDay(transformBoardDetail(detail)));
   }
   if (req.method === "GET" && req.url.startsWith("/api/health")) {
     const url = new URL(req.url, "http://localhost");

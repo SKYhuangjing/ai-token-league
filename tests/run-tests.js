@@ -17,10 +17,16 @@ import { cursorDashboardUsageProvider, eventsToUsageEvents } from "../src/collec
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
 import { addDays, localDay } from "../src/shared/date.js";
+import { currentBusinessDay } from "../src/backend/day-context.js";
 
 const require = createRequire(import.meta.url);
 const initSqlJs = require("sql.js/dist/sql-asm.js");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
+
+function restoreEnv(name, value) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 async function testScan() {
   const identity = generateIdentity();
@@ -514,6 +520,115 @@ async function testParticipantDataDeleteMissingIsNoop() {
     if (originalOpenRouterAutoRefresh === undefined) delete process.env.OPENROUTER_PRICING_AUTO_REFRESH;
     else process.env.OPENROUTER_PRICING_AUTO_REFRESH = originalOpenRouterAutoRefresh;
   }
+}
+
+async function testBoardApiBusinessDayMetadata() {
+  const originalDbPath = process.env.DB_PATH;
+  const originalSecurityLevel = process.env.BOARD_SECURITY_LEVEL;
+  const originalSalt = process.env.BOARD_ANONYMIZATION_SALT;
+  const originalBusinessDay = process.env.AI_TOKEN_LEAGUE_BUSINESS_DAY;
+  const originalOpenRouterAutoRefresh = process.env.OPENROUTER_PRICING_AUTO_REFRESH;
+  process.env.DB_PATH = path.join(tmp, "db-board-business-day-api.json");
+  process.env.BOARD_SECURITY_LEVEL = "anonymous";
+  process.env.BOARD_ANONYMIZATION_SALT = "business-day-api-test-salt";
+  process.env.AI_TOKEN_LEAGUE_BUSINESS_DAY = "2026-05-11";
+  process.env.OPENROUTER_PRICING_AUTO_REFRESH = "false";
+  let server;
+  try {
+    const { createServer } = await import(`../src/backend/server.js?board-business-day=${Date.now()}`);
+    server = createServer();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    const identity = await (await fetch(`http://127.0.0.1:${port}/api/board/my-identity?participantId=p_business_day`)).json();
+    const leaderboard = await (await fetch(`http://127.0.0.1:${port}/api/board/leaderboard?period=today`)).json();
+    const summary = await (await fetch(`http://127.0.0.1:${port}/api/board/summary`)).json();
+    assert.equal(identity.businessDay, "2026-05-11");
+    assert.equal(leaderboard.businessDay, "2026-05-11");
+    assert.equal(summary.businessDay, "2026-05-11");
+    assert.equal(identity.identityMode, "anonymous");
+    assert.ok(identity.publicId);
+    assert.equal(Object.hasOwn(identity, "participantId"), false);
+  } finally {
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    restoreEnv("DB_PATH", originalDbPath);
+    restoreEnv("BOARD_SECURITY_LEVEL", originalSecurityLevel);
+    restoreEnv("BOARD_ANONYMIZATION_SALT", originalSalt);
+    restoreEnv("AI_TOKEN_LEAGUE_BUSINESS_DAY", originalBusinessDay);
+    restoreEnv("OPENROUTER_PRICING_AUTO_REFRESH", originalOpenRouterAutoRefresh);
+  }
+}
+
+function testBusinessDayContextEnvOverride() {
+  const original = process.env.AI_TOKEN_LEAGUE_BUSINESS_DAY;
+  try {
+    process.env.AI_TOKEN_LEAGUE_BUSINESS_DAY = "2026-05-12";
+    assert.equal(currentBusinessDay(), "2026-05-12");
+    process.env.AI_TOKEN_LEAGUE_BUSINESS_DAY = "not-a-day";
+    assert.match(currentBusinessDay(new Date("2026-05-13T03:00:00.000Z")), /^\d{4}-\d{2}-\d{2}$/);
+  } finally {
+    restoreEnv("AI_TOKEN_LEAGUE_BUSINESS_DAY", original);
+  }
+}
+
+function testStoreBusinessDayScopedCache() {
+  let businessDay = "2026-05-10";
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-business-day-cache.json"), {
+    businessDayProvider: () => businessDay
+  });
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "business-day-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+  const baseItem = {
+    toolCode: "codex",
+    providerId: "codex_local",
+    workdirHash: "wd_business_day",
+    workdirDisplayName: "business-day-project",
+    model: "gpt-5",
+    inputTokens: 100,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    sourceQuality: "exact",
+    rawSourceRef: "business-day.jsonl",
+    providerVersion: "0.1.0",
+    parserVersion: "0.1.0"
+  };
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: "2026-05-10T00:00:00.000Z",
+    items: [
+      { ...baseItem, day: "2026-05-10", totalTokens: 100, sourceFingerprint: "business-day-d1" },
+      { ...baseItem, day: "2026-05-11", inputTokens: 200, totalTokens: 200, sourceFingerprint: "business-day-d2" }
+    ]
+  });
+
+  const d1Board = store.publicLeaderboard({ period: "today" });
+  assert.equal(d1Board[0].totalTokens, 100);
+  const d1Summary = store.boardSummary();
+  assert.equal(d1Summary.todayTokens, 100);
+  assert.equal(Object.values(store.db.aggregateCache).some((entry) => entry.args.businessDay === "2026-05-10"), true);
+
+  businessDay = "2026-05-11";
+  const d2Board = store.publicLeaderboard({ period: "today" });
+  assert.equal(d2Board[0].totalTokens, 200);
+  const d2Summary = store.boardSummary();
+  assert.equal(d2Summary.todayTokens, 200);
+  assert.equal(d2Summary.yesterdayTokens, 100);
+  assert.equal(Object.values(store.db.aggregateCache).some((entry) => entry.args.businessDay === "2026-05-11"), true);
+
+  const customD1 = store.publicLeaderboard({ range: "custom", startDay: "2026-05-10", endDay: "2026-05-10" });
+  assert.equal(customD1[0].totalTokens, 100);
+  const customEntries = Object.values(store.db.aggregateCache).filter((entry) => entry.name === "publicLeaderboard" && entry.args.range === "custom");
+  assert.equal(customEntries.every((entry) => !Object.hasOwn(entry.args, "businessDay")), true);
 }
 
 function testAdminUsageRowRangeFeedsParticipantDetail() {
@@ -1053,6 +1168,20 @@ function testBoardAnonymizerDailyRotation() {
   // todayStr with custom timezone returns valid date
   const todayUtc = todayStr("UTC");
   assert.match(todayUtc, /^\d{4}-\d{2}-\d{2}$/);
+
+  let businessDay = "2026-05-10";
+  const injected = new BoardAnonymizer("injected-day-salt", ["甲", "乙", "丙"], () => businessDay);
+  const d1PublicId = injected.getPublicId("p_user1");
+  assert.equal(injected.getPublicId("p_user1"), d1PublicId);
+  injected.buildReverseMap(["p_user1"]);
+  assert.equal(injected.resolveParticipantId(d1PublicId), "p_user1");
+  assert.equal(injected.stale, false);
+  businessDay = "2026-05-11";
+  assert.equal(injected.stale, true);
+  const d2PublicId = injected.getPublicId("p_user1");
+  assert.notEqual(d2PublicId, d1PublicId);
+  injected.buildReverseMap(["p_user1"]);
+  assert.equal(injected.resolveParticipantId(d2PublicId), "p_user1");
 }
 
 function testLoadNames() {
@@ -1091,11 +1220,14 @@ testLegacyCursorEnabledMigration();
 testHmacSha256Hex();
 testBoardAnonymizer();
 testBoardAnonymizerDailyRotation();
+testBusinessDayContextEnvOverride();
 testLoadOrGenerateSalt();
 testLoadNames();
 testBackendUpload(identity, items);
 testDeleteParticipantDataAllowsResync();
 await testParticipantDataDeleteMissingIsNoop();
+await testBoardApiBusinessDayMetadata();
+testStoreBusinessDayScopedCache();
 testAdminUsageRowRangeFeedsParticipantDetail();
 testSourceFingerprintDedupeKeepsDistinctDays();
 testIdentityImport();

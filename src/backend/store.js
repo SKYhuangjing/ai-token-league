@@ -6,6 +6,7 @@ import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, 
 import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertUsageItem, displayTotalTokens, usageKey } from "../shared/schema.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
+import { currentBusinessDay } from "./day-context.js";
 
 export const DEFAULT_DB = {
   schemaVersion: STORAGE_SCHEMA_VERSION,
@@ -28,6 +29,7 @@ export class Store {
     this.persist = options.persist !== false;
     this.dbPath = dbPath;
     if (this.persist) fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    this.businessDayProvider = options.businessDayProvider || currentBusinessDay;
     this.db = this.persist && fs.existsSync(dbPath) ? JSON.parse(fs.readFileSync(dbPath, "utf8")) : structuredClone(DEFAULT_DB);
     this.db.schemaVersion ||= STORAGE_SCHEMA_VERSION;
     this.db.aggregateCache ||= {};
@@ -42,6 +44,10 @@ export class Store {
   save() {
     if (!this.persist) return;
     fs.writeFileSync(this.dbPath, `${JSON.stringify(this.db, null, 2)}\n`);
+  }
+
+  currentBusinessDay() {
+    return this.businessDayProvider();
   }
 
   registerDevice(input) {
@@ -266,7 +272,8 @@ export class Store {
   }
 
   leaderboard({ period, range = "today", tool = "all", startDay = "", endDay = "" } = {}) {
-    const days = period ? daysForPeriod(period) : daysForDetailRange(range, { startDay, endDay });
+    const businessDay = this.currentBusinessDay();
+    const days = period ? daysForPeriod(period, { businessDay }) : daysForDetailRange(range, { startDay, endDay, businessDay });
     const rows = Object.values(this.db.usageDaily).filter((item) => {
       return days.includes(item.day) && (tool === "all" || item.toolCode === tool);
     });
@@ -302,11 +309,12 @@ export class Store {
   }
 
   publicLeaderboard({ period, range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
-    return this.cachedAggregate("publicLeaderboard", { period, range, startDay, endDay, includeCost }, () => this.computePublicLeaderboard({ period, range, startDay, endDay, includeCost }));
+    const args = { period, range, startDay, endDay, includeCost };
+    return this.cachedAggregate("publicLeaderboard", args, () => this.computePublicLeaderboard(args), { dayScoped: isDayScopedRange({ period, range, startDay, endDay }) });
   }
 
   boardSummary() {
-    return this.cachedAggregate("boardSummary", {}, () => this.computeBoardSummary());
+    return this.cachedAggregate("boardSummary", {}, () => this.computeBoardSummary(), { dayScoped: true });
   }
 
   computeBoardSummary() {
@@ -336,7 +344,7 @@ export class Store {
   }
 
   computePublicLeaderboard({ period, range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
-    const days = daysForQuery({ period, range, startDay, endDay });
+    const days = daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
     const rows = Object.values(this.db.usageDaily).filter((item) => days.includes(item.day));
     const byParticipant = new Map();
     for (const item of rows) {
@@ -389,7 +397,7 @@ export class Store {
   participantDetail(participantId, { period, range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
-    const days = daysForQuery({ period, range, startDay, endDay });
+    const days = daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
     const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && days.includes(item.day));
     const selectedPeriod = period || range;
     const rankRow = this.publicLeaderboard({ period, range, startDay, endDay, includeCost }).find((item) => item.participantId === participantId);
@@ -465,7 +473,7 @@ export class Store {
   participantTrend(participantId, { grain = "day", range = "last30", startDay = "", endDay = "", includeCost = false } = {}) {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
-    const days = daysForDetailRange(range, { startDay, endDay });
+    const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
     const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && days.includes(item.day));
     return {
       participantId,
@@ -478,11 +486,12 @@ export class Store {
   }
 
   adminUsage({ grain = "day", range = "month", startDay = "", endDay = "", participantId = "", includeCost = false } = {}) {
-    return this.cachedAggregate("adminUsage", { grain, range, startDay, endDay, participantId, includeCost }, () => this.computeAdminUsage({ grain, range, startDay, endDay, participantId, includeCost }));
+    const args = { grain, range, startDay, endDay, participantId, includeCost };
+    return this.cachedAggregate("adminUsage", args, () => this.computeAdminUsage(args), { dayScoped: isDayScopedRange({ range, startDay, endDay }) });
   }
 
   computeAdminUsage({ grain = "day", range = "month", startDay = "", endDay = "", participantId = "", includeCost = false } = {}) {
-    const days = daysForDetailRange(range, { startDay, endDay });
+    const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
     const rows = Object.values(this.db.usageDaily).filter((item) => {
       return days.includes(item.day) && (!participantId || item.participantId === participantId);
     });
@@ -497,8 +506,9 @@ export class Store {
     };
   }
 
-  cachedAggregate(name, args, compute) {
-    const key = sha256Hex(JSON.stringify({ name, args, schemaVersion: STORAGE_SCHEMA_VERSION }));
+  cachedAggregate(name, args, compute, { dayScoped = false } = {}) {
+    const cacheArgs = dayScoped ? { ...args, businessDay: this.currentBusinessDay() } : args;
+    const key = sha256Hex(JSON.stringify({ name, args: cacheArgs, schemaVersion: STORAGE_SCHEMA_VERSION }));
     const cached = this.db.aggregateCache?.[key];
     if (cached) return cached.value;
     const value = compute();
@@ -506,7 +516,7 @@ export class Store {
     this.db.aggregateCache[key] = {
       key,
       name,
-      args,
+      args: cacheArgs,
       createdAt: new Date().toISOString(),
       value
     };
@@ -515,7 +525,7 @@ export class Store {
   }
 
   adminQuality({ range = "month", startDay = "", endDay = "", participantId = "" } = {}) {
-    const days = daysForDetailRange(range, { startDay, endDay });
+    const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
     const rows = Object.values(this.db.usageDaily).filter((item) => {
       return days.includes(item.day) && (!participantId || item.participantId === participantId);
     });
@@ -807,7 +817,7 @@ export class Store {
   }
 
   missingPriceModels({ range = "month", startDay = "", endDay = "" } = {}) {
-    const days = daysForDetailRange(range, { startDay, endDay });
+    const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
     const map = new Map();
     for (const item of Object.values(this.db.usageDaily || {})) {
       if (!days.includes(item.day)) continue;
@@ -829,13 +839,13 @@ export class Store {
   }
 }
 
-function daysForQuery({ period = "", range = "today", startDay = "", endDay = "" } = {}) {
-  if (period) return daysForPeriod(period);
-  return daysForRange(range, { startDay, endDay });
+function daysForQuery({ period = "", range = "today", startDay = "", endDay = "" } = {}, { businessDay = localDay() } = {}) {
+  if (period) return daysForPeriod(period, { businessDay });
+  return daysForRange(range, { startDay, endDay, businessDay });
 }
 
-function daysForPeriod(period) {
-  const today = localDay();
+function daysForPeriod(period, { businessDay = localDay() } = {}) {
+  const today = businessDay;
   if (period === "today") return [today];
   if (period === "yesterday") {
     return [addDays(today, -1)];
@@ -855,31 +865,31 @@ function daysForPeriod(period) {
       : todayDate;
     return daysBetween(toDay(start), toDay(end));
   }
-  return daysForPeriod("today");
+  return daysForPeriod("today", { businessDay });
 }
 
-function daysForDetailRange(range, { startDay = "", endDay = "" } = {}) {
+function daysForDetailRange(range, { startDay = "", endDay = "", businessDay = localDay() } = {}) {
   if (range === "custom" && isDay(startDay) && isDay(endDay)) return daysBetween(startDay, endDay);
-  if (range === "today" || range === "yesterday") return daysForPeriod(range);
-  if (range === "last7") return trailingDays(7);
-  if (range === "7d") return trailingDays(7);
-  if (range === "last30") return trailingDays(30);
-  if (range === "last12_weeks") return daysForLastWeeks(12);
-  if (range === "last12_months") return daysForLastMonths(12);
-  if (range === "last_month" || range === "lastMonth") return daysForPeriod("last_month");
-  if (range === "month" || range === "this_month") return daysForPeriod("this_month");
-  if (range === "last_week") return daysForPeriod("last_week");
-  if (range === "this_week") return daysForPeriod("this_week");
-  return trailingDays(30);
+  if (range === "today" || range === "yesterday") return daysForPeriod(range, { businessDay });
+  if (range === "last7") return trailingDays(7, { businessDay });
+  if (range === "7d") return trailingDays(7, { businessDay });
+  if (range === "last30") return trailingDays(30, { businessDay });
+  if (range === "last12_weeks") return daysForLastWeeks(12, { businessDay });
+  if (range === "last12_months") return daysForLastMonths(12, { businessDay });
+  if (range === "last_month" || range === "lastMonth") return daysForPeriod("last_month", { businessDay });
+  if (range === "month" || range === "this_month") return daysForPeriod("this_month", { businessDay });
+  if (range === "last_week") return daysForPeriod("last_week", { businessDay });
+  if (range === "this_week") return daysForPeriod("this_week", { businessDay });
+  return trailingDays(30, { businessDay });
 }
 
-function daysForRange(range, { startDay = "", endDay = "" } = {}) {
-  const today = localDay();
+function daysForRange(range, { startDay = "", endDay = "", businessDay = localDay() } = {}) {
+  const today = businessDay;
   if (range === "custom" && isDay(startDay) && isDay(endDay)) {
     return daysBetween(startDay, endDay);
   }
   if (range === "today" || range === "yesterday" || range === "this_week" || range === "last_week" || range === "this_month" || range === "last_month") {
-    return daysForPeriod(range);
+    return daysForPeriod(range, { businessDay });
   }
   if (range === "month" || range === "lastMonth") {
     const todayDate = dayToUtcDate(today);
@@ -898,8 +908,8 @@ function daysForRange(range, { startDay = "", endDay = "" } = {}) {
   });
 }
 
-function trailingDays(count) {
-  const today = dayToUtcDate(localDay());
+function trailingDays(count, { businessDay = localDay() } = {}) {
+  const today = dayToUtcDate(businessDay);
   return Array.from({ length: count }, (_, index) => {
     const d = new Date(today);
     d.setUTCDate(today.getUTCDate() - count + index + 1);
@@ -995,21 +1005,26 @@ function aggregateUsageRows(rows, grain, { includeAdminFields = false, participa
     }));
 }
 
-function daysForLastWeeks(count) {
-  const today = dayToUtcDate(localDay());
+function daysForLastWeeks(count, { businessDay = localDay() } = {}) {
+  const today = dayToUtcDate(businessDay);
   const start = startOfUtcWeek(today);
   start.setUTCDate(start.getUTCDate() - ((count - 1) * 7));
   return daysBetween(toDay(start), toDay(today));
 }
 
-function daysForLastMonths(count) {
-  const today = dayToUtcDate(localDay());
+function daysForLastMonths(count, { businessDay = localDay() } = {}) {
+  const today = dayToUtcDate(businessDay);
   const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - count + 1, 1));
   return daysBetween(toDay(start), toDay(today));
 }
 
 function isDay(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function isDayScopedRange({ period = "", range = "today", startDay = "", endDay = "" } = {}) {
+  if (!period && range === "custom" && isDay(startDay) && isDay(endDay)) return false;
+  return true;
 }
 
 function sortedBreakdown(obj) {

@@ -29,6 +29,9 @@ let latestScanAt = "";
 let scanRunning = false;
 let scanPollTimer = null;
 let latestUpdateState = null;
+let latestIdentityBusinessDay = "";
+let lastIdentityCheckLocalDay = localDay();
+let identityRefreshTimer = null;
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
@@ -549,6 +552,7 @@ async function boot() {
     renderWizard();
     await loadToday();
     await loadMyIdentity();
+    startIdentityRefreshTimer();
     await loadBackgroundStatus();
     await loadSystemStatus();
   } else {
@@ -593,6 +597,7 @@ async function loadToday(force = false) {
   await refreshPricing();
   const status = await api.startUsageScan({ force });
   applyUsageScanStatus(status, { force });
+  await loadMyIdentity();
   pollUsageScan();
 }
 
@@ -602,6 +607,7 @@ async function loadMyIdentity() {
   if (!block || !nameEl) return;
   try {
     const data = await api.getMyIdentity();
+    latestIdentityBusinessDay = data?.businessDay || latestIdentityBusinessDay;
     if (data?.identityMode === "anonymous" && data.displayName) {
       nameEl.textContent = data.displayName;
       block.hidden = false;
@@ -647,6 +653,7 @@ function pollUsageScan() {
       if (!status.running) {
         clearInterval(scanPollTimer);
         scanPollTimer = null;
+        loadMyIdentity().catch((error) => console.error(error));
       }
     } catch (error) {
       clearInterval(scanPollTimer);
@@ -657,6 +664,20 @@ function pollUsageScan() {
       console.error(error);
     }
   }, 1000);
+}
+
+function startIdentityRefreshTimer() {
+  if (identityRefreshTimer) return;
+  lastIdentityCheckLocalDay = localDay();
+  identityRefreshTimer = setInterval(() => {
+    const currentLocalDay = localDay();
+    if (currentLocalDay === lastIdentityCheckLocalDay) return;
+    lastIdentityCheckLocalDay = currentLocalDay;
+    run(async () => {
+      await loadToday();
+      await loadMyIdentity();
+    });
+  }, 60 * 1000);
 }
 
 function applyUsageScanStatus(status, { force = false } = {}) {
