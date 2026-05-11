@@ -25,7 +25,7 @@ Options:
   --platform PLAT   Platform: current | mac-arm64 | mac-intel | mac-all | win | all (default: all)
   --env FILE        Env file for presets and upload credentials
   --installers      Build native installers (DMG / NSIS)
-  --upload          Upload artifacts to OSS after build
+  --upload          Upload artifacts to OSS after build; builds all platforms and installers
   --yes             Skip confirmation prompt
   -h, --help        Show this help message
 
@@ -179,7 +179,6 @@ fi
 if [[ -z "$INSTALLERS" ]]; then
   prompt_yn INSTALLERS "  Build native installers (DMG/NSIS)? [y/N] " "no"
 fi
-echo "  Installers: $INSTALLERS"
 
 # --- step 5: upload ---
 if [[ -z "$UPLOAD" ]]; then
@@ -190,6 +189,16 @@ if [[ "$UPLOAD" == "yes" && -z "$ENV_FILE" ]]; then
   echo "  Error: upload requires an env file with OSS credentials"
   exit 1
 fi
+if [[ "$UPLOAD" == "yes" && "$PLATFORM" != "all" ]]; then
+  echo "  Upload publishes the full release set; switching platform to all."
+  PLATFORM="all"
+  PLATFORM_LABEL="All platforms"
+fi
+if [[ "$UPLOAD" == "yes" && "$INSTALLERS" != "yes" ]]; then
+  echo "  Upload requires installer artifacts; enabling installers."
+  INSTALLERS="yes"
+fi
+echo "  Installers: $INSTALLERS"
 echo "  Upload: $UPLOAD"
 
 # --- step 6: confirm ---
@@ -230,7 +239,7 @@ run_package() {
     mac-intel)  npm run package:mac:intel ;;
     mac-all)    npm run package:mac:all ;;
     win)        npm run package:win ;;
-    all)        npm run package:all && return ;;
+    all)        npm run package:all; return ;;
   esac
   # for single platforms (except "all" which already zips), run zip
   if [[ "$1" != "all" ]]; then

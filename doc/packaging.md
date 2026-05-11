@@ -40,7 +40,7 @@ bash scripts/release.sh --platform mac-arm64 --env env.local --installers --uplo
 | `--platform PLAT` | `current` / `mac-arm64` / `mac-intel` / `mac-all` / `win` / `all` |
 | `--env FILE` | Env file for presets and upload credentials |
 | `--installers` | Build native installers (DMG / NSIS) |
-| `--upload` | Upload artifacts to OSS |
+| `--upload` | Upload artifacts to OSS; automatically builds all platforms and installers because release metadata requires the complete artifact set |
 | `--yes` | Skip confirmation prompt |
 
 ## Manual Build

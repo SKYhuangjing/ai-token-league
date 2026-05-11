@@ -29,6 +29,7 @@
 - Board 视图按当前业务日状态刷新。
 - 补齐当前 UI 界面的中文 locale 覆盖。
 - `scripts/release.sh --platform current` 支持自动识别当前电脑并只构建一个 zip 包。
+- `scripts/release.sh --upload` 会自动切到全平台并启用安装包构建，避免部分 zip 打包完成后因缺少 zip 或 DMG/NSIS 产物导致上传失败。
 - 来源开关按钮改为图标样式，不再使用 ON/OFF 文字标签。
 - Trend 仪表盘指标统一使用 showRawTokens 设置格式化令牌数。
 

@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Board views now refresh against the active business-day state.
 - Completed Chinese locale coverage for current UI surfaces.
 - `scripts/release.sh --platform current` now builds a single zip for the current machine.
+- `scripts/release.sh --upload` now automatically switches to all platforms and enables installer builds so release upload does not fail after partial packaging due to missing zip or DMG/NSIS artifacts.
 - Source toggle buttons now use icon-only design instead of ON/OFF text labels.
 - Trend dashboard metrics respect showRawTokens setting for consistent formatting.
 

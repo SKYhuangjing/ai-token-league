@@ -170,7 +170,7 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | Script | Primary use | Preferred command |
 | --- | --- | --- |
 | `scripts/start-server.sh` | Start backend + public Web with env loading, Node >= 22 check, occupied-port fallback, optional smoke, detach/log/pid support. | `scripts/start-server.sh --env env.local` |
-| `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, platform build, installers, and OSS upload. | `scripts/release.sh` or `npm run release` |
+| `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, platform build, installers, and OSS upload. `--upload` automatically switches to all platforms and enables installers because release metadata requires the complete artifact set. | `scripts/release.sh` or `npm run release` |
 | `scripts/bump-version.js` | Client version and/or product baseline bump across package/docs metadata. | `npm run bump -- <version>` or `npm run bump -- --baseline <major.minor>` |
 | `scripts/build-preset.js` | Generate `assets/preset.json` from `PRESET_*` env values or an env file before packaging. | `npm run preset -- --env env.local` |
 | `scripts/publish-release.js` | Build release manifests and upload zip/installer artifacts to OSS; supports dry run. | `node scripts/publish-release.js --env env.local --dry-run` |
