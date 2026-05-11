@@ -1,3 +1,5 @@
+import { t } from "./i18n.js";
+
 export function formatTokenCompact(value, locale = "zh-CN") {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return "0";
@@ -11,13 +13,13 @@ export function formatTokenCompact(value, locale = "zh-CN") {
 }
 
 export function formatTokenRaw(value, locale = undefined) {
-  return `${new Intl.NumberFormat(locale).format(value || 0)} tokens`;
+  return `${new Intl.NumberFormat(locale).format(value || 0)} ${t("unit.tokens")}`;
 }
 
 export function formatUsd(value) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "-";
   const n = Number(value);
-  if (n > 0 && n < 0.01) return "<$0.01";
+  if (n > 0 && n < 0.01) return t("common.lessThanCost");
   return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
 }
 

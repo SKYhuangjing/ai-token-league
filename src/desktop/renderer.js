@@ -24,7 +24,7 @@ let selectedTrendBucketKey = "";
 let trendDrawerBucketKey = "";
 let trendDrawerCloseTimer = null;
 let serverPriceMap = null;
-let pricingSource = "local fallback pricing";
+let pricingSource = t("desktop.renderer.localFallbackPricing");
 let latestScanAt = "";
 let scanRunning = false;
 let scanPollTimer = null;
@@ -246,7 +246,7 @@ document.addEventListener("click", async (e) => {
     setSaveMessage(t("desktop.sources.sourceRemoved"), "ok");
     await loadHealth();
   } catch (err) {
-    setSaveMessage(err.message || "Failed to remove", "error");
+    setSaveMessage(err.message || t("desktop.renderer.failedToRemove"), "error");
   }
 });
 
@@ -263,7 +263,7 @@ document.addEventListener("click", async (e) => {
     await loadHealth();
     await loadToday(true);
   } catch (err) {
-    setSaveMessage(err.message || "Failed to remove", "error");
+    setSaveMessage(err.message || t("desktop.renderer.failedToRemove"), "error");
   }
 });
 
@@ -280,7 +280,7 @@ document.addEventListener("click", async (e) => {
     setSaveMessage(t("desktop.sources.sourceIgnored"), "ok");
     await loadHealth();
   } catch (err) {
-    setSaveMessage(err.message || "Failed to ignore", "error");
+    setSaveMessage(err.message || t("desktop.renderer.failedToIgnore"), "error");
   }
 });
 
@@ -296,7 +296,7 @@ document.addEventListener("click", async (e) => {
     setSaveMessage(t("desktop.sources.sourceRestored"), "ok");
     await loadHealth();
   } catch (err) {
-    setSaveMessage(err.message || "Failed to restore", "error");
+    setSaveMessage(err.message || t("desktop.renderer.failedToRestore"), "error");
   }
 });
 
@@ -962,11 +962,11 @@ function updateMessage(state = {}) {
 
 function renderCursorTokenSummary(cursorConfig = {}) {
   const tokens = cursorConfig?.workosSessionTokens || [];
-  const legacy = cursorConfig?.workosSessionToken ? [{ accountName: "legacy token" }] : [];
+  const legacy = cursorConfig?.workosSessionToken ? [{ accountName: t("common.legacyToken") }] : [];
   const accounts = [...tokens, ...legacy].map((item) => item.accountName || "Cursor").filter(Boolean);
   const summary = accounts.length
-    ? `${accounts.length} Cursor token${accounts.length === 1 ? "" : "s"} configured`
-    : "No Cursor token configured. Local Cursor state can still be detected automatically.";
+    ? (accounts.length === 1 ? t("desktop.renderer.cursorTokensConfiguredOne") : t("desktop.renderer.cursorTokensConfiguredPlural", { count: accounts.length }))
+    : t("desktop.renderer.noCursorTokenAuto");
   let html = `<p>${escapeHtml(summary)}</p>`;
   if (tokens.length) {
     html += `<ul class="root-list">${tokens.map((item, idx) => {
@@ -1044,7 +1044,7 @@ function renderToday() {
 
   $("#today-total").textContent = formatToken(total);
   $("#today-total").title = formatTokenRaw(total);
-  $("#today-summary").textContent = latestUsage.length ? `${latestUsage.length} daily rows from local sources` : t("desktop.renderer.noLocalUsage");
+  $("#today-summary").textContent = latestUsage.length ? t("desktop.renderer.dailyRowsFromLocal", { count: latestUsage.length }) : t("desktop.renderer.noLocalUsage");
   $("#today-scan-time").textContent = t("desktop.renderer.lastScan", { time: latestScanAt ? formatDateTime(latestScanAt) : "-" });
   $("#workdir-count").textContent = String(workdirs.length);
   $("#model-count").textContent = String(models.length);
@@ -1081,7 +1081,7 @@ function renderTrend() {
   $("#trend-rows").innerHTML = rows.length
     ? rows
         .map((row) => `<tr>
-          <td><button type="button" data-expand-trend="${escapeHtml(trendBucketKey(row))}">${trendDrawerBucketKey === trendBucketKey(row) ? "Hide" : "Show"}</button> ${formatTrendPeriod(row)}</td>
+          <td><button type="button" data-expand-trend="${escapeHtml(trendBucketKey(row))}">${trendDrawerBucketKey === trendBucketKey(row) ? t("common.hide") : t("common.show")}</button> ${formatTrendPeriod(row)}</td>
           <td class="numeric" title="${formatTokenRaw(row.totalTokens)}">${formatToken(row.totalTokens)}</td>
           <td>${escapeHtml(row.compositionSummary || tokenCompositionSummary(row))}</td>
           <td>${renderCompactBreakdown(row.modelBreakdown)}</td>
@@ -1416,7 +1416,7 @@ function renderBars(items, { showCost = false } = {}) {
     .map((item) => `<article class="bar-row">
       <div>
         <strong>${escapeHtml(item.name)}</strong>
-        <small title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)} tokens</small>
+        <small title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)} ${t("unit.tokens")}</small>
         ${showCost ? `<em title="${escapeHtml(costTitle(item))}">${renderCost(item)}</em>` : ""}
       </div>
       <i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%"></i>
@@ -1507,14 +1507,14 @@ function renderTrendModelDetails(row) {
       <table class="trend-table model-detail-table">
         <thead>
           <tr>
-            <th>Workdir</th>
-            <th>Model</th>
-            <th>Tokens</th>
-            <th>Input</th>
-            <th>Output</th>
-            <th>Cache</th>
-            <th>Reasoning</th>
-            ${latestConfig?.showEstimatedCost ? "<th>Est. Cost</th>" : ""}
+            <th>${t("desktop.renderer.workdir")}</th>
+            <th>${t("desktop.renderer.model")}</th>
+            <th>${t("unit.tokens")}</th>
+            <th>${t("common.input")}</th>
+            <th>${t("common.output")}</th>
+            <th>${t("common.cache")}</th>
+            <th>${t("common.reasoning")}</th>
+            ${latestConfig?.showEstimatedCost ? `<th>${t("desktop.today.estCost")}</th>` : ""}
           </tr>
         </thead>
         <tbody>
@@ -1714,7 +1714,7 @@ function formatNumber(value) {
 
 function costTitle(item) {
   const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
-  return `${item.costQuality || "unknown_price"} · ${item.pricingVersion || "no pricing version"} · ${pricingSource}${missing ? ` · missing: ${missing}` : ""}`;
+  return `${item.costQuality || t("desktop.renderer.unknownPrice")} · ${item.pricingVersion || t("desktop.renderer.noPricingVersion")} · ${pricingSource}${missing ? ` · ${t("desktop.renderer.missing")}: ${missing}` : ""}`;
 }
 
 function normalizeMissingPriceModels(value) {
@@ -1753,7 +1753,7 @@ async function refreshPricing() {
   if (!latestConfig?.showEstimatedCost) return;
   if (!latestConfig?.apiBaseUrl) {
     serverPriceMap = null;
-    pricingSource = "server pricing unavailable";
+    pricingSource = t("desktop.renderer.serverPricingUnavailable");
     return;
   }
   try {
@@ -1762,10 +1762,10 @@ async function refreshPricing() {
       Object.fromEntries((data?.custom || []).map((item) => [item.model, item])),
       Object.fromEntries((data?.openrouter || []).map((item) => [item.model, item]))
     );
-    pricingSource = data?.remote?.status ? `server pricing · OpenRouter ${data.remote.status}` : "server pricing";
+    pricingSource = data?.remote?.status ? t("desktop.renderer.serverPricingDetail", { status: data.remote.status }) : t("desktop.renderer.serverPricing");
   } catch (error) {
     serverPriceMap = null;
-    pricingSource = `server pricing unavailable: ${error.message}`;
+    pricingSource = t("desktop.renderer.serverPricingError", { error: error.message });
   }
 }
 
@@ -1780,7 +1780,7 @@ function formatToken(value) {
 }
 
 function metricTitle(row) {
-  const cost = latestConfig?.showEstimatedCost ? ` · cost ${renderCost(row)}` : "";
+  const cost = latestConfig?.showEstimatedCost ? ` · ${t("common.cost")} ${renderCost(row)}` : "";
   return `${formatTrendPeriod(row)} · ${formatTokenRaw(row.totalTokens)}${cost}`;
 }
 

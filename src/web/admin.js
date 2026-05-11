@@ -136,7 +136,7 @@ document.querySelector("#pricing-form").addEventListener("submit", async (event)
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   });
-  if (!response.ok) throw new Error((await response.json()).error || "failed to save model price");
+  if (!response.ok) throw new Error((await response.json()).error || t("admin.error.savePrice"));
   event.target.reset();
   await loadPricing();
   await loadUsage();
@@ -148,7 +148,7 @@ document.querySelector("#refresh-openrouter-recalculate").addEventListener("clic
 async function refreshOpenRouter(recalculate) {
   pricingStatus.textContent = recalculate ? t("admin.refreshingRecalc") : t("admin.refreshing");
   const response = await fetchAdmin(`/api/admin/model-prices/refresh-openrouter?recalculate=${recalculate ? "1" : "0"}`, { method: "POST" });
-  if (!response.ok) throw new Error((await response.json()).error || "failed to refresh OpenRouter prices");
+  if (!response.ok) throw new Error((await response.json()).error || t("admin.error.refreshOpenRouter"));
   await loadPricing();
   if (recalculate) await loadUsage();
 }
@@ -298,7 +298,7 @@ async function mapModelPriceAlias(model, targetModel) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model, targetModel })
   });
-  if (!response.ok) throw new Error((await response.json()).error || "failed to save model alias");
+  if (!response.ok) throw new Error((await response.json()).error || t("admin.error.saveAlias"));
   await loadPricing();
   await loadUsage();
 }
@@ -378,7 +378,7 @@ async function deleteParticipantData(participantId, nickname) {
   statusEl.textContent = t("admin.usage.deletingUser", { label });
   const response = await fetchAdmin(`/api/admin/participants/${encodeURIComponent(participantId)}`, { method: "DELETE" });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "failed to delete participant data");
+  if (!response.ok) throw new Error(result.error || t("admin.error.deleteParticipant"));
   if (state.participantId === participantId) state.participantId = "";
   state.expandedUsageKey = "";
   await loadUsage();
@@ -874,7 +874,7 @@ function formatTokenRaw(value) {
 function formatCost(value) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "-";
   const n = Number(value);
-  if (n > 0 && n < 0.01) return "<$0.01";
+  if (n > 0 && n < 0.01) return t("common.lessThanCost");
   return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
 }
 

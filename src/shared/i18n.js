@@ -21,6 +21,22 @@ const translations = {
     "common.cost": "成本",
     "common.total": "总计",
     "common.peak": "峰值",
+    "common.input": "输入",
+    "common.output": "输出",
+    "common.cacheRead": "缓存读取",
+    "common.cacheWrite": "缓存写入",
+    "common.reasoning": "推理",
+    "common.in": "输入",
+    "common.out": "输出",
+    "common.cache": "缓存",
+    "common.noComposition": "无构成",
+    "common.exact": "精确",
+    "common.estimated": "预估",
+    "common.missingPrice": "缺失价格",
+    "common.show": "展开",
+    "common.hide": "收起",
+    "common.lessThanCost": "<$0.01",
+    "common.legacyToken": "旧版令牌",
 
     // Web 端 - 导航和标题
     "web.publicBoard": "公开社区榜单",
@@ -479,6 +495,24 @@ const translations = {
     "desktop.renderer.last12Weeks": "最近 12 周",
     "desktop.renderer.last12Months": "最近 12 个月",
     "desktop.renderer.noComposition": "无构成",
+    "desktop.renderer.workdir": "工作目录",
+    "desktop.renderer.model": "模型",
+    "desktop.renderer.localFallbackPricing": "本地回退定价",
+    "desktop.renderer.serverPricingUnavailable": "服务器定价不可用",
+    "desktop.renderer.serverPricing": "服务器定价",
+    "desktop.renderer.serverPricingDetail": "服务器定价 · OpenRouter {status}",
+    "desktop.renderer.serverPricingError": "服务器定价不可用: {error}",
+    "desktop.renderer.dailyRowsFromLocal": "{count} 条本地每日记录",
+    "desktop.renderer.cursorTokensConfiguredPlural": "已配置 {count} 个 Cursor token",
+    "desktop.renderer.cursorTokensConfiguredOne": "已配置 1 个 Cursor token",
+    "desktop.renderer.noCursorTokenAuto": "未配置 Cursor token。本地 Cursor 状态仍可自动检测。",
+    "desktop.renderer.downloadFailed": "下载失败",
+    "desktop.renderer.failedToRemove": "删除失败",
+    "desktop.renderer.failedToIgnore": "忽略失败",
+    "desktop.renderer.failedToRestore": "恢复失败",
+    "desktop.renderer.unknownPrice": "未知价格",
+    "desktop.renderer.noPricingVersion": "无定价版本",
+    "desktop.renderer.missing": "缺失",
 
     // 通用状态
     "status.on": "开启",
@@ -651,7 +685,13 @@ const translations = {
     "admin.devices.lastSeen": "最后在线",
     "admin.devices.empty": "暂无注册设备。",
     "admin.devices.count": "{count} 台设备",
-    "admin.devices.countOne": "1 台设备"
+    "admin.devices.countOne": "1 台设备",
+
+    // Admin - 错误回退
+    "admin.error.savePrice": "保存模型价格失败",
+    "admin.error.refreshOpenRouter": "刷新 OpenRouter 价格失败",
+    "admin.error.saveAlias": "保存模型别名失败",
+    "admin.error.deleteParticipant": "删除参与者数据失败"
   },
 
   "en": {
@@ -670,6 +710,22 @@ const translations = {
     "common.cost": "cost",
     "common.total": "Total",
     "common.peak": "Peak",
+    "common.input": "Input",
+    "common.output": "Output",
+    "common.cacheRead": "Cache read",
+    "common.cacheWrite": "Cache write",
+    "common.reasoning": "Reasoning",
+    "common.in": "In",
+    "common.out": "Out",
+    "common.cache": "Cache",
+    "common.noComposition": "No composition",
+    "common.exact": "Exact",
+    "common.estimated": "Estimated",
+    "common.missingPrice": "Missing price",
+    "common.show": "Show",
+    "common.hide": "Hide",
+    "common.lessThanCost": "<$0.01",
+    "common.legacyToken": "legacy token",
 
     // Web - Navigation and Headers
     "web.publicBoard": "Public community board",
@@ -1128,6 +1184,24 @@ const translations = {
     "desktop.renderer.last12Weeks": "last 12 weeks",
     "desktop.renderer.last12Months": "last 12 months",
     "desktop.renderer.noComposition": "No composition",
+    "desktop.renderer.workdir": "Workdir",
+    "desktop.renderer.model": "Model",
+    "desktop.renderer.localFallbackPricing": "local fallback pricing",
+    "desktop.renderer.serverPricingUnavailable": "server pricing unavailable",
+    "desktop.renderer.serverPricing": "server pricing",
+    "desktop.renderer.serverPricingDetail": "server pricing · OpenRouter {status}",
+    "desktop.renderer.serverPricingError": "server pricing unavailable: {error}",
+    "desktop.renderer.dailyRowsFromLocal": "{count} daily rows from local sources",
+    "desktop.renderer.cursorTokensConfiguredPlural": "{count} Cursor tokens configured",
+    "desktop.renderer.cursorTokensConfiguredOne": "1 Cursor token configured",
+    "desktop.renderer.noCursorTokenAuto": "No Cursor token configured. Local Cursor state can still be detected automatically.",
+    "desktop.renderer.downloadFailed": "Download failed",
+    "desktop.renderer.failedToRemove": "Failed to remove",
+    "desktop.renderer.failedToIgnore": "Failed to ignore",
+    "desktop.renderer.failedToRestore": "Failed to restore",
+    "desktop.renderer.unknownPrice": "unknown_price",
+    "desktop.renderer.noPricingVersion": "no pricing version",
+    "desktop.renderer.missing": "missing",
 
     // Common Status
     "status.on": "On",
@@ -1300,7 +1374,13 @@ const translations = {
     "admin.devices.lastSeen": "Last seen",
     "admin.devices.empty": "No devices registered.",
     "admin.devices.count": "{count} devices",
-    "admin.devices.countOne": "1 device"
+    "admin.devices.countOne": "1 device",
+
+    // Admin - Error fallbacks
+    "admin.error.savePrice": "failed to save model price",
+    "admin.error.refreshOpenRouter": "failed to refresh OpenRouter prices",
+    "admin.error.saveAlias": "failed to save model alias",
+    "admin.error.deleteParticipant": "failed to delete participant data"
   }
 };
 

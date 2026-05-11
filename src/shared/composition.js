@@ -1,17 +1,19 @@
+import { t } from "./i18n.js";
+
 export const TOKEN_COMPOSITION_FIELDS = [
-  ["inputTokens", "Input"],
-  ["outputTokens", "Output"],
-  ["cacheReadTokens", "Cache read"],
-  ["cacheWriteTokens", "Cache write"],
-  ["reasoningTokens", "Reasoning"]
+  ["inputTokens", "common.input"],
+  ["outputTokens", "common.output"],
+  ["cacheReadTokens", "common.cacheRead"],
+  ["cacheWriteTokens", "common.cacheWrite"],
+  ["reasoningTokens", "common.reasoning"]
 ];
 
 export const COST_COMPOSITION_FIELDS = [
-  ["inputCostUsd", "Input"],
-  ["outputCostUsd", "Output"],
-  ["cacheReadCostUsd", "Cache read"],
-  ["cacheWriteCostUsd", "Cache write"],
-  ["reasoningCostUsd", "Reasoning"]
+  ["inputCostUsd", "common.input"],
+  ["outputCostUsd", "common.output"],
+  ["cacheReadCostUsd", "common.cacheRead"],
+  ["cacheWriteCostUsd", "common.cacheWrite"],
+  ["reasoningCostUsd", "common.reasoning"]
 ];
 
 export function createEmptyComposition() {
@@ -42,13 +44,13 @@ export function compositionRatio(value, total) {
 
 export function tokenCompositionSummary(item = {}) {
   const total = Number(item.totalTokens || 0);
-  if (!total) return "No composition";
+  if (!total) return t("common.noComposition");
   const cacheTokens = Number(item.cacheReadTokens || 0) + Number(item.cacheWriteTokens || 0);
   const parts = [
-    ["In", item.inputTokens],
-    ["Out", item.outputTokens],
-    ["Cache", cacheTokens],
-    ["Reasoning", item.reasoningTokens]
+    [t("common.in"), item.inputTokens],
+    [t("common.out"), item.outputTokens],
+    [t("common.cache"), cacheTokens],
+    [t("common.reasoning"), item.reasoningTokens]
   ];
   return parts
     .filter(([, value]) => Number(value || 0) > 0)
@@ -58,9 +60,9 @@ export function tokenCompositionSummary(item = {}) {
 
 export function tokenCompositionDetails(item = {}) {
   const total = Number(item.totalTokens || 0);
-  return TOKEN_COMPOSITION_FIELDS.map(([field, label]) => ({
+  return TOKEN_COMPOSITION_FIELDS.map(([field, labelKey]) => ({
     field,
-    label,
+    label: t(labelKey),
     tokens: Number(item[field] || 0),
     ratio: compositionRatio(item[field], total)
   }));
@@ -77,7 +79,7 @@ export function dominantComposition(item = {}) {
 }
 
 export function costQualityLabel(value = "") {
-  if (value === "exact_price") return "Exact";
-  if (value === "estimated_price") return "Estimated";
-  return "Missing price";
+  if (value === "exact_price") return t("common.exact");
+  if (value === "estimated_price") return t("common.estimated");
+  return t("common.missingPrice");
 }
