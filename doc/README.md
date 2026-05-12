@@ -4,7 +4,9 @@ This directory keeps the project documents after the v0.1 phase freeze.
 
 ## Current Baseline
 
-- `0.6-baseline.md` - 0.6 product baseline (in progress).
+- `0.7-baseline.md` - 0.7 desktop client UI redesign baseline (active).
+- `0.7-development-tasks.md` - 0.7 complete implementation task plan and verification record.
+- `0.6-baseline.md` - frozen 0.6 product baseline.
 - `0.6-development-tasks.md` - 0.6 development tasks and verification record.
 - `0.5-baseline.md` - frozen 0.5 product baseline with 11 features.
 - `0.5-development-tasks.md` - 0.5 development tasks and verification record.

@@ -7,6 +7,7 @@
   --red: #ba3b46;
   --blue: #006d77;
   --gold: #b67810;
+  --cost-accent: var(--gold);
 }
 
 * {
@@ -624,7 +625,7 @@ html[lang="en"] .feature-copy strong::after {
   font-size: 18px;
   font-weight: 800;
   line-height: 1.15;
-  color: #16a34a;
+  color: var(--cost-accent);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: nowrap;
 }
@@ -991,7 +992,7 @@ td {
 }
 
 .token-accounting small {
-  color: var(--muted);
+  color: var(--cost-accent);
   font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -1565,6 +1566,10 @@ h3 {
 .muted-cell {
   color: var(--muted);
   font: 700 12px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.cost-quality small {
+  color: var(--cost-accent);
 }
 
 .cost-quality.exact_price strong {

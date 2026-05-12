@@ -11,366 +11,286 @@
     <main class="layout">
       <aside class="rail">
         <div>
-          <p class="eyebrow" data-i18n="app.name">AI Token League</p>
-          <h1 data-i18n="desktop.nav.today">Token usage</h1>
-          <p class="rail-copy" data-i18n="app.tagline">Local daily totals, grouped by workdir. No prompts, responses, code, or real paths are uploaded.</p>
-          <div id="my-identity-block" class="identity-block" hidden>
-            <svg class="identity-icon" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg>
-            <span class="identity-label" data-i18n="desktop.today.codename">今日代号</span>
-            <span class="identity-name" id="my-identity-name"></span>
+          <div class="brand">
+            <div class="mono" data-i18n="app.name">AI Token League</div>
+            <h2 data-i18n="desktop.nav.overview">Overview</h2>
           </div>
+          <div id="my-identity-block" class="identity" hidden>
+            <span class="identity-dot"></span>
+            <span class="mono" id="my-identity-name"></span>
+          </div>
+          <nav aria-label="Main navigation">
+            <button data-section="overview" class="active"><span class="nav-icon icon" style="--icon: url('./icons/layout-dashboard.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.overview">Overview</span></button>
+            <button data-section="workdirs"><span class="nav-icon icon" style="--icon: url('./icons/folder-code.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.workdirs">Workdirs</span></button>
+            <button data-section="sources"><span class="nav-icon icon" style="--icon: url('./icons/database.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.sources">Sources</span></button>
+          </nav>
         </div>
-        <nav>
-          <button data-section="today" class="active" data-i18n="desktop.nav.today">Today</button>
-          <button data-section="trend" data-i18n="desktop.nav.trend">Trend</button>
-          <button data-section="settings" data-i18n="desktop.nav.settings">Settings</button>
-        </nav>
-        <div class="sync-card">
-          <span id="sync-state" data-i18n="desktop.sync.notSynced">Not synced</span>
-          <small id="sync-target" data-i18n="desktop.renderer.apiNotConfigured">API not configured</small>
-          <small id="sync-last" data-i18n="desktop.sync.lastSync">Last sync -</small>
-          <button class="sync-now-button" data-sync-now data-i18n="desktop.nav.syncNow">Sync now</button>
+        <div class="rail-bottom">
+          <button class="primary-pill teal-button" id="rail-restart-update" type="button" hidden data-i18n="desktop.rail.restartUpdate">Restart to update</button>
+          <div class="rail-note">
+            <span id="rail-last-scan" data-i18n="desktop.renderer.currentScanDash">Current -</span>
+            <small id="rail-next-scan" data-i18n="desktop.renderer.nextScanDash">Next -</small>
+          </div>
+          <div class="rail-icon-bar">
+            <button class="rail-icon-btn rail-action-btn" id="brand-refresh" type="button" title="Refresh" data-i18n-title="refresh">
+              <span class="icon" style="--icon: url('./icons/refresh-cw.svg')" aria-hidden="true"></span>
+              <span data-i18n="refresh">Refresh</span>
+            </button>
+            <button class="rail-icon-btn rail-action-btn" data-section="settings" type="button" title="Settings" data-i18n-title="desktop.nav.settings">
+              <span class="icon" style="--icon: url('./icons/settings.svg')" aria-hidden="true"></span>
+              <span data-i18n="desktop.nav.settings">Settings</span>
+            </button>
+          </div>
         </div>
       </aside>
 
       <section class="workspace">
-        <section id="today" class="panel active">
-          <div class="panel-head hero-head">
+        <section id="overview" class="screen active">
+          <div class="topline">
             <div>
-              <p class="eyebrow" data-i18n="desktop.today.title">Today</p>
-              <h2 id="today-total">0</h2>
-              <p id="today-summary" class="subtle" data-i18n="desktop.today.scanning">Scanning local usage...</p>
+              <h3 data-i18n="desktop.nav.overview">Overview</h3>
             </div>
-            <div class="head-actions">
-              <span id="today-scan-time" class="badge" data-i18n="desktop.today.lastScan">Last scan -</span>
-              <button id="refresh-today" data-i18n="refresh">Refresh</button>
+            <div class="actions">
+              <div class="segmented" id="overview-range" aria-label="Overview range">
+                <button type="button" data-range="today" class="active" data-i18n="desktop.range.today">Today</button>
+                <button type="button" data-range="7d" data-i18n="desktop.range.7d">7D</button>
+                <button type="button" data-range="30d" data-i18n="desktop.range.30d">30D</button>
+                <button type="button" data-range="all" data-i18n="desktop.range.all">ALL</button>
+              </div>
             </div>
           </div>
 
-          <section class="cards cards-four">
-            <article class="stat-card">
-              <span data-i18n="desktop.today.workdirs">Workdirs</span>
-              <strong id="workdir-count">0</strong>
-            </article>
-            <article class="stat-card">
-              <span data-i18n="desktop.today.models">Models</span>
-              <strong id="model-count">0</strong>
-            </article>
-            <article class="stat-card">
-              <span data-i18n="desktop.today.dominant">Dominant composition</span>
-              <strong id="today-dominant">-</strong>
-            </article>
-            <article class="stat-card" id="today-cost-card" hidden>
-              <span data-i18n="desktop.today.estCost">Est. cost</span>
-              <strong id="today-cost">-</strong>
-              <small id="today-cost-note" data-i18n="desktop.today.pricingUnavailable">pricing unavailable</small>
-            </article>
-          </section>
+          <section class="dashboard-layout">
+            <div class="dash-row-1">
+              <article class="hero-score">
+                <div class="metric-label" data-i18n="desktop.overview.totalTokens">Total Tokens</div>
+                <div class="total-value" id="today-total">0</div>
+                <div class="hero-sub">
+                  <span id="today-cost" data-i18n="desktop.today.scanning">Scanning local usage...</span>
+                </div>
+              </article>
 
-          <section class="section-block">
-            <div class="section-title">
-              <h3 data-i18n="desktop.composition.tokenComposition">Token composition</h3>
-              <p id="today-composition-summary" data-i18n="desktop.composition.todayLoading">Today composition is loading.</p>
-            </div>
-            <div id="today-composition" class="detail-summary composition-grid"></div>
-          </section>
-
-          <section class="section-block">
-            <div class="section-title">
-              <h3 data-i18n="desktop.workdir.consumption">Workdir consumption</h3>
-              <p data-i18n="desktop.workdir.publicNames">Only public directory names are shown.</p>
-            </div>
-            <div id="workdir-list" class="list"></div>
-          </section>
-
-          <section class="section-block">
-            <div class="section-title">
-              <h3 data-i18n="desktop.model.consumption">Model consumption</h3>
-              <p data-i18n="desktop.model.tokenTotals">Token totals grouped by model.</p>
-            </div>
-            <div id="model-list" class="list"></div>
-          </section>
-        </section>
-
-        <section id="trend" class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow" data-i18n="desktop.nav.trend">Trend</p>
-              <h2 data-i18n="desktop.trend.title">Usage rhythm</h2>
-            </div>
-            <div class="panel-actions">
-              <div class="segmented-control" id="trend-view">
-                <button data-view="daily" class="active" data-i18n="web.detail.daily">Daily</button>
-                <button data-view="weekly" data-i18n="web.detail.weekly">Weekly</button>
-                <button data-view="monthly" data-i18n="web.detail.monthly">Monthly</button>
+              <div class="stat-grid stat-grid-three">
+                <article class="stat-card">
+                  <span data-i18n="common.input">Input</span>
+                  <strong id="overview-input-tokens">0</strong>
+                  <small id="overview-input-detail" class="stat-detail"></small>
+                </article>
+                <article class="stat-card">
+                  <span data-i18n="common.output">Output</span>
+                  <strong id="overview-output-tokens">0</strong>
+                  <small id="overview-output-detail" class="stat-detail"></small>
+                </article>
+                <article class="stat-card">
+                  <span data-i18n="common.cache">Cache</span>
+                  <strong id="overview-cache-tokens">0</strong>
+                  <small id="overview-cache-detail" class="stat-detail"></small>
+                </article>
               </div>
-              <div class="segmented-control" id="trend-mode">
-                <button data-mode="chart" class="active" data-i18n="desktop.trend.chart">Chart</button>
-                <button data-mode="table" data-i18n="desktop.trend.table">Table</button>
-              </div>
-              <button id="refresh-trend" data-i18n="refresh">Refresh</button>
             </div>
-          </div>
 
-          <section class="section-block trend-block">
-            <div class="section-title">
-              <h3 id="trend-heading" data-i18n="desktop.trend.dailyReview">Daily review</h3>
-              <p id="trend-summary" data-i18n="desktop.trend.groupedFromCache">Grouped from cached local usage rows.</p>
+            <div class="three-col">
+              <article class="visual-card">
+                <h4 data-i18n="desktop.overview.providers">Top Providers</h4>
+                <div id="provider-list" class="stack"></div>
+              </article>
+              <article class="visual-card">
+                <h4 data-i18n="desktop.renderer.topModels">Top Models</h4>
+                <div id="model-list" class="stack"></div>
+              </article>
+              <article class="visual-card">
+                <h4 data-i18n="desktop.renderer.topWorkdirs">Top Workdirs</h4>
+                <div id="workdir-list" class="stack"></div>
+              </article>
             </div>
-            <div id="trend-chart-panel" class="trend-chart"></div>
-            <div id="trend-table-panel" class="table-wrap" hidden>
-              <table class="trend-table">
-                <thead>
-                  <tr>
-                    <th data-i18n="desktop.trend.period">Period</th>
-                    <th data-i18n="web.leaderboard.totalTokens">Total Tokens</th>
-                    <th data-i18n="desktop.trend.composition">Composition</th>
-                    <th data-i18n="web.leaderboard.models">Models</th>
-                    <th data-i18n="desktop.trend.workdirs">Workdirs</th>
-                    <th id="trend-cost-header" hidden data-i18n="desktop.today.estCost">Est. Cost</th>
-                  </tr>
-                </thead>
-                <tbody id="trend-rows"></tbody>
-              </table>
-            </div>
-            <div id="trend-selection-panel" class="trend-selection-panel"></div>
-          </section>
 
-          <div class="trend-drawer-backdrop" id="trend-drawer-backdrop" hidden></div>
-          <aside class="trend-drawer" id="trend-drawer" hidden aria-labelledby="trend-drawer-title">
-            <div class="trend-drawer-head">
+            <article class="visual-card">
               <div>
-                <p class="eyebrow" data-i18n="desktop.trend.detailEyebrow">Trend detail</p>
-                <h3 id="trend-drawer-title" data-i18n="desktop.trend.periodDetail">Period detail</h3>
+                <h4 data-i18n="desktop.overview.usageTrend">Usage Trend</h4>
+                <p class="muted" id="overview-trend-summary"></p>
               </div>
-              <button id="close-trend-drawer" type="button" data-i18n="close" data-i18n-title="desktop.trend.closeDetail" aria-label="Close trend detail">Close</button>
-            </div>
-            <div id="trend-drawer-body" class="trend-drawer-body"></div>
-          </aside>
+              <div class="spark-wrap">
+                <div id="overview-trend" class="spark"></div>
+                <div id="overview-trend-axis" class="spark-axis"></div>
+              </div>
+            </article>
+          </section>
         </section>
 
-        <section id="settings" class="panel">
-          <div class="panel-head">
+        <section id="workdirs" class="screen">
+          <div class="topline">
             <div>
-              <p class="eyebrow" data-i18n="desktop.nav.settings">Settings</p>
-              <h2 data-i18n="desktop.settings.title">Profile, sources, cloud, and app</h2>
+              <h3 data-i18n="desktop.workdirs.title">Workdirs</h3>
             </div>
-            <span id="profile-state" class="badge" data-i18n="desktop.settings.notConfigured">Not configured</span>
+            <div class="actions">
+              <div class="segmented" id="workdirs-range" aria-label="Workdirs range">
+                <button type="button" data-range="today" class="active" data-i18n="desktop.range.today">Today</button>
+                <button type="button" data-range="7d" data-i18n="desktop.range.7d">7D</button>
+                <button type="button" data-range="30d" data-i18n="desktop.range.30d">30D</button>
+                <button type="button" data-range="all" data-i18n="desktop.range.all">ALL</button>
+              </div>
+            </div>
           </div>
 
-          <div class="segmented-control settings-tabs" id="settings-tabs">
-            <button data-settings-tab="account" class="active" data-i18n="desktop.settings.tab.account">Profile</button>
-            <button data-settings-tab="app" data-i18n="desktop.settings.tab.app">App</button>
-            <button data-settings-tab="sources" data-i18n="desktop.settings.tab.sources">Sources</button>
+          <section class="panel">
+            <p id="workdirs-summary"></p>
+            <div id="workdirs-analysis-list" class="workdir-analysis-list"></div>
+          </section>
+        </section>
+
+        <section id="sources" class="screen">
+          <div class="topline">
+            <div>
+              <h3 data-i18n="desktop.nav.sources">Sources</h3>
+            </div>
+            <div class="actions">
+              <div class="scan-interval-control">
+                <span data-i18n="desktop.sources.scan">Scan</span>
+                <input class="scan-interval-input" id="refreshIntervalMinutes" type="number" min="1" step="1" value="15" />
+                <span data-i18n="desktop.sources.min">min</span>
+                <button class="outline-button save-settings" type="button" data-i18n="desktop.sources.save">Save</button>
+              </div>
+              <button class="outline-button" id="refresh-health" data-i18n="desktop.sources.detectNow">Detect now</button>
+            </div>
+          </div>
+
+          <div class="segmented source-tabs" id="sources-tabs" aria-label="Provider tabs">
+            <button type="button" data-provider-tab="claude_code_local" class="active" data-i18n="source.claude">Claude Code</button>
+            <button type="button" data-provider-tab="codex_local" data-i18n="source.codex">Codex</button>
+            <button type="button" data-provider-tab="cursor_dashboard_usage" data-i18n="source.cursor">Cursor</button>
+          </div>
+
+          <div id="settings-source-list" class="provider-source-grid"></div>
+          <div id="cursor-token-summary" hidden></div>
+          <span id="sources-action-message" class="action-message" aria-live="polite"></span>
+        </section>
+
+        <section id="settings" class="screen">
+          <div class="topline">
+            <div>
+              <h3 data-i18n="desktop.nav.settings">Settings</h3>
+            </div>
+            <div class="actions">
+              <button class="outline-button" id="import" data-i18n="desktop.account.importConfig">Import config</button>
+              <button class="outline-button" id="export" data-i18n="desktop.account.exportConfig">Export config</button>
+              <button class="primary-pill save-settings" type="button" data-i18n="desktop.account.saveSettings">Save</button>
+            </div>
+          </div>
+
+          <div class="segmented settings-tabs" id="settings-tabs">
+            <button data-settings-tab="app" class="active" data-i18n="desktop.settings.tab.app">App</button>
             <button data-settings-tab="cloud" data-i18n="desktop.settings.tab.cloud">Cloud</button>
             <button data-settings-tab="about" data-i18n="desktop.settings.tab.about">About</button>
           </div>
 
-          <section class="section-block settings-panel active" data-settings-panel="account">
-            <div class="form-grid">
-              <label>
+          <section class="settings-panel active" data-settings-panel="app">
+            <div class="stack">
+              <div>
+                <h4 data-i18n="desktop.settings.identity">Identity</h4>
+              </div>
+              <label class="field">
                 <span data-i18n="desktop.account.nickname">Nickname</span>
                 <input id="nickname" />
               </label>
             </div>
-            <div class="actions">
-              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
-              <button id="export" data-i18n="desktop.account.exportConfig">Export config</button>
-              <button id="import" data-i18n="desktop.account.importConfig">Import config</button>
-            </div>
-          </section>
 
-          <section class="section-block settings-panel" data-settings-panel="sources">
-            <div class="section-title">
-              <h3 data-i18n="desktop.sources.localSources">Local sources</h3>
-              <p data-i18n="desktop.sources.manageProviders">Manage local providers, Cursor tokens, and public workdir aliases.</p>
-            </div>
-            <div class="actions">
-              <button id="refresh-health" data-i18n="desktop.sources.refreshSources">Refresh sources</button>
-              <button id="add-codex-root" data-i18n="desktop.sources.addCodex">Add Codex location</button>
-              <button id="add-claude-root" data-i18n="desktop.sources.addClaude">Add Claude Code location</button>
-              <button id="add-cursor-token" data-i18n="desktop.sources.addCursor">Add Cursor token</button>
-            </div>
-            <p id="cursor-token-summary" class="sync-note" data-i18n="desktop.sources.noCursorToken">No Cursor token configured.</p>
-            <div id="settings-source-list" class="source-grid"></div>
-            <div class="section-title compact-title source-subtitle">
-              <h3>
-                <span data-i18n="desktop.sources.scanCadence">Source scan cadence</span>
-                <span class="help-tooltip" tabindex="0" data-i18n-title="desktop.sources.scanCadenceTooltip" title="Scans local sources on this interval. If cloud is configured, the scan also uploads daily aggregates.">?</span>
-              </h3>
-              <p data-i18n="desktop.sources.scanCadenceDescription">Control how often the desktop scans local usage sources.</p>
-            </div>
-            <div class="form-grid">
-              <label>
-                <span data-i18n="desktop.sync.refreshInterval">Scan interval (minutes)</span>
-                <input id="refreshIntervalMinutes" type="number" min="1" step="1" value="15" />
-              </label>
-              <label class="toggle-row">
-                <input id="autoRefreshEnabled" type="checkbox" />
-                <span data-i18n="desktop.sync.backgroundRefresh">Scheduled scan</span>
-              </label>
-            </div>
-            <div class="actions">
-              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
-            </div>
-            <p id="background-state" class="sync-note" data-i18n="desktop.sync.backgroundState">Scheduled scan has not run yet.</p>
-            <div class="section-title compact-title">
-              <h3 data-i18n="desktop.sources.workdirAliases">Workdir aliases</h3>
-            </div>
-            <div id="workdir-alias-list" class="alias-list"></div>
-          </section>
-
-          <section class="section-block settings-panel" data-settings-panel="cloud">
-            <div class="section-title">
-              <h3 data-i18n="desktop.cloud.title">Cloud connection</h3>
-              <p data-i18n="desktop.cloud.description">One app-server target is used by sync, pricing, compatibility, and update checks.</p>
-            </div>
-            <div class="form-grid">
-              <label>
-                <span data-i18n="desktop.cloud.apiBaseUrl">API base URL</span>
-                <input id="apiBaseUrl" placeholder="https://your-api.example" data-i18n-placeholder="desktop.cloud.apiBaseUrl" />
-              </label>
-            </div>
-            <div class="actions">
-              <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
-              <button class="sync-now-button" data-sync-now type="button" data-i18n="desktop.nav.syncNow">Sync now</button>
-              <span id="settings-save-message" class="action-message" aria-live="polite"></span>
-            </div>
-            <div class="sync-status-box">
-              <strong data-i18n="desktop.cloud.cloudStatus">Cloud status</strong>
-              <span id="cloud-target" data-i18n="desktop.renderer.apiNotConfigured">API not configured</span>
-              <span id="cloud-health" data-i18n="desktop.renderer.healthDash">Health -</span>
-              <span id="cloud-server-version" data-i18n="desktop.renderer.serverDash">Server -</span>
-              <span id="cloud-protocol" data-i18n="desktop.renderer.protocolDash">Protocol -</span>
-              <span id="cloud-compatibility" data-i18n="desktop.renderer.compatibilityDash">Compatibility -</span>
-              <span id="cloud-latest-version" data-i18n="desktop.renderer.latestDash">Latest -</span>
-              <span id="cloud-release-manifest" data-i18n="desktop.renderer.releaseManifestDash">Release manifest -</span>
-            </div>
-            <div class="sync-status-box">
-              <strong data-i18n="desktop.sync.syncStatus">Sync status</strong>
-              <span id="settings-sync-target" data-i18n="desktop.renderer.apiNotConfigured">API not configured</span>
-              <span id="settings-sync-last" data-i18n="desktop.sync.lastSync">Last sync -</span>
-              <span id="settings-sync-result" data-i18n="desktop.sync.result">No upload attempt recorded.</span>
-            </div>
-          </section>
-
-          <section class="section-block settings-panel" data-settings-panel="app">
-            <section class="app-section-block">
-              <div class="section-title">
-                <h3 data-i18n="desktop.app.title">App</h3>
-                <p data-i18n="desktop.app.description">Language, display preferences, and local startup behavior.</p>
+            <div class="stack">
+              <div>
+                <h4 data-i18n="desktop.settings.displayBehavior">Display &amp; Behavior</h4>
               </div>
-              <div class="app-preferences-grid">
-                <article class="preference-card">
-                  <div class="compact-title">
-                    <h3 data-i18n="desktop.app.displayTitle">Display</h3>
-                    <p data-i18n="desktop.app.displayDescription">Choose how token and cost information is shown in the desktop views.</p>
-                  </div>
-                  <div class="preference-list">
-                    <label class="toggle-row">
-                      <input id="showEstimatedCost" type="checkbox" />
-                      <span data-i18n="desktop.display.showEstCost">Show estimated cost</span>
-                    </label>
-                    <label class="toggle-row">
-                      <input id="showRawTokens" type="checkbox" />
-                      <span data-i18n="desktop.display.showRawTokens">Show raw token numbers</span>
-                    </label>
-                  </div>
-                </article>
-                <article class="preference-card">
-                  <div class="compact-title">
-                    <h3 data-i18n="desktop.app.behaviorTitle">Language and startup</h3>
-                    <p data-i18n="desktop.app.behaviorDescription">Keep desktop behavior settings close to the application controls they affect.</p>
-                  </div>
-                  <div class="preference-list">
-                    <div class="lang-switcher-container settings-lang-switcher" id="lang-switcher-container"></div>
-                    <label class="toggle-row">
-                      <input id="launchAtLogin" type="checkbox" />
-                      <span data-i18n="desktop.display.launchAtLogin">Launch at login</span>
-                    </label>
-                  </div>
-                </article>
+              <div class="row-card">
+                <span class="setting-icon icon" style="--icon: url('./icons/dollar-sign.svg')" aria-hidden="true"></span>
+                <div><strong data-i18n="desktop.display.showEstCost">Estimated cost</strong></div>
+                <label class="toggle-row"><input id="showEstimatedCost" type="checkbox" /><span data-i18n="status.on">On</span></label>
               </div>
+              <div class="row-card">
+                <span class="setting-icon icon" style="--icon: url('./icons/hash.svg')" aria-hidden="true"></span>
+                <div><strong data-i18n="desktop.display.showRawTokens">Raw tokens</strong></div>
+                <label class="toggle-row"><input id="showRawTokens" type="checkbox" /><span data-i18n="status.off">Off</span></label>
+              </div>
+              <div class="row-card">
+                <span class="setting-icon icon" style="--icon: url('./icons/languages.svg')" aria-hidden="true"></span>
+                <div><strong data-i18n="desktop.display.language">Language</strong></div>
+                <div class="lang-switcher-container settings-lang-switcher" id="lang-switcher-container"></div>
+              </div>
+              <div class="row-card">
+                <span class="setting-icon icon" style="--icon: url('./icons/power.svg')" aria-hidden="true"></span>
+                <div><strong data-i18n="desktop.display.launchAtLogin">Launch at login</strong></div>
+                <label class="toggle-row"><input id="launchAtLogin" type="checkbox" /><span data-i18n="status.off">Off</span></label>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="cloud">
+            <div class="stack">
+              <div>
+                <h4 data-i18n="desktop.cloud.title">Cloud Connection</h4>
+              </div>
+              <div class="form-row">
+                <label class="field">
+                  <span data-i18n="desktop.cloud.apiBaseUrl">API Base URL</span>
+                  <input id="apiBaseUrl" placeholder="https://your-api.example" />
+                </label>
+                <button class="outline-button sync-now-button" data-sync-now type="button" data-i18n="desktop.nav.syncNow">Sync</button>
+              </div>
+              <div class="cloud-compact-status">
+                <span class="badge" id="cloud-status-badge">-</span>
+                <span id="cloud-status-text" class="muted"></span>
+              </div>
+            </div>
+
+            <div class="stack">
+              <div>
+                <h4 data-i18n="desktop.about.updatePolicy">Update Policy</h4>
+              </div>
+              <button class="row-card" id="check-update" type="button">
+                <span class="setting-icon icon" style="--icon: url('./icons/rotate-cw.svg')" aria-hidden="true"></span>
+                <div><strong data-i18n="desktop.app.checkUpdate">Check for updates</strong><span class="muted" id="update-status-text" data-i18n="desktop.renderer.latestDash">Current version: -</span></div>
+                <span class="badge" id="update-badge" data-i18n="desktop.renderer.latestDash">-</span>
+              </button>
               <div class="actions">
-                <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
-              </div>
-            </section>
-          </section>
-
-          <section class="section-block settings-panel" data-settings-panel="about">
-            <section class="app-section-block app-safety-block">
-              <div class="section-title">
-                <h3 data-i18n="desktop.about.title">About</h3>
-                <p data-i18n="desktop.about.description">Version status, update policy, diagnostics, and local data reset.</p>
-              </div>
-              <div class="sync-status-box">
-                <strong data-i18n="desktop.app.versionStatus">Version status</strong>
-                <span id="system-client-version" data-i18n="desktop.renderer.clientDash">Client -</span>
-                <span id="system-latest-version" data-i18n="desktop.renderer.latestDash">Latest -</span>
-                <span id="system-update-checked" data-i18n="desktop.renderer.lastCheckDash">Last check -</span>
-                <span id="system-silent-update" data-i18n="desktop.renderer.silentUpdateDash">Silent update -</span>
-              </div>
-            </section>
-
-            <section class="app-section-block">
-              <div class="section-title compact-title">
-                <h3 data-i18n="desktop.about.updatePolicy">Update policy</h3>
-                <p data-i18n="desktop.about.updateDescription">Choose how verified client updates are checked and prepared.</p>
-              </div>
-              <div class="silent-update-control" role="radiogroup" aria-label="Silent update">
-                <label>
-                  <input type="radio" name="silentUpdateMode" value="notify" />
-                  <strong data-i18n="desktop.app.notifyOnly">Notify</strong>
-                  <small data-i18n="desktop.app.notifyOnlyHint">Check only</small>
-                </label>
-                <label>
-                  <input type="radio" name="silentUpdateMode" value="auto_download" />
-                  <strong data-i18n="desktop.app.autoDownload">Prepare</strong>
-                  <small data-i18n="desktop.app.autoDownloadHint">Download verified zip</small>
-                </label>
-                <label>
-                  <input type="radio" name="silentUpdateMode" value="auto_apply_on_idle" />
-                  <strong data-i18n="desktop.app.autoApplyIdle">Auto apply</strong>
-                  <small data-i18n="desktop.app.autoApplyIdleHint">Restart when idle</small>
-                </label>
-              </div>
-              <div class="actions">
-                <button id="check-update" type="button" data-i18n="desktop.app.checkUpdate">Check update</button>
                 <button id="download-update" type="button" disabled data-i18n="desktop.app.downloadRestart">Download and restart</button>
                 <button id="download-installer" type="button" hidden data-i18n="desktop.app.downloadInstaller">Download installer</button>
-                <button class="save-settings" type="button" data-i18n="desktop.account.saveSettings">Save settings</button>
                 <span id="update-message" class="action-message" aria-live="polite"></span>
               </div>
-            </section>
+            </div>
+          </section>
 
-            <section class="app-section-block">
-              <div class="section-title compact-title">
-                <h3 data-i18n="desktop.about.diagnosticsTitle">Diagnostics</h3>
-                <p data-i18n="desktop.about.diagnosticsDescription">Export runtime logs and cached usage summary for local troubleshooting.</p>
+          <section class="settings-panel" data-settings-panel="about">
+            <div class="stack">
+              <div>
+                <h4 data-i18n="desktop.about.diagnosticsTitle">Diagnostics &amp; Reset</h4>
               </div>
-              <div class="actions">
-                <button id="export-diagnostics" type="button" data-i18n="desktop.app.exportDiagnostics">Export diagnostics</button>
-                <span id="diagnostics-message" class="action-message" aria-live="polite"></span>
-              </div>
-            </section>
-
-            <section class="app-section-block">
-              <div class="section-title">
-                <h3 data-i18n="desktop.reset.title">Reset local data</h3>
-                <p data-i18n="desktop.reset.description">Clears this desktop profile, upload queue, cached usage scan, local tokens, aliases, and settings. Codex, Claude Code, and Cursor source files are not deleted.</p>
-              </div>
-              <section class="danger-zone">
-                <div>
-                  <strong data-i18n="desktop.reset.title">Reset local data</strong>
-                  <p data-i18n="desktop.reset.description">Clears this desktop profile, upload queue, cached usage scan, local tokens, aliases, and settings. Codex, Claude Code, and Cursor source files are not deleted.</p>
-                </div>
-                <button id="reset-local-data" type="button" data-i18n="desktop.reset.button">Reset data</button>
-              </section>
-            </section>
+              <button class="row-card" id="export-diagnostics" type="button">
+                <span class="setting-icon icon" style="--icon: url('./icons/file-down.svg')" aria-hidden="true"></span>
+                <div><strong data-i18n="desktop.app.exportDiagnostics">Export diagnostics</strong></div>
+                <span class="badge" data-i18n="desktop.about.safe">Safe</span>
+              </button>
+              <button class="row-card" id="reset-local-data" type="button">
+                <span class="setting-icon icon" style="--icon: url('./icons/trash-2.svg')" aria-hidden="true"></span>
+                <div><strong data-i18n="desktop.reset.title">Reset local data</strong></div>
+                <span class="badge stop" data-i18n="desktop.about.danger">Danger</span>
+              </button>
+              <span id="diagnostics-message" class="action-message" aria-live="polite"></span>
+            </div>
           </section>
         </section>
       </section>
     </main>
+
+    <aside class="drawer" id="trend-drawer" hidden aria-labelledby="trend-drawer-title">
+      <div class="topline">
+        <div>
+          <h3 id="trend-drawer-title" data-i18n="desktop.drawer.detail">Detail</h3>
+          <p id="trend-drawer-copy"></p>
+        </div>
+        <button class="outline-button" id="close-trend-drawer" type="button" data-i18n="close">Close</button>
+      </div>
+      <div id="trend-drawer-body" class="stack"></div>
+    </aside>
+    <div class="trend-drawer-backdrop" id="trend-drawer-backdrop" hidden></div>
+    <div class="toast" id="toast" aria-live="polite"></div>
+
     <div id="wizard-overlay" class="modal-backdrop" hidden>
       <section id="onboarding-wizard" class="wizard" role="dialog" aria-modal="true">
         <div class="wizard-progress">
@@ -385,7 +305,6 @@
         <div class="wizard-step active" data-wizard-step="0">
           <p class="eyebrow" data-i18n="desktop.wizard.welcomeEyebrow">Welcome</p>
           <h2 data-i18n="desktop.wizard.welcome">Welcome to AI Token League</h2>
-          <p data-i18n="desktop.wizard.welcomeDesc">Track your AI coding token usage and compare with the community. The app scans local usage files from Codex, Claude Code, and Cursor, then aggregates daily token counts.</p>
           <div class="privacy-callout">
             <h3 data-i18n="desktop.wizard.privacyTitle">Your data stays private</h3>
             <ul>
@@ -404,7 +323,6 @@
         <div class="wizard-step" data-wizard-step="1">
           <p class="eyebrow" data-i18n="desktop.wizard.identityEyebrow">Identity</p>
           <h2 data-i18n="desktop.wizard.identity">Your identity</h2>
-          <p data-i18n="desktop.wizard.identityDesc">AI Token League creates a cryptographic identity on this device. It signs your usage data so the server can verify it came from you, without requiring a login.</p>
           <div class="form-grid">
             <label>
               <span data-i18n="desktop.account.nickname">Nickname</span>
@@ -425,7 +343,6 @@
         <div class="wizard-step" data-wizard-step="2">
           <p class="eyebrow" data-i18n="desktop.wizard.sourcesEyebrow">Sources</p>
           <h2 data-i18n="desktop.wizard.dataSources">Data sources</h2>
-          <p data-i18n="desktop.wizard.sourcesDesc">We checked your machine for AI coding tools. Enable the ones you want to track.</p>
           <div id="wizard-source-list" class="source-grid"></div>
           <div class="wizard-actions">
             <button id="wizard-back-2" type="button" data-i18n="desktop.wizard.back">Back</button>
@@ -436,7 +353,6 @@
         <div class="wizard-step" data-wizard-step="3">
           <p class="eyebrow" data-i18n="desktop.wizard.cloudEyebrow">Cloud</p>
           <h2 data-i18n="desktop.wizard.cloud">Cloud connection (optional)</h2>
-          <p data-i18n="desktop.wizard.cloudDesc">Connect to an app server to sync your usage to the community leaderboard, check for updates, and view pricing data.</p>
           <div class="form-grid">
             <label>
               <span data-i18n="desktop.cloud.apiBaseUrl">API base URL</span>
@@ -484,11 +400,11 @@
         </div>
       </section>
     </div>
+
     <div id="cursor-token-modal" class="modal-backdrop" hidden>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="cursor-token-title">
         <div class="section-title">
           <h3 id="cursor-token-title" data-i18n="desktop.sources.addCursor">Add Cursor token</h3>
-          <p data-i18n="desktop.cursorToken.description">Cursor credentials stay on this computer and are never uploaded.</p>
         </div>
         <label>
           <span data-i18n="desktop.cursorToken.label">Cursor token</span>
@@ -501,11 +417,11 @@
         </div>
       </section>
     </div>
+
     <div id="reset-confirm-modal" class="modal-backdrop" hidden>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="reset-confirm-title">
         <div class="section-title">
           <h3 id="reset-confirm-title" data-i18n="desktop.reset.modalTitle">Reset data</h3>
-          <p data-i18n="desktop.reset.modalDescription">Choose whether to also delete your uploaded data from the cloud server. Source files in Codex, Claude Code, and Cursor are never deleted.</p>
         </div>
         <p id="reset-confirm-error" class="form-error" aria-live="polite"></p>
         <div class="actions modal-actions">
@@ -515,6 +431,7 @@
         </div>
       </section>
     </div>
+
     <script type="module" src="./renderer.js"></script>
   </body>
 </html>

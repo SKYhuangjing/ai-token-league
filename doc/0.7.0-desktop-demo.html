@@ -1,0 +1,1535 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Token League 客户端 UI 升级交互 Demo</title>
+    <style>
+      :root {
+        --paper: #f5efe3;
+        --paper-2: #fff9ed;
+        --ink: #10110f;
+        --muted: #6f695e;
+        --line: #d9cbb7;
+        --line-strong: #11120f;
+        --yellow: #f4b000;
+        --teal: #058f7e;
+        --mint: #dff4e8;
+        --red: #b43b32;
+        --violet: #9d78dc;
+        --shadow: 0 24px 70px rgba(20, 19, 15, 0.16);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          linear-gradient(rgba(16, 17, 15, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(16, 17, 15, 0.035) 1px, transparent 1px),
+          radial-gradient(circle at 16% 10%, rgba(244, 176, 0, 0.18), transparent 24rem),
+          radial-gradient(circle at 86% 18%, rgba(5, 143, 126, 0.15), transparent 25rem),
+          var(--paper);
+        background-size: 24px 24px, 24px 24px, auto, auto, auto;
+        font-family: ui-serif, Georgia, "Times New Roman", serif;
+      }
+
+      button,
+      input,
+      select,
+      .mono,
+      .tag,
+      .badge,
+      .nav-item,
+      .metric-label,
+      .rail-note,
+      .toast {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      button,
+      input,
+      select { color: inherit; }
+
+      button { cursor: pointer; }
+
+      .page {
+        width: min(1440px, calc(100vw - 48px));
+        margin: 0 auto;
+        padding: 42px 0 56px;
+      }
+
+      .proposal {
+        display: grid;
+        grid-template-columns: minmax(420px, 0.9fr) 1.1fr;
+        gap: 24px;
+        align-items: end;
+        margin-bottom: 24px;
+      }
+
+      .proposal h1 {
+        max-width: 780px;
+        margin: 8px 0 16px;
+        font-size: clamp(42px, 4.8vw, 72px);
+        line-height: 0.98;
+        letter-spacing: 0;
+      }
+
+      .proposal p {
+        max-width: 720px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.65;
+      }
+
+      .tag-row,
+      .actions,
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .tag-row { margin-top: 20px; }
+
+      .tag,
+      .badge {
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        background: rgba(255, 249, 237, 0.86);
+        padding: 7px 10px;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+
+      .tag.hot,
+      .badge.dark {
+        background: var(--ink);
+        color: var(--paper);
+      }
+
+      .badge.ok { background: var(--mint); }
+      .badge.warn { background: rgba(244, 176, 0, 0.22); }
+      .badge.stop { background: rgba(180, 59, 50, 0.16); }
+
+      .principles {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .principle,
+      .panel,
+      .visual-card,
+      .setting-card {
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: rgba(255, 249, 237, 0.78);
+      }
+
+      .principle {
+        min-height: 142px;
+        padding: 18px;
+      }
+
+      .principle strong {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 24px;
+      }
+
+      .principle span,
+      .muted {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .coverage-strip {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 24px;
+      }
+
+      .coverage-card {
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: rgba(255, 249, 237, 0.78);
+        padding: 14px;
+      }
+
+      .coverage-card strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 18px;
+      }
+
+      .coverage-card span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .demo-shell {
+        overflow: hidden;
+        border: 2px solid var(--line-strong);
+        border-radius: 18px;
+        background: var(--paper-2);
+        box-shadow: var(--shadow);
+      }
+
+      .window-bar {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 16px;
+        align-items: center;
+        height: 44px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.48);
+        padding: 0 18px;
+      }
+
+      .traffic {
+        display: flex;
+        gap: 8px;
+      }
+
+      .traffic span {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: #e95c4d;
+      }
+
+      .traffic span:nth-child(2) { background: #f3bd31; }
+      .traffic span:nth-child(3) { background: #50b85c; }
+
+      .window-title {
+        text-align: center;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .primary-pill,
+      .outline-button {
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .primary-pill {
+        background: var(--ink);
+        color: var(--paper);
+      }
+
+      .outline-button {
+        background: rgba(255, 249, 237, 0.84);
+      }
+
+      .app-grid {
+        display: grid;
+        grid-template-columns: 248px 1fr;
+        min-height: 850px;
+      }
+
+      .rail {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-right: 1px solid var(--line-strong);
+        background:
+          linear-gradient(180deg, rgba(255, 249, 237, 0.96), rgba(239, 226, 203, 0.96)),
+          var(--paper);
+        padding: 24px 18px;
+      }
+
+      .brand { margin-bottom: 28px; }
+
+      .brand .mono {
+        color: var(--red);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+      }
+
+      .brand h2 {
+        margin: 8px 0 10px;
+        font-size: 42px;
+        line-height: 0.92;
+      }
+
+      .brand p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .identity {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: fit-content;
+        margin-top: 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        background: rgba(223, 244, 232, 0.72);
+        padding: 7px 10px;
+        font-weight: 800;
+      }
+
+      .identity-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--teal);
+      }
+
+      .nav {
+        display: grid;
+        gap: 8px;
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        gap: 10px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        padding: 12px 10px;
+        font-size: 14px;
+        font-weight: 900;
+        text-align: left;
+      }
+
+      .nav-item.active {
+        border-color: var(--line-strong);
+        background: var(--ink);
+        color: var(--paper);
+      }
+
+      .nav-icon {
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        border: 1px solid currentColor;
+        border-radius: 6px;
+        font-size: 12px;
+      }
+
+      .rail-note {
+        display: grid;
+        gap: 8px;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: rgba(255, 249, 237, 0.74);
+        padding: 14px;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .rail-note strong { font-size: 18px; }
+
+      .content {
+        min-width: 0;
+        padding: 26px;
+      }
+
+      .screen { display: none; }
+
+      .screen.active {
+        display: block;
+        animation: page-in 180ms ease-out;
+      }
+
+      @keyframes page-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .topline {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: flex-start;
+        margin-bottom: 18px;
+      }
+
+      .topline h3 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .topline p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+
+      .actions { justify-content: flex-end; }
+
+      .segmented {
+        display: inline-flex;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: var(--paper-2);
+      }
+
+      .segmented button {
+        border: 0;
+        border-right: 1px solid var(--line-strong);
+        background: transparent;
+        padding: 9px 13px;
+        color: var(--ink);
+        font-weight: 900;
+      }
+
+      .segmented button:last-child { border-right: 0; }
+
+      .segmented .active {
+        background: var(--ink);
+        color: var(--paper);
+      }
+
+      .overview-grid {
+        display: grid;
+        grid-template-columns: minmax(360px, 0.95fr) 1.05fr;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .dashboard-layout { display: grid; gap: 18px; margin-bottom: 18px; }
+      .dash-row-1 { display: grid; grid-template-columns: minmax(320px, 0.8fr) 1.2fr; gap: 18px; }
+      .dash-row-2 { display: grid; grid-template-columns: 1.3fr 0.7fr; gap: 18px; }
+      .stat-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 12px; }
+      .stat-card { border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(255, 249, 237, 0.78); padding: 16px 20px; display: flex; flex-direction: column; justify-content: center; }
+      .stat-card span { color: var(--muted); font-size: 13px; font-weight: 900; }
+      .stat-card strong { font-size: 26px; font-weight: 900; margin-top: 6px; font-family: ui-monospace, SFMono-Regular, monospace; }
+      @media (max-width: 1080px) { .dash-row-1, .dash-row-2 { grid-template-columns: 1fr; } }
+
+      .hero-score {
+        position: relative;
+        overflow: hidden;
+        min-height: 390px;
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        background:
+          radial-gradient(circle at 78% 18%, rgba(244, 176, 0, 0.28), transparent 12rem),
+          linear-gradient(135deg, #171815, #2a2b25);
+        color: var(--paper);
+        padding: 24px;
+      }
+
+      .hero-score::after {
+        content: "";
+        position: absolute;
+        width: 330px;
+        height: 330px;
+        right: -90px;
+        bottom: -90px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(5, 143, 126, 0.86), transparent 70%);
+      }
+
+      .metric-label {
+        color: rgba(245, 239, 227, 0.74);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .total-value {
+        position: relative;
+        z-index: 1;
+        margin: 28px 0 8px;
+        font-size: clamp(70px, 9vw, 130px);
+        font-weight: 900;
+        line-height: 0.82;
+      }
+
+      .hero-sub {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: rgba(245, 239, 227, 0.8);
+      }
+
+      .hero-bottom {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        bottom: 22px;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .dark-mini {
+        border: 1px solid rgba(245, 239, 227, 0.3);
+        border-radius: 8px;
+        background: rgba(16, 17, 15, 0.58);
+        padding: 10px;
+      }
+
+      .dark-mini strong {
+        display: block;
+        font-size: 22px;
+      }
+
+      .dark-mini span {
+        color: rgba(245, 239, 227, 0.68);
+        font-size: 12px;
+      }
+
+      .visual-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .visual-card,
+      .panel,
+      .setting-card {
+        padding: 16px;
+      }
+
+      .visual-card h4,
+      .panel h4,
+      .setting-card h4 {
+        margin: 0 0 8px;
+        font-size: 22px;
+      }
+
+      .ring {
+        width: 132px;
+        height: 132px;
+        margin: 14px auto 4px;
+        border-radius: 50%;
+        background: conic-gradient(var(--teal) 0 72%, var(--yellow) 72% 88%, var(--violet) 88% 100%);
+        display: grid;
+        place-items: center;
+      }
+
+      .ring::after {
+        content: "";
+        width: 78px;
+        height: 78px;
+        border-radius: 50%;
+        background: var(--paper-2);
+        border: 1px solid var(--line);
+      }
+
+      .spark {
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        align-items: end;
+        gap: 6px;
+        height: 120px;
+        margin-top: 14px;
+        border-bottom: 1px solid var(--line-strong);
+      }
+
+      .bar {
+        min-width: 0;
+        border: 1px solid rgba(16, 17, 15, 0.25);
+        border-bottom: 0;
+        border-radius: 6px 6px 0 0;
+        background: linear-gradient(180deg, rgba(5, 143, 126, 0.68), rgba(5, 143, 126, 0.18));
+      }
+
+      .bar.hot {
+        background: linear-gradient(180deg, rgba(244, 176, 0, 0.94), rgba(244, 176, 0, 0.2));
+      }
+
+      .legend {
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .legend i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 5px;
+        border-radius: 50%;
+        background: var(--teal);
+      }
+
+      .legend .yellow i { background: var(--yellow); }
+      .legend .violet i { background: var(--violet); }
+
+      .two-col {
+        display: grid;
+        grid-template-columns: 1.16fr 0.84fr;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .three-col,
+      .settings-grid,
+      .provider-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      .row-card,
+      .source-row,
+      .workdir-card {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 12px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.34);
+        padding: 12px;
+      }
+
+      .source-mark {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: var(--ink);
+        color: var(--paper);
+        font-weight: 900;
+      }
+
+      .row-card strong,
+      .row-card span,
+      .source-row strong,
+      .source-row span,
+      .workdir-card strong,
+      .workdir-card span {
+        display: block;
+      }
+
+      .row-card span,
+      .source-row span,
+      .workdir-card span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .mini-meter {
+        height: 8px;
+        overflow: hidden;
+        border: 1px solid rgba(16, 17, 15, 0.22);
+        border-radius: 999px;
+        background: rgba(16, 17, 15, 0.08);
+      }
+
+      .mini-meter span {
+        display: block;
+        height: 100%;
+        border-radius: 999px;
+        background: var(--teal);
+      }
+
+      .meter-yellow span { background: var(--yellow); }
+      .meter-violet span { background: var(--violet); }
+
+      .provider-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .switch {
+        position: relative;
+        flex: 0 0 auto;
+        width: 48px;
+        height: 28px;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        background: var(--mint);
+      }
+
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--teal);
+      }
+
+      .switch.off { background: rgba(111, 105, 94, 0.16); }
+      .switch.off::after { right: auto; left: 4px; background: var(--muted); }
+
+      .form-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: end;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+      }
+
+      .field span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      input,
+      select {
+        width: 100%;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: rgba(255, 249, 237, 0.84);
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+
+      .cloud-optional {
+        border: 2px dashed rgba(16, 17, 15, 0.42);
+        background: rgba(223, 244, 232, 0.3);
+      }
+
+      .drawer {
+        position: fixed;
+        top: 0;
+        right: 0;
+        z-index: 10;
+        width: min(430px, 100vw);
+        height: 100vh;
+        border-left: 2px solid var(--line-strong);
+        background: var(--paper-2);
+        box-shadow: -24px 0 60px rgba(16, 17, 15, 0.18);
+        padding: 24px;
+        transform: translateX(105%);
+        transition: transform 180ms ease;
+      }
+
+      .drawer.open { transform: translateX(0); }
+
+      .drawer h3 {
+        margin: 0 0 10px;
+        font-size: 34px;
+      }
+
+      .drawer p {
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .toast {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        z-index: 12;
+        max-width: 360px;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: var(--ink);
+        color: var(--paper);
+        padding: 13px 14px;
+        font-size: 13px;
+        font-weight: 800;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(12px);
+        transition: opacity 160ms ease, transform 160ms ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .footer-note {
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      @media (max-width: 1080px) {
+        .proposal,
+        .app-grid,
+        .overview-grid,
+        .two-col,
+        .settings-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .rail {
+          border-right: 0;
+          border-bottom: 1px solid var(--line-strong);
+        }
+
+        .nav,
+        .coverage-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+
+      @media (max-width: 760px) {
+        .page {
+          width: min(100vw - 24px, 680px);
+          padding-top: 20px;
+        }
+
+        .principles,
+        .coverage-strip,
+        .visual-grid,
+        .three-col,
+        .provider-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .topline,
+        .form-row {
+          display: grid;
+        }
+
+        .nav { grid-template-columns: 1fr; }
+        .hero-bottom { grid-template-columns: 1fr; }
+        .source-row,
+        .row-card,
+        .workdir-card { grid-template-columns: auto 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="proposal">
+        <div>
+          <div class="mono">CLIENT UI UPGRADE / PRODUCT + UX ROUND 4</div>
+          <h1>回到一屏看懂的 Token 工作台</h1>
+          <p>
+            产品判断：`Today` 和 `Trends` 不应拆成两个一级入口，用户的第一任务是看今日是否异常并顺手理解走势。
+            UX 判断：参考小红书视觉稿的重点不是做更多表格，而是用大数字、趋势柱、构成环、来源状态卡把能力可视化。
+          </p>
+          <div class="tag-row">
+            <span class="tag hot">Overview = Today + Trend</span>
+            <span class="tag">Less dense</span>
+            <span class="tag">Visual analytics</span>
+            <span class="tag">Optional cloud</span>
+          </div>
+        </div>
+        <div class="principles">
+          <article class="principle">
+            <strong>结构调整</strong>
+            <span>一级菜单收敛为 Overview、Workdirs、Sources、Settings；趋势作为 Overview 内的核心可视化能力。</span>
+          </article>
+          <article class="principle">
+            <strong>补齐缺口</strong>
+            <span>Sources 补检测、忽略/恢复；Settings 补检查更新、下载更新、诊断、重置和导入导出。</span>
+          </article>
+          <article class="principle">
+            <strong>视觉调整</strong>
+            <span>减少大段盘点表，改用海报式数据卡、状态地图和 drill-down 抽屉承载细节。</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="coverage-strip" aria-label="Current capability coverage">
+        <article class="coverage-card"><strong>Overview</strong><span>Today total, composition, trend, top models, source summary.</span></article>
+        <article class="coverage-card"><strong>Workdirs</strong><span>Public names, aliases, contribution, model split.</span></article>
+        <article class="coverage-card"><strong>Sources</strong><span>Detect, enable, ignore, restore, add roots, Cursor token, cadence.</span></article>
+        <article class="coverage-card"><strong>Settings</strong><span>Profile, display, language, launch, import/export, diagnostics, reset.</span></article>
+        <article class="coverage-card"><strong>Cloud</strong><span>Optional sync, pricing, compatibility, update checks.</span></article>
+      </section>
+
+      <section class="demo-shell" aria-label="AI Token League client UI demo">
+        <div class="window-bar">
+          <div class="traffic"><span></span><span></span><span></span></div>
+          <div class="window-title">AI Token League</div>
+          <button class="primary-pill" data-action="local-scan">Scan local</button>
+        </div>
+
+        <div class="app-grid">
+          <aside class="rail">
+            <div>
+              <div class="brand">
+                <div class="mono">AI TOKEN LEAGUE</div>
+                <h2 id="rail-title">总览</h2>
+                <p id="rail-copy">今日用量、趋势、构成和来源摘要。</p>
+                <div class="identity"><span class="identity-dot"></span><span class="mono">Local only ready</span></div>
+              </div>
+              <nav class="nav" aria-label="Demo navigation">
+                <button class="nav-item active" data-page="overview"><span class="nav-icon">O</span>Overview</button>
+                <button class="nav-item" data-page="workdirs"><span class="nav-icon">W</span>Workdirs</button>
+                <button class="nav-item" data-page="sources"><span class="nav-icon">S</span>Sources</button>
+                <button class="nav-item" data-page="settings"><span class="nav-icon">A</span>Settings</button>
+              </nav>
+            </div>
+            <div>
+              <button class="primary-pill" style="width: 100%; margin-bottom: 16px; background: var(--teal); border-color: var(--teal); color: #fff; box-shadow: 0 4px 12px rgba(32,178,138,0.3);" data-action="restart-update">
+                Restart to update
+              </button>
+              <div class="rail-note">
+                <span class="badge ok" id="rail-status">Offline ready</span>
+                <strong id="rail-count">175 rows</strong>
+                <span id="rail-meta">Last scan 12:03 PM<br />Cloud not configured</span>
+              </div>
+            </div>
+          </aside>
+
+          <section class="content">
+            <section class="screen active" data-screen="overview">
+              <div class="topline">
+                <div>
+                  <h3>Overview</h3>
+                  <p>把 Today 和 Trend 合并，首屏直接回答：今天用了多少、为什么、是否异常。</p>
+                </div>
+                <div class="actions">
+                  <div class="segmented" aria-label="Range" style="background: transparent; padding: 0;">
+                    <button class="active" data-range="today" style="border-radius: 6px; padding: 4px 12px;">Today</button>
+                    <button data-range="7d" style="border-radius: 6px; padding: 4px 12px;">7D</button>
+                    <button data-range="30d" style="border-radius: 6px; padding: 4px 12px;">30D</button>
+                    <button data-range="all" style="border-radius: 6px; padding: 4px 12px;">ALL</button>
+                  </div>
+                  <button class="outline-button" data-action="inspect-overview">Explain</button>
+                </div>
+              </div>
+
+              <section class="dashboard-layout">
+                <!-- 第一排：Total 总分与精细化 Cache 数据 -->
+                <div class="dash-row-1">
+                  <article class="hero-score" style="min-height: auto; padding: 32px 24px; display: flex; flex-direction: column; justify-content: center;">
+                    <div class="metric-label">Total Tokens (All Time)</div>
+                    <div class="total-value" id="overview-total" style="font-size: clamp(50px, 5vw, 76px); margin: 12px 0 8px;">46.62M</div>
+                    <div class="hero-sub" style="margin-top: auto;">
+                      <span id="overview-cost" style="color: var(--teal); font-size: 18px; font-weight: 800;">$25.88 estimated</span>
+                    </div>
+                  </article>
+                  
+                  <div class="stat-grid">
+                    <article class="stat-card"><span>Input Tokens</span><strong id="stat-input">26.40M</strong></article>
+                    <article class="stat-card"><span>Output Tokens</span><strong id="stat-output">17.89M</strong></article>
+                    <article class="stat-card"><span>Cache Read</span><strong id="stat-read">1.36M</strong></article>
+                    <article class="stat-card"><span title="Diagnostic sub-metric">Reasoning</span><strong id="stat-reason">1.01M</strong></article>
+                  </div>
+                </div>
+
+                <!-- 第二排：三个维度的排行榜横向并排 -->
+                <div class="three-col" style="margin-bottom: 18px; gap: 18px;">
+                  <article class="visual-card" style="display: flex; flex-direction: column; justify-content: flex-start;">
+                    <h4 style="margin-bottom: 14px;">Top Providers</h4>
+                    <div class="stack" style="gap: 12px;">
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span>Codex</span>
+                        <div class="mini-meter meter-yellow" style="height: 12px;"><span class="p-bar" style="width: 80%; transition: width 0.3s ease;"></span></div>
+                        <span class="p-val" style="text-align: right;">23.6M</span>
+                      </div>
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span>Claude Code</span>
+                        <div class="mini-meter" style="height: 12px;"><span class="p-bar" style="width: 60%; transition: width 0.3s ease;"></span></div>
+                        <span class="p-val" style="text-align: right;">18.1M</span>
+                      </div>
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span>Cursor</span>
+                        <div class="mini-meter" style="height: 12px;"><span class="p-bar" style="width: 42%; transition: width 0.3s ease;"></span></div>
+                        <span class="p-val" style="text-align: right;">12.8M</span>
+                      </div>
+                    </div>
+                  </article>
+                  
+                  <article class="visual-card" style="display: flex; flex-direction: column; justify-content: flex-start;">
+                    <h4 style="margin-bottom: 14px;">Top Models</h4>
+                    <div class="stack" style="gap: 12px;">
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span>gpt-5.5</span>
+                        <div class="mini-meter meter-violet" style="height: 12px;"><span class="m-bar" style="width: 90%; transition: width 0.3s ease;"></span></div>
+                        <span class="m-val" style="text-align: right;">27.8M</span>
+                      </div>
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span>claude-3.7</span>
+                        <div class="mini-meter" style="height: 12px;"><span class="m-bar" style="width: 62%; transition: width 0.3s ease;"></span></div>
+                        <span class="m-val" style="text-align: right;">18.9M</span>
+                      </div>
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span>gpt-4.1</span>
+                        <div class="mini-meter meter-yellow" style="height: 12px;"><span class="m-bar" style="width: 30%; transition: width 0.3s ease;"></span></div>
+                        <span class="m-val" style="text-align: right;">9.34M</span>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article class="visual-card" style="display: flex; flex-direction: column; justify-content: flex-start;">
+                    <h4 style="margin-bottom: 14px;">Top Workdirs</h4>
+                    <div class="stack" style="gap: 12px;">
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="ai-token-league">ai-token...</span>
+                        <div class="mini-meter" style="height: 12px;"><span class="m-bar" style="width: 80%; transition: width 0.3s ease;"></span></div>
+                        <span class="m-val" style="text-align: right;">19.2M</span>
+                      </div>
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="my-project-api">project-api</span>
+                        <div class="mini-meter meter-yellow" style="height: 12px;"><span class="m-bar" style="width: 45%; transition: width 0.3s ease;"></span></div>
+                        <span class="m-val" style="text-align: right;">8.1M</span>
+                      </div>
+                      <div style="display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 12px; font-size: 13px; font-family: ui-monospace, monospace; font-weight: 900;">
+                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="scripts">scripts</span>
+                        <div class="mini-meter meter-violet" style="height: 12px;"><span class="m-bar" style="width: 25%; transition: width 0.3s ease;"></span></div>
+                        <span class="m-val" style="text-align: right;">2.5M</span>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <!-- 第三排：全宽趋势图 -->
+                <div>
+                  <article class="visual-card" style="display: flex; flex-direction: column;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: auto;">
+                      <div>
+                        <h4 style="margin: 0;">Usage Trend</h4>
+                        <p class="muted" style="margin: 2px 0 0 0;" id="trend-desc">Last 24 hours (Hourly)</p>
+                      </div>
+                    </div>
+                    <div class="spark" style="height: 180px; margin-top: 24px; grid-template-columns: repeat(7, 1fr);">
+                      <div class="bar" data-action="open-trend-drawer" style="height:20%; transition: height 0.3s ease; cursor: pointer;"></div><div class="bar" data-action="open-trend-drawer" style="height:35%; transition: height 0.3s ease; cursor: pointer;"></div>
+                      <div class="bar" data-action="open-trend-drawer" style="height:42%; transition: height 0.3s ease; cursor: pointer;"></div><div class="bar" data-action="open-trend-drawer" style="height:55%; transition: height 0.3s ease; cursor: pointer;"></div>
+                      <div class="bar" data-action="open-trend-drawer" style="height:68%; transition: height 0.3s ease; cursor: pointer;"></div><div class="bar" data-action="open-trend-drawer" style="height:74%; transition: height 0.3s ease; cursor: pointer;"></div>
+                      <div class="bar hot" data-action="open-trend-drawer" style="height:72%; transition: height 0.3s ease; cursor: pointer;"></div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 11px; color: var(--muted); margin-top: 10px; font-family: ui-monospace, monospace; font-weight: 900;">
+                      <span>05/05</span><span>05/06</span><span>05/07</span><span>05/08</span><span>05/09</span><span>05/10</span><span>05/11</span>
+                    </div>
+                  </article>
+                </div>
+              </section>
+            </section>
+
+            <section class="screen" data-screen="workdirs">
+              <div class="topline">
+                <div>
+                  <h3>Workdirs</h3>
+                  <p>Top locations consuming tokens. Click to view exact model splits.</p>
+                </div>
+                <div class="segmented" aria-label="Time range" style="background: transparent; padding: 0;">
+                  <button class="active" data-wd-range="today" style="border-radius: 6px; padding: 4px 12px;">Today</button>
+                  <button data-wd-range="7d" style="border-radius: 6px; padding: 4px 12px;">7D</button>
+                  <button data-wd-range="30d" style="border-radius: 6px; padding: 4px 12px;">30D</button>
+                  <button data-wd-range="all" style="border-radius: 6px; padding: 4px 12px;">ALL</button>
+                </div>
+              </div>
+
+              <section class="panel">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                  <h4>Contribution map</h4>
+                  <span class="muted">Click any workdir to manage aliases and view models.</span>
+                </div>
+                <div class="stack">
+                  <div class="workdir-card" data-action="open-workdir-drawer" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='translateX(4px)'" onmouseout="this.style.transform='none'">
+                    <span class="source-mark">1</span>
+                    <div style="flex: 1;">
+                      <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                        <strong>AI Token League</strong>
+                        <span id="wd1-delta" style="font-size: 11px; color: var(--teal); font-weight: 500;">+2.4M today</span>
+                      </div>
+                      <span style="font-size: 12px; color: var(--muted);"><span id="wd1-total">2.4M</span> tokens · alias for token-mac-windows-ai-codex-claude</span>
+                      <div class="mini-meter" style="margin-top: 6px;"><span id="wd1-bar" style="width:92%; transition: width 0.3s ease;"></span></div>
+                    </div>
+                    <span class="badge dark" style="align-self: flex-start; margin-top: 4px;">Main</span>
+                  </div>
+                  <div class="workdir-card" data-action="open-workdir-drawer" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='translateX(4px)'" onmouseout="this.style.transform='none'">
+                    <span class="source-mark">2</span>
+                    <div style="flex: 1;">
+                      <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                        <strong>new-chat</strong>
+                        <span id="wd2-delta" style="font-size: 11px; color: var(--teal); font-weight: 500;">+12k today</span>
+                      </div>
+                      <span style="font-size: 12px; color: var(--muted);"><span id="wd2-total">12k</span> tokens · alias pending</span>
+                      <div class="mini-meter meter-yellow" style="margin-top: 6px;"><span id="wd2-bar" style="width:18%; transition: width 0.3s ease;"></span></div>
+                    </div>
+                    <span class="badge" style="align-self: flex-start; margin-top: 4px;">Small</span>
+                  </div>
+                </div>
+              </section>
+            </section>
+
+            <section class="screen" data-screen="sources">
+              <div class="topline">
+                <div>
+                  <h3>Sources</h3>
+                  <p>Manage AI providers and their specific detected locations.</p>
+                </div>
+                <div class="actions" style="align-items: center; gap: 12px;">
+                  <div style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); background: var(--paper); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line);">
+                    <span>Scan</span>
+                    <input id="scan-interval" value="15" style="width: 32px; text-align: center; border: 1px solid var(--line); border-radius: 4px; background: var(--paper-hover); color: var(--ink); padding: 2px;" />
+                    <span>min</span>
+                    <button data-action="save-scan" style="background: transparent; border: none; color: var(--blue); cursor: pointer; padding: 0 4px; font-weight: 500;">Save</button>
+                  </div>
+                  <button class="outline-button" data-action="refresh-health">Detect now</button>
+                </div>
+              </div>
+
+              <!-- Provider Tabs -->
+              <div class="segmented" style="margin-bottom: 16px; justify-content: flex-start; overflow-x: auto; max-width: 100%; background: transparent; padding: 0; gap: 8px;">
+                <button class="active" data-ptab="claude" style="border-radius: 6px; padding: 6px 14px;">Claude Code</button>
+                <button data-ptab="codex" style="border-radius: 6px; padding: 6px 14px;">Codex</button>
+                <button data-ptab="cursor" style="border-radius: 6px; padding: 6px 14px;">Cursor</button>
+              </div>
+
+              <div id="provider-tab-contents" style="margin-bottom: 24px;">
+                <!-- Claude Code Card -->
+                <article class="visual-card p-content" id="p-claude" style="display: flex; flex-direction: column;">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                    <div>
+                      <h4 style="margin: 0; font-size: 16px;">Claude Code Configuration</h4>
+                      <div class="muted" style="font-size: 12px; margin-top: 4px;">2 detected locations</div>
+                    </div>
+                    <button class="switch" data-action="toggle-source" data-source="Claude Code"></button>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px;">
+                    <p class="muted" style="font-size: 12px; margin: 0;">Scans local project usage logs. Only aggregate daily stats are uploaded.</p>
+                    <button class="outline-button" data-action="add-location" style="padding: 4px 10px; font-size: 12px;">+ Add path</button>
+                  </div>
+                  
+                  <div class="stack" style="gap: 8px; max-height: 250px; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;">
+                    <div class="source-row" style="background: var(--paper); padding: 8px 12px; border-radius: 6px; font-size: 13px;">
+                      <span class="badge ok" style="padding: 2px 6px;">Auto</span>
+                      <div style="flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;">~/.claude/projects/league</div>
+                      <button class="outline-button" style="padding: 2px 8px; font-size: 11px;">Ignore</button>
+                    </div>
+                    <div class="source-row" style="background: var(--paper); padding: 8px 12px; border-radius: 6px; font-size: 13px;">
+                      <span class="badge" style="padding: 2px 6px;">Manual</span>
+                      <div style="flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;">~/.claude/projects/api</div>
+                      <button class="outline-button" style="padding: 2px 8px; font-size: 11px;">Remove</button>
+                    </div>
+                  </div>
+                </article>
+
+                <!-- Codex Card -->
+                <article class="visual-card p-content" id="p-codex" style="display: none; flex-direction: column;">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                    <div>
+                      <h4 style="margin: 0; font-size: 16px;">Codex Configuration</h4>
+                      <div class="muted" style="font-size: 12px; margin-top: 4px;">1 detected location</div>
+                    </div>
+                    <button class="switch" data-action="toggle-source" data-source="Codex local"></button>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px;">
+                    <p class="muted" style="font-size: 12px; margin: 0;">Scans local Codex agent logs. Only aggregate daily stats are uploaded.</p>
+                    <button class="outline-button" data-action="add-location" style="padding: 4px 10px; font-size: 12px;">+ Add path</button>
+                  </div>
+                  
+                  <div class="stack" style="gap: 8px; max-height: 250px; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;">
+                    <div class="source-row" style="background: var(--paper); padding: 8px 12px; border-radius: 6px; font-size: 13px;">
+                      <span class="badge ok" style="padding: 2px 6px;">Auto</span>
+                      <div style="flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;">~/.codex</div>
+                      <button class="outline-button" style="padding: 2px 8px; font-size: 11px;">Ignore</button>
+                    </div>
+                  </div>
+                </article>
+
+                <!-- Cursor Card -->
+                <article class="visual-card p-content" id="p-cursor" style="display: none; flex-direction: column; background: var(--paper-hover);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                    <div>
+                      <h4 style="margin: 0; font-size: 16px;">Cursor Configuration</h4>
+                      <div class="muted" style="font-size: 12px; margin-top: 4px;">3 accounts</div>
+                    </div>
+                    <button class="switch off" data-action="toggle-source" data-source="Cursor Dashboard"></button>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px;">
+                    <p class="muted" style="font-size: 12px; margin: 0;">Reads usage from Cursor dashboard. Tokens remain local.</p>
+                    <button class="outline-button" data-action="add-cursor" style="padding: 4px 10px; font-size: 12px;">+ Add token</button>
+                  </div>
+                  
+                  <div class="stack" style="gap: 8px; max-height: 250px; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;">
+                    <div class="source-row" style="background: var(--paper); padding: 8px 12px; border-radius: 6px; font-size: 13px; opacity: 0.6;">
+                      <span class="badge" style="padding: 2px 6px;">Auto</span>
+                      <div style="flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;">pengyou122@gmail.com</div>
+                      <button class="outline-button" style="padding: 2px 8px; font-size: 11px;">Ignore</button>
+                    </div>
+                    <div class="source-row" style="background: var(--paper); padding: 8px 12px; border-radius: 6px; font-size: 13px; opacity: 0.6;">
+                      <span class="badge" style="padding: 2px 6px;">Auto</span>
+                      <div style="flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;">lily.shan@ldata.info</div>
+                      <button class="outline-button" style="padding: 2px 8px; font-size: 11px;">Ignore</button>
+                    </div>
+                    <div class="source-row" style="background: var(--paper); padding: 8px 12px; border-radius: 6px; font-size: 13px; opacity: 0.6;">
+                      <span class="badge" style="padding: 2px 6px;">Auto</span>
+                      <div style="flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;">18838983358@163.com</div>
+                      <button class="outline-button" style="padding: 2px 8px; font-size: 11px;">Ignore</button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+
+            </section>
+
+            <section class="screen" data-screen="settings">
+              <div class="topline">
+                <div>
+                  <h3>Settings</h3>
+                  <p>App preferences, identity, and advanced options.</p>
+                </div>
+                <div class="actions">
+                  <button class="outline-button" data-action="import-config">Import config</button>
+                  <button class="outline-button" data-action="export-config">Export config</button>
+                  <button class="primary-pill" data-action="save-settings">Save</button>
+                </div>
+              </div>
+
+              <!-- Settings Tabs -->
+              <div class="segmented" style="margin-bottom: 16px; justify-content: flex-start; overflow-x: auto; max-width: 100%; background: transparent; padding: 0; gap: 8px;">
+                <button class="active" data-stab="app" style="border-radius: 6px; padding: 6px 14px;">App</button>
+                <button data-stab="cloud" style="border-radius: 6px; padding: 6px 14px;">Cloud</button>
+                <button data-stab="about" style="border-radius: 6px; padding: 6px 14px;">About</button>
+              </div>
+
+              <section class="stack" style="padding-bottom: 60px;">
+                <article class="s-content" id="s-app" style="display: flex; flex-direction: column; gap: 40px;">
+                  <div class="stack" style="gap: 12px;">
+                    <div>
+                      <h4 style="margin: 0;">Identity</h4>
+                      <span class="muted" style="font-size: 12px;">Manage your local cryptographic profile and nickname.</span>
+                    </div>
+                    <div style="max-width: 500px;">
+                      <label class="field"><span>Nickname</span><input value="柴达星" /></label>
+                    </div>
+                  </div>
+
+                  <div class="stack" style="gap: 12px;">
+                    <div>
+                      <h4 style="margin: 0;">Display & Behavior</h4>
+                      <span class="muted" style="font-size: 12px;">Local UI preferences and startup behavior.</span>
+                    </div>
+                    <div class="stack" style="max-width: 500px;">
+                      <div class="row-card"><span class="source-mark">$</span><div><strong>Estimated cost</strong><span>Show pricing in desktop views</span></div><span class="badge ok">On</span></div>
+                      <div class="row-card"><span class="source-mark">#</span><div><strong>Raw tokens</strong><span>Show exact token numbers instead of compact formats</span></div><span class="badge">Off</span></div>
+                      <div class="row-card"><span class="source-mark">L</span><div><strong>Language</strong><span>Interface language (zh-CN / en)</span></div><span class="badge">i18n</span></div>
+                      <div class="row-card"><span class="source-mark">S</span><div><strong>Launch at login</strong><span>Start tracking automatically</span></div><span class="badge">Off</span></div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="s-content" id="s-cloud" style="display: none; flex-direction: column; gap: 40px;">
+                  <div class="stack" style="gap: 12px;">
+                    <div>
+                      <h4 style="margin: 0;">Cloud Connection</h4>
+                      <span class="muted" style="font-size: 12px;">Connect to server for sync and pricing. No API required for local tracking.</span>
+                    </div>
+                    <div class="form-row" style="max-width: 500px;">
+                      <label class="field"><span>API Base URL</span><input id="api-url" placeholder="https://your-api.example" /></label>
+                      <button class="outline-button" data-action="sync-cloud">Sync</button>
+                    </div>
+                  </div>
+
+                  <div class="stack" style="gap: 12px;">
+                    <div>
+                      <h4 style="margin: 0;">Update Policy</h4>
+                      <span class="muted" style="font-size: 12px;">Updates are checked via Cloud connection.</span>
+                    </div>
+                    <div class="stack" style="max-width: 500px;">
+                      <button class="row-card" data-action="check-update"><span class="source-mark">U</span><div><strong>Check for updates</strong><span>Current version: v0.5.3 (v0.6.0 downloaded)</span></div><span class="badge ok">Ready to restart</span></button>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="s-content" id="s-about" style="display: none; flex-direction: column; gap: 40px;">
+                  <div class="stack" style="gap: 12px;">
+                    <div>
+                      <h4 style="margin: 0;">Diagnostics & Reset</h4>
+                      <span class="muted" style="font-size: 12px;">System health, troubleshooting, and local data reset.</span>
+                    </div>
+                    <div class="stack" style="max-width: 500px;">
+                      <button class="row-card" data-action="export-diagnostics"><span class="source-mark">X</span><div><strong>Export diagnostics</strong><span>Save runtime logs and usage cache for debugging</span></div><span class="badge">Safe</span></button>
+                      <button class="row-card" data-action="reset-local"><span class="source-mark">R</span><div><strong>Reset local data</strong><span>Clear tracking history (Does not delete original provider files)</span></div><span class="badge stop">Danger</span></button>
+                    </div>
+                  </div>
+                </article>
+              </section>
+            </section>
+          </section>
+        </div>
+      </section>
+
+      <p class="footer-note">
+        迭代记录：Round 4 合并 Today + Trends 为 Overview，补齐 Settings 的更新能力与 Sources 的检测/忽略能力，并把密集表格改成可视化卡片。
+      </p>
+    </main>
+
+    <aside class="drawer" id="drawer" aria-live="polite">
+      <div class="topline">
+        <div>
+          <h3 id="drawer-title">Detail</h3>
+          <p id="drawer-copy">Selected operation details appear here.</p>
+        </div>
+        <button class="outline-button" data-action="close-drawer">Close</button>
+      </div>
+      <div id="drawer-body" class="stack"></div>
+    </aside>
+    <div class="toast" id="toast">Ready</div>
+
+    <script>
+      const pageMeta = {
+        overview: ["总览", "今日用量、趋势、构成和来源摘要。", "Offline ready", "175 rows", "Last scan 12:03 PM<br />Cloud not configured"],
+        workdirs: ["目录", "公开 workdir 名、别名和模型拆解。", "Local analysis", "2 workdirs", "Real paths are not shown"],
+        sources: ["来源", "检测、启用、忽略、恢复和扫描节奏。", "3 sources", "2 enabled", "Cursor detected but disabled"],
+        settings: ["设置", "Profile、Display、Cloud optional、App/About。", "Local first", "Cloud optional", "No API required for local use"]
+      };
+
+      const rangeData = {
+        today: {
+          total: "46.62M", cost: "$25.88", input: "26.40M", output: "17.89M", read: "1.36M", reason: "1.01M",
+          pVals: ["23.6M", "18.1M", "12.8M"], pBars: ["80%", "60%", "42%"],
+          mVals: ["27.8M", "18.9M", "9.34M"], mBars: ["90%", "62%", "30%"]
+        },
+        "7d": {
+          total: "318.5M", cost: "$172.40", input: "185.2M", output: "98.4M", read: "20.1M", reason: "12.3M",
+          pVals: ["142.1M", "108.5M", "67.9M"], pBars: ["85%", "65%", "40%"],
+          mVals: ["150.2M", "110.8M", "48.1M"], mBars: ["88%", "68%", "28%"]
+        },
+        "30d": {
+          total: "1.25B", cost: "$645.10", input: "710.5M", output: "420.2M", read: "80.6M", reason: "54.8M",
+          pVals: ["580.4M", "420.1M", "249.5M"], pBars: ["90%", "70%", "45%"],
+          mVals: ["610.2M", "440.5M", "180.3M"], mBars: ["92%", "72%", "35%"]
+        },
+        "all": {
+          total: "14.2B", cost: "$7,120.50", input: "8.1B", output: "4.5B", read: "950M", reason: "650M",
+          pVals: ["6.2B", "5.1B", "2.9B"], pBars: ["95%", "80%", "50%"],
+          mVals: ["8.5B", "4.1B", "1.6B"], mBars: ["98%", "65%", "25%"]
+        }
+      };
+
+      function showToast(message) {
+        const toast = document.querySelector("#toast");
+        toast.textContent = message;
+        toast.classList.add("show");
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+      }
+
+      function openDrawer(title, copy, rows) {
+        document.querySelector("#drawer-title").textContent = title;
+        document.querySelector("#drawer-copy").textContent = copy;
+        document.querySelector("#drawer-body").innerHTML = rows
+          .map((row) => `<div class="row-card"><span class="source-mark">${row[0]}</span><div><strong>${row[1]}</strong><span>${row[2]}</span></div><span class="badge ${row[4] || ""}">${row[3]}</span></div>`)
+          .join("");
+        document.querySelector("#drawer").classList.add("open");
+      }
+
+      function setPage(page) {
+        document.querySelectorAll("[data-screen]").forEach((screen) => screen.classList.toggle("active", screen.dataset.screen === page));
+        document.querySelectorAll("[data-page]").forEach((item) => item.classList.toggle("active", item.dataset.page === page));
+        const meta = pageMeta[page];
+        document.querySelector("#rail-title").textContent = meta[0];
+        document.querySelector("#rail-copy").textContent = meta[1];
+        document.querySelector("#rail-status").textContent = meta[2];
+        document.querySelector("#rail-count").textContent = meta[3];
+        document.querySelector("#rail-meta").innerHTML = meta[4];
+      }
+
+      document.querySelectorAll("[data-page]").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
+      document.querySelectorAll("[data-range]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll("[data-range]").forEach((item) => item.classList.toggle("active", item === button));
+          const data = rangeData[button.dataset.range];
+          
+          let desc = "Local cadence aggregation";
+          if(button.dataset.range === "today") desc = "Last 24 hours (Hourly)";
+          else if(button.dataset.range === "7d") desc = "Last 7 days (Daily)";
+          else if(button.dataset.range === "30d") desc = "Last 4 weeks (Weekly)";
+          else if(button.dataset.range === "all") desc = "All time (Monthly)";
+          document.querySelector("#trend-desc").textContent = desc;
+          
+          document.querySelector("#overview-total").textContent = data.total;
+          document.querySelector("#overview-cost").textContent = data.cost + " estimated";
+          document.querySelector("#stat-input").textContent = data.input;
+          document.querySelector("#stat-output").textContent = data.output;
+          document.querySelector("#stat-read").textContent = data.read;
+          document.querySelector("#stat-reason").textContent = data.reason;
+
+          const pVals = document.querySelectorAll(".p-val");
+          const pBars = document.querySelectorAll(".p-bar");
+          const mVals = document.querySelectorAll(".m-val");
+          const mBars = document.querySelectorAll(".m-bar");
+          
+          if(pVals.length) {
+            pVals.forEach((el, i) => { el.textContent = data.pVals[i]; pBars[i].style.width = data.pBars[i]; });
+            mVals.forEach((el, i) => { el.textContent = data.mVals[i]; mBars[i].style.width = data.mBars[i]; });
+          }
+
+          document.querySelectorAll(".spark .bar").forEach(bar => {
+             bar.style.height = (Math.random() * 50 + 30) + "%";
+          });
+
+          showToast(`Overview switched to ${button.textContent.trim()}`);
+        });
+      });
+
+      document.querySelectorAll("[data-stab]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll("[data-stab]").forEach(btn => btn.classList.remove("active"));
+          button.classList.add("active");
+          const target = button.dataset.stab;
+          document.querySelectorAll(".s-content").forEach(content => {
+            content.style.display = content.id === `s-${target}` ? "flex" : "none";
+          });
+        });
+      });
+
+      document.querySelectorAll("[data-ptab]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll("[data-ptab]").forEach(btn => btn.classList.remove("active"));
+          button.classList.add("active");
+          const target = button.dataset.ptab;
+          document.querySelectorAll(".p-content").forEach(content => {
+            content.style.display = content.id === `p-${target}` ? "flex" : "none";
+          });
+        });
+      });
+
+      const wdData = {
+        "today": { wd1Total: "2.4M", wd1Delta: "+2.4M today", wd1Bar: "92%", wd2Total: "12k", wd2Delta: "+12k today", wd2Bar: "18%" },
+        "7d": { wd1Total: "18.5M", wd1Delta: "+2.4M today", wd1Bar: "85%", wd2Total: "34k", wd2Delta: "+12k today", wd2Bar: "25%" },
+        "30d": { wd1Total: "46.66M", wd1Delta: "+2.4M today", wd1Bar: "70%", wd2Total: "56k", wd2Delta: "+12k today", wd2Bar: "12%" },
+        "all": { wd1Total: "248.5M", wd1Delta: "+2.4M today", wd1Bar: "65%", wd2Total: "312k", wd2Delta: "+12k today", wd2Bar: "8%" }
+      };
+
+      document.querySelectorAll("[data-wd-range]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll("[data-wd-range]").forEach(btn => btn.classList.remove("active"));
+          button.classList.add("active");
+          const d = wdData[button.dataset.wdRange];
+          document.querySelector("#wd1-total").textContent = d.wd1Total;
+          document.querySelector("#wd1-delta").textContent = d.wd1Delta;
+          document.querySelector("#wd1-bar").style.width = d.wd1Bar;
+          
+          document.querySelector("#wd2-total").textContent = d.wd2Total;
+          document.querySelector("#wd2-delta").textContent = d.wd2Delta;
+          document.querySelector("#wd2-bar").style.width = d.wd2Bar;
+        });
+      });
+
+      document.addEventListener("click", (event) => {
+        const action = event.target.closest("[data-action]");
+        if (!action) return;
+        const type = action.dataset.action;
+
+        if (type === "close-drawer") document.querySelector("#drawer").classList.remove("open");
+        if (type === "local-scan") showToast("Local scan finished. Cloud remains optional.");
+        if (type === "restart-update") showToast("Restarting application to apply update...");
+        if (type === "inspect-overview") {
+          openDrawer("Overview explanation", "Today and Trends are merged because the user's first question is contextual: how much did I use, and is it unusual?", [
+            ["Σ", "Total rule", "input + output + cacheRead + cacheWrite; reasoning excluded.", "Truth", "dark"],
+            ["G", "Visual trend", "Peak period is visible without opening another page.", "Trend", "warn"],
+            ["S", "Sources", "Source health is summarized here and managed in Sources.", "Route", "ok"]
+          ]);
+        }
+        if (type === "model-detail") {
+          openDrawer("Model detail", "Model breakdown remains available, but not as a dense default table.", [
+            ["G", "gpt-5.5", "2780万 tokens · dominant.", "Top", "dark"],
+            ["M", "mimo-v2.5-pro", "1795万 tokens · active.", "Model", ""]
+          ]);
+        }
+        if (type === "open-trend-drawer") {
+          openDrawer("Period breakdown", "Usage details for the selected timeframe block.", [
+            ["W", "Workdir Contribution", "AI Token League led with 4.2M tokens.", "Top", "dark"],
+            ["M", "Model Contribution", "gpt-5.5 generated 82% of tokens.", "Split", "ok"],
+            ["C", "Cost Impact", "Estimated $2.40 spent in this slice.", "Cost", "warn"]
+          ]);
+        }
+        if (type === "save-alias") showToast(`Alias saved: ${document.querySelector("#alias-input")?.value || "AI Token League"}`);
+        if (type === "open-workdir-drawer") {
+          document.querySelector("#drawer-title").textContent = "AI Token League (Workdir)";
+          document.querySelector("#drawer-copy").textContent = "Real paths are not shown. Manage alias and view model split for this specific directory.";
+          document.querySelector("#drawer-body").innerHTML = `
+            <div class="form-row" style="margin-bottom: 24px;">
+              <label class="field"><span>Public alias (Hides real path)</span><input id="alias-input" value="AI Token League" /></label>
+              <button class="primary-pill" data-action="save-alias">Save</button>
+            </div>
+            <div class="visual-card" style="margin-bottom: 16px;">
+              <h4 style="margin: 0 0 12px 0;">Usage History</h4>
+              <div style="display: flex; gap: 16px;">
+                <div style="flex: 1;">
+                  <div class="muted" style="font-size: 11px;">TODAY</div>
+                  <div style="font-size: 16px; font-weight: 600;">2.4M</div>
+                </div>
+                <div style="flex: 1;">
+                  <div class="muted" style="font-size: 11px;">7 DAYS</div>
+                  <div style="font-size: 16px; font-weight: 600;">18.5M</div>
+                </div>
+                <div style="flex: 1;">
+                  <div class="muted" style="font-size: 11px;">30 DAYS</div>
+                  <div style="font-size: 16px; font-weight: 600;">46.6M</div>
+                </div>
+              </div>
+            </div>
+            <div class="visual-card">
+              <h4>Model structure</h4>
+              <div class="ring" style="margin: 14px auto 14px; width:112px;height:112px;background:conic-gradient(var(--teal) 0 61%, var(--yellow) 61% 100%)"></div>
+              <div class="legend" style="justify-content: center;"><span><i></i>gpt-5.5 61%</span><span class="yellow"><i></i>mimo 39%</span></div>
+            </div>
+          `;
+          document.querySelector("#drawer").classList.add("open");
+        }
+        if (type === "refresh-health") showToast("Detection refreshed: accounts and roots updated");
+        if (type === "ignore-source") showToast("Source ignored. Local files were not deleted.");
+        if (type === "restore-source") showToast("Ignored source restored to scan candidates.");
+        if (type === "remove-source") showToast("Manual source removed. Local files were not deleted.");
+        if (type === "add-location") {
+          openDrawer("Add location", "Codex and Claude locations are local roots; adding them does not configure cloud.", [
+            ["C", "Codex location", "Add a custom Codex log root.", "Local", "ok"],
+            ["CC", "Claude location", "Add a Claude Code project root.", "Local", "ok"]
+          ]);
+        }
+        if (type === "add-cursor") {
+          openDrawer("Add Cursor token", "Cursor credentials stay local and are never echoed back after save.", [
+            ["1", "Paste token", "Mask sensitive content.", "Local", "ok"],
+            ["2", "Resolve account", "Prefer email or readable account display.", "Name", ""],
+            ["3", "Save config", "Deduplicate while preserving existing token records.", "Safe", "warn"]
+          ]);
+        }
+        if (type === "toggle-source") {
+          action.classList.toggle("off");
+          const enabled = !action.classList.contains("off");
+          if (action.dataset.source === "Cursor Dashboard") {
+            document.querySelector("#cursor-copy").textContent = enabled ? "enabled, cloud optional" : "detected, scan disabled";
+          }
+          showToast(`${action.dataset.source} ${enabled ? "enabled" : "disabled"} with optimistic UI`);
+        }
+        if (type === "save-scan") showToast(`Scan cadence saved: ${document.querySelector("#scan-interval").value} minutes`);
+        if (type === "export-config") showToast("Config export demo");
+        if (type === "import-config") showToast("Import config demo");
+        if (type === "save-settings") showToast("Settings saved");
+        if (type === "sync-cloud") showToast(document.querySelector("#api-url").value ? "Cloud sync demo started" : "Cloud is optional; local analysis still works.");
+        if (type === "check-update") showToast("Checked updates: client 0.5.3 is current");
+        if (type === "download-update") showToast("No update package available in this demo");
+        if (type === "reset-local") showToast("Reset confirmation would open here");
+        if (type === "export-diagnostics") {
+          openDrawer("Diagnostics export", "Diagnostics helps troubleshoot without exposing prompts, responses, source code, paths or secrets.", [
+            ["R", "Runtime", "Version, platform, source health, cloud target.", "Meta", ""],
+            ["U", "Usage", "Cached aggregate summary and queue state.", "Facts", "ok"],
+            ["X", "Excluded", "Raw content and source files are never exported.", "Safe", "warn"]
+          ]);
+        }
+      });
+    </script>
+  </body>
+</html>

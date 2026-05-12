@@ -1,7 +1,7 @@
 {
   "name": "ai-token-league",
   "version": "0.5.3",
-  "productBaseline": "0.5",
+  "productBaseline": "0.7",
   "private": true,
   "type": "module",
   "main": "src/desktop/main.cjs",
@@ -46,6 +46,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.6.2",
+    "lucide-static": "^1.14.0",
     "mysql2": "^3.22.3",
     "sql.js": "^1.13.0"
   }

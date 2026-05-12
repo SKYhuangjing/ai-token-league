@@ -2,7 +2,25 @@
 
 本文件记录产品级路线图。已进入版本基线或开发任务的能力，不再放在散列 TODO 中。
 
-## 0.6 进行中
+## 0.7 进行中
+
+目标：基于 UX 团队客户端重构设计稿，完整重做桌面客户端信息架构和视觉体验；不拆一期/二期，按完整功能落地验收。
+
+| 能力 | 状态 | 产品结果 |
+| --- | --- | --- |
+| 桌面信息架构重构 | TODO | 一级导航调整为 Overview、Workdirs、Sources、Settings。 |
+| Overview token 工作台 | TODO | 首屏合并今日用量、构成、趋势、Top Models、Top Workdirs、Sources 和 Cloud/Sync 状态。 |
+| Workdirs 分析面 | TODO | Workdir 成为一级分析入口，支持 range、alias、模型拆解和详情抽屉。 |
+| Sources 一级管理面 | TODO | Codex、Claude Code、Cursor 来源管理从 Settings 提升为一级面板，保留 0.6 来源语义。 |
+| Settings 收敛 | TODO | Settings 聚焦 Profile、App、Cloud、Updates/About、Diagnostics/Reset、Import/Export。 |
+| 完整验证与打包 | TODO | 完成 node check、npm test、desktop smoke 和当前机器 zip 打包验证。 |
+
+参考：
+
+- `doc/0.7-baseline.md`
+- `doc/0.7-development-tasks.md`
+
+## 0.6 已冻结
 
 目标：清理旧版更新系统遗留代码，引入构建时预置配置能力，热更新失败安装包下载兜底。
 

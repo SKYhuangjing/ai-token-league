@@ -262,7 +262,9 @@ scripts/release.sh --env env.local --installers --upload
 
 - [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) - 中文更新日志。
 - [CHANGELOG.md](CHANGELOG.md) - English changelog。
-- [doc/0.6-baseline.md](doc/0.6-baseline.md) - 0.6 产品基线（进行中）。
+- [doc/0.7-baseline.md](doc/0.7-baseline.md) - 0.7 桌面客户端 UI 重构基线（进行中）。
+- [doc/0.7-development-tasks.md](doc/0.7-development-tasks.md) - 0.7 完整落地任务与验证记录。
+- [doc/0.6-baseline.md](doc/0.6-baseline.md) - 0.6 产品基线（已冻结）。
 - [doc/0.6-development-tasks.md](doc/0.6-development-tasks.md) - 0.6 开发任务与验证记录。
 - [doc/0.5-baseline.md](doc/0.5-baseline.md) - 0.5 产品基线（已冻结）。
 - [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - 0.5 开发任务与验证记录。

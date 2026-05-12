@@ -495,8 +495,11 @@ export async function createConfiguredStore() {
 async function warmOpenRouterPrices(targetStore) {
   if (String(process.env.OPENROUTER_PRICING_AUTO_REFRESH || "true").toLowerCase() === "false") return;
   const remote = targetStore.db.modelPriceCache?.remote || {};
-  if (remote.status === "fresh" && remote.expiresAt && Date.parse(remote.expiresAt) > Date.now()) return;
-  await targetStore.refreshOpenRouterPrices({ recalculate: false });
+  if (remote.status === "fresh" && remote.expiresAt && Date.parse(remote.expiresAt) > Date.now()) {
+    if (targetStore.missingPriceModels().length) await targetStore.recalculateCosts();
+    return;
+  }
+  await targetStore.refreshOpenRouterPrices({ recalculate: true });
 }
 
 async function handle(req, res) {

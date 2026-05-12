@@ -23,6 +23,7 @@ import { runVerification } from "../scripts/verify-collector-ccusage.js";
 const require = createRequire(import.meta.url);
 const initSqlJs = require("sql.js/dist/sql-asm.js");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
+process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
 
 function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];

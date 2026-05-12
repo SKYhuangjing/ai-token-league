@@ -262,7 +262,9 @@ Developer commands, API details, storage notes, and verification boundaries live
 
 - [CHANGELOG.md](CHANGELOG.md) - English changelog.
 - [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) - Chinese changelog.
-- [doc/0.6-baseline.md](doc/0.6-baseline.md) - 0.6 product baseline (in progress).
+- [doc/0.7-baseline.md](doc/0.7-baseline.md) - 0.7 desktop client UI redesign baseline (active).
+- [doc/0.7-development-tasks.md](doc/0.7-development-tasks.md) - 0.7 complete implementation tasks and verification record.
+- [doc/0.6-baseline.md](doc/0.6-baseline.md) - 0.6 product baseline (frozen).
 - [doc/0.6-development-tasks.md](doc/0.6-development-tasks.md) - 0.6 development tasks and verification record.
 - [doc/0.5-baseline.md](doc/0.5-baseline.md) - 0.5 product baseline (frozen).
 - [doc/0.5-development-tasks.md](doc/0.5-development-tasks.md) - 0.5 development tasks and verification record.
