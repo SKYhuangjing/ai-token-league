@@ -160,6 +160,11 @@ const translations = {
     "desktop.range.all": "全部",
     "desktop.rail.scanComplete": "统计完成",
     "desktop.rail.restartUpdate": "重启更新",
+    "desktop.rail.cloudLocal": "本地",
+    "desktop.rail.cloudOnline": "在线",
+    "desktop.rail.cloudOffline": "离线",
+    "desktop.rail.cloudUnavailable": "不可用",
+    "desktop.rail.cloudChecking": "检查中",
     "desktop.drawer.detail": "详情",
 
     // 桌面端 - 同步状态
@@ -753,6 +758,11 @@ const translations = {
     "desktop.range.all": "All",
     "desktop.rail.scanComplete": "Scan complete",
     "desktop.rail.restartUpdate": "Restart to update",
+    "desktop.rail.cloudLocal": "Local",
+    "desktop.rail.cloudOnline": "Online",
+    "desktop.rail.cloudOffline": "Offline",
+    "desktop.rail.cloudUnavailable": "Unavailable",
+    "desktop.rail.cloudChecking": "Checking",
     "desktop.drawer.detail": "Detail",
 
     // Desktop - Sync Status

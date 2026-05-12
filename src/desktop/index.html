@@ -28,6 +28,10 @@
         <div class="rail-bottom">
           <button class="primary-pill teal-button" id="rail-restart-update" type="button" hidden data-i18n="desktop.rail.restartUpdate">Restart to update</button>
           <div class="rail-note">
+            <div id="rail-cloud-status" class="rail-cloud-status" data-state="local">
+              <span class="rail-status-dot" aria-hidden="true"></span>
+              <span id="rail-cloud-status-text" data-i18n="desktop.rail.cloudLocal">Local</span>
+            </div>
             <span id="rail-last-scan" data-i18n="desktop.renderer.currentScanDash">Current -</span>
             <small id="rail-next-scan" data-i18n="desktop.renderer.nextScanDash">Next -</small>
           </div>

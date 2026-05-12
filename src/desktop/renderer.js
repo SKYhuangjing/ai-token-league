@@ -380,9 +380,12 @@ function selectSettingsTab(tab) {
 
 async function saveSettings() {
   const payload = settingsPayload();
+  const previousConfig = latestConfig;
   const dirtyBeforeSave = getDirtyFields();
+  const apiChanged = apiBaseUrlChanged(previousConfig, payload);
   const nextCycleDirty = dirtyBeforeSave.some((f) => f === "autoRefreshEnabled" || f === "refreshIntervalMinutes" || f === "silentUpdateMode");
   setSaveMessage(payload.apiBaseUrl ? t("desktop.renderer.checkingApi") : t("desktop.renderer.savingSettings"), "");
+  if (apiChanged && payload.apiBaseUrl) renderRailCloudStatus({ state: "checking", label: t("desktop.rail.cloudChecking") });
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
   renderConfig(config);
@@ -393,7 +396,11 @@ async function saveSettings() {
     setSaveMessage(t("desktop.sync.settingsSaved"), "ok");
   }
   setStatusMessage(t("desktop.sync.settingsSaved"));
-  await loadBackgroundStatus();
+  if (apiChanged) {
+    await refreshCloudDependentState();
+  } else {
+    await loadBackgroundStatus();
+  }
   return config;
 }
 
@@ -420,11 +427,16 @@ $("#import").addEventListener("click", async () => run(async () => {
 }));
 
 async function importProfile() {
+  const previousConfig = latestConfig;
   const config = await api.importConfig();
   if (!config?.canceled) {
     renderConfig(config);
     await loadToday(true);
-    await loadBackgroundStatus();
+    if (apiBaseUrlChanged(previousConfig, config)) {
+      await refreshCloudDependentState();
+    } else {
+      await loadBackgroundStatus();
+    }
   }
 }
 
@@ -513,13 +525,18 @@ function renderWizardSummary() {
 }
 
 async function wizardImportProfile() {
+  const previousConfig = latestConfig;
   const config = await api.importConfig();
   if (!config?.canceled) {
     latestConfig = config;
     renderConfig(config);
     renderWizard();
     await loadToday(true);
-    await loadBackgroundStatus();
+    if (apiBaseUrlChanged(previousConfig, config)) {
+      await refreshCloudDependentState();
+    } else {
+      await loadBackgroundStatus();
+    }
   }
 }
 
@@ -542,6 +559,7 @@ async function skipWizard() {
 async function finishWizard() {
   const nickname = $("#wizard-nickname").value.trim() || "anonymous";
   const apiBaseUrl = $("#wizard-api-base-url").value.trim();
+  const previousConfig = latestConfig;
   const providerEnabled = {};
   document.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
     const pid = button.dataset.wizardToggleSource;
@@ -557,7 +575,11 @@ async function finishWizard() {
   });
   renderConfig(latestConfig);
   await loadToday(true);
-  await loadBackgroundStatus();
+  if (apiBaseUrlChanged(previousConfig, latestConfig)) {
+    await refreshCloudDependentState();
+  } else {
+    await loadBackgroundStatus();
+  }
   setStatusMessage(t("desktop.sync.profileReady"));
 }
 
@@ -686,6 +708,21 @@ async function loadMyIdentity() {
   } catch {
     block.hidden = true;
   }
+}
+
+async function refreshCloudDependentState() {
+  serverPriceMap = null;
+  latestUpdateState = null;
+  latestIdentityBusinessDay = "";
+  await loadMyIdentity();
+  await refreshPricing();
+  renderInstantPreferenceViews();
+  await loadBackgroundStatus();
+  await loadSystemStatus();
+}
+
+function apiBaseUrlChanged(previousConfig = {}, nextConfig = {}) {
+  return normalizeApiBaseUrl(previousConfig?.apiBaseUrl || "") !== normalizeApiBaseUrl(nextConfig?.apiBaseUrl || "");
 }
 
 function setScanState(running, force = false) {
@@ -1216,10 +1253,52 @@ function renderRailStatus() {
   const readyPackage = latestUpdateState?.readyPackage || null;
   const lastScanAt = latestScanAt || latestBackgroundStatus?.cacheScannedAt || latestBackgroundStatus?.lastRunAt || "";
   const nextScanAt = latestBackgroundStatus?.nextRunAt || "";
+  renderRailCloudStatus();
   setTextIfPresent("#rail-last-scan", t("desktop.renderer.currentScan", { time: lastScanAt ? formatDateTime(lastScanAt) : "-" }));
   setTextIfPresent("#rail-next-scan", t("desktop.renderer.nextScan", { time: nextScanAt ? formatDateTime(nextScanAt) : "-" }));
   const restartBtn = $("#rail-restart-update");
   if (restartBtn) restartBtn.hidden = !(readyPackage || latestUpdateState?.status === "downloaded" || update?.status === "downloaded");
+}
+
+function renderRailCloudStatus(override = null) {
+  const root = $("#rail-cloud-status");
+  const text = $("#rail-cloud-status-text");
+  if (!root || !text) return;
+  const status = override || railCloudStatus(latestConfig);
+  root.dataset.state = status.state;
+  text.textContent = status.label;
+  root.title = status.title || status.label;
+}
+
+function railCloudStatus(config = latestConfig) {
+  const connection = config?.apiConnection || {};
+  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || connection.apiBaseUrl || "");
+  if (!apiBaseUrl) {
+    return { state: "local", label: t("desktop.rail.cloudLocal"), title: t("desktop.renderer.cloudNotConfigured") };
+  }
+  if (!connection.checkedAt) {
+    return { state: "checking", label: t("desktop.rail.cloudChecking"), title: apiBaseUrl };
+  }
+  const compatibility = connection.compatibility || {};
+  if (connection.status === "reachable" && compatibility.compatible === false) {
+    return {
+      state: "unavailable",
+      label: t("desktop.rail.cloudUnavailable"),
+      title: connection.message || compatibility.reason || compatibility.status || apiBaseUrl
+    };
+  }
+  if (connection.status === "reachable") {
+    const version = connection.serverVersion ? `v${connection.serverVersion}` : apiBaseUrl;
+    return { state: "online", label: t("desktop.rail.cloudOnline"), title: version };
+  }
+  if (connection.status === "not_configured") {
+    return { state: "local", label: t("desktop.rail.cloudLocal"), title: t("desktop.renderer.cloudNotConfigured") };
+  }
+  return {
+    state: "offline",
+    label: t("desktop.rail.cloudOffline"),
+    title: connection.message || apiBaseUrl
+  };
 }
 
 function renderTrend() {

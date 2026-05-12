@@ -356,8 +356,10 @@ ipcMain.handle("api:check", async (_event, apiBaseUrl) => {
 ipcMain.handle("config:init", async (_event, input) => {
   const { config } = await modules();
   const current = config.loadConfig();
+  const previousApiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
   const prepared = await prepareConfigInput(input, current);
   const next = current ? config.updateConfig(prepared, current) : config.initConfig(prepared);
+  invalidateCloudStateForApiChange(previousApiBaseUrl, next);
   invalidateUsageCache();
   appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
@@ -369,7 +371,9 @@ ipcMain.handle("config:init", async (_event, input) => {
 ipcMain.handle("config:update", async (_event, input) => {
   const { config } = await modules();
   const current = config.loadConfig();
+  const previousApiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
   const next = config.updateConfig(await prepareConfigInput(input, current), current);
+  invalidateCloudStateForApiChange(previousApiBaseUrl, next);
   invalidateUsageCache();
   appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
@@ -1346,6 +1350,27 @@ function resetLocalData(configModule) {
 
 function hasApiBaseUrl(config) {
   return Boolean(String(config?.apiBaseUrl || "").trim());
+}
+
+function invalidateCloudStateForApiChange(previousApiBaseUrl, nextConfig = {}) {
+  const nextApiBaseUrl = normalizeApiBaseUrl(nextConfig.apiBaseUrl || "");
+  if (nextApiBaseUrl === previousApiBaseUrl) return;
+  cachedConfig = nextConfig;
+  cachedReleaseConfig = null;
+  customMacUpdate = null;
+  if (!updateCheck.downloadRunning && !updateCheck.applyRunning) {
+    updateCheck.running = false;
+    updateCheck.status = "idle";
+    updateCheck.lastCheckedAt = null;
+    updateCheck.lastResult = null;
+    updateCheck.lastError = null;
+    updateCheck.downloadProgress = null;
+    updateCheck.readyPackage = null;
+  }
+  appendRuntimeLog("cloud_api_changed", {
+    fromConfigured: Boolean(previousApiBaseUrl),
+    toConfigured: Boolean(nextApiBaseUrl)
+  });
 }
 
 async function prepareConfigInput(input = {}, current = null) {

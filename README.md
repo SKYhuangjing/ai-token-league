@@ -20,6 +20,10 @@
 
 ![AI Token League 桌面客户端趋势页](assets/screenshots/desktop-client.png)
 
+| 工作目录 | 来源 |
+| --- | --- |
+| ![AI Token League 桌面客户端工作目录页](assets/screenshots/desktop-workdirs.png) | ![AI Token League 桌面客户端来源页](assets/screenshots/desktop-sources.png) |
+
 | 公开首页 | 社区排行榜 |
 | --- | --- |
 | ![AI Token League 公开首页](assets/screenshots/web-home.png) | ![AI Token League 社区排行榜](assets/screenshots/web-leaderboard.png) |

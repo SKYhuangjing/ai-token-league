@@ -20,6 +20,10 @@ Current version: `0.5.3`
 
 ![AI Token League desktop client trend view](assets/screenshots/desktop-client.png)
 
+| Workdirs | Sources |
+| --- | --- |
+| ![AI Token League desktop client workdirs view](assets/screenshots/desktop-workdirs.png) | ![AI Token League desktop client sources view](assets/screenshots/desktop-sources.png) |
+
 | Public Home | Community Leaderboard |
 | --- | --- |
 | ![AI Token League public home](assets/screenshots/web-home.png) | ![AI Token League community leaderboard](assets/screenshots/web-leaderboard.png) |

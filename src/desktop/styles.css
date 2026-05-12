@@ -166,6 +166,30 @@ nav button.active, nav button:hover {
 .rail-note strong { font-size: 18px; }
 .rail-note small { color: var(--muted); }
 
+.rail-cloud-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.rail-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.rail-cloud-status[data-state="local"] { color: var(--muted); }
+.rail-cloud-status[data-state="online"] { color: var(--green); }
+.rail-cloud-status[data-state="offline"] { color: #8c7f6e; }
+.rail-cloud-status[data-state="unavailable"] { color: var(--red); }
+.rail-cloud-status[data-state="checking"] { color: var(--yellow); }
+
 .rail-bottom { display: grid; gap: 10px; }
 
 .rail-icon-bar {
