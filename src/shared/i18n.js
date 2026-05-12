@@ -277,6 +277,7 @@ const translations = {
     // 桌面端 - 重置区域
     "desktop.reset.title": "重置本地数据",
     "desktop.reset.modalTitle": "重置数据",
+    "desktop.reset.modalDescription": "选择是否同时删除云端服务器上已上传的数据。Codex、Claude Code 和 Cursor 中的源文件不会被删除。",
     "desktop.reset.localOnly": "仅本地",
     "desktop.reset.localAndCloud": "本地 + 云端",
     "desktop.reset.cloudClearing": "正在清除云端数据...",
@@ -867,6 +868,7 @@ const translations = {
     // Desktop - Reset Zone
     "desktop.reset.title": "Reset local data",
     "desktop.reset.modalTitle": "Reset data",
+    "desktop.reset.modalDescription": "Choose whether to also delete your uploaded data from the cloud server. Source files in Codex, Claude Code, and Cursor are never deleted.",
     "desktop.reset.localOnly": "Local only",
     "desktop.reset.localAndCloud": "Local + Cloud",
     "desktop.reset.cloudClearing": "Clearing cloud data...",

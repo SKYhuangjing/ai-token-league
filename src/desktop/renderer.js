@@ -269,9 +269,29 @@ for (const field of DIRTY_TRACKED_FIELDS) {
 }
 
 $("#reset-local-data").addEventListener("click", openResetConfirmModal);
-$("#check-update").addEventListener("click", () => run(checkUpdate));
-$("#download-update").addEventListener("click", () => run(downloadUpdate));
-$("#download-installer").addEventListener("click", () => run(downloadInstaller));
+$("#check-update").addEventListener("click", (event) => {
+  if (event.target.closest(".row-inline-action")) return;
+  if ($("#check-update").dataset.busy === "true") return;
+  run(checkUpdate);
+});
+$("#check-update").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  if ($("#check-update").dataset.busy === "true") return;
+  run(checkUpdate);
+});
+$("#download-update").addEventListener("click", (event) => {
+  event.stopPropagation();
+  if ($("#download-update").dataset.updateAction === "install") {
+    run(installAndRestartUpdate);
+    return;
+  }
+  run(downloadUpdate);
+});
+$("#download-installer").addEventListener("click", (event) => {
+  event.stopPropagation();
+  run(downloadInstaller);
+});
 $("#export-diagnostics").addEventListener("click", () => run(exportDiagnostics));
 
 document.addEventListener("click", async (e) => {
@@ -622,19 +642,17 @@ function updateCheckProgress(data) {
       : `${t("desktop.renderer.downloading")} ${pct}%`;
   }
   if (data.status === "downloaded") {
+    $("#download-update").hidden = false;
     $("#download-update").disabled = false;
     $("#download-installer").hidden = true;
     $("#download-update").textContent = t("desktop.app.installRestart");
-    $("#download-update").onclick = async () => {
-      $("#download-update").disabled = true;
-      $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
-      await api.installAndRestartUpdate();
-    };
+    $("#download-update").dataset.updateAction = "install";
     $("#update-message").textContent = t("desktop.renderer.downloadedReady");
   }
   if (data.status === "failed" && data.lastError) {
     $("#update-message").textContent = data.lastError;
-    $("#download-update").disabled = false;
+    $("#download-update").hidden = true;
+    $("#download-update").disabled = true;
     $("#download-installer").hidden = false;
   }
   renderSilentUpdateStatus(data, latestConfig);
@@ -879,6 +897,12 @@ async function loadSystemStatus() {
   renderSystemStatus({ client, server, update: latestUpdateState });
 }
 
+function setUpdateCardBusy(isBusy) {
+  const card = $("#check-update");
+  card.dataset.busy = isBusy ? "true" : "false";
+  card.setAttribute("aria-disabled", isBusy ? "true" : "false");
+}
+
 async function checkUpdate() {
   if (isApiBaseUrlDirty() && !window.confirm(t("desktop.sync.unsavedApiBaseUrl"))) return;
   const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "");
@@ -886,16 +910,19 @@ async function checkUpdate() {
     showToast(t("desktop.renderer.configureCloudUpdate"));
     return;
   }
-  $("#check-update").disabled = true;
+  setUpdateCardBusy(true);
+  $("#download-update").hidden = true;
+  $("#download-update").disabled = true;
   $("#download-installer").hidden = true;
   $("#update-message").textContent = t("desktop.renderer.checking");
   try {
     latestUpdateState = await api.checkUpdate();
     renderSystemStatus(latestUpdateState);
     $("#update-message").textContent = updateMessage(latestUpdateState);
+    $("#download-update").hidden = !latestUpdateState.update?.updateAvailable;
     $("#download-update").disabled = !latestUpdateState.update?.updateAvailable;
     $("#download-update").textContent = t("desktop.app.downloadRestart");
-    $("#download-update").onclick = downloadUpdate;
+    $("#download-update").dataset.updateAction = "download";
     latestConfig = await api.getConfig();
     renderCloudStatus(latestConfig);
   } catch (error) {
@@ -905,26 +932,29 @@ async function checkUpdate() {
     showToast(msg);
     $("#update-message").textContent = msg;
   } finally {
-    $("#check-update").disabled = false;
+    setUpdateCardBusy(false);
   }
 }
 
 async function downloadUpdate() {
+  $("#download-update").hidden = false;
   $("#download-update").disabled = true;
   $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
     await api.downloadUpdate();
     $("#download-update").textContent = t("desktop.app.installRestart");
     $("#download-update").disabled = false;
-    $("#download-update").onclick = async () => {
-      $("#download-update").disabled = true;
-      $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
-      await api.installAndRestartUpdate();
-    };
+    $("#download-update").dataset.updateAction = "install";
   } catch (error) {
     $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
     $("#download-update").disabled = false;
   }
+}
+
+async function installAndRestartUpdate() {
+  $("#download-update").disabled = true;
+  $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
+  await api.installAndRestartUpdate();
 }
 
 async function downloadInstaller() {
@@ -1409,10 +1439,27 @@ function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   const statusText = parts.join(" · ");
   setTextIfPresent("#update-status-text", statusText);
   const badge = $("#update-badge");
+  const updateButton = $("#download-update");
   if (badge) {
     const hasUpdate = updateCheck?.update?.updateAvailable || updateCheck?.status === "downloaded";
+    badge.hidden = !hasUpdate;
     badge.textContent = hasUpdate ? t("desktop.about.readyToRestart") : labels[mode] || "";
     badge.className = hasUpdate ? "badge ok" : "badge";
+  }
+  if (updateButton && updateCheck?.status === "downloaded") {
+    updateButton.hidden = false;
+    updateButton.disabled = false;
+    updateButton.textContent = t("desktop.app.installRestart");
+    updateButton.dataset.updateAction = "install";
+  } else if (updateButton && updateCheck?.update?.updateAvailable) {
+    updateButton.hidden = false;
+    updateButton.disabled = Boolean(updateCheck?.downloadProgress);
+    updateButton.textContent = t("desktop.app.downloadRestart");
+    updateButton.dataset.updateAction = "download";
+  } else if (updateButton && !updateCheck?.downloadProgress) {
+    updateButton.hidden = true;
+    updateButton.disabled = true;
+    updateButton.dataset.updateAction = "download";
   }
 }
 

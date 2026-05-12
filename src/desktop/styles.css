@@ -324,7 +324,7 @@ button:disabled {
   justify-content: space-between;
   gap: 14px;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .topline > div:first-child {
@@ -345,14 +345,14 @@ button:disabled {
 .hero-score {
   position: relative;
   overflow: hidden;
-  min-height: 168px;
+  min-height: 152px;
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background:
     radial-gradient(circle at 78% 18%, rgba(244, 176, 0, 0.28), transparent 12rem),
     linear-gradient(135deg, #171815, #2a2b25);
   color: var(--paper);
-  padding: 20px 24px;
+  padding: 18px 24px;
 }
 
 .hero-score::after {
@@ -377,8 +377,8 @@ button:disabled {
 }
 
 .total-value {
-  margin: 12px 0 6px;
-  font-size: clamp(42px, 4.2vw, 62px);
+  margin: 10px 0 5px;
+  font-size: clamp(40px, 4vw, 58px);
   font-weight: 900;
   line-height: 0.82;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -405,18 +405,18 @@ button:disabled {
 
 /* ─── Dashboard Layout ─── */
 
-.dashboard-layout { display: grid; gap: 16px; margin-bottom: 16px; }
+.dashboard-layout { display: grid; gap: 12px; margin-bottom: 12px; }
 .dash-row-1 {
   display: grid;
   grid-template-columns: minmax(320px, 0.8fr) 1.2fr;
   align-items: start;
-  gap: 16px;
+  gap: 14px;
 }
 
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 12px;
+  gap: 10px;
 }
 
 .stat-grid-three {
@@ -431,8 +431,8 @@ button:disabled {
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background: rgba(255, 249, 237, 0.78);
-  min-height: 112px;
-  padding: 12px 16px;
+  min-height: 100px;
+  padding: 10px 16px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -445,7 +445,7 @@ button:disabled {
 }
 
 .stat-card strong {
-  font-size: 24px;
+  font-size: 23px;
   font-weight: 900;
   margin-top: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -460,19 +460,19 @@ button:disabled {
 .three-col {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 10px;
+  gap: 14px;
+  margin-bottom: 4px;
   align-items: start;
 }
 
 .three-col .visual-card {
   display: flex;
   flex-direction: column;
-  min-height: 184px;
+  min-height: 168px;
 }
 
 .three-col .stack {
-  min-height: 108px;
+  min-height: 96px;
 }
 
 .three-col .empty-state {
@@ -485,7 +485,7 @@ button:disabled {
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background: rgba(255, 249, 237, 0.78);
-  padding: 14px 18px;
+  padding: 12px 18px;
 }
 
 .visual-card h4 {
@@ -582,14 +582,14 @@ button:disabled {
 
 .spark-wrap {
   overflow-x: hidden;
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .spark {
   display: grid;
   align-items: end;
   gap: clamp(6px, 1vw, 14px);
-  min-height: 160px;
+  min-height: 128px;
   border-bottom: 1px solid var(--line-strong);
   padding: 0;
 }
@@ -604,7 +604,7 @@ button:disabled {
   text-align: center;
   font-size: 11px;
   color: var(--muted);
-  margin-top: 8px;
+  margin-top: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 900;
   white-space: nowrap;
@@ -932,6 +932,7 @@ button:disabled {
 
 .settings-panel { display: none; }
 .settings-panel.active { display: block; }
+.settings-panel > .stack + .stack { margin-top: 22px; }
 
 .row-card {
   display: grid;
@@ -942,6 +943,22 @@ button:disabled {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.34);
   padding: 12px;
+}
+
+.row-action-card {
+  cursor: pointer;
+}
+
+.row-action-card:hover,
+.row-action-card:focus-visible {
+  background: var(--ink);
+  color: var(--paper);
+  outline: none;
+}
+
+.row-action-card[aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.72;
 }
 
 .row-card strong { display: block; font-size: 16px; }
@@ -956,21 +973,69 @@ button:disabled {
   background: currentColor;
 }
 
+button.row-card:not(.destructive-action-row),
+.row-action-card {
+  text-align: left;
+}
+
 button.row-card:hover .setting-icon,
-button.row-card:focus-visible .setting-icon {
+.row-action-card:hover .setting-icon,
+button.row-card:focus-visible .setting-icon,
+.row-action-card:focus-visible .setting-icon {
   color: var(--paper);
 }
 
 button.row-card:hover .muted,
-button.row-card:focus-visible .muted {
+.row-action-card:hover .muted,
+button.row-card:focus-visible .muted,
+.row-action-card:focus-visible .muted {
   color: rgba(245, 239, 227, 0.72);
 }
 
 button.row-card:hover .badge,
-button.row-card:focus-visible .badge {
+.row-action-card:hover .badge,
+button.row-card:focus-visible .badge,
+.row-action-card:focus-visible .badge {
   border-color: currentColor;
   background: rgba(245, 239, 227, 0.12);
   color: var(--paper);
+}
+
+.row-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.row-inline-action {
+  padding: 8px 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.update-card .badge {
+  padding: 5px 9px;
+}
+
+.destructive-action-row {
+  border-color: rgba(180, 59, 50, 0.42);
+}
+
+.destructive-action-row .setting-icon {
+  color: var(--red);
+}
+
+.destructive-action-row:hover,
+.destructive-action-row:focus-visible {
+  border-color: var(--red);
+  background: var(--red);
+  color: #fff;
+}
+
+.destructive-action-row:hover .setting-icon,
+.destructive-action-row:focus-visible .setting-icon {
+  color: #fff;
 }
 
 .form-row {
