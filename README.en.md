@@ -16,6 +16,20 @@ Current version: `0.5.3`
 
 ---
 
+## Screenshots
+
+![AI Token League desktop client trend view](assets/screenshots/desktop-client.png)
+
+| Public Home | Community Leaderboard |
+| --- | --- |
+| ![AI Token League public home](assets/screenshots/web-home.png) | ![AI Token League community leaderboard](assets/screenshots/web-leaderboard.png) |
+
+| Admin Usage Operations | Admin Client Devices |
+| --- | --- |
+| ![AI Token League admin usage operations](assets/screenshots/admin-usage.png) | ![AI Token League admin client devices](assets/screenshots/admin-devices.png) |
+
+---
+
 ## Feature Overview
 
 ### 1. Public Leaderboard
