@@ -133,10 +133,23 @@ const translations = {
     "web.landing.featureMultiTitle": "多来源支持",
     "web.landing.featureMultiDesc": "Claude Code / Codex / Cursor",
     "web.landing.featureBoardTitle": "社区排行榜",
-    "web.landing.featureBoardDesc": "匿名 Token 使用量排名",
+    "web.landing.featureBoardDesc": "Token 使用量排名",
+    "web.landing.featureBoardDescAnonymous": "匿名 Token 使用量排名",
+    "web.landing.featureBoardDescPublic": "公开 Token 使用量排名",
+    "web.landing.featureBoardDescAuthenticated": "登录可见 Token 使用量排名",
     "web.landing.viewLeaderboard": "查看社区排行榜",
     "web.landing.participants": "参与者",
     "web.landing.serverVersion": "服务端版本",
+
+    // Web 端 - 截图标签
+    "web.screenshot.desktopOverview": "桌面端 · 总览",
+    "web.screenshot.desktopSources": "桌面端 · 来源",
+    "web.screenshot.desktopWorkdirs": "桌面端 · 工作目录",
+    "web.screenshot.previous": "上一张截图",
+    "web.screenshot.next": "下一张截图",
+
+    // Web 端 - 更新日志
+    "web.changelog.title": "最新更新",
 
     // Web 端 - 成本相关
     "web.cost.exactPrice": "精确价格",
@@ -731,10 +744,23 @@ const translations = {
     "web.landing.featureMultiTitle": "Multi-source",
     "web.landing.featureMultiDesc": "Claude Code / Codex / Cursor",
     "web.landing.featureBoardTitle": "Community leaderboard",
-    "web.landing.featureBoardDesc": "Anonymous token usage ranking",
+    "web.landing.featureBoardDesc": "Token usage ranking",
+    "web.landing.featureBoardDescAnonymous": "Anonymous token usage ranking",
+    "web.landing.featureBoardDescPublic": "Public token ranking",
+    "web.landing.featureBoardDescAuthenticated": "Signed-in token ranking",
     "web.landing.viewLeaderboard": "View community leaderboard",
     "web.landing.participants": "Participants",
     "web.landing.serverVersion": "Server version",
+
+    // Web - Screenshot labels
+    "web.screenshot.desktopOverview": "Desktop · Overview",
+    "web.screenshot.desktopSources": "Desktop · Sources",
+    "web.screenshot.desktopWorkdirs": "Desktop · Workdirs",
+    "web.screenshot.previous": "Previous screenshot",
+    "web.screenshot.next": "Next screenshot",
+
+    // Web - Changelog
+    "web.changelog.title": "What's new",
 
     // Web - Cost Related
     "web.cost.exactPrice": "exact_price",

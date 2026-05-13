@@ -605,7 +605,7 @@ button:disabled {
 /* ─── Spark (trend bars) ─── */
 
 .spark-wrap {
-  overflow-x: hidden;
+  overflow: visible;
   margin-top: 6px;
 }
 
@@ -694,6 +694,14 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.workdir-today {
+  color: var(--teal);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .workdir-progress {
   overflow: hidden;
   height: 8px;
@@ -709,6 +717,9 @@ button:disabled {
   border-radius: 999px;
   background: var(--teal);
 }
+
+.workdir-progress.meter-yellow i { background: var(--yellow); }
+.workdir-progress.meter-violet i { background: var(--violet); }
 
 /* ─── Sources ─── */
 

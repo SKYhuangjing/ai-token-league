@@ -1157,13 +1157,13 @@ function renderToday() {
   }
 
   $("#provider-list").innerHTML = providers.length
-    ? renderMiniMeters(providers, { showCost: latestConfig?.showEstimatedCost, limit: 3 })
+    ? renderMiniMeters(providers, { showCost: latestConfig?.showEstimatedCost, limit: 3, colorClasses: ["meter-yellow", "", ""] })
     : `<div class="empty-state">${t("desktop.overview.noProviderUsage")}</div>`;
   $("#workdir-list").innerHTML = workdirs.length
-    ? renderMiniMeters(workdirs, { showCost: latestConfig?.showEstimatedCost, limit: 3 })
+    ? renderMiniMeters(workdirs, { showCost: latestConfig?.showEstimatedCost, limit: 3, colorClasses: ["", "meter-yellow", "meter-violet"] })
     : `<div class="empty-state">${t("desktop.renderer.noWorkdirUsage")}</div>`;
   $("#model-list").innerHTML = models.length
-    ? renderMiniMeters(models, { showCost: latestConfig?.showEstimatedCost, limit: 3 })
+    ? renderMiniMeters(models, { showCost: latestConfig?.showEstimatedCost, limit: 3, colorClasses: ["meter-violet", "", "meter-yellow"] })
     : `<div class="empty-state">${t("desktop.renderer.noModelUsage")}</div>`;
   renderOverviewTrend(rangeItems);
   renderRailStatus();
@@ -1171,8 +1171,13 @@ function renderToday() {
 
 function renderWorkdirs() {
   const rangeItems = usageForRange(workdirsRange);
+  const todayWorkdirs = groupWorkdirDetails(usageForRange("today"));
   const total = rangeItems.reduce((sum, item) => sum + item.totalTokens, 0);
-  const workdirs = groupWorkdirDetails(rangeItems);
+  const todayTokenByWorkdir = new Map(todayWorkdirs.map((item) => [item.workdirHash, item.totalTokens]));
+  const workdirs = groupWorkdirDetails(rangeItems).map((item) => ({
+    ...item,
+    todayTokens: todayTokenByWorkdir.get(item.workdirHash) || 0
+  }));
   const models = groupBy(rangeItems, "model");
   const cost = aggregateUsageCost(rangeItems);
   $("#workdirs-summary").textContent = workdirs.length
@@ -1800,18 +1805,19 @@ function groupDailyRows(items) {
     }));
 }
 
-function renderMiniMeters(items, { showCost = false, limit = Infinity } = {}) {
+function renderMiniMeters(items, { showCost = false, limit = Infinity, colorClasses = [] } = {}) {
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
   return items
     .slice(0, limit)
-    .map((item) => {
+    .map((item, index) => {
       const pct = Math.max(3, (item.totalTokens / max) * 100);
       const name = escapeHtml(item.name);
       const val = formatToken(item.totalTokens);
       const cost = showCost ? renderCost(item) : "";
+      const colorClass = colorClasses[index % colorClasses.length] || "";
       return `<div class="mini-meter-row">
         <span title="${name}">${name}</span>
-        <div class="mini-meter"><i style="width:${pct}%; transition: width 0.3s ease;"></i></div>
+        <div class="mini-meter ${colorClass}"><i style="width:${pct}%; transition: width 0.3s ease;"></i></div>
         <span class="meter-value" title="${formatTokenRaw(item.totalTokens)}${cost ? ` · ${escapeHtml(costTitle(item))}` : ""}">
           <strong>${val}</strong>
           ${cost ? renderCostAmount(item) : ""}
@@ -1824,14 +1830,16 @@ function renderMiniMeters(items, { showCost = false, limit = Infinity } = {}) {
 function renderDetailMeters(items = []) {
   if (!items.length) return `<article class="empty-state">${t("desktop.renderer.noLocalUsageFound")}</article>`;
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
+  const colorClasses = ["", "meter-yellow", "meter-violet"];
   return `<div class="drawer-meter-list">${items
-    .map((item) => {
+    .map((item, index) => {
       const pct = Math.max(3, (item.totalTokens / max) * 100);
       const name = escapeHtml(item.name);
       const cost = latestConfig?.showEstimatedCost ? renderCost(item) : "";
+      const colorClass = colorClasses[index % colorClasses.length] || "";
       return `<div class="mini-meter-row drawer-meter-row">
         <span title="${name}">${name}</span>
-        <div class="mini-meter"><i style="width:${pct}%; transition: width 0.3s ease;"></i></div>
+        <div class="mini-meter ${colorClass}"><i style="width:${pct}%; transition: width 0.3s ease;"></i></div>
         <span class="meter-value" title="${formatTokenRaw(item.totalTokens)}${cost ? ` · ${escapeHtml(costTitle(item))}` : ""}">
           <strong>${formatToken(item.totalTokens)}</strong>
           ${cost ? renderCostAmount(item) : ""}
@@ -1843,20 +1851,23 @@ function renderDetailMeters(items = []) {
 
 function renderWorkdirCards(items) {
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
+  const colorClasses = ["", "meter-yellow", "meter-violet"];
   return items.map((item, index) => {
     const pct = Math.round(item.contributionRatio * 100);
     const badgeClass = pct > 50 ? "badge dark" : pct > 20 ? "badge" : "badge";
     const badgeText = pct > 50 ? t("desktop.workdirs.tierMain") : pct > 20 ? t("desktop.workdirs.tierMid") : t("desktop.workdirs.tierSmall");
     const costText = latestConfig?.showEstimatedCost ? ` · ${renderCostAmount(item)}` : "";
+    const todayTokens = item.todayTokens || 0;
+    const colorClass = colorClasses[index % colorClasses.length] || "";
     return `<article class="workdir-card" data-open-workdir="${escapeHtml(item.workdirHash)}" role="button" tabindex="0">
     <span class="workdir-rank">#${index + 1}</span>
     <div>
       <div style="display:flex;justify-content:space-between;align-items:flex-end;">
         <strong>${escapeHtml(item.name)}</strong>
-        <span class="muted" style="font-size:11px;">+${formatToken(item.totalTokens)} ${t("unit.tokens")}</span>
+        <span class="workdir-today">+${formatToken(todayTokens)} ${t("desktop.range.today").toLowerCase()}</span>
       </div>
       <span class="workdir-meta muted">${formatToken(item.totalTokens)} ${t("unit.tokens")}${costText} · ${pct}%</span>
-      <div class="workdir-progress"><i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%; transition: width 0.3s ease;"></i></div>
+      <div class="workdir-progress ${colorClass}"><i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%; transition: width 0.3s ease;"></i></div>
     </div>
     <span class="${badgeClass}" style="align-self:flex-start;margin-top:4px;">${badgeText}</span>
   </article>`;

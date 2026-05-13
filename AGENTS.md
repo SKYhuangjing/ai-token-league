@@ -207,7 +207,7 @@ The script updates only the files that match the selected mode:
 
 ### Step 2: Manual steps (script output lists these)
 
-1. For client releases, write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new client version.
+1. For client releases, write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new client version. Tag public-download-page items with `[Desktop]`, `[Web]`, or `[Desktop, Web]` (e.g. `- [Desktop] Source toggle controls now use a switch-style UI`). The public download page latest-updates block renders only tagged items; untagged items (internal API, scripts, migrations, tooling, documentation) remain in the changelog but are not shown in that block.
 2. For product baseline changes, create `doc/<baseline>-baseline.md` from current product state.
 3. For product baseline changes, create `doc/<baseline>-development-tasks.md` with task plan.
 4. Run `npm install --package-lock-only` if `package.json` version changed.

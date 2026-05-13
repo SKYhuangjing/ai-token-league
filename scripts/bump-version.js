@@ -21,7 +21,7 @@
  *   - doc/roadmap.md: add new baseline header (baseline mode only)
  *
  * What it does NOT touch (manual / content-dependent):
- *   - CHANGELOG.md / CHANGELOG.zh-CN.md (content requires human judgment)
+ *   - CHANGELOG.md / CHANGELOG.zh-CN.md (content and public-display tags require human judgment)
  *   - tests/ (now uses APP_VERSION constant)
  *   - npm scripts (now auto-read from package.json)
  *   - doc/<baseline>-baseline.md / doc/<baseline>-development-tasks.md (create fresh)
@@ -196,6 +196,7 @@ function bump({ version, baseline, date }) {
   console.log("\nManual steps remaining:");
   if (versionChanged) {
     console.log(`  1. CHANGELOG.md / CHANGELOG.zh-CN.md — add [${version}] section`);
+    console.log("     Tag public-download-page items with [Desktop], [Web], or [Desktop, Web]");
   }
   if (baselineChanged) {
     console.log(`  2. doc/${newBaseline}-baseline.md — create from current product state`);

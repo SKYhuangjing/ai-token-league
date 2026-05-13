@@ -12,26 +12,26 @@
 
 - 新增交互式 `scripts/release.sh` 发布构建脚本，支持平台、env、安装包和上传选项。
 - 新增 macOS DMG 中双语 `mac-install-readme.txt` 注入。
-- 新增桌面侧栏匿名身份展示，并优化匿名排行榜标签。
-- 新增 Admin 和排行榜 masthead 的首页导航入口。
+- [Desktop] 新增桌面侧栏匿名身份展示，并优化匿名排行榜标签。
+- [Web] 新增 Admin 和排行榜 masthead 的首页导航入口。
 - 新增可绕过 board 鉴权边界的 Admin 参与者详情路由。
-- 设置生效模型：展示偏好（showRawTokens、showEstimatedCost）切换后即时自动保存，无需点击保存。
-- 保存型设置（昵称、API 地址、开机启动、自动刷新、更新模式）dirty state 跟踪，Save 按钮高亮提示未保存更改。
-- 重置数据确认弹窗，支持"仅本地"和"本地 + 云端"两种删除方式。
+- [Desktop] 设置生效模型：展示偏好（showRawTokens、showEstimatedCost）切换后即时自动保存，无需点击保存。
+- [Desktop] 保存型设置（昵称、API 地址、开机启动、自动刷新、更新模式）dirty state 跟踪，Save 按钮高亮提示未保存更改。
+- [Desktop] 重置数据确认弹窗，支持"仅本地"和"本地 + 云端"两种删除方式。
 - 新增 `DELETE /api/participant/data` API 端点，支持服务端删除参与者数据。
-- Sync now / Check update 操作前检测 API 地址未保存更改并弹窗提示。
+- [Desktop] Sync now / Check update 操作前检测 API 地址未保存更改并弹窗提示。
 
 ### 变更
 
-- 重设计公开下载页预览卡片和参与者徽标展示。
-- 来源开关控件改为 switch 风格。
+- [Web] 重设计公开下载页预览卡片和参与者徽标展示。
+- [Desktop] 来源开关控件改为 switch 风格。
 - 参与者云端重置改为幂等行为。
 - Board 视图按当前业务日状态刷新。
-- 补齐当前 UI 界面的中文 locale 覆盖。
+- [Desktop, Web] 补齐当前 UI 界面的中文 locale 覆盖。
 - `scripts/release.sh --platform current` 支持自动识别当前电脑并只构建一个 zip 包。
 - `scripts/release.sh --upload` 会自动切到全平台并启用安装包构建，避免部分 zip 打包完成后因缺少 zip 或 DMG/NSIS 产物导致上传失败。
-- 来源开关按钮改为图标样式，不再使用 ON/OFF 文字标签。
-- Trend 仪表盘指标统一使用 showRawTokens 设置格式化令牌数。
+- [Desktop] 来源开关按钮改为图标样式，不再使用 ON/OFF 文字标签。
+- [Desktop] Trend 仪表盘指标统一使用 showRawTokens 设置格式化令牌数。
 
 ### 文档
 
@@ -44,8 +44,8 @@
 
 ### 修复
 
-- 修复 electron-updater 下载路径、macOS 更新包检测和重启按钮行为。
-- 恢复 macOS zip 更新器，采用双路径更新架构：Windows 使用 electron-updater + NSIS，macOS 使用自研 zip 更新器（无需 Developer ID）。
+- [Desktop] 修复 electron-updater 下载路径、macOS 更新包检测和重启按钮行为。
+- [Desktop] 恢复 macOS zip 更新器，采用双路径更新架构：Windows 使用 electron-updater + NSIS，macOS 使用自研 zip 更新器（无需 Developer ID）。
 - 恢复 `/api/release/latest` 端点和 `latest.json` manifest，供 macOS zip 更新器使用。
 - 修复 Cursor provider 启用状态检查逻辑。
 
@@ -59,10 +59,10 @@
 
 ### 变更
 
-- 用 `electron-updater` 替换自定义更新系统，用于 Windows 桌面端更新。
-- Windows 使用 NSIS 安装器更新，自带文件锁处理。
-- 新增三种更新模式：`notify`（仅通知）、`auto_download`（自动下载）、`auto_apply_on_idle`（空闲时自动安装）。
-- 新增下载进度通过 IPC `update:progress` 事件推送到渲染进程。
+- [Desktop] 用 `electron-updater` 替换自定义更新系统，用于 Windows 桌面端更新。
+- [Desktop] Windows 使用 NSIS 安装器更新，自带文件锁处理。
+- [Desktop] 新增三种更新模式：`notify`（仅通知）、`auto_download`（自动下载）、`auto_apply_on_idle`（空闲时自动安装）。
+- [Desktop] 新增下载进度通过 IPC `update:progress` 事件推送到渲染进程。
 
 ---
 
@@ -70,29 +70,29 @@
 
 ### 新增
 
-- 新增 Admin 路由 HTTP Basic Auth 保护（`/admin.html` 和 `/api/admin/*`），通过 `ADMIN_USERNAME` + `ADMIN_PASSWORD` 环境变量配置。
-- 新增 `MIN_CLIENT_ENFORCE` 最低客户端版本强制升级，启用后阻止过旧版本上传。
-- 新增 Admin 设备面板，展示每个参与者的注册设备。
-- 新增多语言（i18n）支持，覆盖桌面端和 Web UI。
+- [Web] 新增 Admin 路由 HTTP Basic Auth 保护（`/admin.html` 和 `/api/admin/*`），通过 `ADMIN_USERNAME` + `ADMIN_PASSWORD` 环境变量配置。
+- [Web] 新增 `MIN_CLIENT_ENFORCE` 最低客户端版本强制升级，启用后阻止过旧版本上传。
+- [Web] 新增 Admin 设备面板，展示每个参与者的注册设备。
+- [Desktop, Web] 新增多语言（i18n）支持，覆盖桌面端和 Web UI。
 - 新增 Admin Usage 行级详情语义优化。
-- 新增 Desktop 设置页信息架构重构：Profile、App、Sources、Cloud、About。
-- 新增 Admin 模型价格页缓存读取价格展示。
-- 新增 Missing Price 任务点击联动，可自动填充并聚焦模型价格输入框。
+- [Desktop] 新增 Desktop 设置页信息架构重构：Profile、App、Sources、Cloud、About。
+- [Web] 新增 Admin 模型价格页缓存读取价格展示。
+- [Web] 新增 Missing Price 任务点击联动，可自动填充并聚焦模型价格输入框。
 - 新增 `scripts/bump-version.js` 和 `npm run bump -- <version>`，用于发布版本号集中升级。
 - 新增 `scripts/start-server.sh`，支持 env 选择、smoke、后台运行、log 和 pid 参数。
 
 ### 变更
 
-- Desktop Settings > App 只承载语言、显示预估成本、显示原始令牌数和登录时启动。
-- Desktop Settings > Sources 承载本地来源、Cursor token、workdir aliases 和本地来源扫描周期。
-- Desktop Settings > Cloud 承载 API base URL、云端状态、手动同步入口和同步状态。
-- Desktop Settings > About 承载版本状态、更新策略、诊断导出和重置本地数据。
+- [Desktop] Desktop Settings > App 只承载语言、显示预估成本、显示原始令牌数和登录时启动。
+- [Desktop] Desktop Settings > Sources 承载本地来源、Cursor token、workdir aliases 和本地来源扫描周期。
+- [Desktop] Desktop Settings > Cloud 承载 API base URL、云端状态、手动同步入口和同步状态。
+- [Desktop] Desktop Settings > About 承载版本状态、更新策略、诊断导出和重置本地数据。
 - 来源扫描周期明确为本地数据源扫描频率；配置云端后，同一周期会在扫描后上传每日汇总。
-- Public Web 头部和下载控件压缩高度，为排行榜表格释放更多首屏空间。
-- Public Web 下载区保留平台选择和下载按钮，删除冗余的“下载客户端”标题文案。
-- Admin 语言切换器移动到 masthead，并在桌面布局右对齐。
-- Desktop 语言切换器移动到 Settings > App，与应用偏好同组。
-- Admin 模型价格列表为 Custom prices 和 OpenRouter cache 展示 input、output 和 cache read 价格。
+- [Web] Public Web 头部和下载控件压缩高度，为排行榜表格释放更多首屏空间。
+- [Web] Public Web 下载区保留平台选择和下载按钮，删除冗余的”下载客户端”标题文案。
+- [Web] Admin 语言切换器移动到 masthead，并在桌面布局右对齐。
+- [Desktop] Desktop 语言切换器移动到 Settings > App，与应用偏好同组。
+- [Web] Admin 模型价格列表为 Custom prices 和 OpenRouter cache 展示 input、output 和 cache read 价格。
 - 本版本新增和调整的 Desktop / Web 文案继续统一走 `src/shared/i18n.js`。
 
 ### 文档

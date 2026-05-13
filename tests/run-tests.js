@@ -9,6 +9,7 @@ import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src
 import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
 import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
+import { parseLatestChangelog } from "../src/shared/changelog.js";
 import { scanUsage } from "../src/collector/core.js";
 import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, migrateLegacyCursorProviderEnabled, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
 import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
@@ -568,6 +569,8 @@ async function testBoardApiBusinessDayMetadata() {
     assert.equal(leaderboard.businessDay, "2026-05-11");
     assert.equal(summary.businessDay, "2026-05-11");
     assert.equal(identity.identityMode, "anonymous");
+    assert.equal(summary.identityMode, "anonymous");
+    assert.equal(summary.identityLabel, "anonymousDisplayName");
     assert.ok(identity.publicId);
     assert.equal(Object.hasOwn(identity, "participantId"), false);
   } finally {
@@ -886,6 +889,45 @@ async function testVersionCompatibilityAndManifest() {
 
 function testProductBaseline() {
   assert.match(PRODUCT_BASELINE, /^\d+\.\d+$/, "PRODUCT_BASELINE should be major.minor format");
+}
+
+function testPublicChangelogParsing() {
+  const parsed = parseLatestChangelog(`# Changelog
+
+## [0.5.3] - 2026-05-09
+
+### Added
+
+- [Desktop] Source toggle controls now use a switch-style UI.
+- Added internal release helper.
+- [Desktop, Web] Completed locale coverage.
+
+### Fixed
+
+- [Web] Public download cards render current release metadata.
+
+---
+
+## [0.5.2] - 2026-05-07
+
+### Fixed
+
+- [Desktop] Older entry.
+`);
+  assert.equal(parsed.version, "0.5.3");
+  assert.equal(parsed.date, "2026-05-09");
+  assert.deepEqual(parsed.sections.map((section) => section.heading), ["Added", "Fixed"]);
+  assert.deepEqual(parsed.sections[0].items.map((item) => item.tag), ["Desktop", "Desktop, Web"]);
+  assert.equal(parsed.sections[0].items[0].text, "Source toggle controls now use a switch-style UI.");
+  assert.equal(parsed.sections[1].items[0].tag, "Web");
+
+  const noPublicItems = parseLatestChangelog(`## [0.5.3] - 2026-05-09
+
+### Added
+
+- Internal release helper.
+`);
+  assert.equal(noPublicItems.sections.length, 0);
 }
 
 function testIdentityImport() {
@@ -1268,6 +1310,7 @@ await testCodexLocalNormalizesInputTokens();
 await testCollectorCcusageVerification();
 testForbiddenUploadFields();
 testProductBaseline();
+testPublicChangelogParsing();
 await testVersionCompatibilityAndManifest();
 testDisplayAndPricing();
 await testOpenRouterRefresh();

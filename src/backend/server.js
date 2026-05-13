@@ -145,7 +145,11 @@ async function readBody(req) {
 async function handleApi(req, res) {
   if (req.url.startsWith("/api/admin/") && !checkBasicAuth(req, res)) return;
   if (req.method === "GET" && req.url.startsWith("/api/board/summary")) {
-    return sendJson(res, 200, withBusinessDay(store.boardSummary()));
+    return sendJson(res, 200, withBusinessDay({
+      ...store.boardSummary(),
+      identityMode: BOARD_SECURITY_LEVEL,
+      identityLabel: BOARD_SECURITY_LEVEL === "anonymous" ? "anonymousDisplayName" : "nickname"
+    }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/board/my-identity")) {
     const url = new URL(req.url, "http://localhost");
@@ -452,6 +456,18 @@ function serveStatic(req, res) {
   const requested = req.url === "/" ? "/web/download.html" : new URL(req.url, "http://localhost").pathname;
   if (requested === "/admin.html" && !checkBasicAuth(req, res)) return;
   if (requested === "/leaderboard.html" && !checkBoardAuth(req, res)) return;
+  if (requested === "/CHANGELOG.md" || requested === "/CHANGELOG.zh-CN.md") {
+    const rootDir = path.dirname(SRC_DIR);
+    const file = path.resolve(rootDir, requested.slice(1));
+    if (!file.startsWith(rootDir) || !fs.existsSync(file)) {
+      res.writeHead(404);
+      res.end("not found");
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
   const normalized = requested.startsWith("/web/") || requested.startsWith("/shared/")
     ? requested
     : `/web${requested}`;

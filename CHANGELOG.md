@@ -12,26 +12,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Added interactive `scripts/release.sh` release builder with platform, env, installer, and upload options.
 - Added bilingual `mac-install-readme.txt` injection into generated macOS DMGs.
-- Added anonymous identity display in the desktop rail and refined anonymous leaderboard labels.
-- Added home navigation links to Admin and leaderboard mastheads.
+- [Desktop] Added anonymous identity display in the desktop rail and refined anonymous leaderboard labels.
+- [Web] Added home navigation links to Admin and leaderboard mastheads.
 - Added admin participant detail route that works under board authentication.
-- Settings effect model: display preferences (showRawTokens, showEstimatedCost) now auto-save instantly on toggle.
-- Dirty state tracking for save-required settings (nickname, API base URL, launch at login, auto-refresh, update mode) with visual Save button highlight.
-- Reset data confirmation modal with "Local only" and "Local + Cloud" deletion options.
+- [Desktop] Settings effect model: display preferences (showRawTokens, showEstimatedCost) now auto-save instantly on toggle.
+- [Desktop] Dirty state tracking for save-required settings (nickname, API base URL, launch at login, auto-refresh, update mode) with visual Save button highlight.
+- [Desktop] Reset data confirmation modal with "Local only" and "Local + Cloud" deletion options.
 - New `DELETE /api/participant/data` API endpoint for server-side participant data deletion.
-- Unsaved API base URL warning before Sync now / Check update actions.
+- [Desktop] Unsaved API base URL warning before Sync now / Check update actions.
 
 ### Changed
 
-- Redesigned public download preview cards and participant badge presentation.
-- Source toggle controls now use a switch-style UI.
+- [Web] Redesigned public download preview cards and participant badge presentation.
+- [Desktop] Source toggle controls now use a switch-style UI.
 - Participant cloud reset is now idempotent.
 - Board views now refresh against the active business-day state.
-- Completed Chinese locale coverage for current UI surfaces.
+- [Desktop, Web] Completed Chinese locale coverage for current UI surfaces.
 - `scripts/release.sh --platform current` now builds a single zip for the current machine.
 - `scripts/release.sh --upload` now automatically switches to all platforms and enables installer builds so release upload does not fail after partial packaging due to missing zip or DMG/NSIS artifacts.
-- Source toggle buttons now use icon-only design instead of ON/OFF text labels.
-- Trend dashboard metrics respect showRawTokens setting for consistent formatting.
+- [Desktop] Source toggle buttons now use icon-only design instead of ON/OFF text labels.
+- [Desktop] Trend dashboard metrics respect showRawTokens setting for consistent formatting.
 
 ### Documentation
 
@@ -44,8 +44,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Fixed electron-updater download path, macOS update bundle detection, and restart button behavior.
-- Restored macOS zip updater with dual-path update architecture: Windows uses electron-updater + NSIS, macOS uses custom zip updater (no Developer ID required).
+- [Desktop] Fixed electron-updater download path, macOS update bundle detection, and restart button behavior.
+- [Desktop] Restored macOS zip updater with dual-path update architecture: Windows uses electron-updater + NSIS, macOS uses custom zip updater (no Developer ID required).
 - Restored `/api/release/latest` endpoint and `latest.json` manifest for macOS zip updater compatibility.
 - Fixed cursor provider enabled check logic.
 
@@ -59,10 +59,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Replaced custom update system with `electron-updater` for Windows desktop updates.
-- Windows now uses NSIS installer updates with built-in file lock handling.
-- Added three update modes: `notify`, `auto_download`, `auto_apply_on_idle`.
-- Added download progress push via IPC `update:progress` events.
+- [Desktop] Replaced custom update system with `electron-updater` for Windows desktop updates.
+- [Desktop] Windows now uses NSIS installer updates with built-in file lock handling.
+- [Desktop] Added three update modes: `notify`, `auto_download`, `auto_apply_on_idle`.
+- [Desktop] Added download progress push via IPC `update:progress` events.
 
 ---
 
@@ -70,29 +70,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Added HTTP Basic Auth protection for admin routes (`/admin.html` and `/api/admin/*`), configured via `ADMIN_USERNAME` + `ADMIN_PASSWORD` environment variables.
-- Added `MIN_CLIENT_ENFORCE` to block outdated clients from uploading when enabled.
-- Added admin devices panel showing registered devices per participant.
-- Added multi-language (i18n) support for desktop and web UI.
+- [Web] Added HTTP Basic Auth protection for admin routes (`/admin.html` and `/api/admin/*`), configured via `ADMIN_USERNAME` + `ADMIN_PASSWORD` environment variables.
+- [Web] Added `MIN_CLIENT_ENFORCE` to block outdated clients from uploading when enabled.
+- [Web] Added admin devices panel showing registered devices per participant.
+- [Desktop, Web] Added multi-language (i18n) support for desktop and web UI.
 - Added admin usage row detail semantic optimization.
-- Added a reworked desktop Settings information architecture: Profile, App, Sources, Cloud, and About.
-- Added cache read price visibility to the admin model pricing UI.
-- Added Missing Price task click-through that fills and focuses the model price input.
+- [Desktop] Added a reworked desktop Settings information architecture: Profile, App, Sources, Cloud, and About.
+- [Web] Added cache read price visibility to the admin model pricing UI.
+- [Web] Added Missing Price task click-through that fills and focuses the model price input.
 - Added `scripts/bump-version.js` and `npm run bump -- <version>` for coordinated release version updates.
 - Added `scripts/start-server.sh` for local server startup with env selection, smoke mode, detached mode, log, and pid options.
 
 ### Changed
 
-- Desktop Settings > App now owns language, estimated cost display, raw token display, and launch-at-login preferences only.
-- Desktop Settings > Sources now owns local sources, Cursor token configuration, workdir aliases, and the local source scan cadence.
-- Desktop Settings > Cloud now owns API base URL, cloud status, manual sync, and sync status.
-- Desktop Settings > About now owns version status, update policy, diagnostics export, and local data reset.
+- [Desktop] Desktop Settings > App now owns language, estimated cost display, raw token display, and launch-at-login preferences only.
+- [Desktop] Desktop Settings > Sources now owns local sources, Cursor token configuration, workdir aliases, and the local source scan cadence.
+- [Desktop] Desktop Settings > Cloud now owns API base URL, cloud status, manual sync, and sync status.
+- [Desktop] Desktop Settings > About now owns version status, update policy, diagnostics export, and local data reset.
 - Source scan cadence now explicitly means local data source scanning; when cloud is configured, the same cadence also uploads daily aggregates after scanning.
-- Public Web masthead and download controls were compressed to free more first-screen space for the leaderboard table.
-- Public Web download controls now keep platform selection and download action while removing the redundant "Download client" title copy.
-- Admin language switcher was moved into the masthead and aligned to the right on desktop layouts.
-- Desktop language switcher was moved into Settings > App with the other application preferences.
-- Admin model price lists now show input, output, and cache read prices for custom prices and OpenRouter cache entries.
+- [Web] Public Web masthead and download controls were compressed to free more first-screen space for the leaderboard table.
+- [Web] Public Web download controls now keep platform selection and download action while removing the redundant "Download client" title copy.
+- [Web] Admin language switcher was moved into the masthead and aligned to the right on desktop layouts.
+- [Desktop] Desktop language switcher was moved into Settings > App with the other application preferences.
+- [Web] Admin model price lists now show input, output, and cache read prices for custom prices and OpenRouter cache entries.
 - Desktop and Web UI text added in this release continues to use `src/shared/i18n.js`.
 
 ### Documentation
