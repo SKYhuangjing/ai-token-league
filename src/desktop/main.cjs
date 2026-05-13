@@ -153,6 +153,7 @@ function updateStatusSnapshot() {
     applyRunning: updateCheck.applyRunning,
     status: updateCheck.status,
     lastCheckedAt: updateCheck.lastCheckedAt,
+    update: updateCheck.lastResult,
     lastResult: updateCheck.lastResult,
     lastError: updateCheck.lastError,
     nextCheckAt: updateCheck.nextCheckAt,
@@ -687,6 +688,17 @@ ipcMain.handle("update:check", async () => {
       updateCheck.status = state.updateAvailable ? "available" : "up_to_date";
       updateCheck.lastResult = state;
       updateCheck.lastError = null;
+      if (state.updateAvailable && ["auto_download", "auto_apply_on_idle"].includes(silentUpdateMode(current))) {
+        await downloadCustomMacUpdate();
+        return {
+          ...updateStatusSnapshot(),
+          code: "update_downloaded",
+          checkedAt,
+          client,
+          server: releaseConfig,
+          message: `Version ${state.latestVersion} downloaded and ready to install`
+        };
+      }
       broadcastUpdateProgress();
       return {
         code: state.updateAvailable ? "update_available" : "up_to_date",
@@ -708,7 +720,8 @@ ipcMain.handle("update:check", async () => {
         message: "Release feed URL is not configured on the app server"
       };
     }
-    const result = await autoUpdater.checkForUpdates();
+    autoUpdater.autoDownload = ["auto_download", "auto_apply_on_idle"].includes(silentUpdateMode(current));
+    await autoUpdater.checkForUpdates();
     const state = updateCheck.lastResult || {};
     return {
       code: state.updateAvailable ? "update_available" : "up_to_date",
@@ -1045,11 +1058,10 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       deviceId: current.deviceId,
       clientGeneratedAt: new Date().toISOString(),
       client,
-      sourceFingerprint: usage.sourceFingerprint || "",
       items: usage.items
     };
     const drainBefore = await drainUploadQueue(current);
-    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
+    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload), usage.sourceFingerprint || "");
     const result = await uploadQueueEntry(current, signed);
     const drainAfter = await drainUploadQueue(current);
     const syncResult = {
@@ -1087,10 +1099,9 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       deviceId: current.deviceId,
       clientGeneratedAt: new Date().toISOString(),
       client,
-      sourceFingerprint: usage.sourceFingerprint || "",
       items: usage.items
     };
-    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
+    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload), usage.sourceFingerprint || "");
     const queued = enqueueUpload(current, signed, error.message);
     const syncResult = {
       accepted: 0,
@@ -1644,6 +1655,7 @@ function diagnosticsUploadQueue(queue) {
       payloadHash: entry.payloadHash,
       participantId: entry.participantId,
       deviceId: entry.deviceId,
+      sourceFingerprint: entry.sourceFingerprint || entry.payload?.sourceFingerprint || "",
       createdAt: entry.createdAt,
       attempts: Number(entry.attempts || 0),
       lastAttemptAt: entry.lastAttemptAt || "",
@@ -1652,7 +1664,6 @@ function diagnosticsUploadQueue(queue) {
         participantId: entry.payload?.participantId || "",
         deviceId: entry.payload?.deviceId || "",
         clientGeneratedAt: entry.payload?.clientGeneratedAt || "",
-        sourceFingerprint: entry.payload?.sourceFingerprint || "",
         client: entry.payload?.client || null,
         itemCount: entry.payload?.items?.length || 0,
         items: entry.payload?.items || []
@@ -1795,13 +1806,14 @@ function writeUploadQueue(current, queue) {
   fs.writeFileSync(file, `${JSON.stringify({ version: 1, items: queue.items }, null, 2)}\n`);
 }
 
-function signedQueueEntry(payload, signature) {
+function signedQueueEntry(payload, signature, sourceFingerprint = "") {
   const payloadHash = nodeCrypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
   return {
     id: `uq_${payloadHash.slice(0, 24)}`,
     payloadHash,
     participantId: payload.participantId,
     deviceId: payload.deviceId,
+    sourceFingerprint,
     createdAt: new Date().toISOString(),
     attempts: 0,
     lastError: "",
@@ -1825,8 +1837,8 @@ function enqueueUpload(current, entry, errorMessage = "") {
 }
 
 function sameQueuedUsageSnapshot(left, right) {
-  const leftFingerprint = left?.payload?.sourceFingerprint || "";
-  const rightFingerprint = right?.payload?.sourceFingerprint || "";
+  const leftFingerprint = left?.sourceFingerprint || left?.payload?.sourceFingerprint || "";
+  const rightFingerprint = right?.sourceFingerprint || right?.payload?.sourceFingerprint || "";
   return Boolean(leftFingerprint)
     && leftFingerprint === rightFingerprint
     && left?.participantId === right?.participantId
@@ -1856,9 +1868,15 @@ async function drainUploadQueue(current) {
 }
 
 async function uploadQueueEntry(current, entry) {
+  const payload = { ...(entry.payload || {}) };
+  let signature = entry.signature;
+  if (Object.hasOwn(payload, "sourceFingerprint")) {
+    delete payload.sourceFingerprint;
+    signature = (await modules()).crypto.signPayload(current.identityPrivateKey, payload);
+  }
   return postJson(`${current.apiBaseUrl}/api/usage/daily-batch`, {
-    ...entry.payload,
-    signature: entry.signature
+    ...payload,
+    signature
   });
 }
 

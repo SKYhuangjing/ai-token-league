@@ -256,9 +256,8 @@ const translations = {
 
     // 桌面端 - 应用设置
     "desktop.app.checkUpdate": "检查更新",
-    "desktop.app.downloadRestart": "下载并重启",
+    "desktop.app.downloadRestart": "下载更新",
     "desktop.app.downloadInstaller": "下载安装包",
-    "desktop.app.installRestart": "重启安装",
     "desktop.app.exportDiagnostics": "导出诊断",
 
     // 桌面端 - 关于
@@ -374,10 +373,11 @@ const translations = {
     "desktop.renderer.checking": "检查中...",
     "desktop.renderer.downloading": "下载中...",
     "desktop.renderer.downloadedInstalling": "已下载并验证。正在安装更新并重启...",
-    "desktop.renderer.downloadedReady": "已下载，准备就绪，可重启安装",
+    "desktop.renderer.downloadedReady": "已下载，准备就绪，可重启更新",
     "desktop.renderer.configureCloudUpdate": "请先配置云连接再检查更新",
     "desktop.renderer.releaseNotConfigured": "应用服务器上未配置发布清单",
     "desktop.renderer.updateCheckFinished": "更新检查完成",
+    "desktop.renderer.updateAvailable": "有更新",
     "desktop.renderer.cloudNotConfigured": "云未配置",
     "desktop.renderer.lastSync": "上次同步 {time}",
     "desktop.renderer.apiUnreachable": "API 不可达: {error}",
@@ -867,9 +867,8 @@ const translations = {
 
     // Desktop - App Settings
     "desktop.app.checkUpdate": "Check update",
-    "desktop.app.downloadRestart": "Download and restart",
+    "desktop.app.downloadRestart": "Download update",
     "desktop.app.downloadInstaller": "Download installer",
-    "desktop.app.installRestart": "Restart to install",
     "desktop.app.exportDiagnostics": "Export diagnostics",
 
     // Desktop - About
@@ -983,10 +982,11 @@ const translations = {
     "desktop.renderer.checking": "Checking...",
     "desktop.renderer.downloading": "Downloading...",
     "desktop.renderer.downloadedInstalling": "Downloaded and verified. Installing update and restarting...",
-    "desktop.renderer.downloadedReady": "Downloaded and ready. Restart to install",
+    "desktop.renderer.downloadedReady": "Downloaded and ready. Restart to update",
     "desktop.renderer.configureCloudUpdate": "Configure Cloud Connection before checking updates",
     "desktop.renderer.releaseNotConfigured": "Release manifest is not configured on the app server",
     "desktop.renderer.updateCheckFinished": "Update check finished",
+    "desktop.renderer.updateAvailable": "Update available",
     "desktop.renderer.cloudNotConfigured": "Cloud not configured",
     "desktop.renderer.lastSync": "Last sync {time}",
     "desktop.renderer.apiUnreachable": "API unreachable: {error}",

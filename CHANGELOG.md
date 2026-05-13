@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - [Desktop] Added a first-class Sources management surface for provider enablement, detected/manual/ignored/preset sources, Cursor tokens, and scan cadence.
 - [Desktop] Added auto-sync after foreground scan: when source fingerprint changes since the last successful sync, the desktop automatically uploads without requiring manual Sync Now.
 - [Desktop] Added spark bar value overlays showing token count and estimated cost per bar on the Overview trend chart.
+- [Desktop] Added auto-check for updates when opening the Cloud settings tab when cloud is reachable and no update is already downloaded.
+- [Desktop] Added auto-download when checking updates and silent update mode is `auto_download` or `auto_apply_on_idle`.
+- [Desktop] Added centralized update action rendering with distinct badge states for available, downloading, and ready-to-install.
 - [Web] Redesigned the public download page with a product hero, installer cards, board preview, desktop screenshot gallery, and latest updates.
 - Added shared changelog parsing so the public download page can show tagged user-facing release notes.
 
@@ -32,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Board summary responses now include identity display metadata for public preview copy.
 - OpenRouter warm refresh recalculates costs when a fresh cache still has missing-price models.
 - Upload queue dedup now matches on source fingerprint in addition to payload hash, preventing duplicate entries when the same scan result is re-queued.
+- Source fingerprint moved from upload payload to queue entry level so it is not sent to the server; payloads are re-signed without the field before upload.
 - Config import and first-run now initialize API connection state so the rail reflects the actual cloud status immediately.
 
 ### Documentation

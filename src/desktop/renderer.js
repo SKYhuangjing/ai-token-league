@@ -148,6 +148,7 @@ $("#settings-tabs").addEventListener("click", (event) => {
   if (button.dataset.settingsTab === "cloud") run(async () => {
     await loadCloudStatus();
     await loadBackgroundStatus();
+    if (shouldCheckUpdateOnCloudOpen()) await checkUpdate({ automatic: true });
   });
   if (button.dataset.settingsTab === "about") run(loadSystemStatus);
 });
@@ -660,7 +661,55 @@ async function boot() {
   });
 }
 
+function hasReadyUpdatePackage(state = latestUpdateState) {
+  const update = state?.update || state?.lastResult || null;
+  return Boolean(state?.readyPackage || state?.status === "downloaded" || update?.status === "downloaded");
+}
+
+function hasUpdateAvailable(state = latestUpdateState) {
+  const update = state?.update || state?.lastResult || null;
+  return Boolean(update?.updateAvailable);
+}
+
+function isUpdateDownloading(state = latestUpdateState) {
+  return Boolean(state?.downloadProgress || state?.downloadRunning || state?.status === "downloading");
+}
+
+function renderUpdateActions(state = latestUpdateState) {
+  const updateButton = $("#download-update");
+  const installerButton = $("#download-installer");
+  if (!updateButton || !installerButton) return;
+  const ready = hasReadyUpdatePackage(state);
+  const available = hasUpdateAvailable(state);
+  const failed = state?.status === "failed" && state?.lastError;
+  installerButton.hidden = !(failed && !ready);
+  installerButton.disabled = installerButton.hidden;
+  if (ready || isUpdateDownloading(state)) {
+    updateButton.hidden = true;
+    updateButton.disabled = true;
+    updateButton.dataset.updateAction = "download";
+  } else if (available) {
+    updateButton.hidden = false;
+    updateButton.disabled = Boolean(state?.downloadProgress || state?.downloadRunning);
+    updateButton.textContent = t("desktop.app.downloadRestart");
+    updateButton.dataset.updateAction = "download";
+  } else {
+    updateButton.hidden = true;
+    updateButton.disabled = true;
+    updateButton.dataset.updateAction = "download";
+  }
+}
+
+function shouldCheckUpdateOnCloudOpen() {
+  if ($("#check-update")?.dataset.busy === "true") return false;
+  if (isApiBaseUrlDirty()) return false;
+  if (hasReadyUpdatePackage(latestUpdateState)) return false;
+  const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || latestConfig?.apiConnection?.apiBaseUrl || "");
+  return Boolean(apiBaseUrl && latestConfig?.apiConnection?.status === "reachable");
+}
+
 function updateCheckProgress(data) {
+  latestUpdateState = data || latestUpdateState;
   if (data.downloadProgress) {
     const pct = data.downloadProgress.percent;
     const speed = data.downloadProgress.bytesPerSecond > 0
@@ -671,18 +720,10 @@ function updateCheckProgress(data) {
       : `${t("desktop.renderer.downloading")} ${pct}%`;
   }
   if (data.status === "downloaded") {
-    $("#download-update").hidden = false;
-    $("#download-update").disabled = false;
-    $("#download-installer").hidden = true;
-    $("#download-update").textContent = t("desktop.app.installRestart");
-    $("#download-update").dataset.updateAction = "install";
     $("#update-message").textContent = t("desktop.renderer.downloadedReady");
   }
   if (data.status === "failed" && data.lastError) {
     $("#update-message").textContent = data.lastError;
-    $("#download-update").hidden = true;
-    $("#download-update").disabled = true;
-    $("#download-installer").hidden = false;
   }
   renderSilentUpdateStatus(data, latestConfig);
 }
@@ -956,13 +997,16 @@ function setUpdateCardBusy(isBusy) {
   card.setAttribute("aria-disabled", isBusy ? "true" : "false");
 }
 
-async function checkUpdate() {
-  if (isApiBaseUrlDirty() && !window.confirm(t("desktop.sync.unsavedApiBaseUrl"))) return;
+async function checkUpdate({ automatic = false } = {}) {
+  if (isApiBaseUrlDirty()) {
+    if (automatic || !window.confirm(t("desktop.sync.unsavedApiBaseUrl"))) return;
+  }
   const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "");
   if (!apiBaseUrl) {
-    showToast(t("desktop.renderer.configureCloudUpdate"));
+    if (!automatic) showToast(t("desktop.renderer.configureCloudUpdate"));
     return;
   }
+  if (automatic && hasReadyUpdatePackage(latestUpdateState)) return;
   setUpdateCardBusy(true);
   $("#download-update").hidden = true;
   $("#download-update").disabled = true;
@@ -972,10 +1016,7 @@ async function checkUpdate() {
     latestUpdateState = await api.checkUpdate();
     renderSystemStatus(latestUpdateState);
     $("#update-message").textContent = updateMessage(latestUpdateState);
-    $("#download-update").hidden = !latestUpdateState.update?.updateAvailable;
-    $("#download-update").disabled = !latestUpdateState.update?.updateAvailable;
-    $("#download-update").textContent = t("desktop.app.downloadRestart");
-    $("#download-update").dataset.updateAction = "download";
+    renderSilentUpdateStatus(latestUpdateState, latestConfig);
     latestConfig = await api.getConfig();
     renderCloudStatus(latestConfig);
   } catch (error) {
@@ -995,9 +1036,8 @@ async function downloadUpdate() {
   $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
     await api.downloadUpdate();
-    $("#download-update").textContent = t("desktop.app.installRestart");
-    $("#download-update").disabled = false;
-    $("#download-update").dataset.updateAction = "install";
+    latestUpdateState = { ...(latestUpdateState || {}), status: "downloaded" };
+    renderUpdateActions(latestUpdateState);
   } catch (error) {
     $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
     $("#download-update").disabled = false;
@@ -1095,6 +1135,7 @@ function renderCloudStatus(config = latestConfig) {
 function updateMessage(state = {}) {
   if (state.code === "cloud_not_configured") return t("desktop.renderer.configureCloudUpdate");
   if (state.code === "release_not_configured") return t("desktop.renderer.releaseNotConfigured");
+  if (state.code === "update_downloaded" || state.status === "downloaded" || state.readyPackage) return t("desktop.renderer.downloadedReady");
   return state.message || t("desktop.renderer.updateCheckFinished");
 }
 
@@ -1565,28 +1606,20 @@ function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   const statusText = parts.join(" · ");
   setTextIfPresent("#update-status-text", statusText);
   const badge = $("#update-badge");
-  const updateButton = $("#download-update");
   if (badge) {
-    const hasUpdate = updateCheck?.update?.updateAvailable || updateCheck?.status === "downloaded";
+    const ready = hasReadyUpdatePackage(updateCheck);
+    const downloading = isUpdateDownloading(updateCheck);
+    const available = hasUpdateAvailable(updateCheck);
+    const hasUpdate = available || ready || downloading;
     badge.hidden = !hasUpdate;
-    badge.textContent = hasUpdate ? t("desktop.about.readyToRestart") : labels[mode] || "";
-    badge.className = hasUpdate ? "badge ok" : "badge";
+    badge.textContent = ready
+      ? t("desktop.about.readyToRestart")
+      : downloading
+        ? t("desktop.renderer.downloading")
+        : available ? t("desktop.renderer.updateAvailable") : labels[mode] || "";
+    badge.className = ready ? "badge ok" : hasUpdate ? "badge" : "badge";
   }
-  if (updateButton && updateCheck?.status === "downloaded") {
-    updateButton.hidden = false;
-    updateButton.disabled = false;
-    updateButton.textContent = t("desktop.app.installRestart");
-    updateButton.dataset.updateAction = "install";
-  } else if (updateButton && updateCheck?.update?.updateAvailable) {
-    updateButton.hidden = false;
-    updateButton.disabled = Boolean(updateCheck?.downloadProgress);
-    updateButton.textContent = t("desktop.app.downloadRestart");
-    updateButton.dataset.updateAction = "download";
-  } else if (updateButton && !updateCheck?.downloadProgress) {
-    updateButton.hidden = true;
-    updateButton.disabled = true;
-    updateButton.dataset.updateAction = "download";
-  }
+  renderUpdateActions(updateCheck);
 }
 
 function renderSourceRows(autoSources, manualSources, ignoredSources, providerId) {

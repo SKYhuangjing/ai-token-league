@@ -16,6 +16,9 @@
 - [Desktop] 新增一等 Sources 管理页面，集中管理 provider 开关、自动/手动/忽略/preset 来源、Cursor token 和扫描周期。
 - [Desktop] 新增前台扫描后自动同步：source fingerprint 变化时自动上传，无需手动点击 Sync Now。
 - [Desktop] 新增 Overview 趋势图 spark bar 值覆盖层，展示每根柱的 token 数和估算成本。
+- [Desktop] 新增打开 Cloud 设置 tab 时自动检查更新（云端可达且无已下载更新时触发）。
+- [Desktop] 新增 silent update mode 为 `auto_download` 或 `auto_apply_on_idle` 时自动下载更新。
+- [Desktop] 新增集中化更新操作渲染，区分可用、下载中、准备安装三种 badge 状态。
 - [Web] 重设计公开下载页，包含产品 hero、安装包卡片、board preview、桌面截图 gallery 和最新更新。
 - 新增共享 changelog 解析能力，供公开下载页展示带标签的用户可见 release notes。
 
@@ -32,6 +35,7 @@
 - Board summary 响应新增 identity display metadata，用于公开 preview 文案。
 - OpenRouter warm refresh 在价格缓存仍 fresh 但存在 missing-price models 时会重新计算成本。
 - 上传队列去重现在同时匹配 source fingerprint 和 payload hash，避免同一扫描结果被重复入队。
+- Source fingerprint 从上传 payload 移到队列条目层级，不再发送到服务端；上传前移除该字段并重新签名。
 - 配置导入和首次启动时立即初始化 API 连接状态，rail 可直接反映实际云端状态。
 
 ### 文档
