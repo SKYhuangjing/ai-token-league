@@ -274,20 +274,23 @@ function renderSummary(detail) {
 function renderRawRows(items, { mode }) {
   document.querySelector("#detail-rows").innerHTML = items.length
     ? items
-        .map((item) => `<tr>
+        .map((item) => {
+          const total = Number(item.totalTokens || 0);
+          const pct = (v) => total ? Math.round((Number(v || 0) / total) * 100) : 0;
+          return `<tr>
           <td>${mode === "history" ? formatPeriod(item) : item.day}</td>
           <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
-          <td>${escapeHtml(localizedCompositionSummary(item))}</td>
-          <td class="tokens" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)}</td>
-          <td class="tokens" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)}</td>
-          <td class="tokens" title="${formatTokenRaw((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}">${renderAccountingToken((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))}</td>
-          <td class="tokens" title="${formatTokenRaw(item.reasoningTokens)}">${renderAccountingToken(item.reasoningTokens, item.reasoningCostUsd)}</td>
+          <td class="tokens" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)} <small class="pct">${pct(item.inputTokens)}%</small></td>
+          <td class="tokens" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)} <small class="pct">${pct(item.outputTokens)}%</small></td>
+          <td class="tokens" title="${formatTokenRaw((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}">${renderAccountingToken((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))} <small class="pct">${pct((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}%</small></td>
+          <td class="tokens" title="${formatTokenRaw(item.reasoningTokens)}">${renderAccountingToken(item.reasoningTokens, item.reasoningCostUsd)} <small class="pct">${pct(item.reasoningTokens)}%</small></td>
           ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
           ${state.showCost ? `<td>${escapeHtml(localizedCostQualityLabel(item.costQuality))}</td>` : ""}
           <td>${mode === "history" ? renderModels(item.models) : renderModels([{ name: item.model, totalTokens: item.totalTokens }])}</td>
-        </tr>`)
+        </tr>`;
+        })
         .join("")
-    : `<tr><td class="empty" colspan="${state.showCost ? 10 : 8}">${t("web.detail.noUsagePeriod")}</td></tr>`;
+    : `<tr><td class="empty" colspan="${state.showCost ? 9 : 7}">${t("web.detail.noUsagePeriod")}</td></tr>`;
 }
 
 function renderBreakdownBars(items = []) {

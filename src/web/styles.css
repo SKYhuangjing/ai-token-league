@@ -1505,6 +1505,12 @@ td {
   font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+small.pct {
+  color: var(--ink-muted);
+  font: 600 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin-left: 2px;
+}
+
 .pill {
   display: inline-block;
   margin: 2px 4px 2px 0;

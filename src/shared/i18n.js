@@ -8,7 +8,7 @@ const translations = {
   "zh-CN": {
     // 通用
     "app.name": "AI Token League",
-    "app.tagline": "AI 编码令牌使用排行榜",
+    "app.tagline": "匿名 Token 使用量排名",
     "loading": "加载中...",
     "cancel": "取消",
     "close": "关闭",
@@ -61,6 +61,7 @@ const translations = {
     "web.leaderboard.anonymousTitle": "匿名公开榜",
     "web.leaderboard.anonymousDesc": "名称为系统生成的匿名展示名，真实昵称不会公开。",
     "web.leaderboard.colNickname": "昵称",
+    "web.leaderboard.colAlias": "匿名名",
     "web.leaderboard.aliasMark": "匿名",
     "web.leaderboard.aliasRotatesDaily": "匿名展示名 · 今日有效",
 
@@ -619,7 +620,7 @@ const translations = {
   "en": {
     // Common
     "app.name": "AI Token League",
-    "app.tagline": "AI Coding Token Usage Leaderboard",
+    "app.tagline": "Anonymous token usage ranking",
     "loading": "Loading...",
     "cancel": "Cancel",
     "close": "Close",
@@ -672,6 +673,7 @@ const translations = {
     "web.leaderboard.anonymousTitle": "Anonymous public board",
     "web.leaderboard.anonymousDesc": "Names are generated aliases. Real nicknames are not shown.",
     "web.leaderboard.colNickname": "Nickname",
+    "web.leaderboard.colAlias": "Alias",
     "web.leaderboard.aliasMark": "Alias",
     "web.leaderboard.aliasRotatesDaily": "Generated alias · rotates daily",
 
