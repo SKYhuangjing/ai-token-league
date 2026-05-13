@@ -17,6 +17,7 @@ COPY src ./src
 COPY assets ./assets
 COPY migrations ./migrations
 COPY README.md ./
+COPY CHANGELOG.md CHANGELOG.zh-CN.md ./
 COPY doc ./doc
 
 EXPOSE 8787
