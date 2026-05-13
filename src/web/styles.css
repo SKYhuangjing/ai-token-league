@@ -1953,6 +1953,17 @@ sup {
   font: 700 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.summary-tile .cost-amount {
+  display: inline;
+  color: var(--cost-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: inherit;
+  font-weight: 900;
+  line-height: inherit;
+  overflow-wrap: normal;
+  text-transform: none;
+}
+
 .composition-grid {
   grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
 }
@@ -2084,7 +2095,7 @@ h3 {
   white-space: nowrap;
 }
 
-.cost-quality strong {
+.cost-quality .cq-label {
   overflow-wrap: anywhere;
   line-height: 1.15;
 }
@@ -2096,19 +2107,19 @@ h3 {
   font: 700 12px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.cost-quality small {
+.cost-quality small:not(.cq-label) {
   color: var(--cost-accent);
 }
 
-.cost-quality.exact_price strong {
+.cost-quality.exact_price .cq-label {
   color: var(--green);
 }
 
-.cost-quality.estimated_price strong {
+.cost-quality.estimated_price .cq-label {
   color: var(--blue);
 }
 
-.cost-quality.unknown_price strong {
+.cost-quality.unknown_price .cq-label {
   color: var(--red);
 }
 

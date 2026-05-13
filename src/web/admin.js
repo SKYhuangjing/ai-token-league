@@ -645,7 +645,6 @@ function renderExpandedUsage(item) {
 function renderDetailSummary(detail) {
   const items = [
     [t("admin.detail.total"), formatToken(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
-    [t("admin.detail.composition"), localizedCompositionSummary(detail)],
     [t("admin.detail.workdirs"), String(detail.workdirs?.length || 0)],
     [t("admin.detail.models"), String(detail.models?.length || 0)]
   ];
@@ -661,7 +660,8 @@ function renderCompositionBlock(item) {
     .map((entry) => `<article class="summary-tile composition-tile">
       <span>${escapeHtml(compositionFieldLabel(entry.field))}</span>
       <strong title="${formatTokenRaw(entry.tokens)}">${formatToken(entry.tokens)}</strong>
-      <small>${Math.round(entry.ratio * 100)}%${state.showCost ? ` · <span class="cost-amount">${escapeHtml(formatCost(costValueForField(item, entry.field)))}</span>` : ""}</small>
+      <small>${Math.round(entry.ratio * 100)}%</small>
+      ${state.showCost ? `<small><span class="cost-amount">${escapeHtml(formatCost(costValueForField(item, entry.field)))}</span></small>` : ""}
     </article>`)
     .join("");
   return `<div class="detail-summary composition-grid">${rows}</div>`;
@@ -834,8 +834,8 @@ function renderCostQuality(item) {
   const label = localizedCostQualityLabel(item.costQuality);
   const cost = state.showCost ? renderCost(item) : "";
   return `<span class="cost-quality ${escapeHtml(item.costQuality || "unknown_price")}" title="${escapeHtml(costTitle(item))}">
-    <strong>${escapeHtml(label)}</strong>
-    ${cost ? `<small>${cost}</small>` : ""}
+    <small class="cq-label">${escapeHtml(label)}</small>
+    ${cost ? cost : ""}
   </span>`;
 }
 

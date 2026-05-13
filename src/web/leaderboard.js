@@ -258,7 +258,6 @@ function renderSummary(detail) {
   const items = [
     [t("web.detail.rank"), detail.rank ? `#${detail.rank}` : "-"],
     [t("web.detail.periodTokens"), localeTokenCompact(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
-    [t("web.detail.composition"), localizedCompositionSummary(detail)],
     [t("web.detail.dominant"), humanDominant(detail.dominantComposition || dominantComposition(detail))],
     [t("web.detail.models"), String(detail.models?.length || 0)]
   ];
@@ -346,11 +345,11 @@ function renderCompactTrend(items, { topTitle }) {
 function renderCompositionBlock(item, { showCost = false } = {}) {
   const rows = tokenCompositionDetails(item)
     .map((entry) => {
-      const cost = showCost ? renderCostPart(item, entry.field) : "";
       return `<article class="summary-tile composition-tile">
         <span>${escapeHtml(compositionFieldLabel(entry.field))}</span>
         <strong title="${formatTokenRaw(entry.tokens)}">${localeTokenCompact(entry.tokens)}</strong>
-        <small>${Math.round(entry.ratio * 100)}%${cost ? ` · ${cost}` : ""}</small>
+        <small>${Math.round(entry.ratio * 100)}%</small>
+        ${showCost ? `<small>${renderCostPart(item, entry.field)}</small>` : ""}
       </article>`;
     })
     .join("");
