@@ -369,7 +369,7 @@ function selectSection(section) {
 
 function handlePrimaryNavigationClick(section) {
   selectSection(section);
-  if (section === "overview" || section === "workdirs") {
+  if (section === "overview") {
     run(() => loadToday(true));
   }
   if (section === "sources") run(loadHealth);

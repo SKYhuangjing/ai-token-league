@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - [Desktop] Consolidated Settings around profile, app preferences, cloud, updates, diagnostics, reset, import, and export after Sources moved to primary navigation.
 - [Desktop] Refreshed rail and cloud status behavior so saved API base URL changes clear stale cloud/update state and the rail reflects local, checking, online, offline, and unavailable states.
-- [Desktop] Clicking `Overview` or `Workdirs` now triggers a local usage refresh using the existing scan path.
+- [Desktop] Clicking `Overview` now triggers a local usage refresh using the existing scan path.
 - [Desktop] Updated card inline actions and destructive row styling so contextual operations stay with their rows and destructive actions are visually distinct.
 - [Desktop, Web] Updated desktop screenshots used by README and the public download page.
 - [Web] Public latest updates now show only changelog entries tagged `[Desktop]`, `[Web]`, or `[Desktop, Web]`.

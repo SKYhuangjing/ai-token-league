@@ -21,7 +21,7 @@
 
 - [Desktop] Sources 提升为一级导航后，Settings 收敛为 profile、应用偏好、cloud、updates、diagnostics、reset、import/export。
 - [Desktop] 刷新 rail 和 cloud 状态行为，保存后的 API base URL 变化会清理旧 cloud/update 状态，rail 可区分 local、checking、online、offline、unavailable。
-- [Desktop] 点击 `Overview` 或 `Workdirs` 时会复用现有扫描链路触发本地用量刷新。
+- [Desktop] 点击 `Overview` 时会复用现有扫描链路触发本地用量刷新。
 - [Desktop] 更新卡片行内操作和危险操作行样式，使上下文操作留在对应行内，删除/重置等危险动作更明确。
 - [Desktop, Web] 更新 README 和公开下载页使用的桌面端截图。
 - [Web] 公开下载页最新更新只展示 changelog 中带 `[Desktop]`、`[Web]` 或 `[Desktop, Web]` 的条目。
