@@ -758,6 +758,7 @@ function pollUsageScan() {
       if (!status.running) {
         clearInterval(scanPollTimer);
         scanPollTimer = null;
+        await refreshForegroundSyncStatus(status);
         showToast(t("desktop.rail.scanComplete"));
         loadMyIdentity().catch((error) => console.error(error));
       }
@@ -793,6 +794,14 @@ function applyUsageScanStatus(status, { force = false } = {}) {
     $("#workdirs-summary").textContent = t("desktop.renderer.refreshFailed", { error: status.error });
     showToast(t("desktop.renderer.refreshFailed", { error: status.error }));
   }
+}
+
+async function refreshForegroundSyncStatus(status) {
+  if (!status.syncResult && !status.syncError) return;
+  latestConfig = await api.getConfig();
+  if (status.syncResult) renderSyncStatus(latestConfig, status.syncResult);
+  if (status.syncError) setStatusMessage(t("desktop.renderer.refreshFailed", { error: status.syncError }));
+  await loadBackgroundStatus();
 }
 
 function applyUsageSnapshot(usage) {
@@ -1218,7 +1227,9 @@ function renderOverviewTrend(items) {
     sparkEl.style.gridTemplateColumns = gridCols;
     sparkEl.innerHTML = rows.map((row, i) => {
       const isHot = i === peakIdx;
-      return `<div class="spark-bar${isHot ? " hot" : ""}" data-open-overview-trend="${escapeHtml(row.periodStart)}|${escapeHtml(row.periodEnd)}" style="height:${Math.max(12, (row.totalTokens / max) * 100)}%; transition: height 0.3s ease; cursor: pointer;" data-tooltip="${escapeHtml(metricTitle(row))}"></div>`;
+      return `<div class="spark-bar${isHot ? " hot" : ""}" data-open-overview-trend="${escapeHtml(row.periodStart)}|${escapeHtml(row.periodEnd)}" style="height:${Math.max(12, (row.totalTokens / max) * 100)}%; transition: height 0.3s ease; cursor: pointer;">
+        ${renderSparkBarValue(row)}
+      </div>`;
     }).join("");
 
     axisEl.style.gridTemplateColumns = gridCols;
@@ -1230,6 +1241,13 @@ function renderOverviewTrend(items) {
   }
 }
 
+function renderSparkBarValue(row) {
+  return `<span class="spark-bar-value">
+    <strong>${formatToken(row.totalTokens)}</strong>
+    ${latestConfig?.showEstimatedCost ? renderCostAmount(row) : ""}
+  </span>`;
+}
+
 function groupByGrain(items, grain) {
   const map = new Map();
   for (const item of items) {
@@ -1237,12 +1255,29 @@ function groupByGrain(items, grain) {
     const row = map.get(bucket.key) || {
       periodStart: bucket.periodStart,
       periodEnd: bucket.periodEnd,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      estimatedCostUsd: 0,
+      costQuality: "",
+      pricingVersion: "",
       totalTokens: 0
     };
+    const withCost = addDisplayCostToUsageItem(item);
+    row.inputTokens += item.inputTokens || 0;
+    row.outputTokens += item.outputTokens || 0;
+    row.reasoningTokens += item.reasoningTokens || 0;
+    row.cacheReadTokens += item.cacheReadTokens || 0;
+    row.cacheWriteTokens += item.cacheWriteTokens || 0;
     row.totalTokens += item.totalTokens || 0;
+    aggregateCost(row, withCost);
     map.set(bucket.key, row);
   }
-  return [...map.values()].sort((a, b) => a.periodStart.localeCompare(b.periodStart));
+  return [...map.values()]
+    .sort((a, b) => a.periodStart.localeCompare(b.periodStart))
+    .map((row) => ({ ...row, missingPriceModels: sortedBreakdown(row.missingPriceModels || {}) }));
 }
 
 function formatAxisLabel(row, grain) {
@@ -1582,24 +1617,12 @@ function renderSourceRows(autoSources, manualSources, ignoredSources, providerId
 }
 
 function groupBy(items, key) {
-  const map = new Map();
+  const map = {};
   for (const item of items) {
     const name = item[key] || "unknown";
-    const current = map.get(name) || {
-      name,
-      totalTokens: 0,
-      estimatedCostUsd: 0,
-      costQuality: "",
-      pricingVersion: ""
-    };
-    const withCost = addDisplayCostToUsageItem(item);
-    current.totalTokens += item.totalTokens || 0;
-    aggregateCost(current, withCost);
-    map.set(name, current);
+    addCostBreakdownItem(map, name, item, addDisplayCostToUsageItem(item));
   }
-  return [...map.values()]
-    .sort((a, b) => b.totalTokens - a.totalTokens)
-    .map((item) => ({ ...item, missingPriceModels: sortedBreakdown(item.missingPriceModels || {}) }));
+  return finalizeCostBreakdown(map);
 }
 
 function groupProviders(items) {
@@ -1652,8 +1675,8 @@ function groupTrend(items) {
         totalTokens: 0,
         estimatedCostUsd: 0,
         costQuality: "",
-        modelMap: {},
-        workdirMap: {},
+        modelBreakdownMap: {},
+        workdirBreakdownMap: {},
         modelDetailMap: {}
       };
     const withCost = addDisplayCostToUsageItem(item);
@@ -1672,8 +1695,6 @@ function groupTrend(items) {
       pricingVersion: ""
     };
     row.models.add(item.model || "unknown");
-    row.modelMap[item.model || "unknown"] = (row.modelMap[item.model || "unknown"] || 0) + (item.totalTokens || 0);
-    row.workdirMap[item.workdirDisplayName || "unknown"] = (row.workdirMap[item.workdirDisplayName || "unknown"] || 0) + (item.totalTokens || 0);
     row.inputTokens += item.inputTokens || 0;
     row.outputTokens += item.outputTokens || 0;
     row.reasoningTokens += item.reasoningTokens || 0;
@@ -1681,6 +1702,8 @@ function groupTrend(items) {
     row.cacheWriteTokens += item.cacheWriteTokens || 0;
     row.totalTokens += item.totalTokens || 0;
     aggregateCost(row, withCost);
+    addCostBreakdownItem(row.modelBreakdownMap, item.model || "unknown", item, withCost);
+    addCostBreakdownItem(row.workdirBreakdownMap, item.workdirDisplayName || "unknown", item, withCost);
     modelDetail.inputTokens += item.inputTokens || 0;
     modelDetail.outputTokens += item.outputTokens || 0;
     modelDetail.reasoningTokens += item.reasoningTokens || 0;
@@ -1697,8 +1720,8 @@ function groupTrend(items) {
       ...row,
       compositionSummary: tokenCompositionSummary(row),
       missingPriceModels: sortedBreakdown(row.missingPriceModels || {}),
-      modelBreakdown: sortedBreakdown(row.modelMap || {}),
-      workdirBreakdown: sortedBreakdown(row.workdirMap || {}),
+      modelBreakdown: finalizeCostBreakdown(row.modelBreakdownMap || {}),
+      workdirBreakdown: finalizeCostBreakdown(row.workdirBreakdownMap || {}),
       modelDetails: Object.values(row.modelDetailMap || {}).sort((a, b) => b.totalTokens - a.totalTokens),
       models: [...row.models].sort()
     }));
@@ -1765,8 +1788,8 @@ function groupWorkdirDetails(items) {
     .map((item) => ({
       ...item,
       contributionRatio: item.totalTokens / total,
-      modelBreakdown: Object.values(item.modelCostMap || {}).sort((a, b) => b.totalTokens - a.totalTokens),
-      dailyBreakdown: Object.values(item.dailyCostMap || {}).sort((a, b) => a.name.localeCompare(b.name)),
+      modelBreakdown: finalizeCostBreakdown(item.modelCostMap || {}),
+      dailyBreakdown: finalizeCostBreakdown(item.dailyCostMap || {}).sort((a, b) => a.name.localeCompare(b.name)),
       missingPriceModels: sortedBreakdown(item.missingPriceModels || {})
     }));
 }
@@ -1786,8 +1809,8 @@ function groupDailyRows(items) {
       estimatedCostUsd: 0,
       costQuality: "",
       pricingVersion: "",
-      modelMap: {},
-      workdirMap: {}
+      modelBreakdownMap: {},
+      workdirBreakdownMap: {}
     };
     const withCost = addDisplayCostToUsageItem(item);
     row.inputTokens += item.inputTokens || 0;
@@ -1796,17 +1819,17 @@ function groupDailyRows(items) {
     row.cacheReadTokens += item.cacheReadTokens || 0;
     row.cacheWriteTokens += item.cacheWriteTokens || 0;
     row.totalTokens += item.totalTokens || 0;
-    row.modelMap[item.model || "unknown"] = (row.modelMap[item.model || "unknown"] || 0) + (item.totalTokens || 0);
-    row.workdirMap[item.workdirDisplayName || "unknown"] = (row.workdirMap[item.workdirDisplayName || "unknown"] || 0) + (item.totalTokens || 0);
     aggregateCost(row, withCost);
+    addCostBreakdownItem(row.modelBreakdownMap, item.model || "unknown", item, withCost);
+    addCostBreakdownItem(row.workdirBreakdownMap, item.workdirDisplayName || "unknown", item, withCost);
     map.set(item.day, row);
   }
   return [...map.values()]
     .sort((a, b) => a.periodStart.localeCompare(b.periodStart))
     .map((row) => ({
       ...row,
-      modelBreakdown: sortedBreakdown(row.modelMap || {}),
-      workdirBreakdown: sortedBreakdown(row.workdirMap || {}),
+      modelBreakdown: finalizeCostBreakdown(row.modelBreakdownMap || {}),
+      workdirBreakdown: finalizeCostBreakdown(row.workdirBreakdownMap || {}),
       compositionSummary: tokenCompositionSummary(row),
       missingPriceModels: sortedBreakdown(row.missingPriceModels || {})
     }));
@@ -2005,8 +2028,8 @@ function aggregatePeriodRow(items, periodStart, periodEnd) {
     estimatedCostUsd: 0,
     costQuality: "",
     pricingVersion: "",
-    modelMap: {},
-    workdirMap: {}
+    modelBreakdownMap: {},
+    workdirBreakdownMap: {}
   };
   for (const item of items) {
     const withCost = addDisplayCostToUsageItem(item);
@@ -2016,16 +2039,16 @@ function aggregatePeriodRow(items, periodStart, periodEnd) {
     row.cacheReadTokens += item.cacheReadTokens || 0;
     row.cacheWriteTokens += item.cacheWriteTokens || 0;
     row.totalTokens += item.totalTokens || 0;
-    row.modelMap[item.model || "unknown"] = (row.modelMap[item.model || "unknown"] || 0) + (item.totalTokens || 0);
-    row.workdirMap[item.workdirDisplayName || "unknown"] = (row.workdirMap[item.workdirDisplayName || "unknown"] || 0) + (item.totalTokens || 0);
     aggregateCost(row, withCost);
+    addCostBreakdownItem(row.modelBreakdownMap, item.model || "unknown", item, withCost);
+    addCostBreakdownItem(row.workdirBreakdownMap, item.workdirDisplayName || "unknown", item, withCost);
   }
   return {
     ...row,
     compositionSummary: tokenCompositionSummary(row),
     missingPriceModels: sortedBreakdown(row.missingPriceModels || {}),
-    modelBreakdown: sortedBreakdown(row.modelMap || {}),
-    workdirBreakdown: sortedBreakdown(row.workdirMap || {})
+    modelBreakdown: finalizeCostBreakdown(row.modelBreakdownMap || {}),
+    workdirBreakdown: finalizeCostBreakdown(row.workdirBreakdownMap || {})
   };
 }
 
@@ -2399,9 +2422,33 @@ async function refreshPricing() {
 }
 
 function sortedBreakdown(obj) {
-  return Object.entries(obj)
+  return Object.entries(obj || {})
     .sort((a, b) => b[1] - a[1])
     .map(([name, totalTokens]) => ({ name, totalTokens }));
+}
+
+function addCostBreakdownItem(map, name, item, withCost = addDisplayCostToUsageItem(item)) {
+  const key = name || "unknown";
+  const current = map[key] || {
+    name: key,
+    totalTokens: 0,
+    estimatedCostUsd: 0,
+    costQuality: "",
+    pricingVersion: ""
+  };
+  current.totalTokens += item.totalTokens || 0;
+  aggregateCost(current, withCost);
+  map[key] = current;
+  return current;
+}
+
+function finalizeCostBreakdown(map) {
+  return Object.values(map || {})
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .map((item) => ({
+      ...item,
+      missingPriceModels: sortedBreakdown(item.missingPriceModels || {})
+    }));
 }
 
 function formatToken(value) {

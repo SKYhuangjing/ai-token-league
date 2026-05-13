@@ -325,7 +325,9 @@ button:disabled {
 /* ─── Workspace ─── */
 
 .workspace {
+  min-width: 0;
   height: 100vh;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 14px 26px 26px;
 }
@@ -615,7 +617,7 @@ button:disabled {
   gap: clamp(6px, 1vw, 14px);
   min-height: 128px;
   border-bottom: 1px solid var(--line-strong);
-  padding: 0;
+  padding: 32px 0 0;
 }
 
 .spark-bar {
@@ -647,6 +649,37 @@ button:disabled {
 
 .spark-bar.hot {
   background: linear-gradient(180deg, rgba(244, 176, 0, 0.94), rgba(244, 176, 0, 0.2));
+}
+
+.spark-bar-value {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  display: grid;
+  gap: 1px;
+  width: max-content;
+  max-width: min(92px, calc(100vw - 36px));
+  text-align: center;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.05;
+  pointer-events: none;
+}
+
+.spark-bar-value strong,
+.spark-bar-value .cost-amount {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spark-bar-value .cost-amount {
+  display: block;
+  color: var(--cost-accent);
+  font-size: 11px;
 }
 
 /* ─── Workdirs ─── */

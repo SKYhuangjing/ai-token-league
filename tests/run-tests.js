@@ -357,6 +357,7 @@ function testBackendUpload(identity, items) {
   const costBoard = store.publicLeaderboard({ period: "this_month", includeCost: true });
   assert.ok(Object.hasOwn(costBoard[0], "estimatedCostUsd"));
   assert.ok(costBoard[0].costQuality);
+  assert.ok(Object.hasOwn(costBoard[0].models[0], "estimatedCostUsd"));
   assert.equal(
     costBoard[0].estimatedCostUsd,
     Number((
@@ -375,14 +376,20 @@ function testBackendUpload(identity, items) {
   assert.ok(detail.workdirs.length >= 1);
   assert.ok(detail.providers.length >= 1);
   assert.ok(detail.periodRows.length >= 1);
+  assert.ok(Object.hasOwn(detail.models[0], "estimatedCostUsd"));
+  assert.ok(Object.hasOwn(detail.workdirs[0], "estimatedCostUsd"));
+  assert.ok(Object.hasOwn(detail.providers[0], "estimatedCostUsd"));
+  assert.ok(Object.hasOwn(detail.periodRows[0].models[0], "estimatedCostUsd"));
+  assert.ok(Object.hasOwn(detail.periodRows[0].workdirs[0], "estimatedCostUsd"));
   assert.ok(detail.compositionSummary);
   assert.equal(detail.rows[0].compositionSummary.length > 0, true);
-  const trend = store.participantTrend(identity.participantId, { grain: "week", range: "last30" });
+  const trend = store.participantTrend(identity.participantId, { grain: "week", range: "last30", includeCost: true });
   assert.equal(trend.participantId, identity.participantId);
   assert.ok(trend.items.length >= 1);
   assert.equal(trend.items[0].nickname, "tester");
   assert.ok(trend.items[0].periodStart);
   assert.ok(trend.items[0].models.length >= 1);
+  assert.ok(Object.hasOwn(trend.items[0].models[0], "estimatedCostUsd"));
   const monthlyTrend = store.participantTrend(identity.participantId, { grain: "month", range: "last12_months" });
   assert.ok(monthlyTrend.items.length >= 1);
   const admin = store.adminUsage({ grain: "day", range: "month" });

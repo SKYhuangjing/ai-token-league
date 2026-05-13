@@ -14,6 +14,8 @@
 - [Desktop] 新增按区间联动的 Overview 指标：总 token、composition、趋势、Top Providers、Top Models、Top Workdirs、来源就绪状态和 cloud/sync 状态。
 - [Desktop] 新增一等 Workdirs 分析页面，支持贡献占比、模型拆解、使用历史和 alias 管理。
 - [Desktop] 新增一等 Sources 管理页面，集中管理 provider 开关、自动/手动/忽略/preset 来源、Cursor token 和扫描周期。
+- [Desktop] 新增前台扫描后自动同步：source fingerprint 变化时自动上传，无需手动点击 Sync Now。
+- [Desktop] 新增 Overview 趋势图 spark bar 值覆盖层，展示每根柱的 token 数和估算成本。
 - [Web] 重设计公开下载页，包含产品 hero、安装包卡片、board preview、桌面截图 gallery 和最新更新。
 - 新增共享 changelog 解析能力，供公开下载页展示带标签的用户可见 release notes。
 
@@ -24,9 +26,13 @@
 - [Desktop] 点击 `Overview` 时会复用现有扫描链路触发本地用量刷新。
 - [Desktop] 更新卡片行内操作和危险操作行样式，使上下文操作留在对应行内，删除/重置等危险动作更明确。
 - [Desktop, Web] 更新 README 和公开下载页使用的桌面端截图。
+- [Desktop, Web] breakdown 项（models、workdirs、providers、tools）现在携带每项成本字段（`estimatedCostUsd`、`costQuality`），成本信息与 token 数并列展示。
 - [Web] 公开下载页最新更新只展示 changelog 中带 `[Desktop]`、`[Web]` 或 `[Desktop, Web]` 的条目。
+- [Web] 排行榜 breakdown bars 现在同时展示估算成本和 token 数。
 - Board summary 响应新增 identity display metadata，用于公开 preview 文案。
 - OpenRouter warm refresh 在价格缓存仍 fresh 但存在 missing-price models 时会重新计算成本。
+- 上传队列去重现在同时匹配 source fingerprint 和 payload hash，避免同一扫描结果被重复入队。
+- 配置导入和首次启动时立即初始化 API 连接状态，rail 可直接反映实际云端状态。
 
 ### 文档
 

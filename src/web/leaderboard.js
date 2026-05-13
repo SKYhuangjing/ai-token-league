@@ -296,7 +296,7 @@ function renderBreakdownBars(items = []) {
   return items
     .map((item) => `<article class="bar-row">
       <span>${escapeHtml(item.name)}</span>
-      <strong title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+      <strong title="${formatTokenRaw(item.totalTokens)}${state.showCost ? ` · ${escapeHtml(costTitle(item))}` : ""}">${localeTokenCompact(item.totalTokens)}${state.showCost ? ` · ${renderCost(item)}` : ""}</strong>
       <i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%"></i>
     </article>`)
     .join("");

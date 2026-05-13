@@ -29,6 +29,8 @@ const foregroundScan = {
   startedAt: null,
   finishedAt: null,
   error: null,
+  syncResult: null,
+  syncError: "",
   snapshot: null
 };
 
@@ -488,7 +490,8 @@ ipcMain.handle("config:import", async () => {
     });
     if (source.canceled || !source.filePaths[0]) return { canceled: true };
     const imported = JSON.parse(fs.readFileSync(source.filePaths[0], "utf8"));
-    const next = config.importConfig(imported);
+    let next = config.importConfig(imported);
+    next = await ensureApiConnectionState(config, next);
     appendRuntimeLog("config_imported", { participantId: next.participantId, deviceId: next.deviceId });
     applyLaunchAtLogin(next);
     scheduleBackgroundRefresh(next);
@@ -610,9 +613,15 @@ ipcMain.handle("usage:scan", async (_event, options = {}) => {
 });
 
 ipcMain.handle("usage:scan-start", async (_event, options = {}) => {
-  const { config, core, preset } = await modules();
+  const { config, core, crypto, preset } = await modules();
   const current = await ensureDesktopConfig(config, preset);
-  startForegroundScan({ config, core, current, force: Boolean(options.force) });
+  startForegroundScan({
+    config,
+    core,
+    crypto,
+    current,
+    force: Boolean(options.force)
+  });
   return foregroundScanStatus();
 });
 
@@ -1036,6 +1045,7 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       deviceId: current.deviceId,
       clientGeneratedAt: new Date().toISOString(),
       client,
+      sourceFingerprint: usage.sourceFingerprint || "",
       items: usage.items
     };
     const drainBefore = await drainUploadQueue(current);
@@ -1045,6 +1055,7 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
     const syncResult = {
       ...result,
       scanned: usage.items.length,
+      sourceFingerprint: usage.sourceFingerprint || "",
       queued: false,
       queueUploaded: drainBefore.uploaded + drainAfter.uploaded,
       queuePending: drainAfter.pending
@@ -1076,6 +1087,7 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       deviceId: current.deviceId,
       clientGeneratedAt: new Date().toISOString(),
       client,
+      sourceFingerprint: usage.sourceFingerprint || "",
       items: usage.items
     };
     const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
@@ -1084,6 +1096,7 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       accepted: 0,
       rejected: 0,
       scanned: usage.items.length,
+      sourceFingerprint: usage.sourceFingerprint || "",
       queued: true,
       queueId: queued.id,
       queuePending: readUploadQueue(current).items.length,
@@ -1110,6 +1123,14 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
   }
 }
 
+function shouldAutoSyncScannedUsage(current, snapshot = {}) {
+  if (!hasApiBaseUrl(current) || snapshot.fromCache) return false;
+  const sourceFingerprint = snapshot.sourceFingerprint || "";
+  const lastSuccessSourceFingerprint = current?.syncStatus?.lastSuccessSourceFingerprint || "";
+  if (sourceFingerprint && sourceFingerprint !== lastSuccessSourceFingerprint) return true;
+  return readUploadQueue(current).items.length > 0;
+}
+
 function persistSyncStatus(configModule, current, { apiBaseUrl, status, startedAt, finishedAt, result, error = "" }) {
   const previous = current.syncStatus || {};
   const syncStatus = {
@@ -1123,6 +1144,10 @@ function persistSyncStatus(configModule, current, { apiBaseUrl, status, startedA
     rejected: result.rejected || 0,
     queueUploaded: result.queueUploaded || 0,
     queuePending: result.queuePending || 0,
+    sourceFingerprint: result.sourceFingerprint || "",
+    lastSuccessSourceFingerprint: status === "success"
+      ? result.sourceFingerprint || previous.lastSuccessSourceFingerprint || ""
+      : previous.lastSuccessSourceFingerprint || "",
     error
   };
   configModule.saveConfig({
@@ -1175,7 +1200,7 @@ async function getUsageSnapshot({ core, current, force = false }) {
   }
 }
 
-function startForegroundScan({ config, core, current, force = false }) {
+function startForegroundScan({ config, core, crypto, current, force = false }) {
   const cached = readUsageCache();
   if (foregroundScan.running) return;
   if (!force && cached && Date.now() - Date.parse(cached.scannedAt) < usageCache.cacheTtlMs) {
@@ -1183,6 +1208,8 @@ function startForegroundScan({ config, core, current, force = false }) {
     foregroundScan.startedAt = cached.scannedAt;
     foregroundScan.finishedAt = cached.scannedAt;
     foregroundScan.error = null;
+    foregroundScan.syncResult = null;
+    foregroundScan.syncError = "";
     foregroundScan.force = false;
     return;
   }
@@ -1193,12 +1220,21 @@ function startForegroundScan({ config, core, current, force = false }) {
   foregroundScan.startedAt = new Date().toISOString();
   foregroundScan.finishedAt = null;
   foregroundScan.error = null;
+  foregroundScan.syncResult = null;
+  foregroundScan.syncError = "";
   foregroundScan.snapshot = cached || null;
   setTimeout(() => {
     getUsageSnapshot({ config, core, current, force })
-      .then((snapshot) => {
+      .then(async (snapshot) => {
         if (foregroundScan.taskId !== taskId) return;
         foregroundScan.snapshot = snapshot;
+        if (shouldAutoSyncScannedUsage(current, snapshot)) {
+          try {
+            foregroundScan.syncResult = await syncCurrentUsage({ config, core, crypto, current, scanned: snapshot });
+          } catch (error) {
+            foregroundScan.syncError = error.message;
+          }
+        }
         foregroundScan.finishedAt = new Date().toISOString();
       })
       .catch((error) => {
@@ -1222,6 +1258,8 @@ function foregroundScanStatus() {
     startedAt: foregroundScan.startedAt,
     finishedAt: foregroundScan.finishedAt,
     error: foregroundScan.error,
+    syncResult: foregroundScan.syncResult,
+    syncError: foregroundScan.syncError,
     snapshot: snapshot ? publicUsageSnapshot(snapshot) : null
   };
 }
@@ -1336,6 +1374,8 @@ function resetLocalData(configModule) {
   foregroundScan.running = false;
   foregroundScan.taskId += 1;
   foregroundScan.error = null;
+  foregroundScan.syncResult = null;
+  foregroundScan.syncError = "";
   foregroundScan.snapshot = null;
   try {
     fs.rmSync(configModule.APP_DIR, { recursive: true, force: true });
@@ -1612,6 +1652,7 @@ function diagnosticsUploadQueue(queue) {
         participantId: entry.payload?.participantId || "",
         deviceId: entry.payload?.deviceId || "",
         clientGeneratedAt: entry.payload?.clientGeneratedAt || "",
+        sourceFingerprint: entry.payload?.sourceFingerprint || "",
         client: entry.payload?.client || null,
         itemCount: entry.payload?.items?.length || 0,
         items: entry.payload?.items || []
@@ -1677,6 +1718,7 @@ async function ensureDesktopConfig(configModule, presetModule = null) {
       const next = configModule.updateConfig({ desktopAutoInitialized: true }, current);
       return next;
     }
+    current = await ensureApiConnectionState(configModule, current);
     return current;
   }
   const preset = presetModule ? presetModule.loadBuildPreset(app.getAppPath()) : {};
@@ -1702,6 +1744,21 @@ async function ensureDesktopConfig(configModule, presetModule = null) {
       message: "API not configured"
     }
   });
+}
+
+async function ensureApiConnectionState(configModule, current) {
+  const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
+  if (current?.apiConnection?.checkedAt) return current;
+  const apiConnection = apiBaseUrl
+    ? await checkApiConnectionForConfig(apiBaseUrl)
+    : {
+        ok: true,
+        status: "not_configured",
+        apiBaseUrl: "",
+        checkedAt: new Date().toISOString(),
+        message: "API not configured"
+      };
+  return configModule.updateConfig({ apiBaseUrl, apiConnection }, current);
 }
 
 function isUnconfirmedDesktopProfile(current) {
@@ -1755,7 +1812,7 @@ function signedQueueEntry(payload, signature) {
 
 function enqueueUpload(current, entry, errorMessage = "") {
   const queue = readUploadQueue(current);
-  const existing = queue.items.find((item) => item.payloadHash === entry.payloadHash);
+  const existing = queue.items.find((item) => item.payloadHash === entry.payloadHash || sameQueuedUsageSnapshot(item, entry));
   if (existing) {
     existing.lastError = errorMessage || existing.lastError;
     writeUploadQueue(current, queue);
@@ -1765,6 +1822,15 @@ function enqueueUpload(current, entry, errorMessage = "") {
   queue.items.push(next);
   writeUploadQueue(current, queue);
   return next;
+}
+
+function sameQueuedUsageSnapshot(left, right) {
+  const leftFingerprint = left?.payload?.sourceFingerprint || "";
+  const rightFingerprint = right?.payload?.sourceFingerprint || "";
+  return Boolean(leftFingerprint)
+    && leftFingerprint === rightFingerprint
+    && left?.participantId === right?.participantId
+    && left?.deviceId === right?.deviceId;
 }
 
 async function drainUploadQueue(current) {

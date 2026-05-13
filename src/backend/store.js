@@ -362,6 +362,7 @@ export class Store {
           cacheWriteTokens: 0,
           reasoningTokens: 0,
           modelBreakdown: {},
+          modelCostBreakdown: {},
           estimatedCostUsd: 0,
           costQuality: ""
         };
@@ -372,7 +373,10 @@ export class Store {
       current.cacheWriteTokens += item.cacheWriteTokens || 0;
       current.reasoningTokens += item.reasoningTokens || 0;
       current.modelBreakdown[item.model] = (current.modelBreakdown[item.model] || 0) + item.totalTokens;
-      if (includeCost) aggregateCost(current, item);
+      if (includeCost) {
+        aggregateCost(current, item);
+        addCostBreakdownItem(current.modelCostBreakdown, item.model || "unknown", item);
+      }
       byParticipant.set(item.participantId, current);
     }
     return [...byParticipant.values()]
@@ -389,7 +393,7 @@ export class Store {
         reasoningTokens: item.reasoningTokens,
         compositionSummary: tokenCompositionSummary(item),
         dominantComposition: dominantComposition(item),
-        models: sortedBreakdown(item.modelBreakdown),
+        models: includeCost ? finalizeCostBreakdown(item.modelCostBreakdown) : sortedBreakdown(item.modelBreakdown),
         ...(includeCost ? costFields(item) : {})
       }));
   }
@@ -417,9 +421,13 @@ export class Store {
       reasoningTokens: 0,
       byDay: {},
       byModel: {},
+      byModelCost: {},
       byWorkdir: {},
+      byWorkdirCost: {},
       byProvider: {},
+      byProviderCost: {},
       byTool: {},
+      byToolCost: {},
       estimatedCostUsd: 0,
       costQuality: "",
       rows: rows
@@ -453,7 +461,13 @@ export class Store {
       detail.byWorkdir[item.workdirDisplayName] = (detail.byWorkdir[item.workdirDisplayName] || 0) + item.totalTokens;
       detail.byProvider[item.providerId] = (detail.byProvider[item.providerId] || 0) + item.totalTokens;
       detail.byTool[item.toolCode] = (detail.byTool[item.toolCode] || 0) + item.totalTokens;
-      if (includeCost) aggregateCost(detail, item);
+      if (includeCost) {
+        aggregateCost(detail, item);
+        addCostBreakdownItem(detail.byModelCost, item.model || "unknown", item);
+        addCostBreakdownItem(detail.byWorkdirCost, item.workdirDisplayName || "unknown", item);
+        addCostBreakdownItem(detail.byProviderCost, item.providerId || "unknown", item);
+        addCostBreakdownItem(detail.byToolCost, item.toolCode || "unknown", item);
+      }
     }
     const periodRows = aggregateUsageRows(rows, "day", { participants: this.db.participants, includeCost });
     return {
@@ -463,10 +477,10 @@ export class Store {
       ...(includeCost ? costFields(detail) : {}),
       days: sortedBreakdown(detail.byDay),
       periodRows,
-      models: sortedBreakdown(detail.byModel),
-      workdirs: sortedBreakdown(detail.byWorkdir),
-      providers: sortedBreakdown(detail.byProvider),
-      tools: sortedBreakdown(detail.byTool)
+      models: includeCost ? finalizeCostBreakdown(detail.byModelCost) : sortedBreakdown(detail.byModel),
+      workdirs: includeCost ? finalizeCostBreakdown(detail.byWorkdirCost) : sortedBreakdown(detail.byWorkdir),
+      providers: includeCost ? finalizeCostBreakdown(detail.byProviderCost) : sortedBreakdown(detail.byProvider),
+      tools: includeCost ? finalizeCostBreakdown(detail.byToolCost) : sortedBreakdown(detail.byTool)
     };
   }
 
@@ -964,6 +978,9 @@ function emptyAggregate(bucket, item, participants = {}) {
     modelsMap: {},
     workdirsMap: {},
     providersMap: {},
+    modelsCostMap: {},
+    workdirsCostMap: {},
+    providersCostMap: {},
     estimatedCostUsd: 0,
     costQuality: "",
     pricingVersion: "",
@@ -987,21 +1004,26 @@ function aggregateUsageRows(rows, grain, { includeAdminFields = false, participa
     current.modelsMap[item.model || "unknown"] = (current.modelsMap[item.model || "unknown"] || 0) + (item.totalTokens || 0);
     current.workdirsMap[item.workdirDisplayName || "unknown"] = (current.workdirsMap[item.workdirDisplayName || "unknown"] || 0) + (item.totalTokens || 0);
     current.providersMap[item.providerId || "unknown"] = (current.providersMap[item.providerId || "unknown"] || 0) + (item.totalTokens || 0);
-    if (includeCost) aggregateCost(current, item);
+    if (includeCost) {
+      aggregateCost(current, item);
+      addCostBreakdownItem(current.modelsCostMap, item.model || "unknown", item);
+      addCostBreakdownItem(current.workdirsCostMap, item.workdirDisplayName || "unknown", item);
+      addCostBreakdownItem(current.providersCostMap, item.providerId || "unknown", item);
+    }
     if (item.sourceQuality !== "exact") current.sourceQuality = "partial";
     if (item.uploadedAt > current.lastSyncedAt) current.lastSyncedAt = item.uploadedAt;
     map.set(key, current);
   }
   return [...map.values()]
     .sort((a, b) => b.periodStart.localeCompare(a.periodStart) || b.totalTokens - a.totalTokens)
-    .map(({ modelsMap, workdirsMap, providersMap, ...item }) => ({
+    .map(({ modelsMap, workdirsMap, providersMap, modelsCostMap, workdirsCostMap, providersCostMap, ...item }) => ({
       ...item,
       compositionSummary: tokenCompositionSummary(item),
       dominantComposition: dominantComposition(item),
       ...(includeCost ? costFields(item) : {}),
-      models: sortedBreakdown(modelsMap),
-      workdirs: sortedBreakdown(workdirsMap),
-      providers: sortedBreakdown(providersMap)
+      models: includeCost ? finalizeCostBreakdown(modelsCostMap) : sortedBreakdown(modelsMap),
+      workdirs: includeCost ? finalizeCostBreakdown(workdirsCostMap) : sortedBreakdown(workdirsMap),
+      providers: includeCost ? finalizeCostBreakdown(providersCostMap) : sortedBreakdown(providersMap)
     }));
 }
 
@@ -1031,6 +1053,30 @@ function sortedBreakdown(obj) {
   return Object.entries(obj)
     .sort((a, b) => b[1] - a[1])
     .map(([name, totalTokens]) => ({ name, totalTokens }));
+}
+
+function addCostBreakdownItem(map, name, item) {
+  const key = name || "unknown";
+  const current = map[key] || {
+    name: key,
+    totalTokens: 0,
+    estimatedCostUsd: 0,
+    costQuality: "",
+    pricingVersion: ""
+  };
+  current.totalTokens += item.totalTokens || 0;
+  aggregateCost(current, item);
+  map[key] = current;
+  return current;
+}
+
+function finalizeCostBreakdown(map = {}) {
+  return Object.values(map)
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .map((item) => ({
+      ...item,
+      ...costFields(item)
+    }));
 }
 
 function normalizeUsageTotal(item) {

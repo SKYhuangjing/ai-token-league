@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - [Desktop] Added range-aware Overview metrics for total tokens, composition, trends, top providers, top models, top workdirs, source readiness, and cloud/sync status.
 - [Desktop] Added a first-class Workdirs analysis surface with contribution, model split, usage history, and alias management.
 - [Desktop] Added a first-class Sources management surface for provider enablement, detected/manual/ignored/preset sources, Cursor tokens, and scan cadence.
+- [Desktop] Added auto-sync after foreground scan: when source fingerprint changes since the last successful sync, the desktop automatically uploads without requiring manual Sync Now.
+- [Desktop] Added spark bar value overlays showing token count and estimated cost per bar on the Overview trend chart.
 - [Web] Redesigned the public download page with a product hero, installer cards, board preview, desktop screenshot gallery, and latest updates.
 - Added shared changelog parsing so the public download page can show tagged user-facing release notes.
 
@@ -24,9 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - [Desktop] Clicking `Overview` now triggers a local usage refresh using the existing scan path.
 - [Desktop] Updated card inline actions and destructive row styling so contextual operations stay with their rows and destructive actions are visually distinct.
 - [Desktop, Web] Updated desktop screenshots used by README and the public download page.
+- [Desktop, Web] Breakdown items (models, workdirs, providers, tools) now carry per-item cost fields (`estimatedCostUsd`, `costQuality`) so cost is visible alongside token counts.
 - [Web] Public latest updates now show only changelog entries tagged `[Desktop]`, `[Web]`, or `[Desktop, Web]`.
+- [Web] Leaderboard breakdown bars now show estimated cost alongside token counts.
 - Board summary responses now include identity display metadata for public preview copy.
 - OpenRouter warm refresh recalculates costs when a fresh cache still has missing-price models.
+- Upload queue dedup now matches on source fingerprint in addition to payload hash, preventing duplicate entries when the same scan result is re-queued.
+- Config import and first-run now initialize API connection state so the rail reflects the actual cloud status immediately.
 
 ### Documentation
 
