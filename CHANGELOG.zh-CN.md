@@ -6,6 +6,23 @@
 
 ---
 
+## [0.6.1] - 2026-05-13
+
+### 修复
+
+- [Desktop] 修复桌面端自动刷新调度，使定时扫描计时器正确启停。
+- [Web] 更新排行榜身份展示文案。
+- [Web] 调换 cost-quality 列 label/amount 样式，拆分 composition tile 中的百分比和成本展示。
+- [Web] 恢复 `colAlias` i18n key，并将 composition 百分比内联到原始数据表的各 token 列中。
+
+### 变更
+
+- [Web] 将估算成本内联到 token 单元格中，移除 Admin 和排行榜详情表的独立成本列。
+- [Web] 对所有格式化成本值使用 `escapeHtml()` 加固 XSS 防护。
+- [Web] 精简下载页，移除冗余的预览标题。
+
+---
+
 ## [0.6.0] - 2026-05-13
 
 ### 新增

@@ -19,7 +19,7 @@ Before changing behavior, identify the real source of truth in code and docs. Do
 
 AI Token League is a local-first AI coding token usage collector plus public leaderboard for Codex, Claude Code, and Cursor.
 
-Current product baseline: `0.7`; client version: `0.6.0` (released 2026-05-13).
+Current product baseline: `0.7`; client version: `0.6.1` (released 2026-05-13).
 Frozen product baseline: `0.6`, tracked by `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`.
 Active product baseline: `0.7`, tracked by `doc/0.7-baseline.md` and `doc/0.7-development-tasks.md`.
 

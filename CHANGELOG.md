@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.1] - 2026-05-13
+
+### Fixed
+
+- [Desktop] Fixed desktop auto-refresh scheduling so the periodic scan timer starts and stops correctly.
+- [Web] Updated leaderboard identity copy for clarity.
+- [Web] Swapped cost-quality label/amount styling and isolated composition cost display in breakdown tiles.
+- [Web] Restored `colAlias` i18n key and inlined composition percentages into each token column in the raw data table.
+
+### Changed
+
+- [Web] Inlined estimated cost into token cells and removed the standalone cost column from admin and leaderboard detail tables.
+- [Web] Hardened XSS escaping on all formatted cost values with `escapeHtml()`.
+- [Web] Simplified download landing page by removing redundant preview header.
+
+---
+
 ## [0.6.0] - 2026-05-13
 
 ### Added
