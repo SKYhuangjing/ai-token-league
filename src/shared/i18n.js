@@ -38,6 +38,9 @@ const translations = {
 
     // Web 端 - 导航和标题
     "web.publicBoard": "公开社区榜单",
+    "web.publicBoardAnonymous": "匿名社区榜单",
+    "web.publicBoardPublic": "公开社区榜单",
+    "web.publicBoardAuthenticated": "登录可见社区榜单",
     "web.rankingMetric": "排名指标",
     "web.totalTokens": "总令牌数",
     "web.modelTotalsContext": "模型总数仅供参考显示",
@@ -58,7 +61,7 @@ const translations = {
     "web.leaderboard.models": "模型",
     "web.leaderboard.noUsage": "暂无使用数据上传",
     "web.leaderboard.participantCount": "{count} 位参与者",
-    "web.leaderboard.anonymousTitle": "匿名公开榜",
+    "web.leaderboard.anonymousTitle": "匿名榜",
     "web.leaderboard.anonymousDesc": "名称为系统生成的匿名展示名，真实昵称不会公开。",
     "web.leaderboard.colNickname": "昵称",
     "web.leaderboard.colAlias": "匿名名",
@@ -650,6 +653,9 @@ const translations = {
 
     // Web - Navigation and Headers
     "web.publicBoard": "Public community board",
+    "web.publicBoardAnonymous": "Anonymous community board",
+    "web.publicBoardPublic": "Public community board",
+    "web.publicBoardAuthenticated": "Signed-in community board",
     "web.rankingMetric": "Ranking metric",
     "web.totalTokens": "Total tokens",
     "web.modelTotalsContext": "Model totals are shown for context",
@@ -670,7 +676,7 @@ const translations = {
     "web.leaderboard.models": "Models",
     "web.leaderboard.noUsage": "No usage uploaded yet",
     "web.leaderboard.participantCount": "{count} ranked participant{plural}",
-    "web.leaderboard.anonymousTitle": "Anonymous public board",
+    "web.leaderboard.anonymousTitle": "Anonymous board",
     "web.leaderboard.anonymousDesc": "Names are generated aliases. Real nicknames are not shown.",
     "web.leaderboard.colNickname": "Nickname",
     "web.leaderboard.colAlias": "Alias",

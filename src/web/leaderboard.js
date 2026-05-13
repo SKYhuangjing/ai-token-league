@@ -84,6 +84,16 @@ async function loadLeaderboard() {
 }
 
 function applyIdentityMode(mode) {
+  const eyebrowKey = {
+    anonymous: "web.publicBoardAnonymous",
+    public: "web.publicBoardPublic",
+    authenticated: "web.publicBoardAuthenticated"
+  }[mode] || "web.publicBoard";
+  const eyebrow = document.querySelector("#board-identity-eyebrow");
+  if (eyebrow) {
+    eyebrow.setAttribute("data-i18n", eyebrowKey);
+    eyebrow.textContent = t(eyebrowKey);
+  }
   const banner = document.querySelector("#anonymous-banner");
   banner.hidden = mode !== "anonymous";
   const colName = document.querySelector("#col-name");
