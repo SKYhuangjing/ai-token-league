@@ -28,6 +28,7 @@ let pricingSource = t("desktop.renderer.localFallbackPricing");
 let latestScanAt = "";
 let scanRunning = false;
 let scanPollTimer = null;
+let backgroundStatusTimer = null;
 let latestUpdateState = null;
 let latestBackgroundStatus = null;
 let latestIdentityBusinessDay = "";
@@ -651,6 +652,7 @@ async function boot() {
     await loadMyIdentity();
     startIdentityRefreshTimer();
     await loadBackgroundStatus();
+    startBackgroundStatusTimer();
     await loadSystemStatus();
   } else {
     showToast(t("desktop.renderer.openSettings"));
@@ -825,6 +827,13 @@ function startIdentityRefreshTimer() {
       await loadToday();
       await loadMyIdentity();
     });
+  }, 60 * 1000);
+}
+
+function startBackgroundStatusTimer() {
+  if (backgroundStatusTimer) return;
+  backgroundStatusTimer = setInterval(() => {
+    loadBackgroundStatus().catch((error) => console.error(error));
   }, 60 * 1000);
 }
 
@@ -1339,13 +1348,25 @@ function formatAxisLabel(row, grain) {
 function renderRailStatus() {
   const update = latestUpdateState?.update || latestUpdateState?.lastResult || null;
   const readyPackage = latestUpdateState?.readyPackage || null;
-  const lastScanAt = latestScanAt || latestBackgroundStatus?.cacheScannedAt || latestBackgroundStatus?.lastRunAt || "";
+  const lastScanAt = latestTimestamp([
+    latestScanAt,
+    latestBackgroundStatus?.cacheScannedAt,
+    latestBackgroundStatus?.lastRunAt
+  ]);
   const nextScanAt = latestBackgroundStatus?.nextRunAt || "";
   renderRailCloudStatus();
   setTextIfPresent("#rail-last-scan", t("desktop.renderer.currentScan", { time: lastScanAt ? formatDateTime(lastScanAt) : "-" }));
   setTextIfPresent("#rail-next-scan", t("desktop.renderer.nextScan", { time: nextScanAt ? formatDateTime(nextScanAt) : "-" }));
   const restartBtn = $("#rail-restart-update");
   if (restartBtn) restartBtn.hidden = !(readyPackage || latestUpdateState?.status === "downloaded" || update?.status === "downloaded");
+}
+
+function latestTimestamp(values = []) {
+  return values
+    .filter(Boolean)
+    .map((value) => ({ value, time: Date.parse(value) }))
+    .filter((item) => Number.isFinite(item.time))
+    .sort((a, b) => b.time - a.time)[0]?.value || "";
 }
 
 function renderRailCloudStatus(override = null) {
@@ -1576,6 +1597,7 @@ function sourceDescription(providerId) {
 }
 
 async function loadBackgroundStatus() {
+  const previousCacheScannedAt = latestBackgroundStatus?.cacheScannedAt || "";
   const status = await api.backgroundStatus();
   const config = await api.getConfig();
   latestBackgroundStatus = status;
@@ -1586,6 +1608,15 @@ async function loadBackgroundStatus() {
   }
   renderSilentUpdateStatus(status.updateCheck, config);
   renderRailStatus();
+  if (previousCacheScannedAt && status.cacheScannedAt && status.cacheScannedAt !== previousCacheScannedAt && !scanRunning && !scanPollTimer) {
+    const scanStatus = await api.startUsageScan({ force: false });
+    applyUsageScanStatus(scanStatus);
+    if (scanStatus.running) {
+      pollUsageScan();
+    } else {
+      await refreshForegroundSyncStatus(scanStatus);
+    }
+  }
 }
 
 function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {

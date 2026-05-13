@@ -9,6 +9,7 @@ const { spawn } = require("node:child_process");
 const background = {
   timer: null,
   running: false,
+  rescheduleAfterRun: false,
   lastRunAt: null,
   lastMode: null,
   lastResult: null,
@@ -571,7 +572,7 @@ ipcMain.handle("config:unignore-auto-source", async (_event, providerId, sourceI
 ipcMain.handle("background:status", async () => {
   const { config } = await modules();
   const current = config.loadConfig();
-  if (current && current.autoRefreshEnabled !== false && !background.timer) await scheduleBackgroundRefresh(current);
+  if (current && current.autoRefreshEnabled !== false) await ensureBackgroundRefreshScheduled(current);
   if (current && hasApiBaseUrl(current) && !updateCheck.timer) await scheduleBackgroundUpdateCheck(current);
   return backgroundStatus();
 });
@@ -872,7 +873,7 @@ ipcMain.handle("app:reset-with-cloud", async () => {
 });
 
 async function scheduleBackgroundRefresh(configOverride = null) {
-  if (background.timer) clearInterval(background.timer);
+  if (background.timer) clearTimeout(background.timer);
   background.timer = null;
   background.nextRunAt = null;
   try {
@@ -880,14 +881,33 @@ async function scheduleBackgroundRefresh(configOverride = null) {
     const current = configOverride || config.loadConfig();
     if (current?.autoRefreshEnabled === false) return;
     const minutes = Math.max(1, Number(current.refreshIntervalMinutes || 15));
-    const intervalMs = minutes * 60 * 1000;
-    background.nextRunAt = new Date(Date.now() + intervalMs).toISOString();
-    background.timer = setInterval(() => {
-      runBackgroundRefresh().catch(() => {});
-      background.nextRunAt = new Date(Date.now() + intervalMs).toISOString();
-    }, intervalMs);
+    armBackgroundRefreshTimer(minutes * 60 * 1000);
   } catch (error) {
     background.lastError = error.message;
+  }
+}
+
+function armBackgroundRefreshTimer(delayMs) {
+  if (background.timer) clearTimeout(background.timer);
+  background.nextRunAt = new Date(Date.now() + delayMs).toISOString();
+  background.timer = setTimeout(() => {
+    background.timer = null;
+    background.nextRunAt = null;
+    runBackgroundRefresh({ reschedule: true }).catch(() => {});
+  }, delayMs);
+}
+
+async function ensureBackgroundRefreshScheduled(current) {
+  if (!background.timer) {
+    await scheduleBackgroundRefresh(current);
+    return;
+  }
+  const nextRunAt = Date.parse(background.nextRunAt || "");
+  if (Number.isFinite(nextRunAt) && nextRunAt <= Date.now()) {
+    clearTimeout(background.timer);
+    background.timer = null;
+    background.nextRunAt = null;
+    runBackgroundRefresh({ reschedule: true }).catch(() => {});
   }
 }
 
@@ -991,8 +1011,11 @@ async function maybeApplyReadyUpdateOnIdle(current = null) {
   return applyReadyUpdateIfIdle({ source: mandatory ? "mandatory" : "background" });
 }
 
-async function runBackgroundRefresh() {
-  if (background.running) return;
+async function runBackgroundRefresh({ reschedule = false } = {}) {
+  if (background.running) {
+    if (reschedule) background.rescheduleAfterRun = true;
+    return;
+  }
   background.running = true;
   background.lastRunAt = new Date().toISOString();
   background.lastError = null;
@@ -1024,6 +1047,10 @@ async function runBackgroundRefresh() {
   } finally {
     background.running = false;
     maybeApplyReadyUpdateOnIdle().catch(() => {});
+    if (reschedule || background.rescheduleAfterRun) {
+      background.rescheduleAfterRun = false;
+      scheduleBackgroundRefresh().catch(() => {});
+    }
   }
 }
 
