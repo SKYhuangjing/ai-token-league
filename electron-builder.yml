@@ -4,9 +4,12 @@ files:
   - src/**/*
   - "!src/backend/**"
   - "!src/web/**"
-  - assets/**/*
+  - assets/app-icon.png
+  - assets/app-icon.ico
+  - assets/app-icon.icns
+  - assets/client-nicknames.json
+  - assets/preset.json
   - package.json
-  - README.md
   - "!doc/**"
   - "!tests/**"
   - "!samples/**"
@@ -19,9 +22,17 @@ files:
   - "!Dockerfile"
   - "!docker-compose*"
   - "!AGENTS.md"
+  - "!CLAUDE.md"
+  - "!README*"
+  - "!CHANGELOG*"
+  - "!marketing/**"
+  - "!.claude/**"
   - "!env.*"
   - "!*.pid"
   - "!*.log"
+  - "!node_modules/lucide-static/**"
+  - "!node_modules/sql.js/dist/*debug*"
+  - "!node_modules/sql.js/dist/*.zip"
 directories:
   output: dist-installer
 mac:

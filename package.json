@@ -19,15 +19,15 @@
     "icons": "node scripts/generate-icons.js",
     "preset": "node scripts/build-preset.js",
     "package:mac": "npm run package:mac:arm64",
-    "package:mac:arm64": "electron-packager . \"AI Token League\" --platform=darwin --arch=arm64 --out=dist --overwrite --icon=assets/app-icon.icns --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|Dockerfile|docker-compose.*|AGENTS\\.md|env\\..*|.*\\.pid|.*\\.log)($|/)'",
-    "package:mac:intel": "electron-packager . \"AI Token League\" --platform=darwin --arch=x64 --out=dist --overwrite --icon=assets/app-icon.icns --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|Dockerfile|docker-compose.*|AGENTS\\.md|env\\..*|.*\\.pid|.*\\.log)($|/)'",
+    "package:mac:arm64": "electron-packager . \"AI Token League\" --platform=darwin --arch=arm64 --out=dist --overwrite --icon=assets/app-icon.icns --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|marketing|\\.claude|Dockerfile|docker-compose.*|AGENTS\\.md|CLAUDE\\.md|README.*|CHANGELOG.*|electron-builder\\.yml|env\\..*|.*\\.pid|.*\\.log)($|/)|^/assets/(screenshots|app-icon-source\\.png|\\.DS_Store)($|/)|^/node_modules/sql\\.js/dist/(.*debug.*|.*\\.zip)$'",
+    "package:mac:intel": "electron-packager . \"AI Token League\" --platform=darwin --arch=x64 --out=dist --overwrite --icon=assets/app-icon.icns --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|marketing|\\.claude|Dockerfile|docker-compose.*|AGENTS\\.md|CLAUDE\\.md|README.*|CHANGELOG.*|electron-builder\\.yml|env\\..*|.*\\.pid|.*\\.log)($|/)|^/assets/(screenshots|app-icon-source\\.png|\\.DS_Store)($|/)|^/node_modules/sql\\.js/dist/(.*debug.*|.*\\.zip)$'",
     "package:mac:all": "npm run package:mac:arm64 && npm run package:mac:intel",
     "package:installer:mac:arm64": "electron-builder --mac dmg --arm64 && node scripts/patch-dmg-readme.js",
     "package:installer:mac:intel": "electron-builder --mac dmg --x64 && node scripts/patch-dmg-readme.js",
     "package:installer:mac:all": "electron-builder --mac dmg --arm64 --x64 && node scripts/patch-dmg-readme.js",
     "package:installer:win": "electron-builder --win nsis --x64",
     "package:installer:all": "electron-builder --mac dmg --arm64 --x64 --win nsis --x64 && node scripts/patch-dmg-readme.js",
-    "package:win": "electron-packager . \"AI Token League\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=assets/app-icon.ico --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|Dockerfile|docker-compose.*|AGENTS\\.md|env\\..*|.*\\.pid|.*\\.log)($|/)'",
+    "package:win": "electron-packager . \"AI Token League\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=assets/app-icon.ico --ignore='^/(dist|dist-installer|\\.tmp[^/]*|data|doc|tests|samples|scripts|migrations|src/backend|src/web|marketing|\\.claude|Dockerfile|docker-compose.*|AGENTS\\.md|CLAUDE\\.md|README.*|CHANGELOG.*|electron-builder\\.yml|env\\..*|.*\\.pid|.*\\.log)($|/)|^/assets/(screenshots|app-icon-source\\.png|\\.DS_Store)($|/)|^/node_modules/sql\\.js/dist/(.*debug.*|.*\\.zip)$'",
     "package:all": "npm run package:mac:all && npm run package:win && node scripts/zip-dist.js",
     "release:build": "rm -rf dist dist-installer && npm run preset && npm run package:all && npm run package:installer:all",
     "release:dry-run": "node scripts/publish-release.js --dry-run",
@@ -42,11 +42,11 @@
   "devDependencies": {
     "@electron/packager": "^20.0.0",
     "electron": "^41.3.0",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "lucide-static": "^1.14.0"
   },
   "dependencies": {
     "electron-updater": "^6.6.2",
-    "lucide-static": "^1.14.0",
     "mysql2": "^3.22.3",
     "sql.js": "^1.13.0"
   }
