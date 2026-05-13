@@ -413,12 +413,11 @@ async function loadDetail(participantId, rowRange = null) {
       <td>${escapeHtml(row.day)}</td>
       <td>${escapeHtml(row.workdirDisplayName)}</td>
       <td>${escapeHtml(row.model)}</td>
-      <td class="tokens" title="${formatTokenRaw(row.totalTokens)}">${formatToken(row.totalTokens)}</td>
+      <td class="tokens" title="${formatTokenRaw(row.totalTokens)}">${renderAccountingToken(row.totalTokens, row.estimatedCostUsd)}</td>
       <td class="tokens" title="${formatTokenRaw(row.inputTokens)}">${renderAccountingToken(row.inputTokens, row.inputCostUsd)}</td>
       <td class="tokens" title="${formatTokenRaw(row.outputTokens)}">${renderAccountingToken(row.outputTokens, row.outputCostUsd)}</td>
       <td class="tokens" title="${formatTokenRaw((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0))}">${renderAccountingToken((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0), sumKnownCosts(row.cacheReadCostUsd, row.cacheWriteCostUsd))}</td>
       <td class="tokens" title="${formatTokenRaw(row.reasoningTokens)}">${renderAccountingToken(row.reasoningTokens, row.reasoningCostUsd)}</td>
-      ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(row))}">${renderCost(row)}</td>` : ""}
       ${state.showCost ? `<td>${escapeHtml(localizedCostQualityLabel(row.costQuality))}</td>` : ""}
       <td>${renderQuality(row.sourceQuality)}</td>
     </tr>`)
@@ -662,7 +661,7 @@ function renderCompositionBlock(item) {
     .map((entry) => `<article class="summary-tile composition-tile">
       <span>${escapeHtml(compositionFieldLabel(entry.field))}</span>
       <strong title="${formatTokenRaw(entry.tokens)}">${formatToken(entry.tokens)}</strong>
-      <small>${Math.round(entry.ratio * 100)}%${state.showCost ? ` · ${formatCost(costValueForField(item, entry.field))}` : ""}</small>
+      <small>${Math.round(entry.ratio * 100)}%${state.showCost ? ` · <span class="cost-amount">${escapeHtml(formatCost(costValueForField(item, entry.field)))}</span>` : ""}</small>
     </article>`)
     .join("");
   return `<div class="detail-summary composition-grid">${rows}</div>`;
@@ -700,7 +699,7 @@ function localizedCostQualityLabel(value = "") {
 }
 
 function renderAccountingToken(tokens, cost) {
-  const costLine = state.showCost ? `<small>${formatCost(cost)}</small>` : "";
+  const costLine = state.showCost ? `<small><span class="cost-amount">${escapeHtml(formatCost(cost))}</span></small>` : "";
   return `<span class="token-accounting">${formatToken(tokens || 0)}${costLine}</span>`;
 }
 
@@ -893,7 +892,7 @@ function normalizeMissingPriceModels(value) {
 function renderCost(item) {
   const value = formatCost(item.estimatedCostUsd);
   if (value === "-") return value;
-  return `${value}${item.missingPriceTokens ? `<sup title="${escapeHtml(t("admin.cost.missingModelPrices"))}">*</sup>` : ""}`;
+  return `<span class="cost-amount">${escapeHtml(value)}</span>${item.missingPriceTokens ? `<sup title="${escapeHtml(t("admin.cost.missingModelPrices"))}">*</sup>` : ""}`;
 }
 
 function chartItemTitle(item) {

@@ -226,15 +226,24 @@ h1 {
   padding: 14px 0 18px;
 }
 
+.landing-masthead h1 {
+  margin-bottom: 18px;
+}
+
 .masthead-tagline-row {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 24px;
   flex-wrap: wrap;
 }
 
+.landing-masthead .summary {
+  margin: 0;
+}
+
 .hero-cta-row {
-  margin-top: 36px;
+  width: max-content;
+  margin-top: 18px;
 }
 
 .btn-primary {
@@ -274,9 +283,11 @@ h1 {
 }
 
 .global-top-bar {
-  position: absolute;
-  top: 24px;
-  right: 32px;
+  position: relative;
+  width: min(1180px, calc(100vw - 32px));
+  margin: 18px auto -18px;
+  display: flex;
+  justify-content: flex-end;
   z-index: 100;
 }
 
@@ -1500,9 +1511,11 @@ td {
   gap: 4px;
 }
 
-.token-accounting small {
+.cost-amount {
   color: var(--cost-accent);
-  font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 small.pct {

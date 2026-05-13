@@ -277,20 +277,25 @@ function renderRawRows(items, { mode }) {
         .map((item) => {
           const total = Number(item.totalTokens || 0);
           const pct = (v) => total ? Math.round((Number(v || 0) / total) * 100) : 0;
+          const totalCell = state.showCost
+            ? `<span class="token-accounting">${localeTokenCompact(total)}<small><span class="cost-amount">${escapeHtml(formatCost(item.estimatedCostUsd))}</span></small></span>`
+            : localeTokenCompact(total);
+          const modelName = mode === "history"
+            ? (item.models || []).map((m) => m.name).join(", ") || item.model || ""
+            : item.model || "";
           return `<tr>
           <td>${mode === "history" ? formatPeriod(item) : item.day}</td>
-          <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
+          <td class="tokens" title="${formatTokenRaw(item.totalTokens)}${state.showCost ? ` · ${escapeHtml(costTitle(item))}` : ""}">${totalCell}</td>
           <td class="tokens" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)} <small class="pct">${pct(item.inputTokens)}%</small></td>
           <td class="tokens" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)} <small class="pct">${pct(item.outputTokens)}%</small></td>
           <td class="tokens" title="${formatTokenRaw((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}">${renderAccountingToken((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))} <small class="pct">${pct((item.cacheReadTokens || 0) + (item.cacheWriteTokens || 0))}%</small></td>
           <td class="tokens" title="${formatTokenRaw(item.reasoningTokens)}">${renderAccountingToken(item.reasoningTokens, item.reasoningCostUsd)} <small class="pct">${pct(item.reasoningTokens)}%</small></td>
-          ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
           ${state.showCost ? `<td>${escapeHtml(localizedCostQualityLabel(item.costQuality))}</td>` : ""}
-          <td>${mode === "history" ? renderModels(item.models) : renderModels([{ name: item.model, totalTokens: item.totalTokens }])}</td>
+          <td>${escapeHtml(modelName)}</td>
         </tr>`;
         })
         .join("")
-    : `<tr><td class="empty" colspan="${state.showCost ? 9 : 7}">${t("web.detail.noUsagePeriod")}</td></tr>`;
+    : `<tr><td class="empty" colspan="${state.showCost ? 8 : 7}">${t("web.detail.noUsagePeriod")}</td></tr>`;
 }
 
 function renderBreakdownBars(items = []) {
@@ -356,7 +361,7 @@ function renderCompositionBlock(item, { showCost = false } = {}) {
 }
 
 function renderAccountingToken(tokens, cost) {
-  const costLine = state.showCost ? `<small>${formatCost(cost)}</small>` : "";
+  const costLine = state.showCost ? `<small><span class="cost-amount">${escapeHtml(formatCost(cost))}</span></small>` : "";
   return `<span class="token-accounting">${localeTokenCompact(tokens || 0)}${costLine}</span>`;
 }
 
@@ -374,7 +379,7 @@ function renderCostPart(item, tokenField) {
     cacheWriteTokens: item.cacheWriteCostUsd,
     reasoningTokens: item.reasoningCostUsd
   };
-  return formatCost(mapping[tokenField]);
+  return `<span class="cost-amount">${escapeHtml(formatCost(mapping[tokenField]))}</span>`;
 }
 
 function summaryValueClass(value) {
@@ -490,7 +495,7 @@ function normalizeMissingPriceModels(value) {
 function renderCost(item) {
   const value = formatCost(item.estimatedCostUsd);
   if (value === "-") return value;
-  return `${value}${item.missingPriceTokens ? `<sup title="${escapeHtml(t("web.cost.missingModelPrices"))}">*</sup>` : ""}`;
+  return `<span class="cost-amount">${escapeHtml(value)}</span>${item.missingPriceTokens ? `<sup title="${escapeHtml(t("web.cost.missingModelPrices"))}">*</sup>` : ""}`;
 }
 
 function localizedCostQualityLabel(value = "") {
