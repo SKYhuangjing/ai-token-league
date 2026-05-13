@@ -6,6 +6,35 @@
 
 ---
 
+## [0.6.0] - 2026-05-13
+
+### 新增
+
+- [Desktop] 将桌面客户端重构为 token workstation，一级导航改为 `Overview`、`Workdirs`、`Sources`、`Settings`。
+- [Desktop] 新增按区间联动的 Overview 指标：总 token、composition、趋势、Top Providers、Top Models、Top Workdirs、来源就绪状态和 cloud/sync 状态。
+- [Desktop] 新增一等 Workdirs 分析页面，支持贡献占比、模型拆解、使用历史和 alias 管理。
+- [Desktop] 新增一等 Sources 管理页面，集中管理 provider 开关、自动/手动/忽略/preset 来源、Cursor token 和扫描周期。
+- [Web] 重设计公开下载页，包含产品 hero、安装包卡片、board preview、桌面截图 gallery 和最新更新。
+- 新增共享 changelog 解析能力，供公开下载页展示带标签的用户可见 release notes。
+
+### 变更
+
+- [Desktop] Sources 提升为一级导航后，Settings 收敛为 profile、应用偏好、cloud、updates、diagnostics、reset、import/export。
+- [Desktop] 刷新 rail 和 cloud 状态行为，保存后的 API base URL 变化会清理旧 cloud/update 状态，rail 可区分 local、checking、online、offline、unavailable。
+- [Desktop] 点击 `Overview` 或 `Workdirs` 时会复用现有扫描链路触发本地用量刷新。
+- [Desktop] 更新卡片行内操作和危险操作行样式，使上下文操作留在对应行内，删除/重置等危险动作更明确。
+- [Desktop, Web] 更新 README 和公开下载页使用的桌面端截图。
+- [Web] 公开下载页最新更新只展示 changelog 中带 `[Desktop]`、`[Web]` 或 `[Desktop, Web]` 的条目。
+- Board summary 响应新增 identity display metadata，用于公开 preview 文案。
+- OpenRouter warm refresh 在价格缓存仍 fresh 但存在 missing-price models 时会重新计算成本。
+
+### 文档
+
+- 更新 0.7 baseline 和 development task 文档，补齐 0.7.0 实现提交的 reverse-sync ledger。
+- 更新发布流程提示，明确 public-download-page changelog 条目需要显式打标签。
+
+---
+
 ## [0.5.3] - 2026-05-09
 
 ### 新增

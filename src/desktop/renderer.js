@@ -54,8 +54,7 @@ function setStatusMessage(message) {
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
-    selectSection(button.dataset.section);
-    if (button.dataset.section === "sources") run(loadHealth);
+    handlePrimaryNavigationClick(button.dataset.section);
   });
 });
 
@@ -366,6 +365,14 @@ function selectSection(section) {
   document.querySelectorAll(".screen").forEach((item) => item.classList.toggle("active", item.id === section));
   renderRailPageMeta(section);
   $(".workspace")?.scrollTo({ top: 0, behavior: "auto" });
+}
+
+function handlePrimaryNavigationClick(section) {
+  selectSection(section);
+  if (section === "overview" || section === "workdirs") {
+    run(() => loadToday(true));
+  }
+  if (section === "sources") run(loadHealth);
 }
 
 function renderRailPageMeta(section) {

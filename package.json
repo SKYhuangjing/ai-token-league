@@ -1,6 +1,6 @@
 {
   "name": "ai-token-league",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "productBaseline": "0.7",
   "private": true,
   "type": "module",
