@@ -53,6 +53,8 @@ const translations = {
     "web.period.lastWeek": "上周",
     "web.period.thisMonth": "本月",
     "web.period.lastMonth": "上月",
+    "web.viewMeter": "仪表",
+    "web.viewList": "列表",
 
     // Web 端 - 排行榜
     "web.leaderboard.title": "社区排行榜",
@@ -60,9 +62,11 @@ const translations = {
     "web.leaderboard.estCost": "预估成本",
     "web.leaderboard.models": "模型",
     "web.leaderboard.noUsage": "暂无使用数据上传",
+    "web.leaderboard.noMoreUsage": "暂无更多排名数据",
     "web.leaderboard.participantCount": "{count} 位参与者",
     "web.leaderboard.anonymousTitle": "匿名榜",
     "web.leaderboard.anonymousDesc": "名称为系统生成的匿名展示名，真实昵称不会公开。",
+    "web.leaderboard.rank": "排名",
     "web.leaderboard.colNickname": "昵称",
     "web.leaderboard.colAlias": "匿名名",
     "web.leaderboard.aliasMark": "匿名",
@@ -670,6 +674,8 @@ const translations = {
     "web.period.lastWeek": "Last week",
     "web.period.thisMonth": "This month",
     "web.period.lastMonth": "Last month",
+    "web.viewMeter": "Meter",
+    "web.viewList": "List",
 
     // Web - Leaderboard
     "web.leaderboard.title": "Community Leaderboard",
@@ -677,9 +683,11 @@ const translations = {
     "web.leaderboard.estCost": "Est. cost",
     "web.leaderboard.models": "Models",
     "web.leaderboard.noUsage": "No usage uploaded yet",
+    "web.leaderboard.noMoreUsage": "No more ranked participants",
     "web.leaderboard.participantCount": "{count} ranked participant{plural}",
     "web.leaderboard.anonymousTitle": "Anonymous board",
     "web.leaderboard.anonymousDesc": "Names are generated aliases. Real nicknames are not shown.",
+    "web.leaderboard.rank": "Rank",
     "web.leaderboard.colNickname": "Nickname",
     "web.leaderboard.colAlias": "Alias",
     "web.leaderboard.aliasMark": "Alias",

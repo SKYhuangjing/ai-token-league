@@ -15,10 +15,12 @@ const state = {
   detailParticipantId: "",
   detailTab: "period",
   historyView: "daily",
-  showCost: false
+  showCost: false,
+  viewMode: "meter"
 };
 const storageKeys = {
-  showCost: "ai-token-league.public.showCost"
+  showCost: "ai-token-league.public.showCost",
+  viewMode: "ai-token-league.public.viewMode"
 };
 
 const tbody = document.querySelector("#leaderboard");
@@ -69,6 +71,17 @@ document.querySelector("#show-cost").addEventListener("change", (event) => {
   if (state.detailParticipantId) loadDetail(state.detailParticipantId);
 });
 
+document.querySelectorAll("[data-view-mode]").forEach((group) => {
+  group.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    setActive(group, button);
+    state.viewMode = button.dataset.value;
+    persistPreference(storageKeys.viewMode, state.viewMode);
+    applyViewMode();
+  });
+});
+
 async function loadLeaderboard() {
   statusEl.textContent = t("loading");
   const params = new URLSearchParams({ period: state.period });
@@ -94,25 +107,35 @@ function applyIdentityMode(mode) {
     eyebrow.setAttribute("data-i18n", eyebrowKey);
     eyebrow.textContent = t(eyebrowKey);
   }
-  const banner = document.querySelector("#anonymous-banner");
-  banner.hidden = mode !== "anonymous";
   const colName = document.querySelector("#col-name");
   colName.setAttribute("data-i18n", mode === "anonymous" ? "web.leaderboard.colAlias" : "web.leaderboard.colNickname");
   colName.textContent = t(colName.getAttribute("data-i18n"));
 }
 
 function render(items) {
+  const top = orderPodium(items.slice(0, 3));
+  const rest = items.slice(3);
+  renderTopThree(top);
+  renderMeterView(rest);
+  renderListView(rest);
+}
+
+function orderPodium(items) {
+  if (items.length < 3) return items;
+  return [items[1], items[0], items[2]];
+}
+
+function renderListView(items) {
   if (!items.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 4 : 3}">${t("web.leaderboard.noUsage")}</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 5 : 4}">${t("web.leaderboard.noMoreUsage")}</td></tr>`;
     return;
   }
-  const isAnon = state.identityMode === "anonymous";
   tbody.innerHTML = items
     .map(
       (item) => `<tr>
+        <td><span class="rank">#${item.rank}</span></td>
         <td>
-          <span class="rank">#${item.rank}</span>
-          <button class="link-button participant-link${isAnon ? " anonymous-name" : ""}" data-display-id="${escapeHtml(item.displayId)}">
+          <button class="link-button participant-link" data-display-id="${escapeHtml(item.displayId)}">
             ${renderDisplayName(item.displayName)}
           </button>
         </td>
@@ -125,6 +148,69 @@ function render(items) {
   tbody.querySelectorAll("[data-display-id]").forEach((button) => {
     button.addEventListener("click", () => loadDetail(button.dataset.displayId));
   });
+}
+
+function renderTopThree(items) {
+  const topThree = document.querySelector("#top-three");
+  if (!items.length) {
+    topThree.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noUsage")}</div>`;
+    return;
+  }
+  topThree.innerHTML = items
+    .map((item) => `<article class="medal-card medal-rank-${item.rank}" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item))}">
+      <span class="medal-icon" aria-hidden="true">${rankIcon(item.rank)}</span>
+      <div class="medal-card-head">
+        <span class="medal-rank">#${item.rank}</span>
+        <button class="link-button participant-link">${renderDisplayName(item.displayName)}</button>
+      </div>
+      <strong class="medal-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+      ${state.showCost ? `<span class="medal-cost">${renderCost(item)}</span>` : ""}
+      ${renderModelSegments(item, { className: "composition-strip", title: modelUsageTitle(item) })}
+    </article>`)
+    .join("");
+  topThree.querySelectorAll(".medal-card[data-display-id]").forEach((el) => {
+    el.addEventListener("click", () => loadDetail(el.dataset.displayId));
+  });
+}
+
+function renderMeterView(items) {
+  const meterView = document.querySelector("#meter-view");
+  if (!items.length) {
+    meterView.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noMoreUsage")}</div>`;
+    return;
+  }
+  const max = Math.max(...items.map((item) => item.totalTokens), 1);
+  const colorCycle = ["", "meter-yellow", "meter-violet"];
+  meterView.innerHTML = items
+    .map((item) => {
+      const pct = Math.max(3, (item.totalTokens / max) * 100);
+      const colorClass = colorCycle[(item.rank - 1) % colorCycle.length];
+      return `<div class="meter-row" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item))}">
+        <span class="meter-name">
+          <span class="rank">#${item.rank}</span>
+          <button class="link-button participant-link" type="button">${renderDisplayName(item.displayName)}</button>
+        </span>
+        <div class="meter-bar ${colorClass}">
+          <div class="meter-fill" style="width:${pct}%">
+            ${renderModelSegmentItems(item)}
+          </div>
+        </div>
+        <span class="meter-value">
+          <strong title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+          ${state.showCost ? `<span class="cost-amount">${renderCost(item)}</span>` : ""}
+        </span>
+      </div>`;
+    })
+    .join("");
+  meterView.querySelectorAll(".meter-row[data-display-id]").forEach((el) => {
+    el.addEventListener("click", () => loadDetail(el.dataset.displayId));
+  });
+}
+
+function rankIcon(rank) {
+  const trophy = `<svg class="lucide lucide-trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978"/><path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978"/><path d="M18 9h1.5a1 1 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"/><path d="M6 9H4.5a1 1 0 0 1 0-5H6"/></svg>`;
+  const medal = `<svg class="lucide lucide-medal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
+  return rank === 1 ? trophy : medal;
 }
 
 async function loadDetail(participantId) {
@@ -167,9 +253,7 @@ async function loadHistory(participantId) {
 }
 
 function renderDisplayName(displayName) {
-  const name = escapeHtml(displayName);
-  if (state.identityMode !== "anonymous") return name;
-  return `<span class="alias-text"><span class="alias-name-text">${name}</span><span class="alias-mark">${t("web.leaderboard.aliasMark")}</span></span>`;
+  return escapeHtml(displayName);
 }
 
 function renderDetailTitle(displayName, contextLabel) {
@@ -369,6 +453,40 @@ function renderCompositionBlock(item, { showCost = false } = {}) {
   return `<div class="detail-summary composition-grid">${rows}</div>${footer}`;
 }
 
+function renderModelSegments(item, { className, title }) {
+  return `<div class="${className}" title="${escapeHtml(title)}">
+    ${renderModelSegmentItems(item)}
+  </div>`;
+}
+
+function renderModelSegmentItems(item) {
+  const models = normalizeModelSegments(item);
+  if (!models.length) return `<i class="model-segment model-segment-empty" style="width:100%"></i>`;
+  return models
+    .map((model, index) => `<i class="model-segment model-segment-${(index % 5) + 1}" style="width:${model.ratio}%"></i>`)
+    .join("");
+}
+
+function normalizeModelSegments(item) {
+  const total = Number(item.totalTokens || 0);
+  if (!total) return [];
+  return (item.models || [])
+    .filter((model) => Number(model.totalTokens || 0) > 0)
+    .map((model) => ({
+      name: model.name,
+      totalTokens: Number(model.totalTokens || 0),
+      ratio: Math.max(2, (Number(model.totalTokens || 0) / total) * 100)
+    }));
+}
+
+function modelUsageTitle(item) {
+  const models = normalizeModelSegments(item);
+  if (!models.length) return t("web.detail.noUsageSlice");
+  return models
+    .map((model) => `${model.name}: ${localeTokenCompact(model.totalTokens)} (${Math.round((model.totalTokens / Number(item.totalTokens || 1)) * 100)}%)`)
+    .join("\n");
+}
+
 function renderAccountingToken(tokens, cost) {
   const costLine = state.showCost ? `<small><span class="cost-amount">${escapeHtml(formatCost(cost))}</span></small>` : "";
   return `<span class="token-accounting">${localeTokenCompact(tokens || 0)}${costLine}</span>`;
@@ -449,6 +567,8 @@ function sourceName(providerId) {
 
 function hydratePreferences() {
   state.showCost = readBooleanPreference(storageKeys.showCost, false);
+  const savedViewMode = readStringPreference(storageKeys.viewMode, "meter");
+  state.viewMode = savedViewMode === "list" ? "list" : "meter";
 }
 
 function applyToggleState() {
@@ -456,11 +576,26 @@ function applyToggleState() {
   document.querySelectorAll(".cost-col").forEach((item) => {
     item.hidden = !state.showCost;
   });
+  applyViewMode();
+}
+
+function applyViewMode() {
+  const meterView = document.querySelector("#meter-view");
+  const listView = document.querySelector("#list-view");
+  const isMeter = state.viewMode === "meter";
+  meterView.hidden = !isMeter;
+  listView.hidden = isMeter;
+  // sync segmented button state
+  document.querySelectorAll("[data-view-mode]").forEach((group) => {
+    group.querySelectorAll("button").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.value === state.viewMode);
+    });
+  });
 }
 
 function persistPreference(key, value) {
   try {
-    window.localStorage.setItem(key, JSON.stringify(Boolean(value)));
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {}
 }
 
@@ -469,6 +604,16 @@ function readBooleanPreference(key, fallback) {
     const raw = window.localStorage.getItem(key);
     if (raw === null) return fallback;
     return JSON.parse(raw) === true;
+  } catch {
+    return fallback;
+  }
+}
+
+function readStringPreference(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw);
   } catch {
     return fallback;
   }

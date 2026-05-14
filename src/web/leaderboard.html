@@ -11,15 +11,10 @@
     <main class="shell public-shell">
       <section class="masthead public-masthead">
         <div class="masthead-copy">
-          <p id="board-identity-eyebrow" class="eyebrow" data-i18n="web.publicBoard">Public community board</p>
           <h1 data-i18n="app.name">AI Token League</h1>
+          <span id="board-identity-eyebrow" class="identity-pill" data-i18n="web.publicBoard">Public community board</span>
         </div>
         <div class="masthead-side">
-          <div class="score-card">
-            <span class="label" data-i18n="web.rankingMetric">Ranking metric</span>
-            <strong data-i18n="web.totalTokens">Total tokens</strong>
-            <small data-i18n="web.modelTotalsContext">Model totals are shown for context.</small>
-          </div>
           <div class="masthead-nav">
             <a href="/" class="nav-link" data-i18n="nav.home">← Home</a>
             <div class="lang-switcher-container" id="lang-switcher-container"></div>
@@ -36,25 +31,30 @@
           <button data-value="this_month" data-i18n="web.period.thisMonth">This month</button>
           <button data-value="last_month" data-i18n="web.period.lastMonth">Last month</button>
         </div>
-        <label class="inline-toggle">
-          <input id="show-cost" type="checkbox" />
-          <span data-i18n="web.estimatedCost">Estimated cost</span>
-        </label>
+        <div class="toolbar-right">
+          <div class="segmented" data-view-mode>
+            <button data-value="meter" class="active" data-i18n="web.viewMeter">Meter</button>
+            <button data-value="list" data-i18n="web.viewList">List</button>
+          </div>
+          <label class="inline-toggle">
+            <input id="show-cost" type="checkbox" />
+            <span data-i18n="web.estimatedCost">Estimated cost</span>
+          </label>
+        </div>
       </section>
 
       <section class="board">
         <div class="board-header">
           <h2 data-i18n="web.leaderboard.title">Community Leaderboard</h2>
-          <div id="anonymous-banner" class="anonymous-banner" hidden>
-            <strong data-i18n="web.leaderboard.anonymousTitle">Anonymous board</strong>
-            <span data-i18n="web.leaderboard.anonymousDesc">Names are generated aliases. Real nicknames are not shown.</span>
-          </div>
           <p id="status" data-i18n="loading">Loading...</p>
         </div>
-        <div class="table-wrap">
+        <div id="top-three" class="top-three-grid"></div>
+        <div id="meter-view" class="meter-stack"></div>
+        <div id="list-view" class="table-wrap" hidden>
           <table class="public-table">
             <thead>
               <tr>
+                <th data-i18n="web.leaderboard.rank">Rank</th>
                 <th id="col-name" data-i18n="web.leaderboard.colNickname">Nickname</th>
                 <th data-i18n="web.leaderboard.totalTokens">Total tokens</th>
                 <th class="cost-col" hidden data-i18n="web.leaderboard.estCost">Est. cost</th>
