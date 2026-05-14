@@ -7,6 +7,8 @@ files:
   - assets/app-icon.png
   - assets/app-icon.ico
   - assets/app-icon.icns
+  - assets/tray-icon.ico
+  - assets/tray-iconTemplate.png
   - assets/client-nicknames.json
   - assets/preset.json
   - package.json

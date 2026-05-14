@@ -1,0 +1,262 @@
+import fs from "node:fs";
+import path from "node:path";
+import zlib from "node:zlib";
+
+const outDir = path.resolve("assets");
+fs.mkdirSync(outDir, { recursive: true });
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+const templatePng = renderIcon({
+  size: 16,
+  scale: 4,
+  template: true
+});
+const windowsPng = renderIcon({
+  size: 16,
+  scale: 4,
+  template: false
+});
+
+fs.writeFileSync(path.join(outDir, "tray-iconTemplate.png"), templatePng);
+fs.writeFileSync(path.join(outDir, "tray-icon.ico"), encodeIco([{ size: 16, bytes: windowsPng }]));
+
+function renderIcon({ size, scale, template }) {
+  const canvas = createCanvas(size * scale, size * scale);
+  const s = scale;
+
+  if (template) {
+    drawTrend(canvas, s, [0, 0, 0, 255], [0, 0, 0, 230]);
+    drawBars(canvas, s, [0, 0, 0, 235]);
+  } else {
+    fillCircle(canvas, 8 * s, 8 * s, 7 * s, [38, 43, 47, 255]);
+    strokeCircle(canvas, 8 * s, 8 * s, 6.1 * s, 1.2 * s, [15, 18, 20, 220]);
+    drawTrend(canvas, s, [219, 88, 75, 255], [120, 40, 35, 245]);
+    drawBars(canvas, s, [198, 230, 218, 255]);
+  }
+
+  return encodePng(downsample(canvas, scale));
+}
+
+function drawTrend(canvas, s, color, shadowColor) {
+  const points = [
+    [2.4 * s, 11.7 * s],
+    [6.2 * s, 8.2 * s],
+    [8.3 * s, 9.8 * s],
+    [12.7 * s, 4.3 * s]
+  ];
+  if (shadowColor) drawPolyline(canvas, points.map(([x, y]) => [x, y + 0.7 * s]), 2.5 * s, shadowColor);
+  drawPolyline(canvas, points, 2.4 * s, color);
+  fillPolygon(canvas, [
+    [11.0 * s, 3.2 * s],
+    [13.9 * s, 2.6 * s],
+    [13.4 * s, 5.6 * s]
+  ], color);
+}
+
+function drawBars(canvas, s, color) {
+  fillRoundRect(canvas, 6.0 * s, 11.0 * s, 1.5 * s, 2.1 * s, 0.7 * s, color);
+  fillRoundRect(canvas, 8.4 * s, 10.0 * s, 1.5 * s, 3.1 * s, 0.7 * s, color);
+  fillRoundRect(canvas, 10.8 * s, 8.8 * s, 1.5 * s, 4.3 * s, 0.7 * s, color);
+}
+
+function createCanvas(width, height) {
+  return {
+    width,
+    height,
+    pixels: new Uint8ClampedArray(width * height * 4)
+  };
+}
+
+function setPixel(canvas, x, y, rgba) {
+  const px = Math.round(x);
+  const py = Math.round(y);
+  if (px < 0 || px >= canvas.width || py < 0 || py >= canvas.height) return;
+  const index = (py * canvas.width + px) * 4;
+  const alpha = rgba[3] / 255;
+  const inv = 1 - alpha;
+  canvas.pixels[index] = Math.round(rgba[0] * alpha + canvas.pixels[index] * inv);
+  canvas.pixels[index + 1] = Math.round(rgba[1] * alpha + canvas.pixels[index + 1] * inv);
+  canvas.pixels[index + 2] = Math.round(rgba[2] * alpha + canvas.pixels[index + 2] * inv);
+  canvas.pixels[index + 3] = Math.round(255 * (alpha + canvas.pixels[index + 3] / 255 * inv));
+}
+
+function fillCircle(canvas, cx, cy, radius, rgba) {
+  const minX = Math.floor(cx - radius);
+  const maxX = Math.ceil(cx + radius);
+  const minY = Math.floor(cy - radius);
+  const maxY = Math.ceil(cy + radius);
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      if ((x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2) setPixel(canvas, x, y, rgba);
+    }
+  }
+}
+
+function strokeCircle(canvas, cx, cy, radius, width, rgba) {
+  const minX = Math.floor(cx - radius - width);
+  const maxX = Math.ceil(cx + radius + width);
+  const minY = Math.floor(cy - radius - width);
+  const maxY = Math.ceil(cy + radius + width);
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const distance = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      if (Math.abs(distance - radius) <= width / 2) setPixel(canvas, x, y, rgba);
+    }
+  }
+}
+
+function fillRoundRect(canvas, x, y, width, height, radius, rgba) {
+  const minX = Math.floor(x);
+  const maxX = Math.ceil(x + width);
+  const minY = Math.floor(y);
+  const maxY = Math.ceil(y + height);
+  for (let py = minY; py <= maxY; py += 1) {
+    for (let px = minX; px <= maxX; px += 1) {
+      const dx = Math.max(x - px, 0, px - (x + width));
+      const dy = Math.max(y - py, 0, py - (y + height));
+      if (dx ** 2 + dy ** 2 <= radius ** 2) setPixel(canvas, px, py, rgba);
+    }
+  }
+}
+
+function drawPolyline(canvas, points, width, rgba) {
+  for (let i = 0; i < points.length - 1; i += 1) {
+    drawLine(canvas, points[i][0], points[i][1], points[i + 1][0], points[i + 1][1], width, rgba);
+  }
+}
+
+function drawLine(canvas, x1, y1, x2, y2, width, rgba) {
+  const steps = Math.ceil(Math.hypot(x2 - x1, y2 - y1) * 2);
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    fillCircle(canvas, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, width / 2, rgba);
+  }
+}
+
+function fillPolygon(canvas, points, rgba) {
+  const minX = Math.floor(Math.min(...points.map(([x]) => x)));
+  const maxX = Math.ceil(Math.max(...points.map(([x]) => x)));
+  const minY = Math.floor(Math.min(...points.map(([, y]) => y)));
+  const maxY = Math.ceil(Math.max(...points.map(([, y]) => y)));
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      if (insidePolygon(x, y, points)) setPixel(canvas, x, y, rgba);
+    }
+  }
+}
+
+function insidePolygon(x, y, points) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+    const [xi, yi] = points[i];
+    const [xj, yj] = points[j];
+    const intersects = yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function downsample(canvas, scale) {
+  const width = canvas.width / scale;
+  const height = canvas.height / scale;
+  const out = createCanvas(width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sum = [0, 0, 0, 0];
+      for (let sy = 0; sy < scale; sy += 1) {
+        for (let sx = 0; sx < scale; sx += 1) {
+          const index = ((y * scale + sy) * canvas.width + (x * scale + sx)) * 4;
+          sum[0] += canvas.pixels[index];
+          sum[1] += canvas.pixels[index + 1];
+          sum[2] += canvas.pixels[index + 2];
+          sum[3] += canvas.pixels[index + 3];
+        }
+      }
+      const count = scale * scale;
+      const outIndex = (y * width + x) * 4;
+      out.pixels[outIndex] = Math.round(sum[0] / count);
+      out.pixels[outIndex + 1] = Math.round(sum[1] / count);
+      out.pixels[outIndex + 2] = Math.round(sum[2] / count);
+      out.pixels[outIndex + 3] = Math.round(sum[3] / count);
+    }
+  }
+  return out;
+}
+
+function encodePng(canvas) {
+  const raw = Buffer.alloc((canvas.width * 4 + 1) * canvas.height);
+  for (let y = 0; y < canvas.height; y += 1) {
+    const rowStart = y * (canvas.width * 4 + 1);
+    raw[rowStart] = 0;
+    for (let x = 0; x < canvas.width * 4; x += 1) {
+      raw[rowStart + 1 + x] = canvas.pixels[y * canvas.width * 4 + x];
+    }
+  }
+  return Buffer.concat([
+    pngChunk("IHDR", ihdr(canvas.width, canvas.height)),
+    pngChunk("IDAT", zlib.deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]);
+}
+
+function ihdr(width, height) {
+  const buffer = Buffer.alloc(13);
+  buffer.writeUInt32BE(width, 0);
+  buffer.writeUInt32BE(height, 4);
+  buffer.writeUInt8(8, 8);
+  buffer.writeUInt8(6, 9);
+  buffer.writeUInt8(0, 10);
+  buffer.writeUInt8(0, 11);
+  buffer.writeUInt8(0, 12);
+  return buffer;
+}
+
+function pngChunk(type, data) {
+  const signature = type === "IHDR" ? Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]) : Buffer.alloc(0);
+  const typeBuffer = Buffer.from(type);
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBuffer.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 8 + data.length);
+  return Buffer.concat([signature, chunk]);
+}
+
+function encodeIco(images) {
+  const headerSize = 6;
+  const entrySize = 16;
+  const directorySize = headerSize + images.length * entrySize;
+  const totalSize = directorySize + images.reduce((sum, image) => sum + image.bytes.length, 0);
+  const buffer = Buffer.alloc(totalSize);
+  buffer.writeUInt16LE(0, 0);
+  buffer.writeUInt16LE(1, 2);
+  buffer.writeUInt16LE(images.length, 4);
+  let offset = directorySize;
+  images.forEach((image, index) => {
+    const entryOffset = headerSize + index * entrySize;
+    buffer.writeUInt8(image.size, entryOffset);
+    buffer.writeUInt8(image.size, entryOffset + 1);
+    buffer.writeUInt8(0, entryOffset + 2);
+    buffer.writeUInt8(0, entryOffset + 3);
+    buffer.writeUInt16LE(1, entryOffset + 4);
+    buffer.writeUInt16LE(32, entryOffset + 6);
+    buffer.writeUInt32LE(image.bytes.length, entryOffset + 8);
+    buffer.writeUInt32LE(offset, entryOffset + 12);
+    image.bytes.copy(buffer, offset);
+    offset += image.bytes.length;
+  });
+  return buffer;
+}
+
+function crc32(buffer) {
+  let crc = -1;
+  for (const byte of buffer) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff];
+  }
+  return (crc ^ -1) >>> 0;
+}

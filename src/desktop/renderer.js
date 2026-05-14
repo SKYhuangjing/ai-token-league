@@ -188,7 +188,7 @@ $("#showEstimatedCost").addEventListener("change", async () => {
 });
 
 // Dirty state tracking for save_required + next_cycle fields
-const DIRTY_TRACKED_FIELDS = ["nickname", "apiBaseUrl", "launchAtLogin", "refreshIntervalMinutes"];
+const DIRTY_TRACKED_FIELDS = ["nickname", "apiBaseUrl", "launchAtLogin", "hideDockIcon", "refreshIntervalMinutes"];
 
 function readDomValue(field) {
   const el = document.getElementById(field);
@@ -421,6 +421,7 @@ function settingsPayload() {
     silentUpdateMode: "auto_download",
     refreshIntervalMinutes: $("#refreshIntervalMinutes")?.value || 15,
     launchAtLogin: $("#launchAtLogin")?.checked ?? false,
+    hideDockIcon: $("#hideDockIcon")?.checked ?? false,
     desktopAutoInitialized: false,
     providerEnabled: latestConfig?.providerEnabled || {}
   };
@@ -648,6 +649,10 @@ async function boot() {
     }
     renderConfig(config);
     renderWizard();
+    if (api.platform !== "darwin") {
+      const dockRow = document.getElementById("hideDockIcon-row");
+      if (dockRow) dockRow.hidden = true;
+    }
     await loadToday();
     await loadMyIdentity();
     startIdentityRefreshTimer();
@@ -661,6 +666,28 @@ async function boot() {
   api.onUpdateProgress((data) => {
     updateCheckProgress(data);
   });
+  api.onNavigateSection((section) => {
+    if (section === "overview") handlePrimaryNavigationClick("overview");
+  });
+  if (api.onTrayRefreshStart) {
+    api.onTrayRefreshStart(() => {
+      setScanState(true);
+      showToast(t("desktop.renderer.scanningLocal"));
+    });
+  }
+  if (api.onTrayRefreshDone) {
+    api.onTrayRefreshDone(() => {
+      setScanState(false);
+      showToast(t("desktop.rail.scanComplete"));
+      loadToday(false).catch(console.error);
+    });
+  }
+  if (api.onTrayRefreshFailed) {
+    api.onTrayRefreshFailed(() => {
+      setScanState(false);
+      showToast(t("desktop.renderer.refreshStatusFailed", { error: "Background refresh failed" }));
+    });
+  }
 }
 
 function hasReadyUpdatePackage(state = latestUpdateState) {
@@ -980,6 +1007,7 @@ function renderConfig(config) {
   if ($("#showRawTokens")) $("#showRawTokens").checked = config?.showRawTokens ?? false;
   if ($("#refreshIntervalMinutes")) $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
   if ($("#launchAtLogin")) $("#launchAtLogin").checked = config?.launchAtLogin ?? false;
+  if ($("#hideDockIcon")) $("#hideDockIcon").checked = config?.hideDockIcon ?? false;
   renderCursorTokenSummary(config?.cursorDashboardUsage);
   renderCloudStatus(config);
   renderSyncStatus(config);

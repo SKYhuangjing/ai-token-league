@@ -102,6 +102,20 @@ npm run desktop
 npm run desktop:smoke
 ```
 
+Desktop feature quick self-test:
+
+When a desktop client feature is still in development and the immediate goal is to self-test the local behavior or confirm the UI direction, do not build a zip by default. Use the fast local loop:
+
+```bash
+node --check src/desktop/main.cjs
+node --check src/desktop/preload.cjs
+node --check src/desktop/renderer.js
+pkill -f "electron .*token-mac-windows-ai-codex-claude" 2>/dev/null || true
+npm run desktop
+```
+
+Manually exercise the feature entry, the core state, and any relevant empty or error state. Treat this as development-stage self-test evidence only; it does not replace merge, release, smoke, or packaged-runtime verification.
+
 Tests:
 
 ```bash
@@ -350,7 +364,8 @@ Use the smallest verification that covers the touched surface:
 - README or docs only: inspect rendered Markdown-sensitive links and run `git diff --check`.
 - Claude Code or Codex collector changes: run `npm test`, then run `npm run collector:verify-ccusage -- --day <YYYY-MM-DD>`. The verifier runs `ccusage@latest` and `@ccusage/codex@latest` through `npx --yes` against local data; token totals and provider-specific input/cache fields must match the script output.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
-- Desktop UI changes: run `node --check src/desktop/main.cjs`, `node --check src/desktop/renderer.js`, `npm test`, and `npm run desktop:smoke`.
+- Desktop feature quick self-test: if the goal is local behavior or UI-direction confirmation during development, run the desktop feature quick self-test loop above. This is enough for development-stage self-test, not for final delivery.
+- Desktop UI changes before merge or handoff: run `node --check src/desktop/main.cjs`, `node --check src/desktop/preload.cjs`, `node --check src/desktop/renderer.js`, `npm test`, and `npm run desktop:smoke`.
 - Packaging, updater, preset, install/download UX, or package-resource changes: run tests, then build one current-machine zip with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.
 

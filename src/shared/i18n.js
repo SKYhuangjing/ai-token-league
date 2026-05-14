@@ -274,6 +274,8 @@ const translations = {
     "desktop.display.showRawTokens": "显示原始令牌数",
     "desktop.display.language": "语言",
     "desktop.display.launchAtLogin": "登录时启动",
+    "desktop.display.hideDockIcon": "隐藏 Dock 图标",
+    "desktop.display.hideDockIconDesc": "仅保留菜单栏入口",
 
     // 桌面端 - 关于
     "desktop.about.safe": "安全",
@@ -889,6 +891,8 @@ const translations = {
     "desktop.display.showRawTokens": "Show raw token numbers",
     "desktop.display.language": "Language",
     "desktop.display.launchAtLogin": "Launch at login",
+    "desktop.display.hideDockIcon": "Hide Dock icon",
+    "desktop.display.hideDockIconDesc": "Keep menu bar entry only",
 
     // Desktop - About
     "desktop.about.safe": "Safe",

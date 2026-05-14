@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("tokenLeague", {
+  platform: process.platform,
   getConfig: () => ipcRenderer.invoke("config:get"),
   checkApi: (apiBaseUrl) => ipcRenderer.invoke("api:check", apiBaseUrl),
   initConfig: (input) => ipcRenderer.invoke("config:init", input),
@@ -40,5 +41,18 @@ contextBridge.exposeInMainWorld("tokenLeague", {
     ipcRenderer.on("update:installer-progress", (_event, data) => callback(data));
   },
   resetLocalData: () => ipcRenderer.invoke("app:reset-local-data"),
-  resetWithCloud: () => ipcRenderer.invoke("app:reset-with-cloud")
+  resetWithCloud: () => ipcRenderer.invoke("app:reset-with-cloud"),
+  rebuildTrayMenu: () => ipcRenderer.invoke("tray:rebuild-menu"),
+  onNavigateSection: (callback) => {
+    ipcRenderer.on("navigate:section", (_event, section) => callback(section));
+  },
+  onTrayRefreshStart: (callback) => {
+    ipcRenderer.on("tray:refresh-start", () => callback());
+  },
+  onTrayRefreshDone: (callback) => {
+    ipcRenderer.on("tray:refresh-done", () => callback());
+  },
+  onTrayRefreshFailed: (callback) => {
+    ipcRenderer.on("tray:refresh-failed", () => callback());
+  }
 });

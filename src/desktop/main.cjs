@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Tray, Menu, nativeImage, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -61,6 +61,65 @@ const activity = {
   configTransfer: false,
   identityTransfer: false
 };
+
+let trayInstance = null;
+let trayMenuTemplate = null;
+let cachedPriceMap = null;
+let cachedDisplayModule = null;
+let cachedPricingModule = null;
+let cachedIdentity = null;
+let isQuitting = false;
+
+const TRAY_I18N = {
+  "zh-CN": {
+    "tray.open": "打开主页面",
+    "tray.refresh": "立即刷新",
+    "tray.quit": "退出",
+    "tray.tokensToday": "📊 今日令牌: {count}",
+    "tray.cost": "💰 预估费用: {cost}",
+    "tray.noUsage": "暂无本地用量",
+    "tray.refreshWithTime": "立即刷新 ({time})",
+    "tray.user": "👤 {name}",
+    "tray.anonymousUser": "{name}",
+    "tray.visitCloud": "访问云端 ({name})",
+    "tray.visitCloudNoName": "访问云端",
+    "tray.cloudLocal": "仅本地",
+    "tray.modelsTitle": "模型消耗",
+    "tray.providersTitle": "来源"
+  },
+  en: {
+    "tray.open": "Open Main Page",
+    "tray.refresh": "Refresh Now",
+    "tray.quit": "Quit",
+    "tray.tokensToday": "📊 Today: {count} tokens",
+    "tray.cost": "💰 Est. cost: {cost}",
+    "tray.noUsage": "No local usage",
+    "tray.refreshWithTime": "Refresh Now ({time})",
+    "tray.user": "👤 {name}",
+    "tray.anonymousUser": "{name}",
+    "tray.visitCloud": "Visit Cloud ({name})",
+    "tray.visitCloudNoName": "Visit Cloud",
+    "tray.cloudLocal": "Local only",
+    "tray.modelsTitle": "Models",
+    "tray.providersTitle": "Sources"
+  }
+};
+
+const TRAY_PROVIDER_NAMES = {
+  claude_code_local: "Claude Code",
+  codex_local: "Codex",
+  cursor_dashboard_usage: "Cursor"
+};
+
+function trayT(key, params = {}) {
+  const lang = cachedConfig?.language || "zh-CN";
+  const dict = TRAY_I18N[lang] || TRAY_I18N["zh-CN"];
+  let text = dict[key] || TRAY_I18N["zh-CN"][key] || key;
+  for (const [k, v] of Object.entries(params)) {
+    text = text.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+  }
+  return text;
+}
 
 function pathToFileUrl(file) {
   return `file://${file.replaceAll("\\", "/")}`;
@@ -182,7 +241,9 @@ async function modules() {
     schema: await import(pathToFileUrl(path.join(root, "src/shared/schema.js"))),
     update: await import(pathToFileUrl(path.join(root, "src/shared/update.js"))),
     version: await import(pathToFileUrl(path.join(root, "src/shared/version.js"))),
-    preset: await import(pathToFileUrl(path.join(root, "src/shared/preset.js")))
+    preset: await import(pathToFileUrl(path.join(root, "src/shared/preset.js"))),
+    pricing: await import(pathToFileUrl(path.join(root, "src/shared/pricing.js"))),
+    display: await import(pathToFileUrl(path.join(root, "src/shared/display.js")))
   };
 }
 
@@ -291,6 +352,205 @@ function broadcastUpdateProgress() {
   }
 }
 
+function createTray() {
+  if (trayInstance) return;
+  const iconName = process.platform === "darwin" ? "tray-iconTemplate.png" : "tray-icon.ico";
+  const iconPath = path.join(app.getAppPath(), "assets", iconName);
+  const icon = nativeImage.createFromPath(iconPath);
+  if (icon.isEmpty()) {
+    appendRuntimeLog("tray_icon_missing", { iconPath });
+    return;
+  }
+  trayInstance = new Tray(icon);
+  trayInstance.setToolTip("AI Token League");
+  trayInstance.on("click", () => {
+    trayInstance.popUpContextMenu();
+  });
+  rebuildTrayMenu();
+  appendRuntimeLog("tray_created", { platform: process.platform });
+}
+
+function destroyTray() {
+  if (!trayInstance) return;
+  trayInstance.destroy();
+  trayInstance = null;
+  trayMenuTemplate = null;
+}
+
+function rebuildTrayMenu() {
+  if (!trayInstance) return;
+  const menu = Menu.buildFromTemplate(buildTrayMenuTemplate());
+  trayInstance.setContextMenu(menu);
+}
+
+function buildTrayMenuTemplate() {
+  const cached = readUsageCache();
+  const today = new Date().toISOString().slice(0, 10);
+  const items = [];
+  const noop = () => {};
+
+  if (cached?.items?.length) {
+    const todayItems = cached.items.filter((row) => row.day === today);
+    if (todayItems.length) {
+      const totalToday = todayItems.reduce((sum, row) => sum + (row.totalTokens || 0), 0);
+      items.push({ label: trayT("tray.tokensToday", { count: formatTokenCount(totalToday) }), click: noop });
+
+      // Estimated cost (show whenever price data is available)
+      if (cachedPriceMap) {
+        const totalCost = trayEstimateTodayCost(todayItems, cachedPriceMap);
+        if (totalCost > 0) {
+          items.push({ label: trayT("tray.cost", { cost: formatCostUsd(totalCost) }), click: noop });
+        }
+      }
+
+      items.push({ type: "separator" });
+
+      // Top models
+      const modelMap = {};
+      for (const row of todayItems) {
+        const model = row.model || "unknown";
+        modelMap[model] = (modelMap[model] || 0) + (row.totalTokens || 0);
+      }
+      const topModels = Object.entries(modelMap)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3);
+      if (topModels.length) {
+        items.push({ label: trayT("tray.modelsTitle"), enabled: false });
+        for (const [model, tokens] of topModels) {
+          const shortModel = model.includes("/") ? model.split("/").pop() : model;
+          items.push({ label: `  ${shortModel}  ${formatTokenCount(tokens)}`, click: noop });
+        }
+      }
+
+      // Providers
+      const providerMap = {};
+      for (const row of todayItems) {
+        const provider = row.providerId || "unknown";
+        providerMap[provider] = (providerMap[provider] || 0) + (row.totalTokens || 0);
+      }
+      const providers = Object.entries(providerMap)
+        .sort((a, b) => b[1] - a[1]);
+      if (providers.length) {
+        items.push({ label: trayT("tray.providersTitle"), enabled: false });
+        for (const [provider, tokens] of providers) {
+          const name = TRAY_PROVIDER_NAMES[provider] || provider;
+          items.push({ label: `  ${name}  ${formatTokenCount(tokens)}`, click: noop });
+        }
+      }
+    } else {
+      items.push({ label: trayT("tray.noUsage"), click: noop });
+    }
+
+  } else {
+    items.push({ label: trayT("tray.noUsage"), click: noop });
+  }
+
+  items.push({ type: "separator" });
+  items.push({ label: trayT("tray.open"), click: () => trayOpenWindow() });
+  if (cached?.scannedAt) {
+    const time = new Date(cached.scannedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    items.push({ label: trayT("tray.refreshWithTime", { time }), click: () => trayRefreshNow() });
+  } else {
+    items.push({ label: trayT("tray.refresh"), click: () => trayRefreshNow() });
+  }
+
+  const apiConfigured = hasApiBaseUrl(cachedConfig);
+  if (apiConfigured) {
+    let label = trayT("tray.visitCloudNoName");
+    if (cachedIdentity?.displayName && cachedIdentity.identityMode === "anonymous") {
+      label = trayT("tray.visitCloud", { name: trayT("tray.anonymousUser", { name: cachedIdentity.displayName }) });
+    } else if (cachedConfig?.nickname) {
+      label = trayT("tray.visitCloud", { name: trayT("tray.user", { name: cachedConfig.nickname }) });
+    }
+    const click = () => {
+      const url = cachedConfig?.apiBaseUrl || cachedConfig?.apiConnection?.apiBaseUrl;
+      if (url) {
+        let fullUrl = url;
+        if (!fullUrl.startsWith("http://") && !fullUrl.startsWith("https://")) {
+          fullUrl = "http://" + fullUrl;
+        }
+        shell.openExternal(fullUrl).catch(console.error);
+      }
+    };
+    items.push({ label, click });
+  } else {
+    items.push({ label: trayT("tray.cloudLocal"), click: noop });
+  }
+
+  items.push({ type: "separator" });
+  items.push({ label: trayT("tray.quit"), click: () => { destroyTray(); app.quit(); } });
+
+  return items;
+}
+
+function trayEstimateTodayCost(todayItems, priceMap) {
+  if (!cachedPricingModule) return 0;
+  let total = 0;
+  for (const item of todayItems) {
+    try {
+      const result = cachedPricingModule.estimateUsageCost(item, priceMap);
+      if (result.estimatedCostUsd !== null) total += result.estimatedCostUsd;
+    } catch {}
+  }
+  return total;
+}
+
+function formatCostUsd(cost) {
+  if (cachedDisplayModule) return cachedDisplayModule.formatUsd(cost);
+  if (cost >= 100) return `$${cost.toFixed(0)}`;
+  if (cost >= 1) return `$${cost.toFixed(2)}`;
+  return `$${cost.toFixed(4)}`;
+}
+
+function formatTokenCount(count) {
+  const lang = cachedConfig?.language || "zh-CN";
+  if (cachedDisplayModule) return cachedDisplayModule.formatTokenCompact(count, lang);
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return String(count);
+}
+
+function trayOpenWindow() {
+  const windows = BrowserWindow.getAllWindows();
+  if (windows.length > 0) {
+    const win = windows[0];
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  } else {
+    createWindow();
+  }
+}
+
+function trayRefreshNow() {
+  const windows = BrowserWindow.getAllWindows();
+  windows.forEach((win) => {
+    try { win.webContents.send("tray:refresh-start"); } catch {}
+  });
+  runBackgroundRefresh({ reschedule: false }).then(() => {
+    rebuildTrayMenu();
+    broadcastUpdateProgress();
+    windows.forEach((win) => {
+      try { win.webContents.send("tray:refresh-done"); } catch {}
+    });
+  }).catch(() => {
+    windows.forEach((win) => {
+      try { win.webContents.send("tray:refresh-failed"); } catch {}
+    });
+  });
+}
+
+function applyDockVisibility(hide) {
+  if (process.platform !== "darwin") return;
+  try {
+    if (hide) {
+      if (app.dock?.isVisible()) app.dock.hide();
+    } else {
+      if (app.dock && !app.dock.isVisible()) app.dock.show();
+    }
+  } catch {}
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1120,
@@ -298,6 +558,7 @@ function createWindow() {
     minWidth: 920,
     minHeight: 680,
     title: "AI Token League",
+    autoHideMenuBar: true,
     icon: path.join(app.getAppPath(), "assets", process.platform === "win32" ? "app-icon.ico" : "app-icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -306,6 +567,12 @@ function createWindow() {
     }
   });
   win.loadFile(path.join(__dirname, "index.html"));
+  win.on("close", (event) => {
+    if (!isQuitting && trayInstance) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
 }
 
 app.whenReady().then(async () => {
@@ -325,7 +592,9 @@ app.whenReady().then(async () => {
       });
     return;
   }
-  const { config, preset } = await modules();
+  const { config, preset, display, pricing } = await modules();
+  cachedDisplayModule = display;
+  cachedPricingModule = pricing;
   const current = await ensureDesktopConfig(config, preset);
   appendRuntimeLog("app_ready", {
     appVersion: app.getVersion(),
@@ -338,14 +607,31 @@ app.whenReady().then(async () => {
   applyLaunchAtLogin(current);
   await scheduleBackgroundRefresh(current);
   await scheduleBackgroundUpdateCheck(current);
+  createTray();
+  applyDockVisibility(current.hideDockIcon === true);
   createWindow();
+  rebuildTrayMenu();
+  if (current.participantId && hasApiBaseUrl(current)) {
+    getJson(`${current.apiBaseUrl}/api/board/my-identity?participantId=${encodeURIComponent(current.participantId)}`)
+      .then((identity) => {
+        cachedIdentity = identity;
+        rebuildTrayMenu();
+      })
+      .catch(() => {});
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  // Keep app alive when tray is active (both macOS and Windows tray mode)
+  if (trayInstance) return;
+  app.quit();
+});
+
+app.on("before-quit", () => {
+  isQuitting = true;
 });
 
 ipcMain.handle("config:get", async () => {
@@ -367,6 +653,8 @@ ipcMain.handle("config:init", async (_event, input) => {
   invalidateUsageCache();
   appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
+  applyDockVisibility(next.hideDockIcon === true);
+  rebuildTrayMenu();
   scheduleBackgroundRefresh(next);
   scheduleBackgroundUpdateCheck(next);
   return sanitizeConfig(next);
@@ -381,6 +669,8 @@ ipcMain.handle("config:update", async (_event, input) => {
   invalidateUsageCache();
   appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
+  applyDockVisibility(next.hideDockIcon === true);
+  rebuildTrayMenu();
   scheduleBackgroundRefresh(next);
   scheduleBackgroundUpdateCheck(next);
   return sanitizeConfig(next);
@@ -605,8 +895,25 @@ ipcMain.handle("pricing:model-prices", async () => {
   const response = await fetch(`${current.apiBaseUrl}/api/model-prices`);
   const text = await response.text();
   if (!response.ok) throw new Error(`${response.status} ${text}`);
-  return text ? JSON.parse(text) : null;
+  const data = text ? JSON.parse(text) : null;
+  refreshTrayPriceMap(data);
+  rebuildTrayMenu();
+  return data;
 });
+
+function refreshTrayPriceMap(data) {
+  try {
+    if (!data || !cachedPricingModule) { cachedPriceMap = null; return; }
+    cachedPriceMap = cachedPricingModule.createPriceMap(
+      Object.fromEntries((data.custom || []).map((item) => [item.model, item])),
+      Object.fromEntries((data.openrouter || []).map((item) => [item.model, item])),
+      Object.fromEntries((data.aliases || []).map((item) => [item.model, item.targetModel]))
+    );
+    if (!Object.keys(cachedPriceMap).length) cachedPriceMap = null;
+  } catch {
+    cachedPriceMap = null;
+  }
+}
 
 ipcMain.handle("usage:scan", async (_event, options = {}) => {
   const { config, core, preset } = await modules();
@@ -872,6 +1179,11 @@ ipcMain.handle("app:reset-with-cloud", async () => {
   return { ok: true };
 });
 
+ipcMain.handle("tray:rebuild-menu", async () => {
+  rebuildTrayMenu();
+  return { ok: true };
+});
+
 async function scheduleBackgroundRefresh(configOverride = null) {
   if (background.timer) clearTimeout(background.timer);
   background.timer = null;
@@ -1035,6 +1347,19 @@ async function runBackgroundRefresh({ reschedule = false } = {}) {
       background.lastMode = "sync";
       background.lastResult = result.queued ? `Queued ${result.scanned} rows` : `Uploaded ${result.scanned} rows`;
       appendRuntimeLog("background_refresh_done", { mode: background.lastMode, result: background.lastResult });
+      // Refresh tray price cache so cost is available without renderer
+      try {
+        const priceResponse = await fetch(`${current.apiBaseUrl}/api/model-prices`);
+        if (priceResponse.ok) {
+          const priceText = await priceResponse.text();
+          refreshTrayPriceMap(priceText ? JSON.parse(priceText) : null);
+        }
+      } catch {}
+      try {
+        if (current.participantId) {
+          cachedIdentity = await getJson(`${current.apiBaseUrl}/api/board/my-identity?participantId=${encodeURIComponent(current.participantId)}`);
+        }
+      } catch {}
     } else {
       background.lastMode = "scan";
       background.lastResult = `Refreshed ${scanned.items.length} rows`;
@@ -1046,6 +1371,7 @@ async function runBackgroundRefresh({ reschedule = false } = {}) {
     appendRuntimeLog("background_refresh_failed", { error: error.message });
   } finally {
     background.running = false;
+    rebuildTrayMenu();
     maybeApplyReadyUpdateOnIdle().catch(() => {});
     if (reschedule || background.rescheduleAfterRun) {
       background.rescheduleAfterRun = false;
@@ -1283,6 +1609,7 @@ function startForegroundScan({ config, core, crypto, current, force = false }) {
       .finally(() => {
         if (foregroundScan.taskId !== taskId) return;
         foregroundScan.running = false;
+        rebuildTrayMenu();
       });
   }, 0);
 }
