@@ -984,17 +984,18 @@ function testUpdateConfigKeepsIdentity() {
   assert.deepEqual(updated.syncStatus, {});
   assert.equal(updated.lastSyncAt, "");
   assert.equal(updated.showEstimatedCost, false);
-  assert.equal(updated.autoRefreshEnabled, false);
+  assert.equal(updated.autoRefreshEnabled, true);
   assert.equal(updated.refreshIntervalMinutes, 3);
-  assert.equal(updated.silentUpdateMode, "notify");
+  assert.equal(updated.silentUpdateMode, "auto_download");
   const silentUpdated = updateConfig({ silentUpdateMode: "auto_apply_on_idle" }, updated, { persist: false });
-  assert.equal(silentUpdated.silentUpdateMode, "auto_apply_on_idle");
+  assert.equal(silentUpdated.silentUpdateMode, "auto_download");
   const invalidSilentUpdate = updateConfig({ silentUpdateMode: "bad" }, silentUpdated, { persist: false });
-  assert.equal(invalidSilentUpdate.silentUpdateMode, "notify");
+  assert.equal(invalidSilentUpdate.silentUpdateMode, "auto_download");
   assert.equal(normalizeSilentUpdateMode("auto_download"), "auto_download");
-  assert.equal(normalizeSilentUpdateMode("bad"), "notify");
+  assert.equal(normalizeSilentUpdateMode("bad"), "auto_download");
   const exported = exportConfig(silentUpdated);
-  assert.equal(exported.silentUpdateMode, "auto_apply_on_idle");
+  assert.equal(Object.hasOwn(exported, "autoRefreshEnabled"), false);
+  assert.equal(Object.hasOwn(exported, "silentUpdateMode"), false);
 }
 
 function testInitConfigKeepsPresetFields() {
@@ -1013,6 +1014,8 @@ function testInitConfigKeepsPresetFields() {
   assert.equal(config.apiBaseUrl, "https://api.example");
   assert.equal(config.language, "en");
   assert.equal(config.showEstimatedCost, true);
+  assert.equal(config.autoRefreshEnabled, true);
+  assert.equal(config.silentUpdateMode, "auto_download");
   assert.equal(Object.hasOwn(config.cursorDashboardUsage, "enabled"), false);
   assert.deepEqual(config.providerEnabled, {
     claude_code_local: true,

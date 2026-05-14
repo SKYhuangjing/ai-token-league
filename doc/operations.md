@@ -384,7 +384,7 @@ PRESET_* 环境变量 → scripts/build-preset.js → assets/preset.json → 打
 
 关键特性：
 - 仅首次启动生效（用户已有配置时不覆盖）
-- 用户修改后以用户配置为准
+- 用户修改后以用户配置为准；后台扫描开启和更新自动下载为固定客户端行为，不通过 preset 配置
 - 无环境变量时生成空对象 `{}`，不影响默认行为
 
 ### 3.2 可配置项
@@ -394,9 +394,7 @@ PRESET_* 环境变量 → scripts/build-preset.js → assets/preset.json → 打
 | `PRESET_API_BASE_URL` | `apiBaseUrl` | string | 服务端地址 |
 | `PRESET_NICKNAME` | `nickname` | string | 默认昵称 |
 | `PRESET_LANGUAGE` | `language` | string | 语言（`zh-CN` / `en`） |
-| `PRESET_AUTO_REFRESH` | `autoRefreshEnabled` | boolean | 自动刷新 |
 | `PRESET_REFRESH_INTERVAL` | `refreshIntervalMinutes` | number | 刷新间隔（分钟） |
-| `PRESET_SILENT_UPDATE` | `silentUpdateMode` | string | 静默更新模式（`notify` / `auto_download` / `auto_apply_on_idle`） |
 | `PRESET_LAUNCH_AT_LOGIN` | `launchAtLogin` | boolean | 开机启动 |
 | `PRESET_SHOW_ESTIMATED_COST` | `showEstimatedCost` | boolean | 显示估算成本 |
 | `PRESET_SHOW_RAW_TOKENS` | `showRawTokens` | boolean | 显示原始 token 数 |
@@ -441,15 +439,13 @@ npx asar list "dist/AI Token League-darwin-arm64/AI Token League.app/Contents/Re
 
 ### 3.4 渠道分发示例
 
-**内部团队渠道**（预配服务端地址和自动同步）：
+**内部团队渠道**（预配服务端地址和扫描间隔）：
 
 ```bash
 cat > env.preset-team << 'EOF'
 PRESET_API_BASE_URL=https://league.internal.example.com
 PRESET_LANGUAGE=zh-CN
-PRESET_AUTO_REFRESH=true
 PRESET_REFRESH_INTERVAL=15
-PRESET_SILENT_UPDATE=auto_download
 PRESET_LAUNCH_AT_LOGIN=true
 PRESET_PROVIDER_CLAUDE_CODE_LOCAL=true
 PRESET_PROVIDER_CODEX_LOCAL=true
@@ -460,14 +456,12 @@ npm run preset -- --env env.preset-team
 scripts/release.sh --platform all --yes
 ```
 
-**公开测试渠道**（禁用静默更新，保留手动控制）：
+**公开测试渠道**：
 
 ```bash
 cat > env.preset-beta << 'EOF'
 PRESET_API_BASE_URL=https://beta.league.example.com
 PRESET_LANGUAGE=en
-PRESET_SILENT_UPDATE=notify
-PRESET_AUTO_REFRESH=false
 EOF
 
 npm run preset -- --env env.preset-beta

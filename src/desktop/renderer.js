@@ -392,7 +392,7 @@ async function saveSettings() {
   const previousConfig = latestConfig;
   const dirtyBeforeSave = getDirtyFields();
   const apiChanged = apiBaseUrlChanged(previousConfig, payload);
-  const nextCycleDirty = dirtyBeforeSave.some((f) => f === "autoRefreshEnabled" || f === "refreshIntervalMinutes" || f === "silentUpdateMode");
+  const nextCycleDirty = dirtyBeforeSave.some((f) => f === "refreshIntervalMinutes");
   setSaveMessage(payload.apiBaseUrl ? t("desktop.renderer.checkingApi") : t("desktop.renderer.savingSettings"), "");
   if (apiChanged && payload.apiBaseUrl) renderRailCloudStatus({ state: "checking", label: t("desktop.rail.cloudChecking") });
   const existing = await api.getConfig();
@@ -417,8 +417,6 @@ function settingsPayload() {
   return {
     nickname: $("#nickname")?.value || "anonymous",
     apiBaseUrl: $("#apiBaseUrl")?.value?.trim() || "",
-    autoRefreshEnabled: true,
-    silentUpdateMode: "auto_download",
     refreshIntervalMinutes: $("#refreshIntervalMinutes")?.value || 15,
     launchAtLogin: $("#launchAtLogin")?.checked ?? false,
     hideDockIcon: $("#hideDockIcon")?.checked ?? false,
@@ -1648,13 +1646,7 @@ async function loadBackgroundStatus() {
 }
 
 function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
-  const mode = config?.silentUpdateMode || "auto_download";
-  const labels = {
-    notify: t("desktop.renderer.notifyOnly"),
-    auto_download: t("desktop.renderer.autoDownload"),
-    auto_apply_on_idle: t("desktop.renderer.autoApplyIdle")
-  };
-  const parts = [labels[mode] || t("desktop.renderer.notifyOnly")];
+  const parts = [];
   if (updateCheck?.status) parts.push(updateCheck.status.replaceAll("_", " "));
   if (updateCheck?.downloadProgress) parts.push(`${updateCheck.downloadProgress.percent}%`);
   if (updateCheck?.lastResult?.latestVersion && updateCheck?.status === "downloaded") {
@@ -1675,7 +1667,7 @@ function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
       ? t("desktop.about.readyToRestart")
       : downloading
         ? t("desktop.renderer.downloading")
-        : available ? t("desktop.renderer.updateAvailable") : labels[mode] || "";
+        : available ? t("desktop.renderer.updateAvailable") : "";
     badge.className = ready ? "badge ok" : hasUpdate ? "badge" : "badge";
   }
   renderUpdateActions(updateCheck);

@@ -110,6 +110,8 @@ const TRAY_PROVIDER_NAMES = {
   codex_local: "Codex",
   cursor_dashboard_usage: "Cursor"
 };
+const DEFAULT_AUTO_REFRESH_ENABLED = true;
+const DEFAULT_SILENT_UPDATE_MODE = "auto_download";
 
 function trayT(key, params = {}) {
   const lang = cachedConfig?.language || "zh-CN";
@@ -126,8 +128,7 @@ function pathToFileUrl(file) {
 }
 
 function silentUpdateMode(config = {}) {
-  const mode = config.silentUpdateMode || "notify";
-  return ["notify", "auto_download", "auto_apply_on_idle"].includes(mode) ? mode : "notify";
+  return DEFAULT_SILENT_UPDATE_MODE;
 }
 
 function safeIdleForUpdateApply({ ignoreUpdateCheck = false } = {}) {
@@ -862,7 +863,7 @@ ipcMain.handle("config:unignore-auto-source", async (_event, providerId, sourceI
 ipcMain.handle("background:status", async () => {
   const { config } = await modules();
   const current = config.loadConfig();
-  if (current && current.autoRefreshEnabled !== false) await ensureBackgroundRefreshScheduled(current);
+  if (current) await ensureBackgroundRefreshScheduled(current);
   if (current && hasApiBaseUrl(current) && !updateCheck.timer) await scheduleBackgroundUpdateCheck(current);
   return backgroundStatus();
 });
@@ -1191,7 +1192,6 @@ async function scheduleBackgroundRefresh(configOverride = null) {
   try {
     const { config } = await modules();
     const current = configOverride || config.loadConfig();
-    if (current?.autoRefreshEnabled === false) return;
     const minutes = Math.max(1, Number(current.refreshIntervalMinutes || 15));
     armBackgroundRefreshTimer(minutes * 60 * 1000);
   } catch (error) {
@@ -1943,9 +1943,9 @@ function diagnosticsConfig(config = {}) {
     nickname: config.nickname || "",
     apiBaseUrl: config.apiBaseUrl || "",
     language: config.language || "",
-	    autoRefreshEnabled: config.autoRefreshEnabled ?? false,
-	    silentUpdateMode: silentUpdateMode(config),
-	    refreshIntervalMinutes: config.refreshIntervalMinutes || 15,
+    autoRefreshEnabled: DEFAULT_AUTO_REFRESH_ENABLED,
+    silentUpdateMode: silentUpdateMode(config),
+    refreshIntervalMinutes: config.refreshIntervalMinutes || 15,
     showEstimatedCost: config.showEstimatedCost ?? false,
     showRawTokens: config.showRawTokens ?? false,
     launchAtLogin: config.launchAtLogin ?? false,
@@ -2031,7 +2031,7 @@ function configLogSummary(config = {}) {
     participantId: config.participantId || "",
     deviceId: config.deviceId || "",
     apiConfigured: hasApiBaseUrl(config),
-	    autoRefreshEnabled: config.autoRefreshEnabled ?? false,
+    autoRefreshEnabled: DEFAULT_AUTO_REFRESH_ENABLED,
     silentUpdateMode: silentUpdateMode(config),
     refreshIntervalMinutes: config.refreshIntervalMinutes || 15,
     providerEnabled: config.providerEnabled || {},
