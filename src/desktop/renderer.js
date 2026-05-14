@@ -32,6 +32,7 @@ let backgroundStatusTimer = null;
 let latestUpdateState = null;
 let latestBackgroundStatus = null;
 let latestIdentityBusinessDay = "";
+let latestClientInfo = null;
 let lastIdentityCheckLocalDay = localDay();
 let identityRefreshTimer = null;
 let overviewRange = "today";
@@ -1022,6 +1023,7 @@ async function loadCloudStatus() {
 
 async function loadSystemStatus() {
   const client = await api.appVersion();
+  latestClientInfo = client;
   const server = latestConfig?.apiConnection || null;
   renderSystemStatus({ client, server, update: latestUpdateState });
 }
@@ -1131,15 +1133,26 @@ async function exportDiagnostics() {
 }
 
 function renderSystemStatus(state = {}) {
-  const client = state.client || {};
+  if (state.client) latestClientInfo = state.client;
+  const client = state.client || latestClientInfo || {};
   const server = state.server || {};
   const update = state.update || latestUpdateState?.update || null;
-  const version = client.clientAppVersion || "";
-  const latest = update?.latestVersion || server.latestClientVersion || "";
-  setTextIfPresent("#update-status-text", latest
-    ? t("desktop.renderer.latest", { version: latest })
-    : version ? `v${version}` : t("desktop.renderer.latestDash"));
+  renderUpdateStatusText({ client, server, update, allowServerLatest: Boolean(state.checkedAt || state.code) });
   renderRailStatus();
+}
+
+function renderUpdateStatusText({ client = latestClientInfo || {}, server = {}, update = latestUpdateState?.update || latestUpdateState?.lastResult || null, statusText = "", allowServerLatest = false } = {}) {
+  const localVersion = client.clientAppVersion || "";
+  const latestVersion = update?.latestVersion
+    || latestUpdateState?.readyPackage?.latestVersion
+    || (allowServerLatest ? server.latestClientVersion : "")
+    || "";
+  const parts = [
+    localVersion ? t("desktop.renderer.localVersion", { version: localVersion }) : t("desktop.renderer.localVersionDash"),
+    latestVersion ? t("desktop.renderer.latest", { version: latestVersion }) : t("desktop.renderer.latestDash")
+  ];
+  if (statusText) parts.push(statusText);
+  setTextIfPresent("#update-status-text", parts.join(" · "));
 }
 
 function renderCloudStatus(config = latestConfig) {
@@ -1158,8 +1171,6 @@ function renderCloudStatus(config = latestConfig) {
     badge.textContent = healthy ? "OK" : connection.status || "-";
     badge.className = healthy ? "badge ok" : "badge warn";
     const parts = [];
-    if (connection.serverVersion) parts.push(`v${connection.serverVersion}`);
-    if (connection.latestClientVersion) parts.push(t("desktop.renderer.latest", { version: connection.latestClientVersion }));
     if (latestSyncInfo) parts.push(latestSyncInfo);
     text.textContent = parts.length ? parts.join(" · ") : apiBaseUrl;
     text.title = connection.message || apiBaseUrl;
@@ -1655,7 +1666,7 @@ function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   if (updateCheck?.nextCheckAt) parts.push(t("desktop.renderer.next", { time: formatTime(updateCheck.nextCheckAt) }));
   if (updateCheck?.lastError) parts.push(t("desktop.renderer.error", { error: updateCheck.lastError }));
   const statusText = parts.join(" · ");
-  setTextIfPresent("#update-status-text", statusText);
+  renderUpdateStatusText({ update: updateCheck?.update || updateCheck?.lastResult || null, statusText });
   const badge = $("#update-badge");
   if (badge) {
     const ready = hasReadyUpdatePackage(updateCheck);
