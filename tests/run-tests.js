@@ -1464,6 +1464,11 @@ function testAddCursorTokenKeepsMultipleAccounts() {
   assert.equal(second.providerEnabled.cursor_dashboard_usage, true);
   assert.equal(second.cursorDashboardUsage.workosSessionTokens.length, 2);
   assert.deepEqual(second.cursorDashboardUsage.workosSessionTokens.map((item) => item.accountName), ["a@example.com", "b@example.com"]);
+  const cookieToken = `user_01COOKIE::${jwtWithSub("auth0|user_01COOKIE")}`;
+  const fromCookieHeader = addCursorToken(`cursor_anonymous_id=local-id; WorkosCursorSessionToken=${encodeURIComponent(cookieToken)}; statsig_stable_id=stable-id`, current, { persist: false });
+  assert.equal(fromCookieHeader.cursorDashboardUsage.workosSessionTokens.length, 1);
+  assert.equal(fromCookieHeader.cursorDashboardUsage.workosSessionTokens[0].token, cookieToken);
+  assert.equal(fromCookieHeader.cursorDashboardUsage.workosSessionTokens[0].accountName, "user_01COOKIE");
   assert.throws(() => addCursorToken("not-a-token", current, { persist: false }), /Cursor token is empty or invalid/);
 }
 

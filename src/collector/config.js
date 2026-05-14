@@ -390,13 +390,19 @@ function parseCursorTokenInput(rawInput) {
     const records = list.flatMap((item) => parseCursorTokenObject(item));
     if (records.length) return records;
   } catch {}
-  const stripped = text.startsWith("WorkosCursorSessionToken=")
+  const cookieToken = extractWorkosSessionTokenFromCookieText(text);
+  const stripped = cookieToken || (text.startsWith("WorkosCursorSessionToken=")
     ? text.replace(/^WorkosCursorSessionToken=/, "")
-    : text;
+    : text);
   const decoded = safeDecodeURIComponent(stripped);
   const token = normalizeCursorTokenValue(decoded);
   if (!token) return [];
   return [{ token, accountName: cursorAccountNameFromToken(token) }];
+}
+
+function extractWorkosSessionTokenFromCookieText(text) {
+  const match = String(text || "").match(/(?:^|[;\s])WorkosCursorSessionToken=([^;\s]+)/);
+  return match?.[1] || "";
 }
 
 function parseCursorTokenObject(input) {
