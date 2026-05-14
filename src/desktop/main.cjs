@@ -390,6 +390,38 @@ function buildTrayMenuTemplate() {
   const items = [];
   const noop = () => {};
 
+  // Open main page and refresh at the top
+  items.push({ label: trayT("tray.open"), click: () => trayOpenWindow() });
+  if (cached?.scannedAt) {
+    const time = new Date(cached.scannedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    items.push({ label: trayT("tray.refreshWithTime", { time }), click: () => trayRefreshNow() });
+  } else {
+    items.push({ label: trayT("tray.refresh"), click: () => trayRefreshNow() });
+  }
+  const apiConfigured = hasApiBaseUrl(cachedConfig);
+  if (apiConfigured) {
+    let label = trayT("tray.visitCloudNoName");
+    if (cachedIdentity?.displayName && cachedIdentity.identityMode === "anonymous") {
+      label = trayT("tray.visitCloud", { name: trayT("tray.anonymousUser", { name: cachedIdentity.displayName }) });
+    } else if (cachedConfig?.nickname) {
+      label = trayT("tray.visitCloud", { name: trayT("tray.user", { name: cachedConfig.nickname }) });
+    }
+    const click = () => {
+      const url = cachedConfig?.apiBaseUrl || cachedConfig?.apiConnection?.apiBaseUrl;
+      if (url) {
+        let fullUrl = url;
+        if (!fullUrl.startsWith("http://") && !fullUrl.startsWith("https://")) {
+          fullUrl = "http://" + fullUrl;
+        }
+        shell.openExternal(fullUrl).catch(console.error);
+      }
+    };
+    items.push({ label, click });
+  } else {
+    items.push({ label: trayT("tray.cloudLocal"), click: noop });
+  }
+  items.push({ type: "separator" });
+
   if (cached?.items?.length) {
     const todayItems = cached.items.filter((row) => row.day === today);
     if (todayItems.length) {
@@ -444,38 +476,6 @@ function buildTrayMenuTemplate() {
 
   } else {
     items.push({ label: trayT("tray.noUsage"), click: noop });
-  }
-
-  items.push({ type: "separator" });
-  items.push({ label: trayT("tray.open"), click: () => trayOpenWindow() });
-  if (cached?.scannedAt) {
-    const time = new Date(cached.scannedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    items.push({ label: trayT("tray.refreshWithTime", { time }), click: () => trayRefreshNow() });
-  } else {
-    items.push({ label: trayT("tray.refresh"), click: () => trayRefreshNow() });
-  }
-
-  const apiConfigured = hasApiBaseUrl(cachedConfig);
-  if (apiConfigured) {
-    let label = trayT("tray.visitCloudNoName");
-    if (cachedIdentity?.displayName && cachedIdentity.identityMode === "anonymous") {
-      label = trayT("tray.visitCloud", { name: trayT("tray.anonymousUser", { name: cachedIdentity.displayName }) });
-    } else if (cachedConfig?.nickname) {
-      label = trayT("tray.visitCloud", { name: trayT("tray.user", { name: cachedConfig.nickname }) });
-    }
-    const click = () => {
-      const url = cachedConfig?.apiBaseUrl || cachedConfig?.apiConnection?.apiBaseUrl;
-      if (url) {
-        let fullUrl = url;
-        if (!fullUrl.startsWith("http://") && !fullUrl.startsWith("https://")) {
-          fullUrl = "http://" + fullUrl;
-        }
-        shell.openExternal(fullUrl).catch(console.error);
-      }
-    };
-    items.push({ label, click });
-  } else {
-    items.push({ label: trayT("tray.cloudLocal"), click: noop });
   }
 
   items.push({ type: "separator" });
