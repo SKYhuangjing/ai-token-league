@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.2] - 2026-05-14
+
+### Added
+
+- [Desktop] Added system tray and macOS menu bar support with quick access to open the app, refresh usage, cloud sync, and source status.
+- [Desktop] Added cloud usage bucket snapshot sync so local collector state can reconcile aggregate usage bucket state from the server.
+- [Web] Redesigned the public leaderboard with a compact masthead, Top 3 medal cards, and Meter/List view switching.
+
+### Fixed
+
+- [Desktop] Corrected the client version shown in desktop update status so it follows the packaged app version.
+- [Desktop] Fixed desktop refresh and update policy defaults so they are owned by the app instead of preset/runtime env injection.
+- Fixed Cursor dashboard token parsing when the token is provided through a cookie header.
+
+### Changed
+
+- [Desktop] Reordered the tray menu so open, refresh, and cloud actions are grouped at the top.
+
+---
+
 ## [0.6.1] - 2026-05-13
 
 ### Fixed

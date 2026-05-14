@@ -6,6 +6,26 @@
 
 ---
 
+## [0.6.2] - 2026-05-14
+
+### 新增
+
+- [Desktop] 新增系统托盘和 macOS 菜单栏支持，可快速打开应用、刷新用量、执行云端同步并查看来源状态。
+- [Desktop] 新增 cloud usage bucket snapshot sync，使本地 collector 状态可以和服务端聚合用量 bucket 状态对齐。
+- [Web] 重设计公开排行榜，新增紧凑 masthead、Top 3 奖牌卡片，以及 Meter/List 视图切换。
+
+### 修复
+
+- [Desktop] 修正桌面端 update status 中展示的客户端版本，使其跟随打包应用版本。
+- [Desktop] 修复桌面刷新与更新策略默认值，改为由应用固定管理，不再依赖 preset/runtime env 注入。
+- 修复 Cursor dashboard token 通过 cookie header 提供时的解析问题。
+
+### 变更
+
+- [Desktop] 调整托盘菜单顺序，将打开应用、刷新和云端操作集中放在顶部。
+
+---
+
 ## [0.6.1] - 2026-05-13
 
 ### 修复
