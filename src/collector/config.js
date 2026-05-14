@@ -6,6 +6,7 @@ import { generateIdentity, newId } from "../shared/crypto.js";
 export const APP_DIR = path.join(os.homedir(), ".ai-token-league");
 export const CONFIG_PATH = path.join(APP_DIR, "config.json");
 export const QUEUE_PATH = path.join(APP_DIR, "upload-queue.json");
+export const MANIFEST_PATH = path.join(APP_DIR, "sync-manifest.json");
 export const SILENT_UPDATE_MODES = ["notify", "auto_download", "auto_apply_on_idle"];
 export const DEFAULT_AUTO_REFRESH_ENABLED = true;
 export const DEFAULT_SILENT_UPDATE_MODE = "auto_download";
@@ -441,4 +442,31 @@ function safeDecodeURIComponent(value) {
   } catch {
     return value;
   }
+}
+
+export function loadSyncManifest(manifestPath = MANIFEST_PATH) {
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.version === 1 && parsed.buckets && typeof parsed.buckets === "object") {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSyncManifest(manifest, manifestPath = MANIFEST_PATH) {
+  if (!manifest) {
+    try { fs.unlinkSync(manifestPath); } catch {}
+    return;
+  }
+  const tmp = manifestPath + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n");
+  fs.renameSync(tmp, manifestPath);
+}
+
+export function clearSyncManifest(manifestPath = MANIFEST_PATH) {
+  try { fs.unlinkSync(manifestPath); } catch {}
 }

@@ -1,3 +1,6 @@
+import { canonicalJson, sha256Hex } from "./crypto.js";
+import { localDay } from "./date.js";
+
 export const SOURCE_QUALITY = new Set(["exact", "partial", "estimated", "imported", "unknown"]);
 export const STORAGE_SCHEMA_VERSION = 2;
 export const USAGE_CACHE_VERSION = 3;
@@ -113,4 +116,61 @@ function safeTraceText(value) {
   if (!text) return "";
   return text.slice(0, 160);
 }
-import { localDay } from "./date.js";
+
+export const BUCKET_FINGERPRINT_FIELDS = [
+  "day", "toolCode", "providerId", "workdirHash", "workdirDisplayName", "model",
+  "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
+  "reasoningTokens", "totalTokens", "sourceQuality", "sourceFingerprint"
+];
+
+export function assertSnapshot(snapshot, items, participantId, deviceId) {
+  const snapshotItems = Array.isArray(items) ? items : [];
+  if (!snapshot || snapshot.mode !== "device_day_provider") {
+    throw new Error("snapshot mode must be device_day_provider");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(snapshot.day)) {
+    throw new Error("snapshot day must be YYYY-MM-DD");
+  }
+  if (!snapshot.providerId) {
+    throw new Error("snapshot providerId is required");
+  }
+  if (!snapshot.bucketFingerprint) {
+    throw new Error("snapshot bucketFingerprint is required");
+  }
+  if (!Number.isInteger(snapshot.rowCount) || snapshot.rowCount < 0) {
+    throw new Error("snapshot rowCount must be a non-negative integer");
+  }
+  if (snapshot.rowCount === 0) {
+    throw new Error("empty-bucket snapshot is not supported in this protocol version");
+  }
+  if (snapshot.rowCount !== snapshotItems.length) {
+    throw new Error(`snapshot rowCount ${snapshot.rowCount} does not match items length ${snapshotItems.length}`);
+  }
+  if (!Number.isFinite(snapshot.totalTokens) || snapshot.totalTokens < 0) {
+    throw new Error("snapshot totalTokens must be non-negative");
+  }
+  for (let i = 0; i < snapshotItems.length; i++) {
+    if (snapshotItems[i].day !== snapshot.day) {
+      throw new Error(`item ${i} day "${snapshotItems[i].day}" does not match snapshot day "${snapshot.day}"`);
+    }
+    if (snapshotItems[i].providerId !== snapshot.providerId) {
+      throw new Error(`item ${i} providerId "${snapshotItems[i].providerId}" does not match snapshot providerId "${snapshot.providerId}"`);
+    }
+  }
+}
+
+export function computeBucketFingerprint(items) {
+  if (!items.length) return sha256Hex("");
+  const rows = items.map((item) => {
+    const row = {};
+    for (const field of BUCKET_FINGERPRINT_FIELDS) {
+      row[field] = item[field];
+    }
+    return row;
+  }).sort((a, b) => {
+    const left = canonicalJson(a);
+    const right = canonicalJson(b);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+  return sha256Hex(canonicalJson(rows));
+}

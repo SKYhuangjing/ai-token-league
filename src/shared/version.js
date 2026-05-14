@@ -2,10 +2,11 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
-export const CLIENT_PROTOCOL_VERSION = 1;
-export const SERVER_PROTOCOL_VERSION = 1;
-export const SUPPORTED_CLIENT_PROTOCOL = { min: 1, max: 1 };
-export const SUPPORTED_SERVER_PROTOCOL = { min: 1, max: 1 };
+export const CLIENT_PROTOCOL_VERSION = 2;
+export const SERVER_PROTOCOL_VERSION = 2;
+export const SNAPSHOT_PROTOCOL_VERSION = 2;
+export const SUPPORTED_CLIENT_PROTOCOL = { min: 1, max: 2 };
+export const SUPPORTED_SERVER_PROTOCOL = { min: 1, max: 2 };
 
 export function packageVersion(cwd = process.cwd()) {
   try {

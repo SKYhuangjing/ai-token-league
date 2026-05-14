@@ -4,7 +4,7 @@ import mysql from "mysql2/promise";
 import { Store } from "./store.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { localDay } from "../shared/date.js";
-import { displayTotalTokens } from "../shared/schema.js";
+import { displayTotalTokens, usageKey } from "../shared/schema.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 
@@ -81,6 +81,23 @@ export class MySqlStore extends Store {
         INDEX idx_model_price_alias_target (targetModel)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     );
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS usage_sync_buckets (
+        bucketKey VARCHAR(512) PRIMARY KEY,
+        participantId VARCHAR(96) NOT NULL,
+        deviceId VARCHAR(96) NOT NULL,
+        day DATE NOT NULL,
+        providerId VARCHAR(96) NOT NULL,
+        bucketFingerprint VARCHAR(128) NOT NULL,
+        rowCount INT NOT NULL,
+        totalTokens BIGINT NOT NULL,
+        clientGeneratedAt VARCHAR(40) NOT NULL,
+        syncedAt VARCHAR(40) NOT NULL,
+        updatedAt VARCHAR(40) NOT NULL,
+        UNIQUE INDEX idx_sync_bucket_scope (participantId, deviceId, day, providerId),
+        INDEX idx_sync_bucket_participant_day (participantId, day)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
   }
 
   async load() {
@@ -93,6 +110,7 @@ export class MySqlStore extends Store {
     const [modelPriceAliases] = await this.pool.query("SELECT * FROM model_price_aliases");
     const [modelPriceCache] = await this.pool.query("SELECT * FROM model_price_cache");
     const [modelPriceCacheMeta] = await this.pool.query("SELECT * FROM model_price_cache_meta WHERE source = 'openrouter'");
+    const syncBuckets = await this.pool.query("SELECT * FROM usage_sync_buckets").catch(() => [[]]);
     this.db.participants = Object.fromEntries(participants.map((row) => [row.id, normalizeRow(row)]));
     this.db.devices = Object.fromEntries(devices.map((row) => [row.id, normalizeRow(row)]));
     this.db.workdirs = Object.fromEntries(workdirs.map((row) => [row.id, normalizeRow(row)]));
@@ -105,6 +123,9 @@ export class MySqlStore extends Store {
       prices: Object.fromEntries(modelPriceCache.map((row) => [row.model, cachedPriceFromRow(row)]))
     };
     this.db.aggregateCache = {};
+    this.db.usageSyncBuckets = Object.fromEntries(
+      syncBuckets[0].map((row) => [row.bucketKey, normalizeRow(row)])
+    );
     if (this.migrateLegacyUsageRows()) await this.syncUsageDaily();
   }
 
@@ -115,9 +136,105 @@ export class MySqlStore extends Store {
   }
 
   async upsertUsageBatch(input) {
+    if (input.snapshot) return this.upsertSnapshotBatch(input);
     const result = super.upsertUsageBatch(input);
     if (!result.duplicate) await this.syncAllTables();
     return result;
+  }
+
+  async upsertSnapshotBatch(input) {
+    const result = super.upsertSnapshotBatch(input);
+    if (result.noOp) return result;
+    try {
+      await this.incrementalBucketSync(input, result);
+    } catch (error) {
+      await this.load();
+      throw error;
+    }
+    return result;
+  }
+
+  async incrementalBucketSync(input, result) {
+    const snapshot = input.snapshot;
+    const bucketKey = this.bucketSyncKey(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
+    await withTransaction(this.pool, async (conn) => {
+      const now = new Date().toISOString();
+      await conn.query(
+        `INSERT IGNORE INTO usage_sync_buckets
+          (bucketKey, participantId, deviceId, day, providerId, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [bucketKey, input.participantId, input.deviceId, snapshot.day, snapshot.providerId, "__lock__", 0, 0, input.clientGeneratedAt || "", now, now]
+      );
+      await conn.query("SELECT bucketKey FROM usage_sync_buckets WHERE bucketKey = ? FOR UPDATE", [bucketKey]);
+
+      // upsert only the identity rows relevant to this bucket
+      const participant = this.db.participants[input.participantId];
+      if (participant) await replaceParticipants(conn, [participant]);
+      const device = this.db.devices[input.deviceId];
+      if (device) await replaceDevices(conn, [device]);
+      // workdirs touched by this bucket's accepted items
+      const workdirSet = new Set();
+      for (const uk of (result.incomingKeys || [])) {
+        const row = this.db.usageDaily[uk];
+        if (row) workdirSet.add(row.workdirId);
+      }
+      const workdirEntries = [...workdirSet].map((id) => this.db.workdirs[id]).filter(Boolean);
+      if (workdirEntries.length) await replaceWorkdirs(conn, workdirEntries);
+
+      // incremental usage row upserts: only the rows that belong to this bucket
+      const bucketEntries = Object.entries(this.db.usageDaily).filter(
+        ([, row]) => row.participantId === input.participantId && row.deviceId === input.deviceId && row.day === snapshot.day && row.providerId === snapshot.providerId
+      );
+      for (const [uk, row] of bucketEntries) {
+        await conn.query(
+          `INSERT INTO usage_daily
+            (usageKey, day, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
+             model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
+             estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
+             rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
+           VALUES ?
+           ON DUPLICATE KEY UPDATE
+             inputTokens = VALUES(inputTokens), outputTokens = VALUES(outputTokens),
+             cacheReadTokens = VALUES(cacheReadTokens), cacheWriteTokens = VALUES(cacheWriteTokens),
+             reasoningTokens = VALUES(reasoningTokens), totalTokens = VALUES(totalTokens),
+             estimatedCostUsd = VALUES(estimatedCostUsd), costQuality = VALUES(costQuality),
+             pricingVersion = VALUES(pricingVersion), pricingModel = VALUES(pricingModel),
+             pricingSource = VALUES(pricingSource), sourceQuality = VALUES(sourceQuality),
+             rawSourceRef = VALUES(rawSourceRef), providerVersion = VALUES(providerVersion),
+             parserVersion = VALUES(parserVersion), sourceFingerprint = VALUES(sourceFingerprint),
+             uploadedAt = VALUES(uploadedAt), workdirDisplayName = VALUES(workdirDisplayName)`,
+          [[[uk, row.day, row.participantId, row.deviceId, row.toolCode, row.providerId, row.workdirId, row.workdirHash, row.workdirDisplayName,
+             row.model, row.inputTokens || 0, row.outputTokens || 0, row.cacheReadTokens || 0, row.cacheWriteTokens || 0, row.reasoningTokens || 0, row.totalTokens || 0,
+             row.estimatedCostUsd, row.costQuality || "", row.pricingVersion || "", row.pricingModel || "", row.pricingSource || "", row.sourceQuality || "unknown",
+             row.rawSourceRef || "", row.providerVersion || "", row.parserVersion || "", row.sourceFingerprint || "", row.uploadedAt || null]]]
+        );
+      }
+
+      // bucket-scoped delete of stale rows (only accepted keys, not rejected items)
+      const incomingKeys = result.incomingKeys || [];
+      if (incomingKeys.length > 0) {
+        const placeholders = incomingKeys.map(() => "?").join(",");
+        await conn.query(
+          `DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ? AND usageKey NOT IN (${placeholders})`,
+          [input.participantId, input.deviceId, snapshot.day, snapshot.providerId, ...incomingKeys]
+        );
+      } else {
+        await conn.query(
+          `DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?`,
+          [input.participantId, input.deviceId, snapshot.day, snapshot.providerId]
+        );
+      }
+
+      // upsert bucket metadata
+      const meta = this.getBucketSync(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
+      if (meta) {
+        await conn.query(
+          `REPLACE INTO usage_sync_buckets (bucketKey, participantId, deviceId, day, providerId, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [bucketKey, meta.participantId, meta.deviceId, meta.day, meta.providerId, meta.bucketFingerprint, meta.rowCount, meta.totalTokens, meta.clientGeneratedAt, meta.syncedAt, meta.updatedAt]
+        );
+      }
+    });
   }
 
   async recalculateCosts() {
@@ -182,6 +299,7 @@ export class MySqlStore extends Store {
     const result = Store.prototype.deleteParticipantData.call(this, participantId);
     await withTransaction(this.pool, async (conn) => {
       await conn.query("DELETE FROM upload_batches WHERE participantId = ?", [participantId]);
+      await conn.query("DELETE FROM usage_sync_buckets WHERE participantId = ?", [participantId]);
       await conn.query("DELETE FROM usage_daily WHERE participantId = ?", [participantId]);
       await conn.query("DELETE FROM workdirs WHERE participantId = ?", [participantId]);
       await conn.query("DELETE FROM devices WHERE participantId = ?", [participantId]);

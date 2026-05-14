@@ -111,6 +111,18 @@ function aggregateItems(items) {
   return [...map.values()].sort((a, b) => b.totalTokens - a.totalTokens);
 }
 
+export function groupByBucket(items) {
+  const map = new Map();
+  for (const item of items) {
+    const key = `${item.day}|${item.providerId}`;
+    if (!map.has(key)) {
+      map.set(key, { day: item.day, providerId: item.providerId, items: [] });
+    }
+    map.get(key).items.push(item);
+  }
+  return map;
+}
+
 function mergeTraceValue(left = "", right = "") {
   const values = [...new Set([left, right].filter(Boolean))].sort();
   if (!values.length) return "";

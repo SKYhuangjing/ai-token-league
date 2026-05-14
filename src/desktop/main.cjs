@@ -651,6 +651,7 @@ ipcMain.handle("config:init", async (_event, input) => {
   const prepared = await prepareConfigInput(input, current);
   const next = current ? config.updateConfig(prepared, current) : config.initConfig(prepared);
   invalidateCloudStateForApiChange(previousApiBaseUrl, next);
+  if (previousApiBaseUrl !== normalizeApiBaseUrl(next.apiBaseUrl || "")) config.clearSyncManifest();
   invalidateUsageCache();
   appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
@@ -667,6 +668,7 @@ ipcMain.handle("config:update", async (_event, input) => {
   const previousApiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl || "");
   const next = config.updateConfig(await prepareConfigInput(input, current), current);
   invalidateCloudStateForApiChange(previousApiBaseUrl, next);
+  if (previousApiBaseUrl !== normalizeApiBaseUrl(next.apiBaseUrl || "")) config.clearSyncManifest();
   invalidateUsageCache();
   appendRuntimeLog("config_saved", configLogSummary(next));
   applyLaunchAtLogin(next);
@@ -1385,6 +1387,7 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
   const startedAt = new Date().toISOString();
   const apiBaseUrl = String(current.apiBaseUrl || "").trim();
   const usage = scanned || await getUsageSnapshot({ config, core, current, force: false });
+  const { schema, version } = await modules();
   appendRuntimeLog("sync_start", {
     participantId: current.participantId,
     deviceId: current.deviceId,
@@ -1393,9 +1396,17 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
     sourceFingerprint: usage.sourceFingerprint || "",
     fromCache: Boolean(usage.fromCache)
   });
+
+  // group items into day+providerId buckets
+  const buckets = core.groupByBucket(usage.items);
+  const client = version.clientMetadata({ clientAppVersion: app.getVersion(), clientBuild: `${version.clientPlatform()}-${app.getVersion()}` });
+
+  // load sync manifest
+  let manifest = config.loadSyncManifest();
+  const isNewManifest = !manifest;
+  if (isNewManifest) manifest = { version: 1, buckets: {} };
+
   try {
-    const { version } = await modules();
-    const client = version.clientMetadata({ clientAppVersion: app.getVersion(), clientBuild: `${version.clientPlatform()}-${app.getVersion()}` });
     await postJson(`${apiBaseUrl}/api/devices/register`, {
       participantId: current.participantId,
       deviceId: current.deviceId,
@@ -1406,21 +1417,85 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       ...client,
       networkInfo: version.collectNetworkInfo()
     });
-    const payload = {
-      participantId: current.participantId,
-      deviceId: current.deviceId,
-      clientGeneratedAt: new Date().toISOString(),
-      client,
-      items: usage.items
-    };
-    const drainBefore = await drainUploadQueue(current);
-    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload), usage.sourceFingerprint || "");
-    const result = await uploadQueueEntry(current, signed);
-    const drainAfter = await drainUploadQueue(current);
+
+    const drainBefore = await drainUploadQueue(current, manifest);
+    if (drainBefore.manifestChanged) config.saveSyncManifest(manifest);
+    let totalAccepted = 0;
+    let totalRejected = 0;
+    let uploadedBucketCount = 0;
+    let noopBucketCount = 0;
+
+    // collect dirty buckets
+    const dirty = [];
+    for (const [bucketKey, bucket] of buckets) {
+      if (!bucket.items.length) continue;
+      const fingerprint = schema.computeBucketFingerprint(bucket.items);
+      const totalTokens = bucket.items.reduce((s, i) => s + (i.totalTokens || 0), 0);
+      const existing = manifest.buckets[bucketKey];
+
+      if (existing && existing.fingerprint === fingerprint) {
+        noopBucketCount += 1;
+        continue;
+      }
+
+      dirty.push({ bucketKey, bucket, fingerprint, totalTokens });
+    }
+
+    // upload with bounded concurrency
+    const BUCKET_CONCURRENCY = 3;
+    for (let i = 0; i < dirty.length; i += BUCKET_CONCURRENCY) {
+      const batch = dirty.slice(i, i + BUCKET_CONCURRENCY);
+      const results = await Promise.all(batch.map(async ({ bucketKey, bucket, fingerprint, totalTokens }) => {
+        const snapshot = {
+          mode: "device_day_provider",
+          day: bucket.day,
+          providerId: bucket.providerId,
+          bucketFingerprint: fingerprint,
+          rowCount: bucket.items.length,
+          totalTokens
+        };
+        const payload = {
+          participantId: current.participantId,
+          deviceId: current.deviceId,
+          clientGeneratedAt: new Date().toISOString(),
+          client,
+          snapshot,
+          items: bucket.items
+        };
+        const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload));
+        const result = await uploadQueueEntry(current, signed);
+
+        manifest.buckets[bucketKey] = {
+          day: bucket.day,
+          providerId: bucket.providerId,
+          fingerprint,
+          rowCount: bucket.items.length,
+          totalTokens,
+          syncedAt: new Date().toISOString()
+        };
+        return result;
+      }));
+
+      for (const result of results) {
+        totalAccepted += result.accepted || 0;
+        totalRejected += result.rejected || 0;
+        uploadedBucketCount += 1;
+      }
+      // persist manifest after each batch so progress survives a crash
+      config.saveSyncManifest(manifest);
+    }
+
+    if (!dirty.length) config.saveSyncManifest(manifest);
+    const drainAfter = await drainUploadQueue(current, manifest);
+    if (drainAfter.manifestChanged) config.saveSyncManifest(manifest);
     const syncResult = {
-      ...result,
+      accepted: totalAccepted,
+      rejected: totalRejected,
       scanned: usage.items.length,
       sourceFingerprint: usage.sourceFingerprint || "",
+      bucketCount: buckets.size,
+      uploadedBucketCount,
+      noopBucketCount,
       queued: false,
       queueUploaded: drainBefore.uploaded + drainAfter.uploaded,
       queuePending: drainAfter.pending
@@ -1432,9 +1507,11 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       accepted: syncResult.accepted || 0,
       rejected: syncResult.rejected || 0,
       scanned: syncResult.scanned || 0,
+      bucketCount: syncResult.bucketCount,
+      uploadedBucketCount: syncResult.uploadedBucketCount,
+      noopBucketCount: syncResult.noopBucketCount,
       queueUploaded: syncResult.queueUploaded || 0,
-      queuePending: syncResult.queuePending || 0,
-      batchId: syncResult.batchId || ""
+      queuePending: syncResult.queuePending || 0
     });
     persistSyncStatus(config, current, {
       apiBaseUrl,
@@ -1445,24 +1522,43 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
     });
     return syncResult;
   } catch (error) {
-    const { version } = await modules();
-    const client = version.clientMetadata({ clientAppVersion: app.getVersion(), clientBuild: `${version.clientPlatform()}-${app.getVersion()}` });
-    const payload = {
-      participantId: current.participantId,
-      deviceId: current.deviceId,
-      clientGeneratedAt: new Date().toISOString(),
-      client,
-      items: usage.items
-    };
-    const signed = signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload), usage.sourceFingerprint || "");
-    const queued = enqueueUpload(current, signed, error.message);
+    config.saveSyncManifest(manifest);
+    // on failure, enqueue any remaining dirty buckets as individual bucket snapshots
+    let enqueuedCount = 0;
+    for (const [bucketKey, bucket] of buckets) {
+      if (!bucket.items.length) continue;
+      const fingerprint = schema.computeBucketFingerprint(bucket.items);
+      const totalTokens = bucket.items.reduce((s, i) => s + (i.totalTokens || 0), 0);
+      const existing = manifest.buckets[bucketKey];
+      if (existing && existing.fingerprint === fingerprint) continue;
+
+      const snapshot = {
+        mode: "device_day_provider",
+        day: bucket.day,
+        providerId: bucket.providerId,
+        bucketFingerprint: fingerprint,
+        rowCount: bucket.items.length,
+        totalTokens
+      };
+      const payload = {
+        participantId: current.participantId,
+        deviceId: current.deviceId,
+        clientGeneratedAt: new Date().toISOString(),
+        client,
+        snapshot,
+        items: bucket.items
+      };
+      enqueueUpload(current, signedQueueEntry(payload, crypto.signPayload(current.identityPrivateKey, payload)), error.message);
+      enqueuedCount += 1;
+    }
+
     const syncResult = {
       accepted: 0,
       rejected: 0,
       scanned: usage.items.length,
       sourceFingerprint: usage.sourceFingerprint || "",
       queued: true,
-      queueId: queued.id,
+      enqueuedBuckets: enqueuedCount,
       queuePending: readUploadQueue(current).items.length,
       error: error.message
     };
@@ -1471,7 +1567,7 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
       deviceId: current.deviceId,
       apiBaseUrl,
       scanned: syncResult.scanned,
-      queueId: queued.id,
+      enqueuedBuckets: enqueuedCount,
       queuePending: syncResult.queuePending,
       error: error.message
     });
@@ -1487,12 +1583,33 @@ async function syncCurrentUsage({ config, core, crypto, current, scanned = null 
   }
 }
 
-function shouldAutoSyncScannedUsage(current, snapshot = {}) {
+async function shouldAutoSyncScannedUsage(current, snapshot = {}) {
   if (!hasApiBaseUrl(current) || snapshot.fromCache) return false;
+  if (readUploadQueue(current).items.length > 0) return true;
+
+  // check for dirty bucket fingerprints
+  if (snapshot.items && snapshot.items.length > 0) {
+    try {
+      const { core, schema, config: configModule } = await modules();
+      const buckets = core.groupByBucket(snapshot.items);
+      const manifest = configModule.loadSyncManifest();
+      if (!manifest) return true; // no manifest → needs full resync
+      for (const [bucketKey, bucket] of buckets) {
+        const fingerprint = schema.computeBucketFingerprint(bucket.items);
+        const existing = manifest.buckets[bucketKey];
+        if (!existing || existing.fingerprint !== fingerprint) return true;
+      }
+    } catch {
+      return true; // on error, assume needs sync
+    }
+  }
+
+  // legacy fallback: sourceFingerprint change
   const sourceFingerprint = snapshot.sourceFingerprint || "";
   const lastSuccessSourceFingerprint = current?.syncStatus?.lastSuccessSourceFingerprint || "";
   if (sourceFingerprint && sourceFingerprint !== lastSuccessSourceFingerprint) return true;
-  return readUploadQueue(current).items.length > 0;
+
+  return false;
 }
 
 function persistSyncStatus(configModule, current, { apiBaseUrl, status, startedAt, finishedAt, result, error = "" }) {
@@ -1592,7 +1709,7 @@ function startForegroundScan({ config, core, crypto, current, force = false }) {
       .then(async (snapshot) => {
         if (foregroundScan.taskId !== taskId) return;
         foregroundScan.snapshot = snapshot;
-        if (shouldAutoSyncScannedUsage(current, snapshot)) {
+        if (await shouldAutoSyncScannedUsage(current, snapshot)) {
           try {
             foregroundScan.syncResult = await syncCurrentUsage({ config, core, crypto, current, scanned: snapshot });
           } catch (error) {
@@ -2167,7 +2284,7 @@ function signedQueueEntry(payload, signature, sourceFingerprint = "") {
     payloadHash,
     participantId: payload.participantId,
     deviceId: payload.deviceId,
-    sourceFingerprint,
+    sourceFingerprint: payload.snapshot ? "" : sourceFingerprint,
     createdAt: new Date().toISOString(),
     attempts: 0,
     lastError: "",
@@ -2191,6 +2308,16 @@ function enqueueUpload(current, entry, errorMessage = "") {
 }
 
 function sameQueuedUsageSnapshot(left, right) {
+  // snapshot queue entries: dedup by bucket identity (day + providerId)
+  const leftSnap = left?.payload?.snapshot;
+  const rightSnap = right?.payload?.snapshot;
+  if (leftSnap && rightSnap) {
+    return left.participantId === right.participantId
+      && left.deviceId === right.deviceId
+      && leftSnap.day === rightSnap.day
+      && leftSnap.providerId === rightSnap.providerId;
+  }
+  // legacy queue entries: dedup by sourceFingerprint
   const leftFingerprint = left?.sourceFingerprint || left?.payload?.sourceFingerprint || "";
   const rightFingerprint = right?.sourceFingerprint || right?.payload?.sourceFingerprint || "";
   return Boolean(leftFingerprint)
@@ -2199,14 +2326,16 @@ function sameQueuedUsageSnapshot(left, right) {
     && left?.deviceId === right?.deviceId;
 }
 
-async function drainUploadQueue(current) {
+async function drainUploadQueue(current, manifest = null) {
   const queue = readUploadQueue(current);
   if (!queue.items.length || !hasApiBaseUrl(current)) return { uploaded: 0, pending: queue.items.length };
   const pending = [];
   let uploaded = 0;
+  let manifestChanged = false;
   for (const entry of queue.items) {
     try {
       await uploadQueueEntry(current, entry);
+      if (manifest && updateManifestFromQueueEntry(manifest, entry)) manifestChanged = true;
       uploaded += 1;
     } catch (error) {
       pending.push({
@@ -2218,16 +2347,39 @@ async function drainUploadQueue(current) {
     }
   }
   writeUploadQueue(current, { version: 1, items: pending });
-  return { uploaded, pending: pending.length };
+  return { uploaded, pending: pending.length, manifestChanged };
+}
+
+function updateManifestFromQueueEntry(manifest, entry) {
+  const payload = entry?.payload || {};
+  const snapshot = payload.snapshot;
+  if (!snapshot?.day || !snapshot?.providerId || !snapshot.bucketFingerprint) return false;
+  const bucketKey = `${snapshot.day}|${snapshot.providerId}`;
+  manifest.buckets ||= {};
+  manifest.buckets[bucketKey] = {
+    day: snapshot.day,
+    providerId: snapshot.providerId,
+    fingerprint: snapshot.bucketFingerprint,
+    rowCount: snapshot.rowCount || 0,
+    totalTokens: snapshot.totalTokens || 0,
+    syncedAt: new Date().toISOString()
+  };
+  return true;
 }
 
 async function uploadQueueEntry(current, entry) {
   const payload = { ...(entry.payload || {}) };
   let signature = entry.signature;
-  if (Object.hasOwn(payload, "sourceFingerprint")) {
+
+  // legacy queue entries had a top-level sourceFingerprint that was not part of the signed payload
+  if (Object.hasOwn(payload, "sourceFingerprint") && !payload.snapshot) {
     delete payload.sourceFingerprint;
     signature = (await modules()).crypto.signPayload(current.identityPrivateKey, payload);
   }
+
+  // bucket snapshot entries: payload.snapshot is present, signed as-is
+  // legacy whole-history entries: no snapshot, uploaded as upsert-only
+
   return postJson(`${current.apiBaseUrl}/api/usage/daily-batch`, {
     ...payload,
     signature

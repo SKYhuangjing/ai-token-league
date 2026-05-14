@@ -345,6 +345,32 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 | `true` | 是 | HTTP 426 拒绝 |
 | `true` | 否 | 正常通过 |
 
+### 2.4 Cloud Usage Snapshot Sync
+
+0.7 引入 protocol v2 的 `device_day_provider` bucket snapshot 同步协议，用于收敛云端 usage 数据到本地 collector 真实状态。
+
+**协议版本**：
+
+| 协议版本 | 客户端行为 |
+| --- | --- |
+| `1`（legacy） | 全量 upsert-only，不删除云端缺失 rows |
+| `2`（snapshot-capable） | 按 `day + providerId` 分桶上传，服务端删除桶内缺失 rows |
+
+**灰度期**：
+
+1. 部署支持 protocol v2 的服务端后，新旧客户端并存。旧客户端继续 upsert-only，新客户端使用 snapshot replace。
+2. 灰度期 `MIN_CLIENT_ENFORCE=false`（默认）。旧客户端可能重新 upsert 被新客户端删除的 row，这是已接受的过渡期行为。
+3. 所有活跃客户端升级后，可设置 `MIN_CLIENT_ENFORCE=true` 阻止低于 snapshot-capable 版本的客户端继续同步。
+
+**相关文件**：
+
+| 文件 | 用途 |
+| --- | --- |
+| `~/.ai-token-league/sync-manifest.json` | 客户端 bucket sync manifest（独立于 config.json） |
+| `~/.ai-token-league/upload-queue.json` | 离线队列（兼容旧 whole-history 和新 bucket snapshot 格式） |
+| `usage_sync_buckets`（MySQL 表） | 服务端 bucket 同步元数据，不参与 ranking truth |
+| `scripts/query-usage-daily.js --sync-buckets` | 查询 sync metadata 用于运营诊断 |
+
 服务端 release 端点：
 
 | 端点 | 说明 |
@@ -353,7 +379,7 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 | `GET /api/release/latest` | 返回 macOS zip updater 的 release manifest |
 | `GET /api/health` | 返回完整健康信息（含版本和兼容状态） |
 
-### 2.4 下载通道验证
+### 2.5 下载通道验证
 
 发布后在服务端机器或 CI 中验证：
 

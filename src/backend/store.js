@@ -3,7 +3,7 @@ import path from "node:path";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { compositionRatio, costQualityLabel, dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, priceToPublic } from "../shared/pricing.js";
-import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertUsageItem, displayTotalTokens, usageKey } from "../shared/schema.js";
+import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, computeBucketFingerprint, displayTotalTokens, usageKey } from "../shared/schema.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 import { currentBusinessDay } from "./day-context.js";
@@ -14,6 +14,7 @@ export const DEFAULT_DB = {
   devices: {},
   workdirs: {},
   usageDaily: {},
+  usageSyncBuckets: {},
   modelPrices: {},
   modelPriceAliases: {},
   modelPriceCache: {
@@ -38,6 +39,7 @@ export class Store {
     this.db.modelPriceCache ||= structuredClone(DEFAULT_DB.modelPriceCache);
     this.db.modelPriceCache.remote ||= structuredClone(DEFAULT_DB.modelPriceCache.remote);
     this.db.modelPriceCache.prices ||= {};
+    this.db.usageSyncBuckets ||= {};
     if (this.migrateLegacyUsageRows()) this.save();
   }
 
@@ -97,7 +99,8 @@ export class Store {
       devices: 0,
       workdirs: 0,
       usageDaily: 0,
-      uploadBatches: 0
+      uploadBatches: 0,
+      usageSyncBuckets: 0
     };
     delete this.db.participants[participantId];
     for (const [id, row] of Object.entries(this.db.devices || {})) {
@@ -124,6 +127,12 @@ export class Store {
         removed.uploadBatches += 1;
       }
     }
+    for (const [key, row] of Object.entries(this.db.usageSyncBuckets || {})) {
+      if (row.participantId === participantId) {
+        delete this.db.usageSyncBuckets[key];
+        removed.usageSyncBuckets += 1;
+      }
+    }
     this.invalidateAggregateCache();
     this.save();
     return {
@@ -134,6 +143,7 @@ export class Store {
   }
 
   upsertUsageBatch(input) {
+    if (input.snapshot) return this.upsertSnapshotBatch(input);
     const now = new Date().toISOString();
     assertNoForbiddenUploadFields(input);
     const batchPayloadHash = sha256Hex(JSON.stringify({ ...input, signature: undefined }));
@@ -242,8 +252,136 @@ export class Store {
     return { accepted, rejected, batchId };
   }
 
+  upsertSnapshotBatch(input) {
+    const now = new Date().toISOString();
+    const snapshot = input.snapshot;
+    assertSnapshot(snapshot, input.items, input.participantId, input.deviceId);
+    const serverBucketFingerprint = computeBucketFingerprint(input.items || []);
+    const serverBucketTotalTokens = (input.items || []).reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+
+    // Idempotency is based on the server-computed bucket fingerprint, not the client-declared value.
+    const existing = this.getBucketSync(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
+    if (existing && existing.bucketFingerprint === serverBucketFingerprint) {
+      return { accepted: existing.rowCount, rejected: 0, duplicate: true, noOp: true };
+    }
+
+    assertNoForbiddenUploadFields(input);
+    let accepted = 0;
+    let rejected = 0;
+    const incomingKeys = new Set();
+
+    for (const incoming of input.items || []) {
+      try {
+        const raw = normalizeUsageTotal(incoming);
+        assertUsageItem(raw);
+        const workdirId = `${input.participantId}:${raw.workdirHash}`;
+        this.db.workdirs[workdirId] = {
+          id: workdirId,
+          participantId: input.participantId,
+          workdirHash: raw.workdirHash,
+          alias: raw.workdirAlias || "",
+          detectedName: raw.workdirDisplayName,
+          displayName: raw.workdirAlias || raw.workdirDisplayName,
+          sourceProvider: raw.providerId,
+          updatedAt: now,
+          lastSeenAt: now,
+          createdAt: this.db.workdirs[workdirId]?.createdAt || now
+        };
+        const key = usageKey(raw, input.participantId, input.deviceId);
+        incomingKeys.add(key);
+
+        // unknown model cleanup (keep)
+        if (raw.model && raw.model !== "unknown") {
+          delete this.db.usageDaily[
+            [raw.day, input.participantId, input.deviceId, raw.toolCode, raw.providerId, raw.workdirHash, "unknown"].join("|")
+          ];
+        }
+
+        const withCost = addCostToUsageItem(raw, this.priceMap());
+        this.db.usageDaily[key] = {
+          ...raw,
+          inputCostUsd: withCost.inputCostUsd,
+          outputCostUsd: withCost.outputCostUsd,
+          cacheReadCostUsd: withCost.cacheReadCostUsd,
+          cacheWriteCostUsd: withCost.cacheWriteCostUsd,
+          reasoningCostUsd: withCost.reasoningCostUsd,
+          estimatedCostUsd: withCost.estimatedCostUsd,
+          costQuality: withCost.costQuality,
+          pricingVersion: withCost.pricingVersion,
+          pricingModel: withCost.pricingModel,
+          pricingSource: withCost.pricingSource || "",
+          participantId: input.participantId,
+          deviceId: input.deviceId,
+          workdirId,
+          rawSourceRef: raw.rawSourceRef || "",
+          providerVersion: raw.providerVersion || "",
+          parserVersion: raw.parserVersion || raw.providerVersion || "",
+          sourceFingerprint: raw.sourceFingerprint || "",
+          uploadedAt: now
+        };
+        accepted += 1;
+      } catch {
+        rejected += 1;
+      }
+    }
+
+    // bucket-scoped delete of stale rows
+    this.deleteBucketUsageRows(input.participantId, input.deviceId, snapshot.day, snapshot.providerId, [...incomingKeys]);
+
+    // record bucket metadata
+    this.recordBucketSync({
+      participantId: input.participantId,
+      deviceId: input.deviceId,
+      day: snapshot.day,
+      providerId: snapshot.providerId,
+      bucketFingerprint: serverBucketFingerprint,
+      rowCount: accepted,
+      totalTokens: serverBucketTotalTokens,
+      clientGeneratedAt: input.clientGeneratedAt || ""
+    });
+
+    this.invalidateAggregateCache();
+    this.save();
+    return { accepted, rejected, incomingKeys: [...incomingKeys] };
+  }
+
   invalidateAggregateCache() {
     this.db.aggregateCache = {};
+  }
+
+  bucketSyncKey(participantId, deviceId, day, providerId) {
+    return [participantId, deviceId, day, providerId].join("|");
+  }
+
+  getBucketSync(participantId, deviceId, day, providerId) {
+    return this.db.usageSyncBuckets[this.bucketSyncKey(participantId, deviceId, day, providerId)] || null;
+  }
+
+  recordBucketSync({ participantId, deviceId, day, providerId, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt }) {
+    const now = new Date().toISOString();
+    const key = this.bucketSyncKey(participantId, deviceId, day, providerId);
+    this.db.usageSyncBuckets[key] = {
+      participantId, deviceId, day, providerId,
+      bucketFingerprint, rowCount, totalTokens,
+      clientGeneratedAt: clientGeneratedAt || "",
+      syncedAt: now,
+      updatedAt: now
+    };
+  }
+
+  deleteBucketUsageRows(participantId, deviceId, day, providerId, incomingUsageKeys) {
+    const keySet = new Set(incomingUsageKeys);
+    for (const [key, row] of Object.entries(this.db.usageDaily)) {
+      if (
+        row.participantId === participantId &&
+        row.deviceId === deviceId &&
+        row.day === day &&
+        row.providerId === providerId &&
+        !keySet.has(key)
+      ) {
+        delete this.db.usageDaily[key];
+      }
+    }
   }
 
   migrateLegacyUsageRows() {

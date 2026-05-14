@@ -6,8 +6,10 @@ import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload, hmacSha256Hex } from "../src/shared/crypto.js";
 import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
-import { assertNoForbiddenUploadFields, displayTotalTokens, USAGE_CACHE_VERSION } from "../src/shared/schema.js";
-import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
+import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber } from "../src/shared/schema.js";
+import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, SNAPSHOT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
+import { groupByBucket } from "../src/collector/core.js";
+import { loadSyncManifest, saveSyncManifest, clearSyncManifest } from "../src/collector/config.js";
 import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
 import { parseLatestChangelog } from "../src/shared/changelog.js";
 import { scanUsage } from "../src/collector/core.js";
@@ -489,7 +491,8 @@ function testDeleteParticipantDataAllowsResync() {
     devices: 1,
     workdirs: 1,
     usageDaily: 1,
-    uploadBatches: 1
+    uploadBatches: 1,
+    usageSyncBuckets: 0
   });
   assert.equal(store.getParticipant(identity.participantId), null);
   assert.equal(Object.values(store.db.devices).some((row) => row.participantId === identity.participantId), false);
@@ -541,7 +544,8 @@ async function testParticipantDataDeleteMissingIsNoop() {
       devices: 0,
       workdirs: 0,
       usageDaily: 0,
-      uploadBatches: 0
+      uploadBatches: 0,
+      usageSyncBuckets: 0
     });
   } finally {
     if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -790,6 +794,419 @@ function testSourceFingerprintDedupeKeepsDistinctDays() {
   assert.equal(store.participantTrend(identity.participantId, { range: "custom", startDay: "2026-04-29", endDay: "2026-04-30" }).items.length, 2);
 }
 
+function testSnapshotWorkdirHashChange() {
+  const tmp = path.join(os.tmpdir(), `test-wd-hash-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_wd", did = "d_wd";
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "wd", identityPublicKey: "pk", os: "test", appVersion: "0.1.0" });
+
+  // initial upload with hash_old
+  const items = [makeSnapshotItem({ workdirHash: "hash_old", workdirDisplayName: "Old Dir" })];
+  const snap1 = makeSnapshotPayload(items, pid, did);
+  store.upsertSnapshotBatch(snap1);
+  assert.equal(Object.keys(store.db.usageDaily).length, 1);
+
+  // now workdirHash changed to hash_new
+  const newItems = [makeSnapshotItem({ workdirHash: "hash_new", workdirDisplayName: "New Dir" })];
+  const snap2 = makeSnapshotPayload(newItems, pid, did);
+  store.upsertSnapshotBatch(snap2);
+
+  // old hash row should be deleted, new hash row exists
+  const keys = Object.keys(store.db.usageDaily);
+  assert.equal(keys.length, 1, "old hash row should be deleted");
+  assert.ok(keys[0].includes("hash_new"), "new hash row should remain");
+  assert.ok(!keys[0].includes("hash_old"));
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSnapshotWorkdirHashChange passed");
+}
+
+function testSnapshotProviderDisabled() {
+  const tmp = path.join(os.tmpdir(), `test-prov-disabled-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_pd", did = "d_pd";
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "pd", identityPublicKey: "pk", os: "test", appVersion: "0.1.0" });
+
+  // upload codex + claude items
+  const codex = [makeSnapshotItem({ providerId: "codex_local", toolCode: "codex", workdirHash: "h1" })];
+  const claude = [makeSnapshotItem({ providerId: "claude_code_local", toolCode: "claude_code", workdirHash: "h2" })];
+  store.upsertUsageBatch({ participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(), items: [...codex, ...claude] });
+  assert.equal(Object.keys(store.db.usageDaily).length, 2);
+
+  // provider disabled: no local rows for codex → client does NOT upload an empty bucket
+  // only upload claude snapshot
+  const claudeSnap = makeSnapshotPayload(claude, pid, did, { providerId: "claude_code_local" });
+  store.upsertSnapshotBatch(claudeSnap);
+
+  // codex rows still exist (no empty-bucket deletion)
+  const keys = Object.keys(store.db.usageDaily);
+  assert.equal(keys.length, 2, "codex rows should remain when provider has no local items");
+  assert.ok(keys.some((k) => k.includes("codex_local")));
+  assert.ok(keys.some((k) => k.includes("claude_code_local")));
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSnapshotProviderDisabled passed");
+}
+
+function testSnapshotLegacyCoexistence() {
+  const tmp = path.join(os.tmpdir(), `test-coexist-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_co", did = "d_co";
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "co", identityPublicKey: "pk", os: "test", appVersion: "0.1.0" });
+
+  // initial upload with 3 rows
+  const items3 = [
+    makeSnapshotItem({ workdirHash: "h1" }),
+    makeSnapshotItem({ workdirHash: "h2" }),
+    makeSnapshotItem({ workdirHash: "h3" })
+  ];
+  store.upsertUsageBatch({ participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(), items: items3 });
+  assert.equal(Object.keys(store.db.usageDaily).length, 3);
+
+  // snapshot deletes h2 and h3, keeps h1
+  const items1 = [makeSnapshotItem({ workdirHash: "h1" })];
+  const snap = makeSnapshotPayload(items1, pid, did);
+  store.upsertSnapshotBatch(snap);
+  assert.equal(Object.keys(store.db.usageDaily).length, 1);
+
+  // legacy client re-upserts h2 (coexistence tradeoff)
+  const legacyReup = [makeSnapshotItem({ workdirHash: "h2" })];
+  store.upsertUsageBatch({ participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(), items: legacyReup });
+  assert.equal(Object.keys(store.db.usageDaily).length, 2, "legacy re-upsert should add h2 back");
+  assert.ok(Object.keys(store.db.usageDaily).some((k) => k.includes("h2")));
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSnapshotLegacyCoexistence passed");
+}
+
+function testCollectorBucketGrouping() {
+  const items = [
+    { day: "2026-05-14", providerId: "codex_local", workdirHash: "h1", model: "gpt-5", totalTokens: 100, inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
+    { day: "2026-05-14", providerId: "codex_local", workdirHash: "h2", model: "gpt-5", totalTokens: 200, inputTokens: 200, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
+    { day: "2026-05-14", providerId: "claude_code_local", workdirHash: "h3", model: "claude-4", totalTokens: 300, inputTokens: 300, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
+    { day: "2026-05-13", providerId: "codex_local", workdirHash: "h4", model: "gpt-5", totalTokens: 50, inputTokens: 50, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
+  ];
+
+  const buckets = groupByBucket(items);
+  assert.equal(buckets.size, 3, "should have 3 buckets (2 days x 2 providers, 1 overlap)");
+
+  const codexToday = buckets.get("2026-05-14|codex_local");
+  assert.ok(codexToday, "codex today bucket should exist");
+  assert.equal(codexToday.items.length, 2);
+  assert.equal(codexToday.day, "2026-05-14");
+  assert.equal(codexToday.providerId, "codex_local");
+
+  const claudeToday = buckets.get("2026-05-14|claude_code_local");
+  assert.ok(claudeToday);
+  assert.equal(claudeToday.items.length, 1);
+
+  const codexYesterday = buckets.get("2026-05-13|codex_local");
+  assert.ok(codexYesterday);
+  assert.equal(codexYesterday.items.length, 1);
+
+  // fingerprint determinism within a bucket
+  const fp1 = computeBucketFingerprint(codexToday.items);
+  const fp2 = computeBucketFingerprint([...codexToday.items].reverse());
+  assert.equal(fp1, fp2);
+
+  console.log("  testCollectorBucketGrouping passed");
+}
+
+function testSyncManifestIO() {
+  const tmpPath = path.join(os.tmpdir(), `test-manifest-${Date.now()}.json`);
+
+  // initially no manifest
+  assert.equal(loadSyncManifest(tmpPath), null);
+
+  // save and load
+  const manifest = {
+    version: 1,
+    buckets: {
+      "2026-05-14|codex_local": {
+        day: "2026-05-14", providerId: "codex_local",
+        fingerprint: "fp_abc", rowCount: 3, totalTokens: 450,
+        syncedAt: "2026-05-14T10:00:00Z"
+      }
+    }
+  };
+  saveSyncManifest(manifest, tmpPath);
+  const loaded = loadSyncManifest(tmpPath);
+  assert.ok(loaded);
+  assert.equal(loaded.version, 1);
+  assert.ok(loaded.buckets["2026-05-14|codex_local"]);
+
+  // corrupt file → null
+  fs.writeFileSync(tmpPath, "not valid json!!!");
+  assert.equal(loadSyncManifest(tmpPath), null);
+
+  // wrong version → null
+  fs.writeFileSync(tmpPath, JSON.stringify({ version: 99, buckets: {} }));
+  assert.equal(loadSyncManifest(tmpPath), null);
+
+  // clear manifest
+  saveSyncManifest(manifest, tmpPath);
+  clearSyncManifest(tmpPath);
+  assert.equal(loadSyncManifest(tmpPath), null);
+
+  // save null → deletes file
+  saveSyncManifest(manifest, tmpPath);
+  saveSyncManifest(null, tmpPath);
+  assert.equal(loadSyncManifest(tmpPath), null);
+
+  console.log("  testSyncManifestIO passed");
+}
+
+function makeSnapshotItem(overrides) {
+  return {
+    day: "2026-05-14", toolCode: "codex", providerId: "codex_local",
+    workdirHash: "hash_default", workdirDisplayName: "Default Dir",
+    model: "gpt-5", inputTokens: 100, outputTokens: 50,
+    cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+    totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_1",
+    ...overrides
+  };
+}
+
+function makeSnapshotPayload(items, participantId, deviceId, options = {}) {
+  const { providerId = items[0]?.providerId || "codex_local", day = items[0]?.day || "2026-05-14" } =
+    typeof options === "string" ? { providerId: options } : options;
+  const overrideDay = day;
+  const overrideProvider = providerId;
+  const snapshotItems = items.map((i) => ({ ...i, providerId: overrideProvider, day: overrideDay }));
+  return {
+    participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    snapshot: {
+      mode: "device_day_provider",
+      day: overrideDay,
+      providerId: overrideProvider,
+      bucketFingerprint: computeBucketFingerprint(snapshotItems),
+      rowCount: snapshotItems.length,
+      totalTokens: snapshotItems.reduce((s, i) => s + (i.totalTokens || 0), 0)
+    },
+    items: snapshotItems
+  };
+}
+
+function testSnapshotReplaceSemantics() {
+  const tmp = path.join(os.tmpdir(), `test-snapshot-replace-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_test", did = "d_test";
+
+  // setup: register device (also creates participant)
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "tester", identityPublicKey: "pk_test", os: "test", appVersion: "0.1.0"
+  });
+
+  const items3 = [
+    makeSnapshotItem({ workdirHash: "h1", model: "gpt-5" }),
+    makeSnapshotItem({ workdirHash: "h2", model: "gpt-5" }),
+    makeSnapshotItem({ workdirHash: "h3", model: "claude-4" })
+  ];
+  const legacyResult = store.upsertUsageBatch({ participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(), items: items3 });
+  assert.equal(legacyResult.accepted, 3);
+  assert.equal(Object.keys(store.db.usageDaily).length, 3);
+
+  // snapshot upload: remove h2, keep h1 and h3
+  const items2 = [
+    makeSnapshotItem({ workdirHash: "h1", model: "gpt-5" }),
+    makeSnapshotItem({ workdirHash: "h3", model: "claude-4" })
+  ];
+  const snapPayload = makeSnapshotPayload(items2, pid, did);
+  const snapResult = store.upsertSnapshotBatch(snapPayload);
+  assert.equal(snapResult.accepted, 2);
+  assert.equal(Object.keys(store.db.usageDaily).length, 2, "h2 should be deleted by snapshot replace");
+
+  // verify h2 is gone, h1 and h3 remain
+  const remainingKeys = Object.keys(store.db.usageDaily);
+  assert.ok(remainingKeys.every((k) => !k.includes("h2")));
+
+  // verify bucket metadata was recorded
+  const meta = store.getBucketSync(pid, did, "2026-05-14", "codex_local");
+  assert.ok(meta);
+  assert.equal(meta.rowCount, 2);
+  assert.equal(meta.bucketFingerprint, snapPayload.snapshot.bucketFingerprint);
+
+  // same fingerprint → noOp
+  const noOpPayload = makeSnapshotPayload(items2, pid, did);
+  noOpPayload.snapshot.bucketFingerprint = snapPayload.snapshot.bucketFingerprint;
+  const noOpResult = store.upsertSnapshotBatch(noOpPayload);
+  assert.equal(noOpResult.noOp, true);
+  assert.equal(noOpResult.duplicate, true);
+
+  // stale client-declared fingerprint must not drive server no-op decisions
+  const changedItems = [
+    makeSnapshotItem({ workdirHash: "h1", model: "gpt-5", inputTokens: 200, outputTokens: 50, totalTokens: 250 }),
+    makeSnapshotItem({ workdirHash: "h3", model: "claude-4" })
+  ];
+  const staleFingerprintPayload = makeSnapshotPayload(changedItems, pid, did);
+  const serverFingerprint = computeBucketFingerprint(staleFingerprintPayload.items);
+  staleFingerprintPayload.snapshot.bucketFingerprint = snapPayload.snapshot.bucketFingerprint;
+  staleFingerprintPayload.snapshot.totalTokens = 999999;
+  const changedResult = store.upsertSnapshotBatch(staleFingerprintPayload);
+  assert.equal(changedResult.noOp, undefined);
+  const changedMeta = store.getBucketSync(pid, did, "2026-05-14", "codex_local");
+  assert.equal(changedMeta.bucketFingerprint, serverFingerprint);
+  assert.equal(changedMeta.totalTokens, 400);
+
+  // multi-provider independence: add claude_code_local rows, then snapshot codex_local only
+  const claudeItems = [
+    makeSnapshotItem({ providerId: "claude_code_local", toolCode: "claude_code", workdirHash: "ch1" })
+  ];
+  store.upsertUsageBatch({ participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(), items: claudeItems });
+  assert.equal(Object.keys(store.db.usageDaily).length, 3, "should have 2 codex + 1 claude");
+
+  // snapshot codex_local that only has h1
+  const items1 = [makeSnapshotItem({ workdirHash: "h1", model: "gpt-5" })];
+  const snap2 = makeSnapshotPayload(items1, pid, did, { providerId: "codex_local" });
+  store.upsertSnapshotBatch(snap2);
+  // h3 should be deleted from codex bucket, claude row untouched
+  const afterDelete = Object.keys(store.db.usageDaily);
+  assert.equal(afterDelete.length, 2, "h3 deleted from codex bucket, claude untouched");
+  assert.ok(afterDelete.some((k) => k.includes("claude_code_local")));
+
+  // legacy upsert still does NOT delete
+  const itemsLegacyPartial = [makeSnapshotItem({ workdirHash: "h1", model: "gpt-5" })];
+  store.upsertUsageBatch({ participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(), items: itemsLegacyPartial });
+  // claude row should still exist (legacy doesn't delete)
+  assert.ok(Object.keys(store.db.usageDaily).some((k) => k.includes("claude_code_local")));
+
+  // multi-device independence
+  store.registerDevice({ participantId: pid, deviceId: "d_other", nickname: "other", identityPublicKey: "pk_test", os: "test", appVersion: "0.1.0" });
+  const otherDeviceItems = [makeSnapshotItem({ workdirHash: "h_other" })];
+  store.upsertUsageBatch({ participantId: pid, deviceId: "d_other", clientGeneratedAt: new Date().toISOString(), items: otherDeviceItems });
+  // empty bucket deletion is intentionally not supported in protocol v2
+  const emptySnap = makeSnapshotPayload([], pid, did, { providerId: "codex_local" });
+  emptySnap.snapshot.rowCount = 0;
+  emptySnap.snapshot.totalTokens = 0;
+  emptySnap.snapshot.bucketFingerprint = computeBucketFingerprint([]);
+  assert.throws(() => store.upsertSnapshotBatch(emptySnap), /empty-bucket snapshot is not supported/);
+  const remaining = Object.keys(store.db.usageDaily);
+  assert.ok(remaining.some((k) => k.includes("d_other")), "other device rows should survive");
+  assert.ok(remaining.some((k) => k.includes("d_test") && k.includes("codex_local")), "d_test codex rows should remain");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSnapshotReplaceSemantics passed");
+}
+
+function testBucketMetadataSchema() {
+  const tmp = path.join(os.tmpdir(), `test-bucket-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_test1", did = "d_test1", day = "2026-05-14", prov = "codex_local";
+
+  // initially no metadata
+  assert.equal(store.getBucketSync(pid, did, day, prov), null);
+
+  // record a bucket sync
+  store.recordBucketSync({
+    participantId: pid, deviceId: did, day, providerId: prov,
+    bucketFingerprint: "fp_abc", rowCount: 3, totalTokens: 450,
+    clientGeneratedAt: "2026-05-14T10:00:00Z"
+  });
+  const meta = store.getBucketSync(pid, did, day, prov);
+  assert.ok(meta);
+  assert.equal(meta.bucketFingerprint, "fp_abc");
+  assert.equal(meta.rowCount, 3);
+  assert.equal(meta.totalTokens, 450);
+  assert.ok(meta.syncedAt);
+
+  // update with new fingerprint
+  store.recordBucketSync({
+    participantId: pid, deviceId: did, day, providerId: prov,
+    bucketFingerprint: "fp_def", rowCount: 2, totalTokens: 300,
+    clientGeneratedAt: "2026-05-14T11:00:00Z"
+  });
+  const meta2 = store.getBucketSync(pid, did, day, prov);
+  assert.equal(meta2.bucketFingerprint, "fp_def");
+  assert.equal(meta2.rowCount, 2);
+
+  // deleteBucketUsageRows: set up some usage rows in the bucket
+  const key1 = `2026-05-14|${pid}|${did}|codex|${prov}|hash1|model-a`;
+  const key2 = `2026-05-14|${pid}|${did}|codex|${prov}|hash2|model-b`;
+  const key3 = `2026-05-14|${pid}|${did}|codex|other_prov|hash3|model-c`;
+  store.db.usageDaily[key1] = { participantId: pid, deviceId: did, day, providerId: prov, totalTokens: 100 };
+  store.db.usageDaily[key2] = { participantId: pid, deviceId: did, day, providerId: prov, totalTokens: 200 };
+  store.db.usageDaily[key3] = { participantId: pid, deviceId: did, day, providerId: "other_prov", totalTokens: 300 };
+
+  // delete rows in bucket not in incoming set (keep key1 only)
+  store.deleteBucketUsageRows(pid, did, day, prov, [key1]);
+  assert.ok(store.db.usageDaily[key1], "key1 should be kept");
+  assert.equal(store.db.usageDaily[key2], undefined, "key2 should be deleted");
+  assert.ok(store.db.usageDaily[key3], "key3 in different provider should be untouched");
+
+  store.save();
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testBucketMetadataSchema passed");
+}
+
+function testSnapshotProtocolPayload() {
+  const day = "2026-05-14";
+  const makeItems = (count, overrides) => {
+    const items = [];
+    for (let i = 0; i < count; i++) {
+      items.push({
+        day, toolCode: "codex", providerId: "codex_local",
+        workdirHash: `hash_${i}`, workdirDisplayName: `dir_${i}`,
+        model: "gpt-5", inputTokens: 100, outputTokens: 50,
+        cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+        totalTokens: 150, sourceQuality: "exact",
+        ...overrides
+      });
+    }
+    return items;
+  };
+  const makeSnapshot = (items, overrides) => ({
+    mode: "device_day_provider", day, providerId: "codex_local",
+    bucketFingerprint: computeBucketFingerprint(items),
+    rowCount: items.length,
+    totalTokens: items.reduce((s, i) => s + (i.totalTokens || 0), 0),
+    ...overrides
+  });
+
+  // assertSnapshot: valid payload passes
+  const items3 = makeItems(3);
+  const snap3 = makeSnapshot(items3);
+  assert.doesNotThrow(() => assertSnapshot(snap3, items3, "p_abc", "d_xyz"));
+
+  // mixed day rejected
+  const mixedDay = [...items3, { ...items3[0], day: "2026-05-13" }];
+  assert.throws(() => assertSnapshot(makeSnapshot(mixedDay), mixedDay, "p_abc", "d_xyz"), /does not match snapshot day/);
+
+  // mixed provider rejected
+  const mixedProv = [...items3, { ...items3[0], providerId: "claude_code_local" }];
+  assert.throws(() => assertSnapshot(makeSnapshot(mixedProv), mixedProv, "p_abc", "d_xyz"), /does not match snapshot providerId/);
+
+  // rowCount mismatch rejected
+  assert.throws(() => assertSnapshot({ ...snap3, rowCount: 99 }, items3, "p_abc", "d_xyz"), /does not match items length/);
+
+  // missing fields rejected
+  assert.throws(() => assertSnapshot({}, items3, "p_abc", "d_xyz"), /mode must be/);
+  assert.throws(() => assertSnapshot({ mode: "device_day_provider" }, items3, "p_abc", "d_xyz"), /day must be/);
+
+  // fingerprint determinism
+  const fp1 = computeBucketFingerprint(items3);
+  const fp2 = computeBucketFingerprint([...items3].reverse());
+  assert.equal(fp1, fp2, "fingerprint should be deterministic regardless of input order");
+
+  // fingerprint changes when a tracked field changes
+  const modified = makeItems(3, { inputTokens: 999 });
+  const fp3 = computeBucketFingerprint(modified);
+  assert.notEqual(fp1, fp3, "fingerprint should change when a fingerprint field changes");
+
+  // fingerprint stable when non-fingerprint fields change
+  const extraFields = makeItems(3, { rawSourceRef: "different", providerVersion: "2.0" });
+  const fp4 = computeBucketFingerprint(extraFields);
+  assert.equal(fp1, fp4, "fingerprint should not change when non-fingerprint fields change");
+
+  assert.throws(() => assertSnapshot({ ...snap3, rowCount: 0 }, [], "p_abc", "d_xyz"), /empty-bucket snapshot is not supported/);
+
+  // BUCKET_FINGERPRINT_FIELDS has exactly 14 fields
+  assert.equal(BUCKET_FINGERPRINT_FIELDS.length, 14);
+
+  console.log("  testSnapshotProtocolPayload passed");
+}
+
 function testForbiddenUploadFields() {
   assert.throws(() => assertNoForbiddenUploadFields({ prompt: "secret" }), /forbidden upload field/);
   assert.throws(() => assertNoForbiddenUploadFields({ nested: { identityPrivateKey: "secret" } }), /forbidden upload field/);
@@ -798,6 +1215,7 @@ function testForbiddenUploadFields() {
 
 async function testVersionCompatibilityAndManifest() {
   assert.equal(clientMetadata().clientProtocolVersion, CLIENT_PROTOCOL_VERSION);
+  assert.equal(SNAPSHOT_PROTOCOL_VERSION, 2);
   assert.equal(compatibilityResult({ clientProtocolVersion: CLIENT_PROTOCOL_VERSION }).status, "compatible");
   assert.equal(compatibilityResult({ clientProtocolVersion: 0 }).status, "unsupported_client");
   assert.equal(compatibilityResult({ clientProtocolVersion: 99 }).status, "unsupported_server");
@@ -1319,6 +1737,14 @@ await testCodexLocalSkipsUnknownModel();
 await testCodexLocalNormalizesInputTokens();
 await testCollectorCcusageVerification();
 testForbiddenUploadFields();
+testSnapshotProtocolPayload();
+testBucketMetadataSchema();
+testSnapshotReplaceSemantics();
+testCollectorBucketGrouping();
+testSyncManifestIO();
+testSnapshotWorkdirHashChange();
+testSnapshotProviderDisabled();
+testSnapshotLegacyCoexistence();
 testProductBaseline();
 testPublicChangelogParsing();
 await testVersionCompatibilityAndManifest();

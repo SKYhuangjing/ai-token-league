@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import readline from "node:readline";
-import { initConfig, loadConfig, saveConfig, exportIdentity, importIdentity } from "./config.js";
-import { scanUsage, providerHealth } from "./core.js";
+import { initConfig, loadConfig, saveConfig, exportIdentity, importIdentity, loadSyncManifest, saveSyncManifest } from "./config.js";
+import { scanUsage, providerHealth, groupByBucket } from "./core.js";
 import { signPayload } from "../shared/crypto.js";
+import { computeBucketFingerprint } from "../shared/schema.js";
 import { clientMetadata, collectNetworkInfo } from "../shared/version.js";
 
 const command = process.argv[2] || "help";
@@ -17,6 +18,10 @@ function requireConfig() {
 function argValue(name, fallback = "") {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? process.argv[index + 1] : fallback;
+}
+
+function hasFlag(name) {
+  return process.argv.includes(`--${name}`);
 }
 
 async function postJson(url, body) {
@@ -164,18 +169,94 @@ async function main() {
       networkInfo: collectNetworkInfo()
     });
     const scanned = await scanUsage(config);
-    const payload = {
-      participantId: config.participantId,
-      deviceId: config.deviceId,
-      clientGeneratedAt: new Date().toISOString(),
-      client: clientMetadata(),
-      items: scanned.items
-    };
-    const result = await postJson(`${config.apiBaseUrl}/api/usage/daily-batch`, {
-      ...payload,
-      signature: signPayload(config.identityPrivateKey, payload)
-    });
-    console.log(JSON.stringify({ ...result, scanned: scanned.items.length }, null, 2));
+    const buckets = groupByBucket(scanned.items);
+    const fullResync = hasFlag("full-resync");
+
+    let manifest = fullResync ? null : loadSyncManifest();
+    const isNewManifest = !manifest;
+    if (isNewManifest) {
+      manifest = { version: 1, buckets: {} };
+    }
+
+    let uploadedBucketCount = 0;
+    let noopBucketCount = 0;
+    const failedBuckets = [];
+
+    // collect dirty buckets to upload
+    const dirty = [];
+    for (const [bucketKey, bucket] of buckets) {
+      if (!bucket.items.length) continue;
+      const fingerprint = computeBucketFingerprint(bucket.items);
+      const totalTokens = bucket.items.reduce((s, i) => s + (i.totalTokens || 0), 0);
+      const existing = manifest.buckets[bucketKey];
+
+      if (!fullResync && existing && existing.fingerprint === fingerprint) {
+        noopBucketCount += 1;
+        continue;
+      }
+
+      dirty.push({ bucketKey, bucket, fingerprint, totalTokens });
+    }
+
+    // upload with bounded concurrency
+    const BUCKET_CONCURRENCY = 3;
+    for (let i = 0; i < dirty.length; i += BUCKET_CONCURRENCY) {
+      const batch = dirty.slice(i, i + BUCKET_CONCURRENCY);
+      const results = await Promise.all(batch.map(async ({ bucketKey, bucket, fingerprint, totalTokens }) => {
+        const snapshot = {
+          mode: "device_day_provider",
+          day: bucket.day,
+          providerId: bucket.providerId,
+          bucketFingerprint: fingerprint,
+          rowCount: bucket.items.length,
+          totalTokens
+        };
+        const payload = {
+          participantId: config.participantId,
+          deviceId: config.deviceId,
+          clientGeneratedAt: new Date().toISOString(),
+          client: clientMetadata(),
+          snapshot,
+          items: bucket.items
+        };
+        try {
+          await postJson(`${config.apiBaseUrl}/api/usage/daily-batch`, {
+            ...payload,
+            signature: signPayload(config.identityPrivateKey, payload)
+          });
+        } catch (error) {
+          return { bucketKey, ok: false, error: error.message };
+        }
+
+        manifest.buckets[bucketKey] = {
+          day: bucket.day,
+          providerId: bucket.providerId,
+          fingerprint,
+          rowCount: bucket.items.length,
+          totalTokens,
+          syncedAt: new Date().toISOString()
+        };
+        return { bucketKey, ok: true };
+      }));
+      for (const result of results) {
+        if (result.ok) uploadedBucketCount += 1;
+        else failedBuckets.push(result);
+      }
+      // persist manifest after each batch so progress survives a crash
+      saveSyncManifest(manifest);
+    }
+
+    if (!dirty.length) saveSyncManifest(manifest);
+    console.log(JSON.stringify({
+      scannedRows: scanned.items.length,
+      bucketCount: buckets.size,
+      uploadedBucketCount,
+      noopBucketCount,
+      failedBucketCount: failedBuckets.length,
+      failedBuckets,
+      fullResync
+    }, null, 2));
+    if (failedBuckets.length) process.exitCode = 1;
     return;
   }
 

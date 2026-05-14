@@ -4,6 +4,7 @@ import path from "node:path";
 import { Store } from "./store.js";
 import { MySqlStore } from "./mysql-store.js";
 import { verifyPayload, sha256Hex } from "../shared/crypto.js";
+import { assertSnapshot } from "../shared/schema.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
 import { releaseConfigFromEnv, releasePublicConfig, validateInstallerMetadata, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
 import { loadOrGenerateSalt, loadNames, BoardAnonymizer } from "./board-anonymizer.js";
@@ -181,10 +182,18 @@ async function handleApi(req, res) {
       deviceId: body.deviceId,
       clientGeneratedAt: body.clientGeneratedAt,
       ...(Object.hasOwn(body, "client") ? { client: body.client } : {}),
+      ...(Object.hasOwn(body, "snapshot") ? { snapshot: body.snapshot } : {}),
       items: body.items
     };
     if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
       return sendJson(res, 401, { error: "invalid signature" });
+    }
+    if (body.snapshot) {
+      try {
+        assertSnapshot(body.snapshot, body.items, body.participantId, body.deviceId);
+      } catch (e) {
+        return sendJson(res, 400, { error: e.message });
+      }
     }
     return sendJson(res, 200, { ...(await store.upsertUsageBatch(payload)), compatibility });
   }

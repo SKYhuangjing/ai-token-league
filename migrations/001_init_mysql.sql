@@ -136,3 +136,19 @@ CREATE TABLE IF NOT EXISTS upload_batches (
   CONSTRAINT fk_upload_batches_participant FOREIGN KEY (participantId) REFERENCES participants(id),
   CONSTRAINT fk_upload_batches_device FOREIGN KEY (deviceId) REFERENCES devices(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS usage_sync_buckets (
+  bucketKey VARCHAR(512) PRIMARY KEY,
+  participantId VARCHAR(96) NOT NULL,
+  deviceId VARCHAR(96) NOT NULL,
+  day DATE NOT NULL,
+  providerId VARCHAR(96) NOT NULL,
+  bucketFingerprint VARCHAR(128) NOT NULL,
+  rowCount INT NOT NULL,
+  totalTokens BIGINT NOT NULL,
+  clientGeneratedAt VARCHAR(40) NOT NULL,
+  syncedAt VARCHAR(40) NOT NULL,
+  updatedAt VARCHAR(40) NOT NULL,
+  UNIQUE INDEX idx_sync_bucket_scope (participantId, deviceId, day, providerId),
+  INDEX idx_sync_bucket_participant_day (participantId, day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
