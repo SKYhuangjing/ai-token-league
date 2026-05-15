@@ -21,12 +21,12 @@ npm install                         # Install dependencies
 scripts/start-server.sh --env env.local  # Start backend + public web with env/port handling
 npm test                            # Run tests
 npm run smoke                       # Backend smoke test
-npm run desktop                     # Launch Electron desktop app
-scripts/release.sh                  # Interactive release builder (version/platform/env/installers/upload)
-scripts/release.sh --platform all --yes  # Non-interactive zip build
+npm run desktop                     # Launch Tauri desktop app (dev mode)
+scripts/release.sh                  # Interactive release builder (version/platform/env/upload)
+scripts/release.sh --platform current --yes  # Non-interactive current-platform build
 ```
 
-Use project scripts as the first-line operational interface: service startup goes through `scripts/start-server.sh`; packaging and release go through `scripts/release.sh`. Raw `npm start`, `npm run package:*`, and `npm run release:*` are low-level commands for focused verification or debugging.
+Use project scripts as the first-line operational interface: service startup goes through `scripts/start-server.sh`; packaging and release go through `scripts/release.sh`. Raw `npm start`, `npx tauri build`, and `npm run release:*` are low-level commands for focused verification or debugging.
 
 ## Rules
 

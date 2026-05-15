@@ -52,7 +52,7 @@ Reasoning tokens are diagnostic and cost-related fields, not part of the main ra
 ```text
 src/backend/      Node.js backend, API, JSON/MySQL stores, OpenRouter pricing
 src/collector/    CLI collector, provider registry, local config, scan/sync logic
-src/desktop/      Electron desktop app
+src/desktop/      Tauri desktop app (renderer + Node.js sidecar)
 src/shared/       Shared schema, pricing, crypto, dates, display helpers
 src/web/          Public and admin Web UI (index.html, admin.html, app.js, admin.js, styles.css)
 tests/            Node-based test runner
@@ -99,18 +99,15 @@ Desktop:
 
 ```bash
 npm run desktop
-npm run desktop:smoke
 ```
 
 Desktop feature quick self-test:
 
-When a desktop client feature is still in development and the immediate goal is to self-test the local behavior or confirm the UI direction, do not build a zip by default. Use the fast local loop:
+When a desktop client feature is still in development and the immediate goal is to self-test the local behavior or confirm the UI direction, use the fast local dev loop:
 
 ```bash
-node --check src/desktop/main.cjs
-node --check src/desktop/preload.cjs
+node --check src/desktop/sidecar.cjs
 node --check src/desktop/renderer.js
-pkill -f "electron .*token-mac-windows-ai-codex-claude" 2>/dev/null || true
 npm run desktop
 ```
 
@@ -138,7 +135,7 @@ Common non-interactive release examples:
 
 ```bash
 scripts/release.sh --platform all --yes
-scripts/release.sh --platform mac-arm64 --env env.local --installers --upload --yes
+scripts/release.sh --platform all --env env.local --upload --yes
 ```
 
 For local development changes that touch packaged desktop behavior, presets, updater/release metadata, or install/download UX, build exactly one current-machine zip before treating the work as done. The agent or script must identify the environment; the user should not have to choose a platform:
@@ -149,13 +146,13 @@ scripts/release.sh --platform current --env env.local --yes
 
 Use `--platform all` only for explicit release-facing verification, not routine local debugging.
 
-Low-level package commands are still useful for targeted verification, but they are not the preferred release entrypoint:
+Low-level build commands:
 
 ```bash
-rm -rf dist
-npm run package:all
-rm -rf dist-installer
-npm run package:installer:all
+npx tauri build                            # build for current platform
+npx tauri build --target aarch64-apple-darwin  # macOS arm64
+npx tauri build --target x86_64-apple-darwin   # macOS Intel
+npx tauri build --target x86_64-pc-windows-msvc # Windows
 ```
 
 Manual release dry run and publish:
@@ -168,12 +165,11 @@ node scripts/publish-release.js --env env.local
 Generated artifacts:
 
 ```text
-dist/AI Token League-darwin-arm64.zip
-dist/AI Token League-darwin-x64.zip
-dist/AI Token League-win32-x64.zip
-dist-installer/AI Token League-<version>-mac-arm64-installer.dmg
-dist-installer/AI Token League-<version>-mac-x64-installer.dmg
-dist-installer/AI Token League-<version>-win-x64-installer.exe
+src-tauri/target/release/bundle/macos/AI Token League.app
+src-tauri/target/release/bundle/dmg/AI Token League_<version>_aarch64.dmg
+src-tauri/target/release/bundle/nsis/AI Token League_<version>_x64-setup.exe
+src-tauri/target/release/bundle/AI Token League.app.tar.gz          (updater package)
+src-tauri/target/release/bundle/AI Token League.app.tar.gz.sig      (signature)
 ```
 
 Windows status: initial verification passed and the app is usable, but Windows host coverage is not yet full.
@@ -185,11 +181,10 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | Script | Primary use | Preferred command |
 | --- | --- | --- |
 | `scripts/start-server.sh` | Start backend + public Web with env loading, Node >= 22 check, occupied-port fallback, optional smoke, detach/log/pid support. | `scripts/start-server.sh --env env.local` |
-| `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, platform build, installers, and OSS upload. `--upload` automatically switches to all platforms and enables installers because release metadata requires the complete artifact set. | `scripts/release.sh` or `npm run release` |
+| `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, Tauri build, and OSS upload. `--upload` automatically switches to all platforms because release metadata requires the complete artifact set. | `scripts/release.sh` or `npm run release` |
 | `scripts/bump-version.js` | Client version and/or product baseline bump across package/docs metadata. | `npm run bump -- <version>` or `npm run bump -- --baseline <major.minor>` |
 | `scripts/build-preset.js` | Generate `assets/preset.json` from `PRESET_*` env values or an env file before packaging. | `npm run preset -- --env env.local` |
-| `scripts/publish-release.js` | Build release manifests and upload zip/installer artifacts to OSS; supports dry run. | `node scripts/publish-release.js --env env.local --dry-run` |
-| `scripts/zip-dist.js` | Zip `dist/` platform folders and write `dist/checksums.txt`; normally called by package/release scripts. | `node scripts/zip-dist.js` |
+| `scripts/publish-release.js` | Build release manifests and upload updater/installer artifacts to OSS; supports dry run. | `node scripts/publish-release.js --env env.local --dry-run` |
 | `scripts/patch-dmg-readme.js` | Add `assets/mac-install-readme.txt` into generated macOS DMGs; normally called by installer npm scripts. | `node scripts/patch-dmg-readme.js` |
 | `scripts/generate-icons.js` | Regenerate desktop and web icon assets from `assets/app-icon-source.png`. | `npm run icons` |
 | `scripts/network-probe.mjs` | Print local network interfaces for LAN/server access diagnostics. | `node scripts/network-probe.mjs` |
@@ -230,7 +225,7 @@ The script updates only the files that match the selected mode:
 ### Step 3: Build and publish
 
 ```bash
-scripts/release.sh        # interactive: guides through platform, env, installers, upload
+scripts/release.sh        # interactive: guides through platform, env, upload
 ```
 
 Or manually:
@@ -243,10 +238,9 @@ node scripts/publish-release.js --env env.local             # upload to OSS
 
 ### Design rules
 
-- `--app-version` is NOT hardcoded in npm scripts; `electron-packager` reads `package.json` version automatically.
+- Version is managed in `package.json` and `src-tauri/Cargo.toml`; `cargo tauri build` reads both automatically.
 - Tests use `APP_VERSION` constant from `src/shared/version.js`, not hardcoded strings.
 - Product baseline tests validate `PRODUCT_BASELINE` format only; they must not require it to match `APP_VERSION` major/minor.
-- Installer filenames embed version via `electron-builder.yml` `${version}` template.
 - Documentation filenames use product baseline, not client semver.
 
 ## API Surface
@@ -291,13 +285,13 @@ Collector local config defaults to:
 Local usage cache:
 
 ```text
-Electron userData/usage-cache.json
+~/.ai-token-league/usage-cache.json
 ```
 
 Desktop runtime log:
 
 ```text
-Electron userData/runtime-log.jsonl
+~/.ai-token-league/runtime-log.jsonl
 ```
 
 Upload queue:
@@ -351,7 +345,7 @@ node scripts/build-preset.js --env env.local
 ```
 
 - If no `--env` is provided and no `PRESET_*` keys are in the environment, the preset is empty and the app falls back to runtime defaults — no error.
-- `env.local` is excluded from the Electron package (`electron-builder.yml` excludes `env.*`), so secrets never ship.
+- `env.local` is not included in the Tauri bundle (only `src/desktop/` and `src/shared/` are bundled), so secrets never ship.
 
 ## Operations Manual
 
@@ -365,8 +359,8 @@ Use the smallest verification that covers the touched surface:
 - Claude Code or Codex collector changes: run `npm test`, then run `npm run collector:verify-ccusage -- --day <YYYY-MM-DD>`. The verifier runs `ccusage@latest` and `@ccusage/codex@latest` through `npx --yes` against local data; token totals and provider-specific input/cache fields must match the script output.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop feature quick self-test: if the goal is local behavior or UI-direction confirmation during development, run the desktop feature quick self-test loop above. This is enough for development-stage self-test, not for final delivery.
-- Desktop UI changes before merge or handoff: run `node --check src/desktop/main.cjs`, `node --check src/desktop/preload.cjs`, `node --check src/desktop/renderer.js`, `npm test`, and `npm run desktop:smoke`.
-- Packaging, updater, preset, install/download UX, or package-resource changes: run tests, then build one current-machine zip with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
+- Desktop UI changes before merge or handoff: run `node --check src/desktop/sidecar.cjs`, `node --check src/desktop/renderer.js`, `npm test`, and `npm run desktop` to verify the Tauri app launches.
+- Packaging, updater, preset, install/download UX, or package-resource changes: run tests, then build with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.
 
 Smoke checklist: `doc/smoke-checklist.md`.

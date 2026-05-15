@@ -4,7 +4,7 @@
 
 ```bash
 npm test
-npm run desktop:smoke
+npm run desktop
 scripts/start-server.sh --env env.local
 ```
 
@@ -185,11 +185,10 @@ The MVP is distributed as:
 
 - Backend and Web: `scripts/start-server.sh --env env.local`
 - Collector CLI: `npm run collector -- <command>`
-- Desktop collector UI: `npm run desktop`
-- macOS arm64 app bundle: `dist/AI Token League-darwin-arm64.zip`
-- macOS Intel x64 app bundle: `dist/AI Token League-darwin-x64.zip`
-- Windows x64 app bundle: `dist/AI Token League-win32-x64.zip`
-- Release checksum file: `dist/checksums.txt`
+- Desktop collector UI: `npm run desktop` (Tauri dev mode)
+- macOS arm64 installer: `src-tauri/target/release/bundle/dmg/AI Token League_<version>_aarch64.dmg`
+- Windows x64 installer: `src-tauri/target/release/bundle/nsis/AI Token League_<version>_x64-setup.exe`
+- macOS updater package: `src-tauri/target/release/bundle/AI Token League.app.tar.gz`
 - Release manifest dry run: `node scripts/publish-release.js --env env.local --dry-run`
 
 The Windows x64 bundle is produced on macOS and has been validated by external users on real Windows machines.

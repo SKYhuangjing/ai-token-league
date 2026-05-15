@@ -16,7 +16,7 @@ import { scanUsage } from "../src/collector/core.js";
 import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, migrateLegacyCursorProviderEnabled, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
 import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
 import { codexLocalProvider } from "../src/collector/providers/codex-local.js";
-import { cursorDashboardUsageProvider, eventsToUsageEvents } from "../src/collector/providers/cursor-dashboard-usage.js";
+import { cursorDashboardUsageProvider, eventsToUsageEvents, sqlReady } from "../src/collector/providers/cursor-dashboard-usage.js";
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
 import { addDays, localDay } from "../src/shared/date.js";
@@ -223,6 +223,7 @@ async function testCursorLocalTokenDetection() {
   db.close();
   process.env.CURSOR_STATE_DB_PATH = dbPath;
   try {
+    await sqlReady;
     const sources = cursorDashboardUsageProvider.scanSessions({ providerEnabled: { cursor_dashboard_usage: true } });
     const localSource = sources.find((source) => source.sourceKind === "local_cursor_state");
     assert.ok(localSource);

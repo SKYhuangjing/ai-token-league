@@ -136,6 +136,34 @@ export async function verifyFileChecksum(file, expectedSha256) {
 
 export const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64"];
 
+const TAURI_PLATFORM_MAP = {
+  "darwin-arm64": "darwin-aarch64",
+  "darwin-x64": "darwin-x64",
+  "win32-x64": "windows-x86_64"
+};
+
+export function buildTauriUpdateJson({ version, publicBaseUrl, artifacts, pubDate = new Date().toISOString(), notes = "" }) {
+  if (!version) throw new Error("version required");
+  if (!publicBaseUrl) throw new Error("publicBaseUrl required");
+  if (!artifacts || !artifacts.length) throw new Error("no artifacts");
+  const platforms = {};
+  for (const artifact of artifacts) {
+    const tauriPlatform = TAURI_PLATFORM_MAP[artifact.platform];
+    if (!tauriPlatform) continue;
+    if (!artifact.signature) throw new Error(`artifact ${artifact.platform} missing minisign signature`);
+    platforms[tauriPlatform] = {
+      signature: artifact.signature,
+      url: artifact.url
+    };
+  }
+  return {
+    version,
+    notes,
+    pub_date: pubDate,
+    platforms
+  };
+}
+
 export const INSTALLER_PLATFORMS = {
   "darwin-arm64": { ext: "dmg", label: "macOS Apple silicon" },
   "darwin-x64": { ext: "dmg", label: "macOS Intel" },

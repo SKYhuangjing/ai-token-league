@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 
-const outDir = path.resolve("assets");
-fs.mkdirSync(outDir, { recursive: true });
+const assetsDir = path.resolve("assets");
+const tauriIconsDir = path.resolve("src-tauri", "icons");
+fs.mkdirSync(assetsDir, { recursive: true });
+fs.mkdirSync(tauriIconsDir, { recursive: true });
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -12,56 +14,59 @@ const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
 });
 
 const templatePng = renderIcon({
-  size: 16,
+  size: 32,
   scale: 4,
   template: true
 });
-const windowsPng = renderIcon({
-  size: 16,
-  scale: 4,
-  template: false
-});
+const windowsImages = [16, 24, 32, 48, 64].map((size) => ({
+  size,
+  bytes: renderIcon({ size, scale: 4, template: false })
+}));
 
-fs.writeFileSync(path.join(outDir, "tray-iconTemplate.png"), templatePng);
-fs.writeFileSync(path.join(outDir, "tray-icon.ico"), encodeIco([{ size: 16, bytes: windowsPng }]));
+fs.writeFileSync(path.join(assetsDir, "tray-iconTemplate.png"), templatePng);
+fs.writeFileSync(path.join(tauriIconsDir, "tray-iconTemplate.png"), templatePng);
+fs.writeFileSync(path.join(assetsDir, "tray-icon.ico"), encodeIco(windowsImages));
 
 function renderIcon({ size, scale, template }) {
   const canvas = createCanvas(size * scale, size * scale);
-  const s = scale;
+  const s = scale * (size / 16);
 
   if (template) {
-    drawTrend(canvas, s, [0, 0, 0, 255], [0, 0, 0, 230]);
-    drawBars(canvas, s, [0, 0, 0, 235]);
+    drawTokenMark(canvas, s, [0, 0, 0, 255], true);
   } else {
     fillCircle(canvas, 8 * s, 8 * s, 7 * s, [38, 43, 47, 255]);
     strokeCircle(canvas, 8 * s, 8 * s, 6.1 * s, 1.2 * s, [15, 18, 20, 220]);
-    drawTrend(canvas, s, [219, 88, 75, 255], [120, 40, 35, 245]);
-    drawBars(canvas, s, [198, 230, 218, 255]);
+    drawTokenMark(canvas, s, [198, 230, 218, 255], false);
   }
 
   return encodePng(downsample(canvas, scale));
 }
 
-function drawTrend(canvas, s, color, shadowColor) {
+function drawTokenMark(canvas, s, color, template) {
+  drawTrend(canvas, s, color);
+  drawBars(canvas, s, color, template);
+}
+
+function drawTrend(canvas, s, color) {
   const points = [
-    [2.4 * s, 11.7 * s],
-    [6.2 * s, 8.2 * s],
-    [8.3 * s, 9.8 * s],
-    [12.7 * s, 4.3 * s]
+    [2.3 * s, 11.1 * s],
+    [5.9 * s, 8.0 * s],
+    [8.2 * s, 9.2 * s],
+    [12.8 * s, 4.0 * s]
   ];
-  if (shadowColor) drawPolyline(canvas, points.map(([x, y]) => [x, y + 0.7 * s]), 2.5 * s, shadowColor);
-  drawPolyline(canvas, points, 2.4 * s, color);
+  drawPolyline(canvas, points, 2.8 * s, color);
   fillPolygon(canvas, [
-    [11.0 * s, 3.2 * s],
-    [13.9 * s, 2.6 * s],
-    [13.4 * s, 5.6 * s]
+    [10.8 * s, 2.9 * s],
+    [14.1 * s, 2.4 * s],
+    [13.3 * s, 5.7 * s]
   ], color);
 }
 
-function drawBars(canvas, s, color) {
-  fillRoundRect(canvas, 6.0 * s, 11.0 * s, 1.5 * s, 2.1 * s, 0.7 * s, color);
-  fillRoundRect(canvas, 8.4 * s, 10.0 * s, 1.5 * s, 3.1 * s, 0.7 * s, color);
-  fillRoundRect(canvas, 10.8 * s, 8.8 * s, 1.5 * s, 4.3 * s, 0.7 * s, color);
+function drawBars(canvas, s, color, template) {
+  const alpha = template ? color : [color[0], color[1], color[2], 245];
+  fillRoundRect(canvas, 5.5 * s, 10.6 * s, 1.9 * s, 2.9 * s, 0.6 * s, alpha);
+  fillRoundRect(canvas, 8.3 * s, 9.5 * s, 1.9 * s, 4.0 * s, 0.6 * s, alpha);
+  fillRoundRect(canvas, 11.1 * s, 7.9 * s, 1.9 * s, 5.6 * s, 0.6 * s, alpha);
 }
 
 function createCanvas(width, height) {
@@ -239,8 +244,8 @@ function encodeIco(images) {
   let offset = directorySize;
   images.forEach((image, index) => {
     const entryOffset = headerSize + index * entrySize;
-    buffer.writeUInt8(image.size, entryOffset);
-    buffer.writeUInt8(image.size, entryOffset + 1);
+    buffer.writeUInt8(image.size >= 256 ? 0 : image.size, entryOffset);
+    buffer.writeUInt8(image.size >= 256 ? 0 : image.size, entryOffset + 1);
     buffer.writeUInt8(0, entryOffset + 2);
     buffer.writeUInt8(0, entryOffset + 3);
     buffer.writeUInt16LE(1, entryOffset + 4);

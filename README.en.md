@@ -8,7 +8,7 @@ A local-first AI coding token usage collector and public leaderboard for **Codex
 
 > AI Token League answers a practical question: who is using AI coding tools, how many tokens they used, and how that usage is distributed across models, projects, and days. It uploads aggregate usage facts only. It does not upload prompts, assistant responses, source code, full transcripts, real absolute paths, Cursor session tokens, or identity private keys.
 
-**Features**: Local collection · Public leaderboard · Electron desktop app · CLI collector · Signed uploads · Token composition · OpenRouter pricing · Estimated cost · Admin console · JSON/MySQL storage · Desktop installers · Silent updates
+**Features**: Local collection · Public leaderboard · Tauri desktop app · CLI collector · Signed uploads · Token composition · OpenRouter pricing · Estimated cost · Admin console · JSON/MySQL storage · Desktop installers · Silent updates
 
 **Officially supported platforms**: macOS Apple silicon, macOS Intel, and Windows x64.
 
@@ -120,13 +120,13 @@ Default local storage:
 | Data | Default location |
 | --- | --- |
 | Local identity, sources, aliases, provider config | `~/.ai-token-league/config.json` |
-| Local usage cache | Electron `userData/usage-cache.json` |
+| Local usage cache | `~/.ai-token-league/usage-cache.json` |
 | Upload queue | `~/.ai-token-league/upload-queue.json` |
 | Backend JSON store | `data/db.json` |
 
 Practical safety tips:
 
-1. Do not share `~/.ai-token-league` or the Electron userData directory directly.
+1. Do not share the `~/.ai-token-league` directory directly.
 2. Confirm diagnostics exports contain sanitized aggregate facts only.
 3. On shared machines, remove local config and upload queue data after use.
 
@@ -231,19 +231,14 @@ Common checks:
 ```bash
 npm test
 npm run smoke
-npm run desktop:smoke
+npm run desktop
 ```
 
-Build zip packages:
+Build packages:
 
 ```bash
+scripts/release.sh --platform current --yes
 scripts/release.sh --platform all --yes
-```
-
-Build native installers:
-
-```bash
-scripts/release.sh --platform all --installers --yes
 ```
 
 Release dry run:
@@ -255,7 +250,7 @@ node scripts/publish-release.js --env env.local --dry-run
 Full release:
 
 ```bash
-scripts/release.sh --env env.local --installers --upload
+scripts/release.sh --env env.local --upload --yes
 ```
 
 Developer commands, API details, storage notes, and verification boundaries live in [AGENTS.md](AGENTS.md).

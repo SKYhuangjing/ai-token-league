@@ -39,6 +39,7 @@ let overviewRange = "today";
 let workdirsRange = "today";
 let sourcesProviderTab = "claude_code_local";
 let latestSyncInfo = "";
+let pricingRefreshPromise = null;
 
 function showToast(message) {
   const toast = document.querySelector("#toast");
@@ -399,6 +400,9 @@ async function saveSettings() {
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
   renderConfig(config);
+  if (api.platform === "darwin" && api.setDockVisible) {
+    api.setDockVisible(!config.hideDockIcon);
+  }
   updateDirtyState();
   if (nextCycleDirty) {
     setSaveMessage(t("desktop.sync.settingsSavedNextCycle"), "ok");
@@ -652,12 +656,18 @@ async function boot() {
       const dockRow = document.getElementById("hideDockIcon-row");
       if (dockRow) dockRow.hidden = true;
     }
-    await loadToday();
-    await loadMyIdentity();
+    if (api.platform === "darwin" && config.hideDockIcon && api.setDockVisible) {
+      api.setDockVisible(false);
+    }
+    const initialScan = loadToday();
+    const identityLoad = loadMyIdentity();
     startIdentityRefreshTimer();
-    await loadBackgroundStatus();
+    const backgroundLoad = loadBackgroundStatus({ config });
     startBackgroundStatusTimer();
-    await loadSystemStatus();
+    const systemLoad = loadSystemStatus();
+    const bootResults = await Promise.allSettled([initialScan, identityLoad, backgroundLoad, systemLoad]);
+    const failed = bootResults.find((result) => result.status === "rejected");
+    if (failed) setStatusMessage(failed.reason?.message || t("desktop.renderer.actionFailed"));
   } else {
     showToast(t("desktop.renderer.openSettings"));
     document.querySelector('[data-section="settings"]').click();
@@ -757,10 +767,10 @@ function updateCheckProgress(data) {
 }
 
 async function loadToday(force = false) {
-  await refreshPricing();
   const status = await api.startUsageScan({ force });
   applyUsageScanStatus(status, { force });
-  await loadMyIdentity();
+  schedulePricingRefresh();
+  loadMyIdentity().catch(() => {});
   pollUsageScan();
 }
 
@@ -790,11 +800,15 @@ async function refreshCloudDependentState() {
   serverPriceMap = null;
   latestUpdateState = null;
   latestIdentityBusinessDay = "";
-  await loadMyIdentity();
-  await refreshPricing();
+  await Promise.allSettled([
+    loadMyIdentity(),
+    refreshPricing({ renderOnComplete: true })
+  ]);
   renderInstantPreferenceViews();
-  await loadBackgroundStatus();
-  await loadSystemStatus();
+  await Promise.allSettled([
+    loadBackgroundStatus(),
+    loadSystemStatus()
+  ]);
 }
 
 function apiBaseUrlChanged(previousConfig = {}, nextConfig = {}) {
@@ -812,9 +826,9 @@ function setScanState(running, force = false) {
 }
 
 async function loadTrend(force = false) {
-  await refreshPricing();
   const status = await api.startUsageScan({ force });
   applyUsageScanStatus(status, { force });
+  schedulePricingRefresh();
   pollUsageScan();
 }
 
@@ -825,6 +839,9 @@ function pollUsageScan() {
       const status = await api.usageScanStatus();
       applyUsageScanStatus(status);
       if (!status.running) {
+        setScanState(false);
+      }
+      if (!status.running && !status.syncRunning) {
         clearInterval(scanPollTimer);
         scanPollTimer = null;
         await refreshForegroundSyncStatus(status);
@@ -874,10 +891,9 @@ function applyUsageScanStatus(status, { force = false } = {}) {
 
 async function refreshForegroundSyncStatus(status) {
   if (!status.syncResult && !status.syncError) return;
-  latestConfig = await api.getConfig();
   if (status.syncResult) renderSyncStatus(latestConfig, status.syncResult);
   if (status.syncError) setStatusMessage(t("desktop.renderer.refreshFailed", { error: status.syncError }));
-  await loadBackgroundStatus();
+  await loadBackgroundStatus({ config: latestConfig });
 }
 
 function applyUsageSnapshot(usage) {
@@ -1633,10 +1649,13 @@ function sourceDescription(providerId) {
   return t("desktop.sources.localDesc");
 }
 
-async function loadBackgroundStatus() {
+async function loadBackgroundStatus({ config = latestConfig, refreshConfig = false } = {}) {
   const previousCacheScannedAt = latestBackgroundStatus?.cacheScannedAt || "";
-  const status = await api.backgroundStatus();
-  const config = await api.getConfig();
+  const [status, freshConfig] = await Promise.all([
+    api.backgroundStatus(),
+    refreshConfig ? api.getConfig() : Promise.resolve(config)
+  ]);
+  config = freshConfig || config;
   latestBackgroundStatus = status;
   latestUpdateState = status.updateCheck || latestUpdateState;
   if (config) {
@@ -2495,11 +2514,22 @@ function addDisplayCostToUsageItem(item) {
   return addCostToUsageItem(item, priceMap);
 }
 
-async function refreshPricing() {
+function schedulePricingRefresh() {
+  if (pricingRefreshPromise) return pricingRefreshPromise;
+  pricingRefreshPromise = refreshPricing({ renderOnComplete: true })
+    .catch((error) => console.error(error))
+    .finally(() => {
+      pricingRefreshPromise = null;
+    });
+  return pricingRefreshPromise;
+}
+
+async function refreshPricing({ renderOnComplete = false } = {}) {
   if (!latestConfig?.showEstimatedCost) return;
   if (!latestConfig?.apiBaseUrl) {
     serverPriceMap = null;
     pricingSource = t("desktop.renderer.serverPricingUnavailable");
+    if (renderOnComplete) renderInstantPreferenceViews();
     return;
   }
   try {
@@ -2513,6 +2543,8 @@ async function refreshPricing() {
   } catch (error) {
     serverPriceMap = null;
     pricingSource = t("desktop.renderer.serverPricingError", { error: error.message });
+  } finally {
+    if (renderOnComplete) renderInstantPreferenceViews();
   }
 }
 

@@ -6,7 +6,7 @@ import { MySqlStore } from "./mysql-store.js";
 import { verifyPayload, sha256Hex } from "../shared/crypto.js";
 import { assertSnapshot } from "../shared/schema.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
-import { releaseConfigFromEnv, releasePublicConfig, validateInstallerMetadata, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
+import { releaseConfigFromEnv, releasePublicConfig, buildTauriUpdateJson, validateInstallerMetadata, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
 import { loadOrGenerateSalt, loadNames, BoardAnonymizer } from "./board-anonymizer.js";
 import { currentBusinessDay } from "./day-context.js";
 
@@ -360,10 +360,13 @@ async function handleApi(req, res) {
     const url = new URL(req.url, "http://localhost");
     return sendJson(res, 200, await releaseConfigBody(Object.fromEntries(url.searchParams.entries())));
   }
-  // macOS custom zip updater fetches the signed manifest via this endpoint.
-  // Windows uses electron-updater with latest.yml and does not call this.
+  // Legacy release manifest endpoint (backward-compatible).
   if (req.method === "GET" && req.url.startsWith("/api/release/latest")) {
     return sendJson(res, 200, await releaseLatestBody());
+  }
+  // Tauri updater endpoint — returns Tauri-format update JSON.
+  if (req.method === "GET" && req.url.startsWith("/api/tauri/update.json")) {
+    return sendJson(res, 200, await tauriUpdateBody());
   }
   return sendJson(res, 404, { error: "not found" });
 }
@@ -459,6 +462,29 @@ async function releaseLatestBody() {
     return { ok: false, code: "release_manifest_invalid", error: error.message, manifest: null };
   }
   return { ok: true, manifest };
+}
+
+async function tauriUpdateBody() {
+  const latestResult = await releaseLatestBody();
+  if (!latestResult.ok || !latestResult.manifest) {
+    return { error: latestResult.error || "manifest unavailable" };
+  }
+  const manifest = latestResult.manifest;
+  const artifacts = [];
+  for (const [platform, artifact] of Object.entries(manifest.platforms)) {
+    artifacts.push({
+      platform,
+      signature: artifact.signature || "",
+      url: artifact.url
+    });
+  }
+  return buildTauriUpdateJson({
+    version: manifest.version,
+    publicBaseUrl: releaseConfigFromEnv().publicBaseUrl,
+    artifacts,
+    pubDate: manifest.generatedAt || new Date().toISOString(),
+    notes: manifest.releaseNotesUrl || ""
+  });
 }
 
 function serveStatic(req, res) {

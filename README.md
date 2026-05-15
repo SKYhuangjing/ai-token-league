@@ -8,7 +8,7 @@
 
 > AI Token League 用来回答一个直接的问题：团队或社区里，谁在使用 AI 编程工具、用了多少 token、分布在哪些模型、项目和日期上。它只上传聚合用量事实，不上传 prompt、回答内容、源码、完整会话、真实绝对路径、Cursor session token 或身份私钥。
 
-**功能**：本地采集 · 公开排行榜 · Electron 桌面端 · CLI 采集器 · 签名上传 · token 组成分析 · OpenRouter 价格 · 估算成本 · Admin 管理台 · JSON/MySQL 存储 · 桌面安装包 · 静默更新
+**功能**：本地采集 · 公开排行榜 · Tauri 桌面端 · CLI 采集器 · 签名上传 · token 组成分析 · OpenRouter 价格 · 估算成本 · Admin 管理台 · JSON/MySQL 存储 · 桌面安装包 · 静默更新
 
 **官方支持平台**：macOS Apple silicon、macOS Intel、Windows x64。
 
@@ -120,13 +120,13 @@ reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
 | 数据 | 默认位置 |
 | --- | --- |
 | 本地身份、来源、alias、provider 配置 | `~/.ai-token-league/config.json` |
-| 本地 usage cache | Electron `userData/usage-cache.json` |
+| 本地 usage cache | `~/.ai-token-league/usage-cache.json` |
 | upload queue | `~/.ai-token-league/upload-queue.json` |
 | 后端 JSON 存储 | `data/db.json` |
 
 实用建议：
 
-1. 不要把 `~/.ai-token-league` 或 Electron userData 目录直接公开分享。
+1. 不要把 `~/.ai-token-league` 目录直接公开分享。
 2. 导出诊断包前确认只包含脱敏聚合事实。
 3. 公共机器使用后，清理本地配置和上传队列。
 
@@ -231,19 +231,14 @@ scripts/release.sh --platform current --env env.local --yes
 ```bash
 npm test
 npm run smoke
-npm run desktop:smoke
+npm run desktop
 ```
 
-构建 zip 包：
+构建：
 
 ```bash
+scripts/release.sh --platform current --yes
 scripts/release.sh --platform all --yes
-```
-
-构建原生安装包：
-
-```bash
-scripts/release.sh --platform all --installers --yes
 ```
 
 发布 dry run：
@@ -255,7 +250,7 @@ node scripts/publish-release.js --env env.local --dry-run
 完整发布：
 
 ```bash
-scripts/release.sh --env env.local --installers --upload
+scripts/release.sh --env env.local --upload --yes
 ```
 
 更多开发命令、API 细节、存储说明和验证边界见 [AGENTS.md](AGENTS.md)。

@@ -6,9 +6,25 @@ import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { localDay } from "../../shared/date.js";
 
-const require = createRequire(import.meta.url);
-const initSqlJs = require("sql.js/dist/sql-asm.js");
-const SQL = await initSqlJs();
+let _SQL = null;
+let _sqlLoadFailed = false;
+// Pre-load sql.js at module level (async, non-blocking).
+// getSQLSync() returns the cached result or falls back to sqlite3 CLI.
+const _sqlReady = (async () => {
+  try {
+    const { default: initSqlJs } = await import("sql.js/dist/sql-asm.js");
+    _SQL = await initSqlJs();
+  } catch {
+    _sqlLoadFailed = true;
+  }
+})();
+
+function getSQLSync() {
+  return _SQL;
+}
+
+/** Exported for tests that need sql.js to be ready before calling scanSessions. */
+export const sqlReady = _sqlReady;
 
 export const cursorDashboardUsageProvider = {
   id: "cursor_dashboard_usage",
@@ -260,6 +276,8 @@ function readTokenFromCursorSqlite() {
 
 function readTokenUsingSqlJs(dbPath) {
   try {
+    const SQL = getSQLSync();
+    if (!SQL) return null;
     const db = new SQL.Database(fs.readFileSync(dbPath));
     try {
       const token = querySqlJsValue(db, "cursorAuth/accessToken");

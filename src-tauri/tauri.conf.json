@@ -1,0 +1,53 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasq/tauri-v2-schema/refs/heads/main/tauri.conf.json",
+  "productName": "AI Token League",
+  "version": "0.6.2",
+  "identifier": "com.ai.token.league",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "url": "desktop/index.html",
+        "title": "AI Token League",
+        "width": 1120,
+        "height": 780,
+        "minWidth": 920,
+        "minHeight": 680,
+        "center": true,
+        "decorations": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' file:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: http: ipc: tauri:"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUzNzAxQkY2Q0E2NkIxNDcKUldTY092aHd0SXFLMmI0OEtqY2pQd3BQcldkVkVmZUpwSnNqWVhBZ09DMkJaeGRwRHhRdWJlVjgK",
+      "endpoints": ["https://releases.example.com/update.json"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "icons/tray-iconTemplate.png": "icons/tray-iconTemplate.png",
+      "../src/desktop/sidecar.cjs": "src/desktop/sidecar.cjs",
+      "../src/collector/": "src/collector/",
+      "../src/shared/": "src/shared/",
+      "../package.json": "package.json"
+    }
+  }
+}

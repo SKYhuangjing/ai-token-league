@@ -9,32 +9,32 @@ cd "$PROJECT_ROOT"
 VERSION=""
 PLATFORM=""
 ENV_FILE=""
-INSTALLERS=""
 UPLOAD=""
 AUTO_YES=false
+
+TAURI_BUNDLE_BASE="src-tauri/target"
 
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Interactive release builder for AI Token League.
+Interactive release builder for AI Token League (Tauri).
 Without flags, runs in interactive mode with prompts.
 
 Options:
   --version VER     Version to release (default: current from package.json)
   --platform PLAT   Platform: current | mac-arm64 | mac-intel | mac-all | win | all (default: all)
   --env FILE        Env file for presets and upload credentials
-  --installers      Build native installers (DMG / NSIS)
-  --upload          Upload artifacts to OSS after build; builds all platforms and installers
+  --upload          Upload artifacts to OSS after build; builds all platforms
   --yes             Skip confirmation prompt
   -h, --help        Show this help message
 
 Examples:
   $(basename "$0")                                      # fully interactive
-  $(basename "$0") --platform current --yes             # quick current-machine zip
+  $(basename "$0") --platform current --yes             # quick current-machine build
   $(basename "$0") --platform mac-arm64 --yes           # quick mac-arm64 build
   $(basename "$0") --version 0.6.0 --upload --yes      # bump + build + upload
-  $(basename "$0") --env env.prod --installers --upload # full release with env
+  $(basename "$0") --env env.prod --upload              # full release with env
 EOF
   exit 0
 }
@@ -45,7 +45,6 @@ while [[ $# -gt 0 ]]; do
     --version)     VERSION="$2"; shift 2 ;;
     --platform)    PLATFORM="$2"; shift 2 ;;
     --env)         ENV_FILE="$2"; shift 2 ;;
-    --installers)  INSTALLERS="yes"; shift ;;
     --upload)      UPLOAD="yes"; shift ;;
     --yes)         AUTO_YES=true; shift ;;
     -h|--help)     usage ;;
@@ -95,10 +94,15 @@ detect_current_platform() {
   esac
 }
 
-# --- check Node.js ---
+# --- check prerequisites ---
 NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
 if [[ "$NODE_VERSION" -lt 22 ]]; then
   echo "Error: Node.js >= 22 required, found $(node -v)"
+  exit 1
+fi
+
+if ! command -v cargo &>/dev/null; then
+  echo "Error: cargo (Rust) not found. Install from https://rustup.rs"
   exit 1
 fi
 
@@ -106,7 +110,7 @@ fi
 CURRENT_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
 
 echo ""
-echo "=== AI Token League Release Builder ==="
+echo "=== AI Token League Release Builder (Tauri) ==="
 echo ""
 
 # --- step 1: version ---
@@ -165,7 +169,6 @@ if [[ -z "$ENV_FILE" ]]; then
 fi
 
 if [[ -n "$ENV_FILE" ]]; then
-  # resolve relative path
   [[ "$ENV_FILE" != /* ]] && ENV_FILE="$PROJECT_ROOT/$ENV_FILE"
   if [[ ! -f "$ENV_FILE" ]]; then
     echo "  Warning: env file not found: $ENV_FILE"
@@ -175,12 +178,7 @@ if [[ -n "$ENV_FILE" ]]; then
   fi
 fi
 
-# --- step 4: installers ---
-if [[ -z "$INSTALLERS" ]]; then
-  prompt_yn INSTALLERS "  Build native installers (DMG/NSIS)? [y/N] " "no"
-fi
-
-# --- step 5: upload ---
+# --- step 4: upload ---
 if [[ -z "$UPLOAD" ]]; then
   prompt_yn UPLOAD "  Upload to OSS after build? [y/N] " "no"
 fi
@@ -194,21 +192,15 @@ if [[ "$UPLOAD" == "yes" && "$PLATFORM" != "all" ]]; then
   PLATFORM="all"
   PLATFORM_LABEL="All platforms"
 fi
-if [[ "$UPLOAD" == "yes" && "$INSTALLERS" != "yes" ]]; then
-  echo "  Upload requires installer artifacts; enabling installers."
-  INSTALLERS="yes"
-fi
-echo "  Installers: $INSTALLERS"
 echo "  Upload: $UPLOAD"
 
-# --- step 6: confirm ---
+# --- step 5: confirm ---
 echo ""
 echo "  --- Summary ---"
-echo "  Version:    $VERSION"
-echo "  Platform:   $PLATFORM_LABEL"
-echo "  Env file:   ${ENV_FILE:-none}"
-echo "  Installers: $INSTALLERS"
-echo "  Upload:     $UPLOAD"
+echo "  Version:  $VERSION"
+echo "  Platform: $PLATFORM_LABEL"
+echo "  Env file: ${ENV_FILE:-none}"
+echo "  Upload:   $UPLOAD"
 echo ""
 
 if [[ "$AUTO_YES" != true ]]; then
@@ -220,8 +212,6 @@ fi
 
 # --- execute pipeline ---
 echo ""
-echo ">>> Cleaning dist/ and dist-installer/..."
-rm -rf dist dist-installer
 
 # preset
 if [[ -n "$ENV_FILE" ]]; then
@@ -232,35 +222,222 @@ else
   node scripts/build-preset.js
 fi
 
-# packaging
-run_package() {
+# clean previous build artifacts
+echo ">>> Cleaning previous build artifacts..."
+rm -rf dist dist-installer
+
+# Resolve the bundle directory for a given rust target.
+# cargo tauri build --target X always outputs to target/X/release/bundle.
+resolve_bundle_dir() {
+  local rust_target="$1"
+  echo "$TAURI_BUNDLE_BASE/$rust_target/release/bundle"
+}
+
+# Tauri build
+# Cross-compilation notes:
+#   - macOS arm64 (native): full build with app + dmg + updater
+#   - macOS Intel (cross): app + updater only (--bundles app skips DMG)
+#   - Windows: must be built natively on Windows (ring/cross-deps don't cross-compile)
+run_tauri_build() {
+  local native_arch
+  native_arch="$(uname -m)"
+
+  build_mac_target() {
+    local rust_target="$1"
+    local arch_label="$2"
+    local exit_code=0
+    if [[ "$native_arch" == "arm64" && "$rust_target" == "aarch64-apple-darwin" ]] || \
+       [[ "$native_arch" == "x86_64" && "$rust_target" == "x86_64-apple-darwin" ]]; then
+      echo ">>> Building $arch_label (native)..."
+      npx tauri build --target "$rust_target" || exit_code=$?
+    else
+      echo ">>> Building $arch_label (cross, app + updater only)..."
+      npx tauri build --target "$rust_target" --bundles app || exit_code=$?
+    fi
+    # Signing fails without TAURI_SIGNING_PRIVATE_KEY but artifacts are still generated.
+    # Only treat as fatal if the .app bundle itself wasn't created.
+    if [[ $exit_code -ne 0 ]]; then
+      local bundle_dir
+      bundle_dir="$(resolve_bundle_dir "$rust_target")"
+      if [[ ! -d "$bundle_dir/macos/AI Token League.app" ]]; then
+        echo "Error: Tauri build failed for $arch_label (exit code $exit_code)"
+        exit 1
+      fi
+      echo "  Warning: build exited with code $exit_code (likely missing TAURI_SIGNING_PRIVATE_KEY). Artifacts are available."
+    fi
+  }
+
   case "$1" in
-    mac-arm64)  npm run package:mac:arm64 ;;
-    mac-intel)  npm run package:mac:intel ;;
-    mac-all)    npm run package:mac:all ;;
-    win)        npm run package:win ;;
-    all)        npm run package:all; return ;;
+    mac-arm64)  build_mac_target aarch64-apple-darwin "macOS arm64" ;;
+    mac-intel)  build_mac_target x86_64-apple-darwin "macOS Intel" ;;
+    win)
+      if [[ "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* && "$(uname -s)" != CYGWIN* ]]; then
+        echo "Error: Windows build requires native Windows (MSYS2/MinGW). Cross-compilation from macOS is not supported."
+        exit 1
+      fi
+      echo ">>> Building Windows x64..."
+      npx tauri build --target x86_64-pc-windows-msvc
+      ;;
+    mac-all)
+      build_mac_target aarch64-apple-darwin "macOS arm64"
+      build_mac_target x86_64-apple-darwin "macOS Intel"
+      ;;
+    all)
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        build_mac_target aarch64-apple-darwin "macOS arm64"
+        build_mac_target x86_64-apple-darwin "macOS Intel"
+      elif [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+        echo ">>> Building Windows x64..."
+        npx tauri build --target x86_64-pc-windows-msvc
+      else
+        echo ">>> Building for current platform..."
+        npx tauri build
+      fi
+      ;;
+    *)
+      echo ">>> Building for current platform..."
+      npx tauri build
+      ;;
   esac
-  # for single platforms (except "all" which already zips), run zip
-  if [[ "$1" != "all" ]]; then
-    node scripts/zip-dist.js
+}
+
+echo ">>> Building Tauri app for $PLATFORM_LABEL..."
+run_tauri_build "$PLATFORM"
+
+# Collect artifacts into dist/ for publish-release.js
+# Disable strict mode during collection — hdiutil may fail on some steps
+set +e
+echo ">>> Collecting artifacts..."
+mkdir -p dist
+
+# Inject mac-install-readme.txt into an existing DMG.
+# Tauri creates the DMG (compressed). We convert to sparse (rw), add file, re-compress.
+inject_readme_into_dmg() {
+  local dmg_path="$1"
+  local readme="$PROJECT_ROOT/assets/mac-install-readme.txt"
+  if [[ ! -f "$readme" ]]; then return 0; fi
+  if [[ ! -f "$dmg_path" ]]; then return 0; fi
+
+  local dir base tmp_sparse tmp_compressed
+  dir="$(dirname "$dmg_path")"
+  base="$(basename "$dmg_path" .dmg)"
+  tmp_sparse="$dir/${base}-rw.sparseimage"
+  tmp_compressed="$dir/${base}-final.dmg"
+
+  # Compressed DMG → sparse (read-write)
+  hdiutil convert "$dmg_path" -format UDSP -o "$tmp_sparse" 2>/dev/null || return 0
+
+  # Mount, copy readme, unmount
+  local mount_output mount_point
+  mount_output=$(hdiutil attach "$tmp_sparse" -nobrowse 2>/dev/null) || { rm -f "$tmp_sparse"; return 0; }
+  mount_point=$(echo "$mount_output" | grep "/Volumes/" | sed 's|^.*\(/Volumes/.*\)$|\1|')
+
+  if [[ -n "$mount_point" ]]; then
+    cp "$readme" "$mount_point/mac-install-readme.txt" || true
+    sync
+    hdiutil detach "$mount_point" 2>/dev/null || true
+  fi
+
+  # Sparse → compressed DMG (temp file, then replace)
+  hdiutil convert "$tmp_sparse" -format UDZO -o "$tmp_compressed" 2>/dev/null || true
+  rm -f "$tmp_sparse"
+  if [[ -f "$tmp_compressed" ]]; then
+    mv "$tmp_compressed" "$dmg_path"
+  fi
+  return 0
+}
+
+collect_mac_artifacts() {
+  local arch="$1"
+  local rust_target="$2"
+  local bundle_dir
+  bundle_dir="$(resolve_bundle_dir "$rust_target")"
+  local target_dir="$bundle_dir/macos"
+  local dmg_dir="$bundle_dir/dmg"
+
+  local suffix=""
+  [[ "$arch" == "arm64" ]] && suffix="-darwin-arm64"
+  [[ "$arch" == "x64" ]] && suffix="-darwin-x64"
+
+  # .app bundle (arch-suffixed to avoid overwrite when building both)
+  if [[ -d "$target_dir/AI Token League.app" ]]; then
+    cp -R "$target_dir/AI Token League.app" "dist/AI Token League${suffix}.app"
+  fi
+
+  # DMG installer (native builds only) — inject readme
+  local dmg
+  dmg=$(find "$dmg_dir" -name "*.dmg" 2>/dev/null | head -1)
+  if [[ -n "$dmg" ]]; then
+    cp "$dmg" "dist/AI Token League${suffix}.dmg"
+    inject_readme_into_dmg "dist/AI Token League${suffix}.dmg"
+  fi
+
+  # Updater package (.app.tar.gz + .sig)
+  local tarball
+  tarball=$(find "$target_dir" -name "*.app.tar.gz" 2>/dev/null | head -1)
+  if [[ -n "$tarball" ]]; then
+    local sig="${tarball}.sig"
+    cp "$tarball" "dist/AI Token League${suffix}.app.tar.gz"
+    [[ -f "$sig" ]] && cp "$sig" "dist/AI Token League${suffix}.app.tar.gz.sig"
   fi
 }
 
-echo ">>> Packaging $PLATFORM_LABEL..."
-run_package "$PLATFORM"
+collect_win_artifacts() {
+  local rust_target="${1:-x86_64-pc-windows-msvc}"
+  local bundle_dir
+  bundle_dir="$(resolve_bundle_dir "$rust_target")"
+  local nsis_dir="$bundle_dir/nsis"
+  local msi_dir="$bundle_dir/msi"
 
-# installers
-if [[ "$INSTALLERS" == "yes" ]]; then
-  echo ">>> Building native installers..."
-  case "$PLATFORM" in
-    mac-arm64)  npm run package:installer:mac:arm64 ;;
-    mac-intel)  npm run package:installer:mac:intel ;;
-    mac-all)    npm run package:installer:mac:all ;;
-    win)        npm run package:installer:win ;;
-    all)        npm run package:installer:all ;;
-  esac
-fi
+  # NSIS installer
+  local nsis
+  nsis=$(find "$nsis_dir" -name "*setup*.exe" 2>/dev/null | head -1)
+  if [[ -n "$nsis" ]]; then
+    cp "$nsis" dist/
+  fi
+
+  # MSI installer
+  local msi
+  msi=$(find "$msi_dir" -name "*.msi" 2>/dev/null | head -1)
+  if [[ -n "$msi" ]]; then
+    cp "$msi" dist/
+  fi
+
+  # Updater NSIS zip
+  local nsis_zip
+  nsis_zip=$(find "$nsis_dir" -name "*.nsis.zip" 2>/dev/null | head -1)
+  if [[ -n "$nsis_zip" ]]; then
+    cp "$nsis_zip" dist/
+    local sig="${nsis_zip}.sig"
+    [[ -f "$sig" ]] && cp "$sig" dist/
+  fi
+}
+
+case "$PLATFORM" in
+  mac-arm64|current)
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      collect_mac_artifacts "arm64" "aarch64-apple-darwin"
+    else
+      collect_win_artifacts
+    fi
+    ;;
+  mac-intel)   collect_mac_artifacts "x64" "x86_64-apple-darwin" ;;
+  mac-all)
+    collect_mac_artifacts "arm64" "aarch64-apple-darwin"
+    collect_mac_artifacts "x64" "x86_64-apple-darwin"
+    ;;
+  win)         collect_win_artifacts ;;
+  all)
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      collect_mac_artifacts "arm64" "aarch64-apple-darwin"
+      collect_mac_artifacts "x64" "x86_64-apple-darwin"
+    else
+      collect_win_artifacts
+    fi
+    ;;
+esac
+
+set -e
 
 # upload
 if [[ "$UPLOAD" == "yes" ]]; then
@@ -268,12 +445,21 @@ if [[ "$UPLOAD" == "yes" ]]; then
   node scripts/publish-release.js --env "$ENV_FILE"
 fi
 
+# Clean up Tauri build targets to save disk space
+echo ">>> Cleaning build targets..."
+for target_dir in src-tauri/target/aarch64-apple-darwin src-tauri/target/x86_64-apple-darwin src-tauri/target/x86_64-pc-windows-msvc src-tauri/target/release; do
+  if [[ -d "$target_dir" ]]; then
+    rm -rf "$target_dir"
+    echo "  Removed $target_dir"
+  fi
+done
+
 # summary
 echo ""
 echo "=== Release Complete ==="
 echo ""
 echo "Artifacts:"
-ls -lh dist/*.zip 2>/dev/null || true
-ls -lh dist-installer/* 2>/dev/null || true
+ls -lh dist/*.dmg dist/*.app.tar.gz dist/*.app.tar.gz.sig dist/*.exe dist/*.msi dist/*.nsis.zip 2>/dev/null || true
+for d in dist/*.app; do [[ -d "$d" ]] && echo "  $(basename "$d")  ($(du -sh "$d" | cut -f1))"; done
 echo ""
 echo "Done."

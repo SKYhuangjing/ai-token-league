@@ -5,12 +5,11 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { Agent } from "undici";
 import {
-  buildLatestYml,
+  buildTauriUpdateJson,
   buildReleaseManifest,
   releaseConfigFromEnv,
   releaseSecretsFromEnv,
   sha256File,
-  sha512Base64,
   validateReleaseConfig
 } from "../src/shared/update.js";
 import { APP_VERSION } from "../src/shared/version.js";
@@ -38,115 +37,159 @@ if (!dryRun && (!secrets.accessKeyId || !secrets.accessKeySecret || secrets.acce
   throw new Error("missing release OSS credentials (use --env FILE or set RELEASE_* env vars)");
 }
 
-const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64"];
-const INSTALLER_PLATFORMS = {
-  "darwin-arm64": { ext: "dmg", short: "mac-arm64" },
-  "darwin-x64": { ext: "dmg", short: "mac-x64" },
-  "win32-x64": { ext: "exe", short: "win-x64" }
+// Tauri updater platforms
+const UPDATER_PLATFORMS = {
+  "darwin-aarch64": { updaterExt: "app.tar.gz", installerExt: "dmg", label: "macOS arm64" },
+  "darwin-x64":     { updaterExt: "app.tar.gz", installerExt: "dmg", label: "macOS Intel" },
+  "windows-x86_64": { updaterExt: "nsis.zip",   installerExt: "exe", label: "Windows x64" }
 };
 
-const artifacts = RELEASE_PLATFORMS.map((platform) => {
-  const fileName = `AI Token League-${platform}.zip`;
-  const file = path.join(distDir, fileName);
-  if (!fs.existsSync(file)) throw new Error(`missing artifact: ${file}`);
-  return {
-    platform,
+// Map release platform names to Tauri updater platform names
+const PLATFORM_TO_UPDATER = {
+  "darwin-arm64": "darwin-aarch64",
+  "darwin-x64": "darwin-x64",
+  "win32-x64": "windows-x86_64"
+};
+
+// Scan dist/ for updater artifacts (.app.tar.gz, .nsis.zip)
+const updaterArtifacts = [];
+for (const [tauriPlatform, info] of Object.entries(UPDATER_PLATFORMS)) {
+  const pattern = info.updaterExt === "app.tar.gz"
+    ? (tauriPlatform === "darwin-aarch64" ? "*darwin-arm64.app.tar.gz" : "*darwin-x64.app.tar.gz")
+    : "*.nsis.zip";
+  const files = fs.readdirSync(distDir).filter((f) => f.endsWith(`.${info.updaterExt}`));
+  // Match files that contain the expected platform hint
+  const matched = files.find((f) => {
+    if (info.updaterExt === "app.tar.gz") {
+      return tauriPlatform === "darwin-aarch64"
+        ? f.includes("arm64") || f.includes("aarch64")
+        : f.includes("x64") || f.includes("intel");
+    }
+    return true; // Windows nsis.zip
+  });
+  if (!matched) continue;
+  const file = path.join(distDir, matched);
+  const sigFile = `${file}.sig`;
+  const signature = fs.existsSync(sigFile) ? fs.readFileSync(sigFile, "utf8").trim() : "";
+  updaterArtifacts.push({
+    platform: tauriPlatform,
     file,
-    fileName,
+    fileName: matched,
     size: fs.statSync(file).size,
     sha256: sha256File(file),
-    key: joinKey(config.prefix, "releases", version, fileName),
-    url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(fileName).replaceAll("%20", "%20")}`
-  };
-});
+    signature,
+    key: joinKey(config.prefix, "releases", version, matched),
+    url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(matched)}`
+  });
+}
 
-const installerDir = path.resolve(argValue("installer-dist") || "dist-installer");
+// Scan dist/ for installer artifacts (.dmg, .exe)
 const installerArtifacts = [];
 const missingInstallerFiles = [];
-for (const platform of RELEASE_PLATFORMS) {
-  const installerInfo = INSTALLER_PLATFORMS[platform];
-  if (!installerInfo) continue;
-  const fileName = buildInstallerFileName(platform, version, installerInfo.ext);
-  const file = path.join(installerDir, fileName);
-  if (!fs.existsSync(file)) {
-    missingInstallerFiles.push(file);
+for (const [releasePlatform, tauriPlatform] of Object.entries(PLATFORM_TO_UPDATER)) {
+  const info = UPDATER_PLATFORMS[tauriPlatform];
+  const files = fs.readdirSync(distDir).filter((f) => f.endsWith(`.${info.installerExt}`));
+  const matched = files.find((f) => {
+    if (info.installerExt === "dmg") {
+      return tauriPlatform === "darwin-aarch64"
+        ? f.includes("aarch64") || f.includes("arm64")
+        : f.includes("x64") || f.includes("intel");
+    }
+    return true;
+  });
+  if (!matched) {
+    missingInstallerFiles.push(`${distDir}/*.${info.installerExt} (${info.label})`);
     continue;
   }
+  const file = path.join(distDir, matched);
   installerArtifacts.push({
-    platform,
+    platform: releasePlatform,
+    tauriPlatform,
     file,
-    fileName,
-    ext: installerInfo.ext,
+    fileName: matched,
+    ext: info.installerExt,
     size: fs.statSync(file).size,
     sha256: sha256File(file),
-    key: joinKey(config.prefix, "releases", version, fileName),
-    url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(fileName).replaceAll("%20", "%20")}`
+    key: joinKey(config.prefix, "releases", version, matched),
+    url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(matched)}`
   });
 }
 if (missingInstallerFiles.length && !allowMissingInstallers) {
-  throw new Error(`missing installer artifacts:\n${missingInstallerFiles.map((file) => `- ${file}`).join("\n")}`);
+  throw new Error(`missing installer artifacts:\n${missingInstallerFiles.map((f) => `- ${f}`).join("\n")}`);
 }
-for (const file of missingInstallerFiles) {
-  console.warn(`installer artifact not found (skipping): ${file}`);
+for (const f of missingInstallerFiles) {
+  console.warn(`installer artifact not found (skipping): ${f}`);
 }
 
-const checksums = artifacts.map((artifact) => `${artifact.sha256}  ${artifact.fileName}`).join("\n") + "\n";
+// Build checksums.txt
+const checksumLines = [
+  ...updaterArtifacts.map((a) => `${a.sha256}  ${a.fileName}`),
+  ...installerArtifacts.map((a) => `${a.sha256}  ${a.fileName}`)
+];
+const checksums = checksumLines.join("\n") + "\n";
 const checksumsKey = joinKey(config.prefix, "releases", version, "checksums.txt");
+
+// Build installer.json for download page
 const installerMeta = { version, generatedAt: new Date().toISOString(), platforms: {} };
 for (const ia of installerArtifacts) {
-  installerMeta.platforms[ia.platform] = { url: ia.url, fileName: ia.fileName, sha256: ia.sha256, size: ia.size, ext: ia.ext };
+  installerMeta.platforms[ia.platform] = {
+    url: ia.url, fileName: ia.fileName, sha256: ia.sha256, size: ia.size, ext: ia.ext
+  };
 }
 const installerJsonText = `${JSON.stringify(installerMeta, null, 2)}\n`;
 const installerJsonKey = joinKey(config.prefix, "releases", "installer.json");
 const installerJsonVersionKey = joinKey(config.prefix, "releases", version, "installer.json");
 
-// Build latest.json manifest for macOS custom zip updater
-const manifest = buildReleaseManifest({
+// Build tauri-update.json for Tauri updater plugin
+const tauriUpdate = buildTauriUpdateJson({
   version,
   publicBaseUrl: config.publicBaseUrl,
-  manifestPath: config.manifestPath,
-  artifacts,
-  installerArtifacts
+  artifacts: updaterArtifacts
 });
-const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+const tauriUpdateText = `${JSON.stringify(tauriUpdate, null, 2)}\n`;
+const tauriUpdateKey = joinKey(config.prefix, "releases", "tauri-update.json");
+const tauriUpdateVersionKey = joinKey(config.prefix, "releases", version, "tauri-update.json");
+
+// Build latest.json manifest (kept for backward compatibility)
+const manifestArtifacts = updaterArtifacts.map((a) => {
+  const releasePlatform = Object.entries(PLATFORM_TO_UPDATER).find(([, tp]) => tp === a.platform)?.[0] || a.platform;
+  return { ...a, platform: releasePlatform };
+});
+let manifest;
+try {
+  manifest = buildReleaseManifest({
+    version,
+    publicBaseUrl: config.publicBaseUrl,
+    manifestPath: config.manifestPath,
+    artifacts: manifestArtifacts,
+    installerArtifacts
+  });
+} catch {
+  manifest = null;
+}
+const manifestText = manifest ? `${JSON.stringify(manifest, null, 2)}\n` : "";
 const manifestKey = joinKey(config.prefix, config.manifestPath);
 const manifestVersionKey = joinKey(config.prefix, "releases", version, "latest.json");
 
-// Build electron-updater metadata files (latest.yml / latest-mac.yml)
-const winInstaller = installerArtifacts.filter((a) => a.platform === "win32-x64");
-const macZipArtifacts = artifacts.filter((a) => a.platform.startsWith("darwin"));
-const latestYml = winInstaller.length
-  ? buildLatestYml(version, winInstaller.map((a) => ({ fileName: `${version}/${a.fileName}`, sha512: sha512Base64(a.file), size: a.size })))
-  : "";
-const latestMacYml = macZipArtifacts.length
-  ? buildLatestYml(version, macZipArtifacts.map((a) => ({ fileName: `${version}/${a.fileName}`, sha512: sha512Base64(a.file), size: a.size })))
-  : "";
-const latestYmlKey = joinKey(config.prefix, "releases", "latest.yml");
-const latestMacYmlKey = joinKey(config.prefix, "releases", "latest-mac.yml");
-const latestYmlVersionKey = joinKey(config.prefix, "releases", version, "latest.yml");
-const latestMacYmlVersionKey = joinKey(config.prefix, "releases", version, "latest-mac.yml");
-
 const plan = [
-  ...artifacts.map((artifact) => ({ key: artifact.key, file: artifact.file, size: artifact.size, contentType: "application/zip" })),
-  ...installerArtifacts.map((artifact) => ({
-    key: artifact.key,
-    file: artifact.file,
-    size: artifact.size,
-    contentType: artifact.ext === "dmg" ? "application/x-apple-diskimage" : "application/octet-stream"
+  ...updaterArtifacts.map((a) => ({ key: a.key, file: a.file, size: a.size, contentType: "application/gzip" })),
+  ...installerArtifacts.map((a) => ({
+    key: a.key, file: a.file, size: a.size,
+    contentType: a.ext === "dmg" ? "application/x-apple-diskimage" : "application/octet-stream"
   })),
   { key: checksumsKey, body: checksums, size: Buffer.byteLength(checksums), contentType: "text/plain; charset=utf-8" },
-  ...(latestYml ? [{ key: latestYmlKey, body: latestYml, size: Buffer.byteLength(latestYml), contentType: "text/yaml; charset=utf-8" }] : []),
-  ...(latestYml ? [{ key: latestYmlVersionKey, body: latestYml, size: Buffer.byteLength(latestYml), contentType: "text/yaml; charset=utf-8" }] : []),
-  ...(latestMacYml ? [{ key: latestMacYmlKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
-  ...(latestMacYml ? [{ key: latestMacYmlVersionKey, body: latestMacYml, size: Buffer.byteLength(latestMacYml), contentType: "text/yaml; charset=utf-8" }] : []),
+  ...(manifestText ? [
+    { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" },
+    { key: manifestVersionKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" }
+  ] : []),
   { key: installerJsonKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
   { key: installerJsonVersionKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
-  { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" },
-  { key: manifestVersionKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8", last: true }
+  { key: tauriUpdateKey, body: tauriUpdateText, size: Buffer.byteLength(tauriUpdateText), contentType: "application/json; charset=utf-8" },
+  { key: tauriUpdateVersionKey, body: tauriUpdateText, size: Buffer.byteLength(tauriUpdateText), contentType: "application/json; charset=utf-8", last: true }
 ];
 
 if (dryRun) {
-  console.log(JSON.stringify({ dryRun: true, version, uploads: plan.map(({ key, last }) => ({ key, last: Boolean(last) })), installerMeta }, null, 2));
+  console.log(JSON.stringify({ dryRun: true, version, uploads: plan.map(({ key, last }) => ({ key, last: Boolean(last) })), installerMeta, tauriUpdate }, null, 2));
   process.exit(0);
 }
 
@@ -155,14 +198,8 @@ const lastItems = plan.filter((item) => item.last);
 const concurrency = Number(process.env.RELEASE_UPLOAD_CONCURRENCY || 3);
 const totalBytes = plan.reduce((sum, item) => sum + (item.size || 0), 0);
 const progress = {
-  done: 0,
-  completedBytes: 0,
-  activeBytes: new Map(),
-  totalBytes,
-  total: plan.length,
-  startTime: Date.now(),
-  lastRenderAt: 0,
-  lastLinePct: -10
+  done: 0, completedBytes: 0, activeBytes: new Map(), totalBytes, total: plan.length,
+  startTime: Date.now(), lastRenderAt: 0, lastLinePct: -10
 };
 
 renderProgress(progress, { force: true });
@@ -318,9 +355,4 @@ function formatBytes(bytes) {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${bytes} B`;
-}
-
-function buildInstallerFileName(platform, ver, ext) {
-  const short = INSTALLER_PLATFORMS[platform]?.short || platform;
-  return `AI Token League-${ver}-${short}-installer.${ext}`;
 }

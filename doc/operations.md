@@ -270,8 +270,8 @@ scripts/release.sh
 常用非交互示例：
 
 ```bash
-scripts/release.sh --platform all --yes
-scripts/release.sh --platform all --env env.local --installers --upload --yes
+scripts/release.sh --platform current --yes
+scripts/release.sh --platform all --env env.local --upload --yes
 ```
 
 底层构建和发布仍可拆成四步，用于定向验证或排障：
@@ -293,29 +293,28 @@ npm run release:publish
 构建产物：
 
 ```text
-dist/AI Token League-darwin-arm64.zip
-dist/AI Token League-darwin-x64.zip
-dist/AI Token League-win32-x64.zip
-dist-installer/AI Token League-<version>-mac-arm64-installer.dmg
-dist-installer/AI Token League-<version>-mac-x64-installer.dmg
-dist-installer/AI Token League-<version>-win-x64-installer.exe
+src-tauri/target/release/bundle/macos/AI Token League.app           (macOS app bundle)
+src-tauri/target/release/bundle/dmg/AI Token League_<version>_aarch64.dmg
+src-tauri/target/release/bundle/nsis/AI Token League_<version>_x64-setup.exe
+src-tauri/target/release/bundle/AI Token League.app.tar.gz          (macOS updater package)
+src-tauri/target/release/bundle/AI Token League.app.tar.gz.sig      (minisign signature)
 ```
 
 上传到 OSS 的文件：
 
 ```text
-<prefix>/releases/<version>/AI Token League-darwin-arm64.zip
-<prefix>/releases/<version>/AI Token League-darwin-x64.zip
-<prefix>/releases/<version>/AI Token League-win32-x64.zip
-<prefix>/releases/<version>/AI Token League-<version>-mac-arm64-installer.dmg
-<prefix>/releases/<version>/AI Token League-<version>-mac-x64-installer.dmg
-<prefix>/releases/<version>/AI Token League-<version>-win-x64-installer.exe
+<prefix>/releases/<version>/AI Token League-darwin-arm64.app.tar.gz      (macOS updater package)
+<prefix>/releases/<version>/AI Token League-darwin-arm64.app.tar.gz.sig  (minisign signature)
+<prefix>/releases/<version>/AI Token League-darwin-x64.app.tar.gz        (macOS updater package)
+<prefix>/releases/<version>/AI Token League-darwin-x64.app.tar.gz.sig    (minisign signature)
+<prefix>/releases/<version>/AI Token League-darwin-arm64-installer.dmg
+<prefix>/releases/<version>/AI Token League-darwin-x64-installer.dmg
+<prefix>/releases/<version>/AI Token League-win-x64-setup.exe
 <prefix>/releases/checksums.txt
-<prefix>/releases/latest.yml              (Windows electron-updater)
-<prefix>/releases/latest-mac.yml          (macOS electron-updater)
+<prefix>/releases/tauri-update.json       (Tauri updater manifest)
 <prefix>/releases/installer.json          (安装包元数据)
 <prefix>/releases/<version>/installer.json
-<prefix>/releases/latest.json             (macOS zip updater manifest)
+<prefix>/releases/latest.json             (backward-compatible manifest)
 ```
 
 可调参数（env 变量）：
@@ -460,7 +459,8 @@ cat assets/preset.json
 
 ```bash
 scripts/release.sh --platform mac-arm64 --yes
-npx asar list "dist/AI Token League-darwin-arm64/AI Token League.app/Contents/Resources/app.asar" | rg "^/assets/preset.json$"
+# Verify app bundle exists and launches
+open "src-tauri/target/release/bundle/macos/AI Token League.app"
 ```
 
 ### 3.4 渠道分发示例
@@ -527,7 +527,7 @@ scripts/release.sh --platform all --yes
 
 ```bash
 rm -rf .tmp-preset-home
-HOME="$PWD/.tmp-preset-home" "dist/AI Token League-darwin-arm64/AI Token League.app/Contents/MacOS/AI Token League" --desktop-smoke
+HOME="$PWD/.tmp-preset-home" "src-tauri/target/release/bundle/macos/AI Token League.app/Contents/MacOS/AI Token League"
 cat .tmp-preset-home/.ai-token-league/config.json | jq '.apiBaseUrl, .language, .providerEnabled'
 ```
 

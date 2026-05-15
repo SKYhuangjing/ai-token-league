@@ -33,10 +33,13 @@ env.*
 !env.example
 docker-compose.mysql.yml
 
-# Electron/package caches
+# Electron/package caches (removed, keep for safety)
 out/
 release/
-*.dmg
-*.exe
 *.blockmap
 assets/preset.json
+
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
