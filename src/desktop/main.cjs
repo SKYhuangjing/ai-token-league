@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const nodeCrypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { localDay } = require("../shared/date.cjs");
 
 const background = {
   timer: null,
@@ -386,7 +387,7 @@ function rebuildTrayMenu() {
 
 function buildTrayMenuTemplate() {
   const cached = readUsageCache();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDay();
   const items = [];
   const noop = () => {};
 
