@@ -607,6 +607,25 @@ function testBusinessDayContextEnvOverride() {
   }
 }
 
+function testTrayLocalDayUsesConfiguredTimezone() {
+  const originalAppTimeZone = process.env.APP_TIME_ZONE;
+  const originalTz = process.env.TZ;
+  try {
+    process.env.APP_TIME_ZONE = "Asia/Shanghai";
+    process.env.TZ = "UTC";
+    const instant = "2026-04-29T18:30:00.000Z";
+    assert.equal(localDay(instant), "2026-04-30");
+    assert.equal(new Date(instant).toISOString().slice(0, 10), "2026-04-29");
+
+    delete process.env.APP_TIME_ZONE;
+    process.env.TZ = "UTC";
+    assert.equal(localDay(instant), "2026-04-29");
+  } finally {
+    restoreEnv("APP_TIME_ZONE", originalAppTimeZone);
+    restoreEnv("TZ", originalTz);
+  }
+}
+
 function testStoreBusinessDayScopedCache() {
   let businessDay = "2026-05-10";
   const identity = generateIdentity();
@@ -1724,6 +1743,7 @@ testHmacSha256Hex();
 testBoardAnonymizer();
 testBoardAnonymizerDailyRotation();
 testBusinessDayContextEnvOverride();
+testTrayLocalDayUsesConfiguredTimezone();
 testLoadOrGenerateSalt();
 testLoadNames();
 testBackendUpload(identity, items);
