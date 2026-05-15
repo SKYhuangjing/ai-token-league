@@ -40,6 +40,7 @@ let workdirsRange = "today";
 let sourcesProviderTab = "claude_code_local";
 let latestSyncInfo = "";
 let pricingRefreshPromise = null;
+let mandatoryUpdateActive = false;
 
 function showToast(message) {
   const toast = document.querySelector("#toast");
@@ -296,6 +297,14 @@ $("#download-installer").addEventListener("click", (event) => {
   run(downloadInstaller);
 });
 $("#export-diagnostics").addEventListener("click", () => run(exportDiagnostics));
+$("#enforcement-download-update").addEventListener("click", (event) => {
+  event.stopPropagation();
+  run(downloadUpdate);
+});
+$("#enforcement-download-installer").addEventListener("click", (event) => {
+  event.stopPropagation();
+  run(downloadInstaller);
+});
 
 document.addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-remove-root]");
@@ -668,6 +677,7 @@ async function boot() {
     const bootResults = await Promise.allSettled([initialScan, identityLoad, backgroundLoad, systemLoad]);
     const failed = bootResults.find((result) => result.status === "rejected");
     if (failed) setStatusMessage(failed.reason?.message || t("desktop.renderer.actionFailed"));
+    checkMandatoryFromConfig();
   } else {
     showToast(t("desktop.renderer.openSettings"));
     document.querySelector('[data-section="settings"]').click();
@@ -744,6 +754,23 @@ function shouldCheckUpdateOnCloudOpen() {
   if (hasReadyUpdatePackage(latestUpdateState)) return false;
   const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || latestConfig?.apiConnection?.apiBaseUrl || "");
   return Boolean(apiBaseUrl && latestConfig?.apiConnection?.status === "reachable");
+}
+
+function checkMandatoryFromConfig(config = latestConfig) {
+  const compatibility = config?.apiConnection?.compatibility;
+  if (compatibility?.mandatory && !compatibility?.compatible) {
+    mandatoryUpdateActive = true;
+    const overlay = $("#mandatory-update-overlay");
+    if (overlay) {
+      $("#enforcement-current-version").textContent = latestClientInfo?.clientAppVersion || "";
+      $("#enforcement-required-version").textContent = compatibility?.server?.latestClientVersion || "";
+      overlay.hidden = false;
+    }
+  } else if (mandatoryUpdateActive) {
+    mandatoryUpdateActive = false;
+    const overlay = $("#mandatory-update-overlay");
+    if (overlay) overlay.hidden = true;
+  }
 }
 
 function updateCheckProgress(data) {
@@ -1072,6 +1099,9 @@ async function checkUpdate({ automatic = false } = {}) {
     renderSilentUpdateStatus(latestUpdateState, latestConfig);
     latestConfig = await api.getConfig();
     renderCloudStatus(latestConfig);
+    if (hasUpdateAvailable(latestUpdateState)) {
+      await downloadUpdate({ restart: true });
+    }
   } catch (error) {
     const msg = error.message?.includes("fetch failed")
       ? t("desktop.renderer.apiUnreachable", { error: error.message })
@@ -1083,7 +1113,7 @@ async function checkUpdate({ automatic = false } = {}) {
   }
 }
 
-async function downloadUpdate() {
+async function downloadUpdate({ restart = true } = {}) {
   $("#download-update").hidden = false;
   $("#download-update").disabled = true;
   $("#update-message").textContent = t("desktop.renderer.downloading");
@@ -1091,6 +1121,7 @@ async function downloadUpdate() {
     await api.downloadUpdate();
     latestUpdateState = { ...(latestUpdateState || {}), status: "downloaded" };
     renderUpdateActions(latestUpdateState);
+    if (restart) await installAndRestartUpdate();
   } catch (error) {
     $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
     $("#download-update").disabled = false;
@@ -1664,6 +1695,7 @@ async function loadBackgroundStatus({ config = latestConfig, refreshConfig = fal
   }
   renderSilentUpdateStatus(status.updateCheck, config);
   renderRailStatus();
+  checkMandatoryFromConfig(config);
   if (previousCacheScannedAt && status.cacheScannedAt && status.cacheScannedAt !== previousCacheScannedAt && !scanRunning && !scanPollTimer) {
     const scanStatus = await api.startUsageScan({ force: false });
     applyUsageScanStatus(scanStatus);

@@ -705,8 +705,74 @@ async function runBackgroundRefresh({ reschedule = false } = {}) {
 function backgroundStatus() {
   return {
     running: background.running, lastRunAt: background.lastRunAt, lastMode: background.lastMode,
-    lastResult: background.lastResult, lastError: background.lastError, nextRunAt: background.nextRunAt
+    lastResult: background.lastResult, lastError: background.lastError, nextRunAt: background.nextRunAt,
+    updateCheck: {
+      status: updateCheck.status, lastCheckedAt: updateCheck.lastCheckedAt,
+      lastResult: updateCheck.lastResult, lastError: updateCheck.lastError,
+      nextCheckAt: updateCheck.nextCheckAt, downloadProgress: updateCheck.downloadProgress,
+      readyPackage: updateCheck.readyPackage, update: updateCheck.lastResult
+    }
   };
+}
+
+// ── Auto-update scheduling ─────────────────────────────────────────
+
+async function scheduleUpdateCheck(configOverride = null) {
+  if (updateCheck.timer) clearTimeout(updateCheck.timer);
+  updateCheck.timer = null;
+  updateCheck.nextCheckAt = null;
+  try {
+    const { config } = await modules();
+    const current = configOverride || config.loadConfig();
+    const minutes = Math.max(5, Number(current?.updateCheckIntervalMinutes || 360));
+    armUpdateCheckTimer(minutes * 60 * 1000);
+  } catch (error) { updateCheck.lastError = error.message; }
+}
+
+function armUpdateCheckTimer(delayMs) {
+  if (updateCheck.timer) clearTimeout(updateCheck.timer);
+  updateCheck.nextCheckAt = new Date(Date.now() + delayMs).toISOString();
+  updateCheck.timer = setTimeout(() => {
+    updateCheck.timer = null;
+    updateCheck.nextCheckAt = null;
+    runUpdateCheck({ reschedule: true }).catch(() => {});
+  }, delayMs);
+}
+
+async function runUpdateCheck({ reschedule = false } = {}) {
+  if (updateCheck.running) return;
+  updateCheck.running = true;
+  updateCheck.status = "checking";
+  updateCheck.lastError = null;
+  try {
+    const { config, version } = await modules();
+    const current = config.loadConfig();
+    const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl);
+    if (!apiBaseUrl) {
+      updateCheck.status = "idle";
+      updateCheck.lastResult = { code: "cloud_not_configured", updateAvailable: false };
+      return;
+    }
+    const url = `${apiBaseUrl}/api/tauri/update.json`;
+    const data = await getJson(url, { timeoutMs: 10000 });
+    const comparison = data?.version ? version.compareSemver(APP_VERSION, data.version) : 0;
+    const updateAvailable = comparison < 0;
+    updateCheck.lastResult = {
+      code: updateAvailable ? "update_available" : "up_to_date",
+      updateAvailable,
+      latestVersion: data?.version || APP_VERSION
+    };
+    updateCheck.status = updateAvailable ? "available" : "idle";
+    updateCheck.lastCheckedAt = new Date().toISOString();
+    appendRuntimeLog("update_check_done", { updateAvailable, latestVersion: data?.version });
+  } catch (error) {
+    updateCheck.status = "failed";
+    updateCheck.lastError = error.message;
+    appendRuntimeLog("update_check_failed", { error: error.message });
+  } finally {
+    updateCheck.running = false;
+    if (reschedule) scheduleUpdateCheck().catch(() => {});
+  }
 }
 
 // ── Price map ──────────────────────────────────────────────────────
@@ -869,6 +935,7 @@ const handlers = {
     appendRuntimeLog("config_saved", configLogSummary(next));
     cachedConfig = next;
     scheduleBackgroundRefresh(next);
+    scheduleUpdateCheck(next);
     return sanitizeConfig(next);
   },
 
@@ -883,6 +950,7 @@ const handlers = {
     appendRuntimeLog("config_saved", configLogSummary(next));
     cachedConfig = next;
     scheduleBackgroundRefresh(next);
+    scheduleUpdateCheck(next);
     return sanitizeConfig(next);
   },
 
@@ -901,6 +969,7 @@ const handlers = {
     appendRuntimeLog("identity_imported", { participantId: next.participantId, deviceId: next.deviceId });
     cachedConfig = next;
     scheduleBackgroundRefresh(next);
+    scheduleUpdateCheck(next);
     return sanitizeConfig(next);
   },
 
@@ -920,6 +989,7 @@ const handlers = {
     appendRuntimeLog("config_imported", { participantId: next.participantId, deviceId: next.deviceId });
     cachedConfig = next;
     scheduleBackgroundRefresh(next);
+    scheduleUpdateCheck(next);
     return sanitizeConfig(next);
   },
 
@@ -1071,6 +1141,26 @@ const handlers = {
     return { ok: true, url: `${base}/releases/` };
   },
 
+  "update:enforcement-status": async () => {
+    const { config, version } = await modules();
+    const current = config.loadConfig();
+    const apiBaseUrl = normalizeApiBaseUrl(current?.apiBaseUrl);
+    if (!apiBaseUrl) return { mandatory: false, compatible: true, status: "cloud_not_configured" };
+    try {
+      const query = clientQuery(version, APP_VERSION);
+      const health = await getJson(`${apiBaseUrl}/api/health?${query}`, { timeoutMs: 8000 });
+      return {
+        mandatory: health?.compatibility?.mandatory || false,
+        compatible: health?.compatibility?.compatible !== false,
+        status: health?.compatibility?.status || "compatible",
+        latestVersion: health?.latestClientVersion || "",
+        reason: health?.compatibility?.reason || ""
+      };
+    } catch (error) {
+      return { mandatory: false, compatible: true, status: "check_failed", error: error.message };
+    }
+  },
+
   "app:reset-local-data": async () => {
     const { config } = await modules();
     resetLocalData(config);
@@ -1156,5 +1246,8 @@ process.on("unhandledRejection", (reason) => {
 
 // Preload modules on startup for faster first response
 modules().catch(() => {});
+
+// Schedule first update check 30s after launch (don't block startup)
+setTimeout(() => { scheduleUpdateCheck().catch(() => {}); }, 30_000);
 
 process.stderr.write(`[sidecar] ready (v${APP_VERSION}, ${process.platform}-${process.arch})\n`);

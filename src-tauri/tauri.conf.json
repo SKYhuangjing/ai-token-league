@@ -27,13 +27,13 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUzNzAxQkY2Q0E2NkIxNDcKUldTY092aHd0SXFLMmI0OEtqY2pQd3BQcldkVkVmZUpwSnNqWVhBZ09DMkJaeGRwRHhRdWJlVjgK",
-      "endpoints": ["https://releases.example.com/update.json"]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI5QjdFNkI2RDBGMThGODcKUldTSGovSFF0dWEzdVM4OTJCS21XeS8vbWxncUVGRmdTbHN0YjRrYThhbWlIcVJLbzBIZlVSWlkK",
+      "endpoints": []
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg", "nsis", "appimage"],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",

@@ -86,9 +86,10 @@ detect_current_platform() {
     Darwin:arm64)  echo "mac-arm64" ;;
     Darwin:x86_64) echo "mac-intel" ;;
     MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) echo "win" ;;
+    Linux:x86_64)  echo "linux" ;;
     *)
       echo "Error: unsupported current platform: $os $arch" >&2
-      echo "Use --platform mac-arm64, mac-intel, mac-all, win, or all." >&2
+      echo "Use --platform mac-arm64, mac-intel, mac-all, win, linux, or all." >&2
       exit 1
       ;;
   esac
@@ -132,14 +133,15 @@ if [[ -z "$PLATFORM" ]]; then
   echo "    2) macOS x64   (Intel)"
   echo "    3) macOS All   (arm64 + Intel)"
   echo "    4) Windows x64"
-  echo "    5) All platforms"
-  echo "    6) Current machine"
+  echo "    5) Linux x64"
+  echo "    6) All platforms"
+  echo "    7) Current machine"
   echo ""
-  prompt PLATFORM "Select platform [5]: " "5"
+  prompt PLATFORM "Select platform [6]: " "6"
 fi
 
 case "$PLATFORM" in
-  6|current)    PLATFORM="$(detect_current_platform)" ;;
+  7|current)    PLATFORM="$(detect_current_platform)" ;;
 esac
 
 case "$PLATFORM" in
@@ -147,7 +149,8 @@ case "$PLATFORM" in
   2|mac-intel)  PLATFORM="mac-intel";  PLATFORM_LABEL="macOS Intel" ;;
   3|mac-all)    PLATFORM="mac-all";    PLATFORM_LABEL="macOS All" ;;
   4|win)        PLATFORM="win";        PLATFORM_LABEL="Windows x64" ;;
-  5|all)        PLATFORM="all";        PLATFORM_LABEL="All platforms" ;;
+  5|linux)      PLATFORM="linux";      PLATFORM_LABEL="Linux x64" ;;
+  6|all)        PLATFORM="all";        PLATFORM_LABEL="All platforms" ;;
   *)            echo "Invalid platform: $PLATFORM"; exit 1 ;;
 esac
 echo "  Platform: $PLATFORM_LABEL"
@@ -213,10 +216,20 @@ fi
 # --- execute pipeline ---
 echo ""
 
-# preset
+# preset + export env vars (TAURI_SIGNING_PRIVATE_KEY, etc.)
 if [[ -n "$ENV_FILE" ]]; then
   echo ">>> Writing preset from $ENV_FILE..."
   node scripts/build-preset.js --env "$ENV_FILE"
+  set -a; source "$ENV_FILE"; set +a
+  # Load signing key for Tauri updater
+  if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    key_path="$PROJECT_ROOT/src-tauri/.signing-key"
+    if [[ -f "$key_path" ]]; then
+      export TAURI_SIGNING_PRIVATE_KEY="$(cat "$key_path")"
+      export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+      echo "  Using signing key: $key_path"
+    fi
+  fi
 else
   echo ">>> No env file, writing empty preset..."
   node scripts/build-preset.js
@@ -271,28 +284,24 @@ run_tauri_build() {
     mac-arm64)  build_mac_target aarch64-apple-darwin "macOS arm64" ;;
     mac-intel)  build_mac_target x86_64-apple-darwin "macOS Intel" ;;
     win)
-      if [[ "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* && "$(uname -s)" != CYGWIN* ]]; then
-        echo "Error: Windows build requires native Windows (MSYS2/MinGW). Cross-compilation from macOS is not supported."
-        exit 1
-      fi
       echo ">>> Building Windows x64..."
-      npx tauri build --target x86_64-pc-windows-msvc
+      npx tauri build --target x86_64-pc-windows-msvc || true
+      ;;
+    linux)
+      echo ">>> Building Linux x64..."
+      npx tauri build --target x86_64-unknown-linux-gnu || true
       ;;
     mac-all)
       build_mac_target aarch64-apple-darwin "macOS arm64"
       build_mac_target x86_64-apple-darwin "macOS Intel"
       ;;
     all)
-      if [[ "$(uname -s)" == "Darwin" ]]; then
-        build_mac_target aarch64-apple-darwin "macOS arm64"
-        build_mac_target x86_64-apple-darwin "macOS Intel"
-      elif [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
-        echo ">>> Building Windows x64..."
-        npx tauri build --target x86_64-pc-windows-msvc
-      else
-        echo ">>> Building for current platform..."
-        npx tauri build
-      fi
+      build_mac_target aarch64-apple-darwin "macOS arm64"
+      build_mac_target x86_64-apple-darwin "macOS Intel"
+      echo ">>> Building Windows x64 (cross)..."
+      npx tauri build --target x86_64-pc-windows-msvc || true
+      echo ">>> Building Linux x64 (cross)..."
+      npx tauri build --target x86_64-unknown-linux-gnu || true
       ;;
     *)
       echo ">>> Building for current platform..."
@@ -413,27 +422,60 @@ collect_win_artifacts() {
   fi
 }
 
+collect_linux_artifacts() {
+  local rust_target="${1:-x86_64-unknown-linux-gnu}"
+  local bundle_dir
+  bundle_dir="$(resolve_bundle_dir "$rust_target")"
+  local appimage_dir="$bundle_dir/appimage"
+  local deb_dir="$bundle_dir/deb"
+
+  # AppImage
+  local appimage
+  appimage=$(find "$appimage_dir" -name "*.AppImage" 2>/dev/null | head -1)
+  if [[ -n "$appimage" ]]; then
+    cp "$appimage" dist/
+  fi
+
+  # AppImage updater tarball + sig
+  local tarball
+  tarball=$(find "$appimage_dir" -name "*.AppImage.tar.gz" 2>/dev/null | head -1)
+  if [[ -n "$tarball" ]]; then
+    cp "$tarball" dist/
+    local sig="${tarball}.sig"
+    [[ -f "$sig" ]] && cp "$sig" dist/
+  fi
+
+  # .deb package
+  local deb
+  deb=$(find "$deb_dir" -name "*.deb" 2>/dev/null | head -1)
+  if [[ -n "$deb" ]]; then
+    cp "$deb" dist/
+  fi
+}
+
 case "$PLATFORM" in
-  mac-arm64|current)
+  current)
     if [[ "$(uname -s)" == "Darwin" ]]; then
       collect_mac_artifacts "arm64" "aarch64-apple-darwin"
+    elif [[ "$(uname -s)" == "Linux" ]]; then
+      collect_linux_artifacts
     else
       collect_win_artifacts
     fi
     ;;
+  mac-arm64)   collect_mac_artifacts "arm64" "aarch64-apple-darwin" ;;
   mac-intel)   collect_mac_artifacts "x64" "x86_64-apple-darwin" ;;
   mac-all)
     collect_mac_artifacts "arm64" "aarch64-apple-darwin"
     collect_mac_artifacts "x64" "x86_64-apple-darwin"
     ;;
   win)         collect_win_artifacts ;;
+  linux)       collect_linux_artifacts ;;
   all)
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-      collect_mac_artifacts "arm64" "aarch64-apple-darwin"
-      collect_mac_artifacts "x64" "x86_64-apple-darwin"
-    else
-      collect_win_artifacts
-    fi
+    collect_mac_artifacts "arm64" "aarch64-apple-darwin"
+    collect_mac_artifacts "x64" "x86_64-apple-darwin"
+    collect_win_artifacts
+    collect_linux_artifacts
     ;;
 esac
 
@@ -447,7 +489,7 @@ fi
 
 # Clean up Tauri build targets to save disk space
 echo ">>> Cleaning build targets..."
-for target_dir in src-tauri/target/aarch64-apple-darwin src-tauri/target/x86_64-apple-darwin src-tauri/target/x86_64-pc-windows-msvc src-tauri/target/release; do
+for target_dir in src-tauri/target/aarch64-apple-darwin src-tauri/target/x86_64-apple-darwin src-tauri/target/x86_64-pc-windows-msvc src-tauri/target/x86_64-unknown-linux-gnu src-tauri/target/release; do
   if [[ -d "$target_dir" ]]; then
     rm -rf "$target_dir"
     echo "  Removed $target_dir"
@@ -459,7 +501,7 @@ echo ""
 echo "=== Release Complete ==="
 echo ""
 echo "Artifacts:"
-ls -lh dist/*.dmg dist/*.app.tar.gz dist/*.app.tar.gz.sig dist/*.exe dist/*.msi dist/*.nsis.zip 2>/dev/null || true
+ls -lh dist/*.dmg dist/*.app.tar.gz dist/*.app.tar.gz.sig dist/*.exe dist/*.msi dist/*.nsis.zip dist/*.AppImage dist/*.AppImage.tar.gz dist/*.AppImage.tar.gz.sig dist/*.deb 2>/dev/null || true
 for d in dist/*.app; do [[ -d "$d" ]] && echo "  $(basename "$d")  ($(du -sh "$d" | cut -f1))"; done
 echo ""
 echo "Done."

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/backend/server.js",
     "desktop": "npx tauri dev",
+    "tauri": "tauri",
     "tauri:dev": "npx tauri dev",
     "tauri:build": "npx tauri build",
     "collector": "node src/collector/cli.js",

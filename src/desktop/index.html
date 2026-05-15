@@ -443,6 +443,24 @@
       </section>
     </div>
 
+    <!-- Mandatory update enforcement overlay -->
+    <div id="mandatory-update-overlay" class="modal-backdrop" hidden>
+      <section class="modal-panel mandatory-update-panel" role="dialog" aria-modal="true" aria-labelledby="mandatory-update-title">
+        <div class="section-title">
+          <h3 id="mandatory-update-title" data-i18n="desktop.enforcement.title">Update Required</h3>
+        </div>
+        <p data-i18n="desktop.enforcement.description">Your app version is no longer compatible with the server. Please update to continue.</p>
+        <div class="enforcement-info">
+          <div><span data-i18n="desktop.enforcement.currentVersion">Current version</span>: <strong id="enforcement-current-version"></strong></div>
+          <div><span data-i18n="desktop.enforcement.requiredVersion">Required version</span>: <strong id="enforcement-required-version"></strong></div>
+        </div>
+        <div class="actions modal-actions">
+          <button id="enforcement-download-update" type="button" data-i18n="desktop.app.downloadRestart">Download &amp; Restart</button>
+          <button id="enforcement-download-installer" type="button" data-i18n="desktop.app.downloadInstaller">Download Installer</button>
+        </div>
+      </section>
+    </div>
+
     <script src="./tauri-bridge.js"></script>
     <script type="module" src="./renderer.js"></script>
   </body>

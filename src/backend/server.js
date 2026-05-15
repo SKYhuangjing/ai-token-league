@@ -6,7 +6,18 @@ import { MySqlStore } from "./mysql-store.js";
 import { verifyPayload, sha256Hex } from "../shared/crypto.js";
 import { assertSnapshot } from "../shared/schema.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
-import { releaseConfigFromEnv, releasePublicConfig, buildTauriUpdateJson, validateInstallerMetadata, validateReleaseConfig, validateReleaseManifest } from "../shared/update.js";
+import {
+  buildInstallerMetadataFromGithubRelease,
+  buildTauriUpdateJson,
+  githubReleaseApiUrl,
+  releaseConfigFromEnv,
+  releaseDistributionFromEnv,
+  releasePublicConfig,
+  selectGithubAsset,
+  validateInstallerMetadata,
+  validateReleaseConfig,
+  validateReleaseManifest
+} from "../shared/update.js";
 import { loadOrGenerateSalt, loadNames, BoardAnonymizer } from "./board-anonymizer.js";
 import { currentBusinessDay } from "./day-context.js";
 
@@ -387,8 +398,21 @@ function serverCompatibility(client = {}) {
   });
 }
 
+async function latestClientVersionFromReleaseSource(fallback = SERVER_VERSION) {
+  if (process.env.LATEST_CLIENT_VERSION) return process.env.LATEST_CLIENT_VERSION;
+  const release = releaseDistributionFromEnv();
+  if (release.source !== "github") return fallback;
+  try {
+    const meta = await fetchGithubRelease(release);
+    return String(meta.tag_name || "").replace(/^v/, "") || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function healthBody(client = {}) {
   const latestClientVersion = process.env.LATEST_CLIENT_VERSION || SERVER_VERSION;
+  const release = releaseDistributionFromEnv();
   return {
     ok: true,
     dbType: store.dbType || "json",
@@ -400,7 +424,7 @@ function healthBody(client = {}) {
     minClientEnforce: MIN_CLIENT_ENFORCE,
     compatibility: serverCompatibility(client),
     release: releasePublicConfig({
-      release: releaseConfigFromEnv(),
+      release,
       latestClientVersion,
       compatibility: serverCompatibility(client)
     })
@@ -408,17 +432,11 @@ function healthBody(client = {}) {
 }
 
 async function releaseConfigBody(client = {}) {
-  const latestClientVersion = process.env.LATEST_CLIENT_VERSION || SERVER_VERSION;
-  const config = releaseConfigFromEnv();
+  const latestClientVersion = await latestClientVersionFromReleaseSource();
+  const release = releaseDistributionFromEnv();
   let installers = null;
   try {
-    validateReleaseConfig(config);
-    const installerUrl = `${config.publicBaseUrl}/releases/installer.json`;
-    const response = await fetch(installerUrl, { cache: "no-store" });
-    if (response.ok) {
-      const meta = await response.json();
-      installers = validateInstallerMetadata(meta, { publicBaseUrl: config.publicBaseUrl });
-    }
+    installers = await installerMetadataFromReleaseSource(release);
   } catch {}
   return {
     ok: true,
@@ -430,7 +448,7 @@ async function releaseConfigBody(client = {}) {
     compatibility: serverCompatibility(client),
     release: {
       ...releasePublicConfig({
-        release: config,
+        release,
         latestClientVersion,
         compatibility: serverCompatibility(client)
       }),
@@ -465,10 +483,19 @@ async function releaseLatestBody() {
 }
 
 async function tauriUpdateBody() {
-  const latestResult = await releaseLatestBody();
-  if (!latestResult.ok || !latestResult.manifest) {
-    return { error: latestResult.error || "manifest unavailable" };
+  const release = releaseDistributionFromEnv();
+  if (release.source === "github") {
+    const meta = await fetchGithubRelease(release);
+    const latestJson = selectGithubAsset(meta, (name) => name === "latest.json");
+    if (!latestJson) return { error: "github release latest.json asset missing" };
+    return await fetchReleaseJson(githubAssetTextUrl(latestJson, release), githubHeaders(release, true));
   }
+  if (release.source === "static" || release.source === "self-hosted" || release.source === "self_hosted") {
+    if (!release.tauriUpdateUrl) return { error: "release update url is not configured" };
+    return await fetchReleaseJson(release.tauriUpdateUrl);
+  }
+  const latestResult = await releaseLatestBody();
+  if (!latestResult.ok || !latestResult.manifest) return { error: latestResult.error || "manifest unavailable" };
   const manifest = latestResult.manifest;
   const artifacts = [];
   for (const [platform, artifact] of Object.entries(manifest.platforms)) {
@@ -485,6 +512,53 @@ async function tauriUpdateBody() {
     pubDate: manifest.generatedAt || new Date().toISOString(),
     notes: manifest.releaseNotesUrl || ""
   });
+}
+
+async function installerMetadataFromReleaseSource(release) {
+  if (release.source === "github") {
+    const meta = await fetchGithubRelease(release);
+    const installerMeta = buildInstallerMetadataFromGithubRelease(meta);
+    return validateInstallerMetadata(installerMeta);
+  }
+  if (release.source === "static" || release.source === "self-hosted" || release.source === "self_hosted") {
+    if (!release.installerUrl) return null;
+    const meta = await fetchReleaseJson(release.installerUrl);
+    return validateInstallerMetadata(meta, { publicBaseUrl: release.publicBaseUrl });
+  }
+  const config = releaseConfigFromEnv();
+  validateReleaseConfig(config);
+  const installerUrl = `${config.publicBaseUrl}/releases/installer.json`;
+  const meta = await fetchReleaseJson(installerUrl);
+  return validateInstallerMetadata(meta, { publicBaseUrl: config.publicBaseUrl });
+}
+
+async function fetchGithubRelease(release) {
+  const url = githubReleaseApiUrl({
+    repository: release.githubRepository,
+    tag: release.githubTag,
+    apiBaseUrl: release.githubApiBaseUrl
+  });
+  return fetchReleaseJson(url, githubHeaders(release));
+}
+
+function githubHeaders(release, octetStream = false) {
+  const headers = {
+    accept: octetStream ? "application/octet-stream" : "application/vnd.github+json",
+    "x-github-api-version": "2022-11-28",
+    "user-agent": "ai-token-league-release-service"
+  };
+  if (release.githubToken) headers.authorization = `Bearer ${release.githubToken}`;
+  return headers;
+}
+
+function githubAssetTextUrl(asset, release) {
+  return release.githubToken && asset.url ? asset.url : asset.browser_download_url;
+}
+
+async function fetchReleaseJson(url, headers = {}) {
+  const response = await fetch(url, { cache: "no-store", headers });
+  if (!response.ok) throw new Error(`release request failed: ${response.status}`);
+  return response.json();
 }
 
 function serveStatic(req, res) {

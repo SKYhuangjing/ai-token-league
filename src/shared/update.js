@@ -16,12 +16,42 @@ export function releaseConfigFromEnv(env = process.env) {
   };
 }
 
-export function releasePublicConfig({ release = {}, latestClientVersion = APP_VERSION, compatibility = null } = {}) {
+export function releaseDistributionFromEnv(env = process.env) {
+  const publicBaseUrl = trimSlash(env.RELEASE_PUBLIC_BASE_URL || "");
+  const source = String(env.RELEASE_SOURCE || (env.RELEASE_GITHUB_REPOSITORY ? "github" : "static")).trim().toLowerCase();
+  const githubRepository = String(env.RELEASE_GITHUB_REPOSITORY || env.GITHUB_RELEASE_REPOSITORY || "SKYhuangjing/ai-token-league").trim();
+  const githubApiBaseUrl = trimSlash(env.RELEASE_GITHUB_API_BASE_URL || "https://api.github.com");
+  const githubTag = String(env.RELEASE_GITHUB_TAG || "").trim();
+  const tauriUpdatePath = trimStartSlash(env.RELEASE_TAURI_UPDATE_PATH || "releases/tauri-update.json");
+  const installerPath = trimStartSlash(env.RELEASE_INSTALLER_PATH || "releases/installer.json");
   return {
+    source,
+    publicBaseUrl,
+    githubRepository,
+    githubApiBaseUrl,
+    githubTag,
+    githubToken: String(env.RELEASE_GITHUB_TOKEN || env.GITHUB_TOKEN || "").trim(),
+    tauriUpdatePath,
+    installerPath,
+    tauriUpdateUrl: env.RELEASE_TAURI_UPDATE_URL
+      ? String(env.RELEASE_TAURI_UPDATE_URL).trim()
+      : publicBaseUrl ? `${publicBaseUrl}/${tauriUpdatePath}` : "",
+    installerUrl: env.RELEASE_INSTALLER_URL
+      ? String(env.RELEASE_INSTALLER_URL).trim()
+      : publicBaseUrl ? `${publicBaseUrl}/${installerPath}` : ""
+  };
+}
+
+export function releasePublicConfig({ release = {}, latestClientVersion = APP_VERSION, compatibility = null } = {}) {
+  const result = {
     latestClientVersion,
     publicBaseUrl: String(release.publicBaseUrl || "").trim(),
     compatibility
   };
+  const source = String(release.source || "").trim();
+  if (source) result.source = source;
+  if (source === "github") result.githubRepository = String(release.githubRepository || "").trim();
+  return result;
 }
 
 export function updatePreflightState({ apiBaseUrl = "", release = null, checkedAt = new Date().toISOString(), client = {}, server = null } = {}) {
@@ -73,7 +103,8 @@ export function validateInstallerMetadata(metadata, { publicBaseUrl = "" } = {})
   const platformRequirements = {
     "darwin-arm64": "dmg",
     "darwin-x64": "dmg",
-    "win32-x64": "exe"
+    "win32-x64": "exe",
+    "linux-x64": "AppImage"
   };
   const normalized = {};
   for (const [platform, expectedExt] of Object.entries(platformRequirements)) {
@@ -134,12 +165,13 @@ export async function verifyFileChecksum(file, expectedSha256) {
   return { ok: true, sha256: actual };
 }
 
-export const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64"];
+export const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64", "linux-x64"];
 
 const TAURI_PLATFORM_MAP = {
   "darwin-arm64": "darwin-aarch64",
   "darwin-x64": "darwin-x64",
-  "win32-x64": "windows-x86_64"
+  "win32-x64": "windows-x86_64",
+  "linux-x64": "linux-x86_64"
 };
 
 export function buildTauriUpdateJson({ version, publicBaseUrl, artifacts, pubDate = new Date().toISOString(), notes = "" }) {
@@ -167,8 +199,49 @@ export function buildTauriUpdateJson({ version, publicBaseUrl, artifacts, pubDat
 export const INSTALLER_PLATFORMS = {
   "darwin-arm64": { ext: "dmg", label: "macOS Apple silicon" },
   "darwin-x64": { ext: "dmg", label: "macOS Intel" },
-  "win32-x64": { ext: "exe", label: "Windows x64" }
+  "win32-x64": { ext: "exe", label: "Windows x64" },
+  "linux-x64": { ext: "AppImage", label: "Linux x64" }
 };
+
+export function githubReleaseApiUrl({ repository, tag = "", apiBaseUrl = "https://api.github.com" } = {}) {
+  const repo = String(repository || "").trim();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new Error("github repository must be owner/name");
+  const base = trimSlash(apiBaseUrl || "https://api.github.com");
+  const suffix = tag ? `tags/${encodeURIComponent(tag)}` : "latest";
+  return `${base}/repos/${repo}/releases/${suffix}`;
+}
+
+export function buildInstallerMetadataFromGithubRelease(release, { publicBaseUrl = "" } = {}) {
+  if (!release || typeof release !== "object") throw new Error("github release metadata must be an object");
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const platforms = {};
+  for (const platform of RELEASE_PLATFORMS) {
+    const definition = INSTALLER_PLATFORMS[platform];
+    const asset = findGithubInstallerAsset(assets, platform, definition.ext);
+    if (!asset) continue;
+    const url = githubAssetDownloadUrl(asset);
+    if (publicBaseUrl && !url.startsWith(`${trimSlash(publicBaseUrl)}/`)) continue;
+    const sha256 = githubAssetDigestSha256(asset);
+    if (!sha256) throw new Error(`github release asset ${asset.name} missing sha256 digest`);
+    platforms[platform] = {
+      url,
+      fileName: String(asset.name || ""),
+      sha256,
+      size: Number(asset.size || 0),
+      ext: definition.ext
+    };
+  }
+  return {
+    version: String(release.tag_name || release.name || "").replace(/^v/, ""),
+    generatedAt: release.published_at || release.created_at || new Date().toISOString(),
+    platforms
+  };
+}
+
+export function selectGithubAsset(release, predicate) {
+  const assets = Array.isArray(release?.assets) ? release.assets : [];
+  return assets.find((asset) => predicate(String(asset?.name || ""), asset));
+}
 
 export function buildReleaseManifest({ version, publicBaseUrl, manifestPath, artifacts, installerArtifacts = [], channel = "stable", mandatory = false, releaseNotesUrl = "" }) {
   const normalizedArtifacts = {};
@@ -180,6 +253,7 @@ export function buildReleaseManifest({ version, publicBaseUrl, manifestPath, art
       fileName: artifact.fileName,
       url: artifact.url,
       sha256: artifact.sha256,
+      signature: artifact.signature || "",
       size: artifact.size,
       mandatory: Boolean(artifact.mandatory ?? mandatory)
     };
@@ -270,4 +344,26 @@ function trimSlash(value) {
 
 function trimStartSlash(value) {
   return String(value || "").trim().replace(/^\/+/, "");
+}
+
+function findGithubInstallerAsset(assets, platform, ext) {
+  return assets.find((asset) => {
+    const name = String(asset?.name || "");
+    if (!name.endsWith(`.${ext}`)) return false;
+    if (platform === "darwin-arm64") return /(aarch64|arm64)/i.test(name);
+    if (platform === "darwin-x64") return /(x64|x86_64|intel)/i.test(name);
+    if (platform === "win32-x64") return /(setup|installer)?\.exe$/i.test(name) && /(x64|x86_64|windows|win32)/i.test(name);
+    if (platform === "linux-x64") return /(x64|x86_64|amd64|linux)/i.test(name);
+    return false;
+  });
+}
+
+function githubAssetDownloadUrl(asset) {
+  return String(asset?.browser_download_url || asset?.url || "").trim();
+}
+
+function githubAssetDigestSha256(asset) {
+  const digest = String(asset?.digest || "").trim();
+  const match = digest.match(/^sha256:([a-f0-9]{64})$/i);
+  return match ? match[1].toLowerCase() : "";
 }

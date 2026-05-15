@@ -15,6 +15,8 @@
  *
  * What it updates:
  *   - package.json "version" and/or "productBaseline"
+ *   - src-tauri/Cargo.toml: version (version mode only)
+ *   - src-tauri/tauri.conf.json: version (version mode only)
  *   - README.md + README.en.md: version number + installer filenames (version mode only)
  *   - CLAUDE.md: product baseline + client version + release date
  *   - AGENTS.md: product baseline + client version + release date
@@ -126,6 +128,26 @@ function bump({ version, baseline, date }) {
   if (pkgUpdated !== pkgContent) {
     write("package.json", pkgUpdated);
     changes.push("package.json");
+  }
+
+  // 1b. Cargo.toml — update version (Tauri build reads this)
+  if (versionChanged) {
+    const cargoContent = read("src-tauri/Cargo.toml");
+    const cargoUpdated = cargoContent.replace(`version = "${oldVersion}"`, `version = "${version}"`);
+    if (cargoUpdated !== cargoContent) {
+      write("src-tauri/Cargo.toml", cargoUpdated);
+      changes.push("src-tauri/Cargo.toml");
+    }
+  }
+
+  // 1c. tauri.conf.json — update version (Tauri updater reads this)
+  if (versionChanged) {
+    const tauriContent = read("src-tauri/tauri.conf.json");
+    const tauriUpdated = tauriContent.replace(`"version": "${oldVersion}"`, `"version": "${version}"`);
+    if (tauriUpdated !== tauriContent) {
+      write("src-tauri/tauri.conf.json", tauriUpdated);
+      changes.push("src-tauri/tauri.conf.json");
+    }
   }
 
   // 2. README.md + README.en.md — only if version changed

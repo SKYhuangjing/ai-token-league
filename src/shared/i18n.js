@@ -310,6 +310,12 @@ const translations = {
     "desktop.reset.cloudClearing": "正在清除云端数据...",
     "desktop.reset.cloudFailed": "清除云端数据失败: {error}",
 
+    // 桌面端 - 强制更新
+    "desktop.enforcement.title": "需要更新",
+    "desktop.enforcement.description": "当前版本不再兼容服务器。请更新以继续使用。",
+    "desktop.enforcement.currentVersion": "当前版本",
+    "desktop.enforcement.requiredVersion": "要求版本",
+
     // 桌面端 - 向导
     "desktop.wizard.welcome": "欢迎使用 AI Token League",
     "desktop.wizard.privacyTitle": "您的数据保持私密",
@@ -928,6 +934,12 @@ const translations = {
     "desktop.reset.localAndCloud": "Local + Cloud",
     "desktop.reset.cloudClearing": "Clearing cloud data...",
     "desktop.reset.cloudFailed": "Failed to clear cloud data: {error}",
+
+    // Desktop - Enforcement
+    "desktop.enforcement.title": "Update Required",
+    "desktop.enforcement.description": "Your app version is no longer compatible with the server. Please update to continue.",
+    "desktop.enforcement.currentVersion": "Current version",
+    "desktop.enforcement.requiredVersion": "Required version",
 
     // Desktop - Wizard
     "desktop.wizard.welcome": "Welcome to AI Token League",

@@ -1,8 +1,8 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
@@ -50,6 +50,19 @@ struct SidecarState {
     #[allow(dead_code)]
     event_tx: broadcast::Sender<SidecarEvent>,
     tray_actions: Arc<Mutex<HashMap<String, TrayMenuMeta>>>,
+    child: Arc<std::sync::Mutex<Option<Child>>>,
+    dead: Arc<AtomicBool>,
+}
+
+impl Drop for SidecarState {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            if let Some(ref mut c) = *child {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        }
+    }
 }
 
 // ── Sidecar communication ──────────────────────────────────────────
@@ -59,6 +72,10 @@ async fn call_sidecar(
     command: &str,
     args: Value,
 ) -> Result<Value, String> {
+    if state.dead.load(Ordering::Relaxed) {
+        return Err("sidecar process exited".to_string());
+    }
+
     let id = format!("req_{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
     let request = SidecarRequest {
         id: id.clone(),
@@ -95,11 +112,24 @@ async fn call_sidecar(
 fn resolve_node_path() -> String {
     // Prefer stable absolute locations when launched from Finder or a packaged app.
     // This avoids paying login-shell startup cost on the common macOS paths.
-    let candidates = [
-        "/opt/homebrew/bin/node",
-        "/usr/local/bin/node",
-        "/usr/bin/node",
-    ];
+    let candidates = if cfg!(target_os = "windows") {
+        vec![
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Program Files (x86)\\nodejs\\node.exe",
+        ]
+    } else if cfg!(target_os = "linux") {
+        vec![
+            "/usr/bin/node",
+            "/usr/local/bin/node",
+            "/snap/bin/node",
+        ]
+    } else {
+        vec![
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/usr/bin/node",
+        ]
+    };
     for c in &candidates {
         if std::path::Path::new(c).exists() {
             return c.to_string();
@@ -169,6 +199,9 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
     let stdout = child.stdout.take().ok_or("No stdout")?;
     let stderr = child.stderr.take().ok_or("No stderr")?;
 
+    let child_handle = Arc::new(std::sync::Mutex::new(Some(child)));
+    let dead = Arc::new(AtomicBool::new(false));
+
     // Forward sidecar stderr to process stderr for debugging
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
@@ -185,7 +218,7 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
     let (event_tx, _) = broadcast::channel::<SidecarEvent>(64);
     let (req_tx, mut req_rx) = mpsc::channel::<SidecarRequest>(128);
 
-    // Writer thread
+    // Writer thread — exits when sidecar stdin closes or channel drops
     thread::spawn(move || {
         let mut stdin = stdin;
         while let Some(request) = req_rx.blocking_recv() {
@@ -197,10 +230,11 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
         }
     });
 
-    // Reader thread
+    // Reader thread — when it exits, the sidecar is dead
     let pending_reader = pending.clone();
     let event_tx_reader = event_tx.clone();
     let app_reader = app.clone();
+    let dead_reader = dead.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
@@ -242,6 +276,18 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
                 }
             }
         }
+        // Sidecar process exited — mark as dead and fail pending requests
+        dead_reader.store(true, Ordering::Relaxed);
+        let mut map = pending_reader.blocking_lock();
+        for (_, tx) in map.drain() {
+            let _ = tx.send(SidecarResponse {
+                id: String::new(),
+                ok: false,
+                data: Value::Null,
+                error: "sidecar process exited".to_string(),
+            });
+        }
+        eprintln!("[sidecar] process exited unexpectedly");
     });
 
     Ok(SidecarState {
@@ -249,6 +295,8 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
         pending,
         event_tx,
         tray_actions: Arc::new(Mutex::new(HashMap::new())),
+        child: child_handle,
+        dead,
     })
 }
 
@@ -366,8 +414,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     "visit-cloud" => {
                         if !url.is_empty() {
-                            use tauri_plugin_shell::ShellExt;
-                            let _ = app_handle.shell().open(&url, None);
+                            let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
                         }
                     }
                     "quit" => {
@@ -658,9 +705,8 @@ async fn install_and_restart(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
-    use tauri_plugin_shell::ShellExt;
-    app.shell().open(&url, None).map_err(|e| e.to_string())
+async fn open_url(_app: AppHandle, url: String) -> Result<(), String> {
+    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -728,7 +774,26 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // Pre-check: ensure Node.js is available before spawning sidecar
+            let node_path = resolve_node_path();
+            if Command::new(&node_path)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_err()
+            {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                app.dialog()
+                    .message("AI Token League requires Node.js to run.\n\nPlease install Node.js 18+ from https://nodejs.org and restart the application.")
+                    .title("Node.js Required")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+                std::process::exit(1);
+            }
+
             let state = spawn_sidecar(app.handle().clone())?;
             app.manage(state);
 

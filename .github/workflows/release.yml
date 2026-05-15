@@ -1,0 +1,210 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.6.3"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - id: meta
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          VERSION="${TAG#v}"
+          PACKAGE_VERSION="$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")"
+          TAURI_VERSION="$(node -e "console.log(JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version)")"
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          echo "tag=$TAG version=$VERSION package=$PACKAGE_VERSION tauri=$TAURI_VERSION cargo=$CARGO_VERSION"
+          if [[ "$VERSION" != "$PACKAGE_VERSION" || "$VERSION" != "$TAURI_VERSION" || "$VERSION" != "$CARGO_VERSION" ]]; then
+            echo "Version mismatch: tag=$TAG package=$PACKAGE_VERSION tauri=$TAURI_VERSION cargo=$CARGO_VERSION" >&2
+            exit 1
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+      - run: npm test
+      - run: |
+          node --check src/desktop/sidecar.cjs
+          node --check src/desktop/renderer.js
+          node --check src/shared/update.js
+          node --check scripts/build-github-tauri-update-json.js
+
+  build:
+    needs:
+      - validate
+      - prepare-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+            native_cli_package: ""
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin"
+            native_cli_package: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+            native_cli_package: "@tauri-apps/cli-win32-x64-msvc@2.11.1"
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ""
+            native_cli_package: "@tauri-apps/cli-linux-x64-gnu@2.11.1"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.os, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Install platform Tauri CLI native package
+        if: matrix.native_cli_package != ''
+        run: npm install --no-save ${{ matrix.native_cli_package }}
+      - run: npm run preset
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ needs.validate.outputs.tag }}
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
+          releaseName: AI Token League ${{ needs.validate.outputs.version }}
+          releaseBody: |
+            Automated release for AI Token League ${{ needs.validate.outputs.version }}.
+
+            Assets include desktop installers and signed Tauri updater packages.
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: false
+          updaterJsonPreferNsis: true
+          assetNamePattern: "AI Token League_[version]_[platform]_[arch][setup][ext]"
+          args: ${{ matrix.args }}
+
+  prepare-release:
+    needs: validate
+    runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId' 2>/dev/null)"; then
+            gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | while read -r asset_name; do
+              [[ -n "$asset_name" ]] && gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes >/dev/null
+            done
+          else
+            target_commit="$(git rev-parse HEAD)"
+            release_json="$(
+              gh api -X POST "repos/$REPOSITORY/releases" \
+                -f tag_name="$RELEASE_TAG" \
+                -f target_commitish="$target_commit" \
+                -f name="AI Token League $RELEASE_VERSION" \
+                -f body="Automated release for AI Token League $RELEASE_VERSION." \
+                -F draft=true \
+                -F prerelease=false
+            )"
+            release_id="$(node -e 'const fs=require("fs"); const release=JSON.parse(fs.readFileSync(0,"utf8")); console.log(release.id)' <<< "$release_json")"
+          fi
+          if [[ -z "$release_id" || "$release_id" == "null" ]]; then
+            echo "Failed to resolve release id for $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh api -X PATCH "repos/$REPOSITORY/releases/$release_id" \
+            -F prerelease=false \
+            -f name="AI Token League $RELEASE_VERSION" \
+            -f body="Automated release for AI Token League $RELEASE_VERSION."
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs:
+      - validate
+      - prepare-release
+      - build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Build merged updater JSON
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/build-github-tauri-update-json.js \
+            --repo "${{ github.repository }}" \
+            --tag "${{ needs.validate.outputs.tag }}" \
+            --output latest.json
+      - name: Upload merged updater JSON
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.validate.outputs.tag }}" latest.json --clobber
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ needs.validate.outputs.tag }}" --json assets --jq '.assets[].name' | tee assets.txt
+          grep -q '^latest.json$' assets.txt
+          grep -q '\.app\.tar\.gz$' assets.txt
+          grep -q -- '-setup\.exe$' assets.txt
+          grep -q '\.dmg$' assets.txt
+          grep -q '\.AppImage$' assets.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ needs.validate.outputs.tag }}" --draft=false --latest

@@ -41,14 +41,16 @@ if (!dryRun && (!secrets.accessKeyId || !secrets.accessKeySecret || secrets.acce
 const UPDATER_PLATFORMS = {
   "darwin-aarch64": { updaterExt: "app.tar.gz", installerExt: "dmg", label: "macOS arm64" },
   "darwin-x64":     { updaterExt: "app.tar.gz", installerExt: "dmg", label: "macOS Intel" },
-  "windows-x86_64": { updaterExt: "nsis.zip",   installerExt: "exe", label: "Windows x64" }
+  "windows-x86_64": { updaterExt: "nsis.zip",   installerExt: "exe", label: "Windows x64" },
+  "linux-x86_64":   { updaterExt: "appimage.tar.gz", installerExt: "AppImage", label: "Linux x64" }
 };
 
 // Map release platform names to Tauri updater platform names
 const PLATFORM_TO_UPDATER = {
   "darwin-arm64": "darwin-aarch64",
   "darwin-x64": "darwin-x64",
-  "win32-x64": "windows-x86_64"
+  "win32-x64": "windows-x86_64",
+  "linux-x64": "linux-x86_64"
 };
 
 // Scan dist/ for updater artifacts (.app.tar.gz, .nsis.zip)
@@ -64,6 +66,9 @@ for (const [tauriPlatform, info] of Object.entries(UPDATER_PLATFORMS)) {
       return tauriPlatform === "darwin-aarch64"
         ? f.includes("arm64") || f.includes("aarch64")
         : f.includes("x64") || f.includes("intel");
+    }
+    if (info.updaterExt === "appimage.tar.gz") {
+      return f.includes("amd64") || f.includes("x86_64");
     }
     return true; // Windows nsis.zip
   });
@@ -94,6 +99,9 @@ for (const [releasePlatform, tauriPlatform] of Object.entries(PLATFORM_TO_UPDATE
       return tauriPlatform === "darwin-aarch64"
         ? f.includes("aarch64") || f.includes("arm64")
         : f.includes("x64") || f.includes("intel");
+    }
+    if (info.installerExt === "AppImage") {
+      return f.includes("amd64") || f.includes("x86_64");
     }
     return true;
   });
@@ -128,6 +136,11 @@ const checksumLines = [
 ];
 const checksums = checksumLines.join("\n") + "\n";
 const checksumsKey = joinKey(config.prefix, "releases", version, "checksums.txt");
+const expectedArtifactCount = Object.keys(UPDATER_PLATFORMS).length * 2;
+const actualArtifactCount = updaterArtifacts.length + installerArtifacts.length;
+if (actualArtifactCount > 0 && actualArtifactCount < expectedArtifactCount) {
+  console.warn(`Warning: partial build — ${actualArtifactCount}/${expectedArtifactCount} artifacts (use --allow-missing-installers to suppress)`);
+}
 
 // Build installer.json for download page
 const installerMeta = { version, generatedAt: new Date().toISOString(), platforms: {} };

@@ -1355,6 +1355,9 @@ label {
 .modal-panel textarea { min-height: 150px; resize: vertical; }
 .modal-actions { justify-content: flex-end; }
 
+.mandatory-update-panel { max-width: 480px; text-align: center; }
+.enforcement-info { display: flex; gap: 24px; justify-content: center; margin: 16px 0; }
+
 .form-error {
   min-height: 18px;
   margin: 8px 0 0;

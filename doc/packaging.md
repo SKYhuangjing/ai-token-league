@@ -22,7 +22,7 @@ bash scripts/release.sh
 The script guides you through:
 
 1. **Version** — keep current or bump to a new version
-2. **Platform** — macOS arm64, macOS Intel, macOS All, Windows, or All
+2. **Platform** — macOS arm64, macOS Intel, macOS All, Windows, Linux, or All
 3. **Env file** — skip presets or load from an env file (for `PRESET_*` vars and OSS credentials)
 4. **Upload** — whether to upload artifacts to OSS
 5. **Confirmation** — review selections before executing
@@ -37,7 +37,7 @@ bash scripts/release.sh --platform mac-arm64 --env env.local --upload --yes
 | Flag | Description |
 |------|-------------|
 | `--version VER` | Version to release (default: current from package.json) |
-| `--platform PLAT` | `current` / `mac-arm64` / `mac-intel` / `mac-all` / `win` / `all` |
+| `--platform PLAT` | `current` / `mac-arm64` / `mac-intel` / `mac-all` / `win` / `linux` / `all` |
 | `--env FILE` | Env file for presets and upload credentials |
 | `--upload` | Upload artifacts to OSS; automatically builds all platforms |
 | `--yes` | Skip confirmation prompt |
@@ -68,6 +68,7 @@ npx tauri build                            # current platform
 npx tauri build --target aarch64-apple-darwin  # macOS arm64
 npx tauri build --target x86_64-apple-darwin   # macOS Intel
 npx tauri build --target x86_64-pc-windows-msvc # Windows x64
+npx tauri build --target x86_64-unknown-linux-gnu # Linux x64
 ```
 
 ### Expected build artifacts
@@ -84,7 +85,48 @@ Tauri produces these artifacts in `src-tauri/target/release/bundle/`:
 - `msi/AI Token League_<version>_x64_en-US.msi` — MSI installer
 - `nsis/AI Token League_<version>_x64-setup.nsis.zip` + `.sig` — updater package
 
+**Linux:**
+- `appimage/AI Token League_<version>_amd64.AppImage` — AppImage
+- `deb/ai-token-league_<version>_amd64.deb` — Debian package
+- `appimage/AI Token League_<version>_amd64.AppImage.tar.gz` + `.sig` — updater package
+
 ## Release Manifest Dry Run
+
+GitHub Release is the primary release path. The client does not read GitHub directly; it calls the app server at `/api/tauri/update.json`, and the server reads either GitHub Release assets or self-hosted metadata based on env.
+
+Required GitHub Actions secrets:
+
+```text
+TAURI_SIGNING_PRIVATE_KEY=<tauri updater private key>
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<optional password>
+```
+
+Release by pushing a version tag that matches `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`:
+
+```bash
+git tag v0.6.3
+git push github v0.6.3
+```
+
+The workflow builds macOS arm64, macOS Intel, Windows x64, and Linux x64; uploads installers plus signed updater packages; generates a merged `latest.json`; then publishes the GitHub Release.
+
+Configure the app server to distribute from GitHub:
+
+```text
+RELEASE_SOURCE=github
+RELEASE_GITHUB_REPOSITORY=SKYhuangjing/ai-token-league
+RELEASE_GITHUB_TAG=          # optional pin; empty means latest release
+RELEASE_GITHUB_TOKEN=        # optional for private repo or higher API rate limit
+```
+
+For self-hosted distribution, keep the same client endpoint and point the server at hosted metadata:
+
+```text
+RELEASE_SOURCE=static
+RELEASE_TAURI_UPDATE_URL=https://example.com/releases/latest.json
+RELEASE_INSTALLER_URL=https://example.com/releases/installer.json
+RELEASE_PUBLIC_BASE_URL=https://example.com
+```
 
 Release resource configuration is read from env. `scripts/publish-release.js` requires an explicit `--env` flag or `RELEASE_*` environment variables; it does not default to `env.local`.
 
@@ -94,8 +136,8 @@ node scripts/publish-release.js --env env.local --dry-run
 
 Expected behavior:
 
-- Updater artifacts (`.app.tar.gz` / `.nsis.zip`) are collected from `dist/`.
-- Installer artifacts (`.dmg` / `.exe`) are collected from `dist/`.
+- Updater artifacts (`.app.tar.gz` / `.nsis.zip` / `.AppImage.tar.gz`) are collected from `dist/`.
+- Installer artifacts (`.dmg` / `.exe` / `.AppImage`) are collected from `dist/`.
 - `checksums.txt` is generated.
 - `tauri-update.json` is generated for the Tauri updater plugin.
 - `installer.json` is generated for the download page.
@@ -161,4 +203,13 @@ src-tauri/target/release/bundle/nsis/AI Token League_<version>_x64-setup.exe
 src-tauri/target/release/bundle/msi/AI Token League_<version>_x64_en-US.msi
 ```
 
+The Linux build produces:
+
+```text
+src-tauri/target/release/bundle/appimage/AI Token League_<version>_amd64.AppImage
+src-tauri/target/release/bundle/deb/ai-token-league_<version>_amd64.deb
+```
+
 Windows UI/E2E has been validated by external users on real Windows machines; repeat this check after packaging or updater changes.
+
+Linux builds must run natively on Linux (same constraint as Windows). Cross-compilation from macOS is not supported.

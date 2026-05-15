@@ -88,6 +88,7 @@
     downloadUpdate:           () => invoke("download_update"),
     installAndRestartUpdate:  () => invoke("install_and_restart"),
     downloadInstaller:        fwd("update:download-installer"),
+    enforcementStatus:        fwd("update:enforcement-status"),
 
     // ── Reset ───────────────────────────────────────────────────
     resetLocalData:      fwd("app:reset-local-data"),

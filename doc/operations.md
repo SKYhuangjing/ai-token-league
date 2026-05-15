@@ -375,8 +375,27 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/release/config` | 返回 release 配置、兼容信息和安装包元数据 |
+| `GET /api/tauri/update.json` | Tauri 客户端唯一更新入口；服务端从 GitHub Release 或自部署 metadata 获取并返回 updater JSON |
 | `GET /api/release/latest` | 返回 macOS zip updater 的 release manifest |
 | `GET /api/health` | 返回完整健康信息（含版本和兼容状态） |
+
+GitHub Release 分发配置：
+
+```text
+RELEASE_SOURCE=github
+RELEASE_GITHUB_REPOSITORY=SKYhuangjing/ai-token-league
+RELEASE_GITHUB_TAG=          # 留空使用 latest release；填写 v0.6.3 可固定版本
+RELEASE_GITHUB_TOKEN=        # 可选，private repo 或规避匿名 API rate limit 时使用
+```
+
+自部署分发配置：
+
+```text
+RELEASE_SOURCE=static
+RELEASE_TAURI_UPDATE_URL=https://download.example.com/releases/latest.json
+RELEASE_INSTALLER_URL=https://download.example.com/releases/installer.json
+RELEASE_PUBLIC_BASE_URL=https://download.example.com
+```
 
 ### 2.5 下载通道验证
 
@@ -384,12 +403,14 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 
 ```bash
 curl -s http://127.0.0.1:8787/api/release/config | jq '.ok, .latestClientVersion, .release.publicBaseUrl, .release.installers'
+curl -s http://127.0.0.1:8787/api/tauri/update.json | jq '.version, .platforms'
 curl -s http://127.0.0.1:8787/api/release/latest | jq '.ok, .manifest.version'
 ```
 
 期望：
-- `/api/release/config` 返回 `release.installers`，且包含 `darwin-arm64`、`darwin-x64`、`win32-x64` 三个平台。
+- `/api/release/config` 返回 `release.installers`，且包含 `darwin-arm64`、`darwin-x64`、`win32-x64`、`linux-x64` 四个平台。
 - 每个平台都有 `url`、`fileName`、`sha256`、`size`、`ext`。
+- `/api/tauri/update.json` 返回 Tauri updater JSON，包含 `darwin-aarch64`、`darwin-x64`、`windows-x86_64`、`linux-x86_64` 平台和 signature。
 - `/api/release/latest` 仅供 macOS zip updater 使用；不要删除，直到所有活跃客户端迁移到新的更新路径。
 - Web 首页下载面板能展示最新版本、平台选择和下载按钮。
 

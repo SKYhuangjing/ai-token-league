@@ -10,7 +10,17 @@ import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELD
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, SNAPSHOT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
 import { groupByBucket } from "../src/collector/core.js";
 import { loadSyncManifest, saveSyncManifest, clearSyncManifest } from "../src/collector/config.js";
-import { releasePublicConfig, updatePreflightState, validateInstallerMetadata, validateReleaseConfig, verifyFileChecksum } from "../src/shared/update.js";
+import {
+  buildInstallerMetadataFromGithubRelease,
+  buildTauriUpdateJson,
+  githubReleaseApiUrl,
+  releaseDistributionFromEnv,
+  releasePublicConfig,
+  updatePreflightState,
+  validateInstallerMetadata,
+  validateReleaseConfig,
+  verifyFileChecksum
+} from "../src/shared/update.js";
 import { parseLatestChangelog } from "../src/shared/changelog.js";
 import { scanUsage } from "../src/collector/core.js";
 import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, migrateLegacyCursorProviderEnabled, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
@@ -1269,6 +1279,7 @@ async function testVersionCompatibilityAndManifest() {
   assert.equal(updatePreflightState({ apiBaseUrl: "https://api.example", release: { publicBaseUrl: "https://cdn.example" } }), null);
   const publicRelease = releasePublicConfig({
     release: {
+      source: "static",
       endpoint: "oss-cn-shanghai.aliyuncs.com",
       bucket: "private-bucket",
       prefix: "private-prefix",
@@ -1282,6 +1293,23 @@ async function testVersionCompatibilityAndManifest() {
   assert.equal(Object.hasOwn(publicRelease, "bucket"), false);
   assert.equal(Object.hasOwn(publicRelease, "prefix"), false);
   assert.equal(Object.hasOwn(publicRelease, "manifestUrl"), false);
+  assert.equal(publicRelease.source, "static");
+
+  const githubRelease = releaseDistributionFromEnv({
+    RELEASE_SOURCE: "github",
+    RELEASE_GITHUB_REPOSITORY: "SKYhuangjing/ai-token-league",
+    RELEASE_GITHUB_TAG: "v0.6.3"
+  });
+  assert.equal(githubRelease.source, "github");
+  assert.equal(githubRelease.githubRepository, "SKYhuangjing/ai-token-league");
+  assert.equal(githubRelease.githubTag, "v0.6.3");
+  assert.equal(githubReleaseApiUrl({
+    repository: "SKYhuangjing/ai-token-league",
+    tag: "v0.6.3"
+  }), "https://api.github.com/repos/SKYhuangjing/ai-token-league/releases/tags/v0.6.3");
+  assert.equal(githubReleaseApiUrl({
+    repository: "SKYhuangjing/ai-token-league"
+  }), "https://api.github.com/repos/SKYhuangjing/ai-token-league/releases/latest");
 
   const installerMetadata = {
     version: APP_VERSION,
@@ -1306,6 +1334,13 @@ async function testVersionCompatibilityAndManifest() {
         sha256: expectedSha,
         size: 202,
         ext: "exe"
+      },
+      "linux-x64": {
+        url: `https://cdn.example/releases/${APP_VERSION}/AI%20Token%20League-${APP_VERSION}-linux-x64.AppImage`,
+        fileName: `AI Token League-${APP_VERSION}-linux-x64.AppImage`,
+        sha256: expectedSha,
+        size: 203,
+        ext: "AppImage"
       }
     }
   };
@@ -1317,7 +1352,7 @@ async function testVersionCompatibilityAndManifest() {
       "darwin-arm64": installerMetadata.platforms["darwin-arm64"],
       "darwin-x64": installerMetadata.platforms["darwin-x64"]
     }
-  }, { publicBaseUrl: "https://cdn.example" }), /installer win32-x64 missing/);
+  }, { publicBaseUrl: "https://cdn.example" }), /installer (win32-x64|linux-x64) missing/);
   assert.throws(() => validateInstallerMetadata({
     platforms: {
       ...installerMetadata.platforms,
@@ -1330,6 +1365,40 @@ async function testVersionCompatibilityAndManifest() {
       "win32-x64": { ...installerMetadata.platforms["win32-x64"], fileName: "../installer.exe" }
     }
   }, { publicBaseUrl: "https://cdn.example" }), /fileName must be basename/);
+
+  const ghAssetBase = "https://github.com/SKYhuangjing/ai-token-league/releases/download/v0.6.3";
+  const githubInstallerMeta = buildInstallerMetadataFromGithubRelease({
+    tag_name: "v0.6.3",
+    assets: [
+      githubAsset("AI Token League_0.6.3_macos_aarch64.dmg", 200, `${ghAssetBase}/mac-arm64.dmg`, expectedSha),
+      githubAsset("AI Token League_0.6.3_macos_x64.dmg", 201, `${ghAssetBase}/mac-x64.dmg`, expectedSha),
+      githubAsset("AI Token League_0.6.3_windows_x64-setup.exe", 202, `${ghAssetBase}/win.exe`, expectedSha),
+      githubAsset("AI Token League_0.6.3_linux_amd64.AppImage", 203, `${ghAssetBase}/linux.AppImage`, expectedSha)
+    ]
+  });
+  assert.equal(validateInstallerMetadata(githubInstallerMeta)["win32-x64"].fileName, "AI Token League_0.6.3_windows_x64-setup.exe");
+
+  const tauriJson = buildTauriUpdateJson({
+    version: "0.6.3",
+    publicBaseUrl: "https://github.com/SKYhuangjing/ai-token-league",
+    artifacts: [
+      { platform: "darwin-arm64", url: `${ghAssetBase}/mac-arm64.app.tar.gz`, signature: "sig-a" },
+      { platform: "darwin-x64", url: `${ghAssetBase}/mac-x64.app.tar.gz`, signature: "sig-b" },
+      { platform: "win32-x64", url: `${ghAssetBase}/win.nsis.zip`, signature: "sig-c" },
+      { platform: "linux-x64", url: `${ghAssetBase}/linux.AppImage.tar.gz`, signature: "sig-d" }
+    ]
+  });
+  assert.equal(tauriJson.platforms["darwin-aarch64"].signature, "sig-a");
+  assert.equal(tauriJson.platforms["windows-x86_64"].url, `${ghAssetBase}/win.nsis.zip`);
+}
+
+function githubAsset(name, size, url, sha256) {
+  return {
+    name,
+    size,
+    browser_download_url: url,
+    digest: `sha256:${sha256}`
+  };
 }
 
 function testProductBaseline() {
