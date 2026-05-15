@@ -25,7 +25,6 @@ import { runVerification } from "../scripts/verify-collector-ccusage.js";
 
 const require = createRequire(import.meta.url);
 const initSqlJs = require("sql.js/dist/sql-asm.js");
-const { localDay: trayLocalDay } = require("../src/shared/date.cjs");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
 process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -614,12 +613,12 @@ function testTrayLocalDayUsesConfiguredTimezone() {
     process.env.APP_TIME_ZONE = "Asia/Shanghai";
     process.env.TZ = "UTC";
     const instant = "2026-04-29T18:30:00.000Z";
-    assert.equal(trayLocalDay(instant), "2026-04-30");
+    assert.equal(localDay(instant), "2026-04-30");
     assert.equal(new Date(instant).toISOString().slice(0, 10), "2026-04-29");
 
     delete process.env.APP_TIME_ZONE;
     process.env.TZ = "UTC";
-    assert.equal(trayLocalDay(instant), "2026-04-29");
+    assert.equal(localDay(instant), "2026-04-29");
   } finally {
     restoreEnv("APP_TIME_ZONE", originalAppTimeZone);
     restoreEnv("TZ", originalTz);

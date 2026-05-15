@@ -5,7 +5,6 @@ const fs = require("node:fs");
 const nodeCrypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
-const { localDay } = require("../shared/date.cjs");
 
 const background = {
   timer: null,
@@ -68,6 +67,7 @@ let trayMenuTemplate = null;
 let cachedPriceMap = null;
 let cachedDisplayModule = null;
 let cachedPricingModule = null;
+let cachedDateModule = null;
 let cachedIdentity = null;
 let isQuitting = false;
 
@@ -243,6 +243,7 @@ async function modules() {
     schema: await import(pathToFileUrl(path.join(root, "src/shared/schema.js"))),
     update: await import(pathToFileUrl(path.join(root, "src/shared/update.js"))),
     version: await import(pathToFileUrl(path.join(root, "src/shared/version.js"))),
+    date: await import(pathToFileUrl(path.join(root, "src/shared/date.js"))),
     preset: await import(pathToFileUrl(path.join(root, "src/shared/preset.js"))),
     pricing: await import(pathToFileUrl(path.join(root, "src/shared/pricing.js"))),
     display: await import(pathToFileUrl(path.join(root, "src/shared/display.js")))
@@ -387,7 +388,7 @@ function rebuildTrayMenu() {
 
 function buildTrayMenuTemplate() {
   const cached = readUsageCache();
-  const today = localDay();
+  const today = trayLocalDay();
   const items = [];
   const noop = () => {};
 
@@ -483,6 +484,12 @@ function buildTrayMenuTemplate() {
   items.push({ label: trayT("tray.quit"), click: () => { destroyTray(); app.quit(); } });
 
   return items;
+}
+
+function trayLocalDay() {
+  return cachedDateModule?.localDay
+    ? cachedDateModule.localDay()
+    : new Date().toISOString().slice(0, 10);
 }
 
 function trayEstimateTodayCost(todayItems, priceMap) {
@@ -594,9 +601,10 @@ app.whenReady().then(async () => {
       });
     return;
   }
-  const { config, preset, display, pricing } = await modules();
+  const { config, preset, display, pricing, date } = await modules();
   cachedDisplayModule = display;
   cachedPricingModule = pricing;
+  cachedDateModule = date;
   const current = await ensureDesktopConfig(config, preset);
   appendRuntimeLog("app_ready", {
     appVersion: app.getVersion(),
