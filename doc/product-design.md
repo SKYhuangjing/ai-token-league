@@ -263,7 +263,7 @@ Claude Code 第一版支持。
 - 参考 ccusage 的本地日志扫描方式。
 - 读取 Claude Code 本地 project/session 数据。
 - 解析 token usage。
-- `inputTokens` 直接使用 `message.usage.input_tokens`，cache 继续保留在独立字段，统计结果必须通过 `npm run collector:verify-ccusage -- --day <YYYY-MM-DD>` 对账。
+- `inputTokens` 直接使用 `message.usage.input_tokens`，cache 继续保留在独立字段；统计口径需要通过 Rust collector 测试和必要的外部 ccusage 手工对账验证。
 - 将 project 或 cwd 映射为本地 workdir。
 
 工作目录维护：
@@ -708,8 +708,8 @@ UploadPayloadItem
 当前实现对应关系：
 
 - `~/.ai-token-league/config.json` 保存 `LocalIdentityConfig`、`LocalProviderRoot`、`LocalWorkdirAlias` 和 Cursor provider 配置。
-- Electron `userData/usage-cache.json` 保存 `LocalUsageCache`，用于 Today / Trend 快速展示。
-- `~/.ai-token-league/upload-queue.json` 是后续离线上传队列的目标位置；当前 MVP 已预留概念，网络失败重试需要继续补强。
+- Rust collector `~/.ai-token-league/usage-cache.json` 保存 `LocalUsageCache`，用于 Today / Trend 快速展示。
+- `~/.ai-token-league/upload-queue.json` 保存离线上传队列；网络失败时 Rust sync 会入队并在后续同步时重试。
 - Cursor 的 `WorkosCursorSessionToken` 只允许保存在本地 provider 配置，不进入上传 payload。
 
 ### 12.3 远端存储 ER 图

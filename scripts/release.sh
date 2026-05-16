@@ -12,7 +12,7 @@ ENV_FILE=""
 UPLOAD=""
 AUTO_YES=false
 
-TAURI_BUNDLE_BASE="src-tauri/target"
+TAURI_BUNDLE_BASE="target"
 
 usage() {
   cat <<EOF
@@ -246,6 +246,67 @@ resolve_bundle_dir() {
   echo "$TAURI_BUNDLE_BASE/$rust_target/release/bundle"
 }
 
+collector_binary_name_for_target() {
+  local rust_target="$1"
+  case "$rust_target" in
+    *windows*) echo "atl-collector.exe" ;;
+    *)         echo "atl-collector" ;;
+  esac
+}
+
+current_host_can_build_target() {
+  local rust_target="$1"
+  local host_os host_arch
+  host_os="$(uname -s)"
+  host_arch="$(uname -m)"
+  case "$rust_target" in
+    x86_64-pc-windows-msvc)
+      [[ "$host_os" == MINGW* || "$host_os" == MSYS* || "$host_os" == CYGWIN* || "${OS:-}" == "Windows_NT" ]]
+      ;;
+    x86_64-unknown-linux-gnu)
+      [[ "$host_os" == "Linux" ]]
+      ;;
+    aarch64-apple-darwin)
+      [[ "$host_os" == "Darwin" ]]
+      ;;
+    x86_64-apple-darwin)
+      [[ "$host_os" == "Darwin" ]]
+      ;;
+    *)
+      [[ "$host_arch" == "$host_arch" ]]
+      ;;
+  esac
+}
+
+prepare_collector_binary() {
+  local rust_target="$1"
+  local label="$2"
+  local binary_name built_binary staged_binary
+
+  binary_name="$(collector_binary_name_for_target "$rust_target")"
+  built_binary="$PROJECT_ROOT/target/$rust_target/release/$binary_name"
+  staged_binary="$PROJECT_ROOT/src-tauri/binaries/$binary_name"
+
+  mkdir -p "$PROJECT_ROOT/src-tauri/binaries"
+  rm -f "$PROJECT_ROOT"/src-tauri/binaries/atl-collector "$PROJECT_ROOT"/src-tauri/binaries/atl-collector.exe
+
+  if ! current_host_can_build_target "$rust_target"; then
+    echo "  Warning: skipping atl-collector build for $label on this host; build that platform natively before publishing it."
+    return 0
+  fi
+
+  echo ">>> Building atl-collector for $label..."
+  cargo build --release -p atl-collector --target "$rust_target"
+
+  if [[ ! -f "$built_binary" ]]; then
+    echo "Error: collector binary not found after build: $built_binary"
+    exit 1
+  fi
+
+  cp "$built_binary" "$staged_binary"
+  chmod +x "$staged_binary" || true
+}
+
 # Tauri build
 # Cross-compilation notes:
 #   - macOS arm64 (native): full build with app + dmg + updater
@@ -259,6 +320,7 @@ run_tauri_build() {
     local rust_target="$1"
     local arch_label="$2"
     local exit_code=0
+    prepare_collector_binary "$rust_target" "$arch_label"
     if [[ "$native_arch" == "arm64" && "$rust_target" == "aarch64-apple-darwin" ]] || \
        [[ "$native_arch" == "x86_64" && "$rust_target" == "x86_64-apple-darwin" ]]; then
       echo ">>> Building $arch_label (native)..."
@@ -285,10 +347,12 @@ run_tauri_build() {
     mac-intel)  build_mac_target x86_64-apple-darwin "macOS Intel" ;;
     win)
       echo ">>> Building Windows x64..."
+      prepare_collector_binary x86_64-pc-windows-msvc "Windows x64"
       npx tauri build --target x86_64-pc-windows-msvc || true
       ;;
     linux)
       echo ">>> Building Linux x64..."
+      prepare_collector_binary x86_64-unknown-linux-gnu "Linux x64"
       npx tauri build --target x86_64-unknown-linux-gnu || true
       ;;
     mac-all)
@@ -299,8 +363,10 @@ run_tauri_build() {
       build_mac_target aarch64-apple-darwin "macOS arm64"
       build_mac_target x86_64-apple-darwin "macOS Intel"
       echo ">>> Building Windows x64 (cross)..."
+      prepare_collector_binary x86_64-pc-windows-msvc "Windows x64"
       npx tauri build --target x86_64-pc-windows-msvc || true
       echo ">>> Building Linux x64 (cross)..."
+      prepare_collector_binary x86_64-unknown-linux-gnu "Linux x64"
       npx tauri build --target x86_64-unknown-linux-gnu || true
       ;;
     *)
@@ -481,6 +547,8 @@ esac
 
 set -e
 
+rm -f src-tauri/binaries/atl-collector src-tauri/binaries/atl-collector.exe
+
 # upload
 if [[ "$UPLOAD" == "yes" ]]; then
   echo ">>> Uploading to OSS..."
@@ -489,7 +557,7 @@ fi
 
 # Clean up Tauri build targets to save disk space
 echo ">>> Cleaning build targets..."
-for target_dir in src-tauri/target/aarch64-apple-darwin src-tauri/target/x86_64-apple-darwin src-tauri/target/x86_64-pc-windows-msvc src-tauri/target/x86_64-unknown-linux-gnu src-tauri/target/release; do
+for target_dir in target/aarch64-apple-darwin target/x86_64-apple-darwin target/x86_64-pc-windows-msvc target/x86_64-unknown-linux-gnu target/release src-tauri/target; do
   if [[ -d "$target_dir" ]]; then
     rm -rf "$target_dir"
     echo "  Removed $target_dir"

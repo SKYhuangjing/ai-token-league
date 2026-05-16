@@ -163,9 +163,9 @@ The upload script reads `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_
 Run these before treating the package as current:
 
 ```bash
-node --check src/desktop/sidecar.cjs
 node --check src/desktop/renderer.js
 node --check scripts/publish-release.js
+cargo test --workspace
 npm test
 npm run desktop
 node scripts/publish-release.js --env env.local --dry-run

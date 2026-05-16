@@ -42,5 +42,8 @@ assets/preset.json
 
 # Tauri build artifacts
 src-tauri/target/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+target/
 src-tauri/gen/
 src-tauri/.signing-key

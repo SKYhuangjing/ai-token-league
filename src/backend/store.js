@@ -3,7 +3,7 @@ import path from "node:path";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { compositionRatio, costQualityLabel, dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, priceToPublic } from "../shared/pricing.js";
-import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, computeBucketFingerprint, displayTotalTokens, usageKey } from "../shared/schema.js";
+import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, computeBucketFingerprint, displayTotalTokens, hourlyUsageKey, usageKey } from "../shared/schema.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 import { currentBusinessDay } from "./day-context.js";
@@ -14,7 +14,9 @@ export const DEFAULT_DB = {
   devices: {},
   workdirs: {},
   usageDaily: {},
+  usageHourly: {},
   usageSyncBuckets: {},
+  usageSyncBucketsHourly: {},
   modelPrices: {},
   modelPriceAliases: {},
   modelPriceCache: {
@@ -40,6 +42,8 @@ export class Store {
     this.db.modelPriceCache.remote ||= structuredClone(DEFAULT_DB.modelPriceCache.remote);
     this.db.modelPriceCache.prices ||= {};
     this.db.usageSyncBuckets ||= {};
+    this.db.usageHourly ||= {};
+    this.db.usageSyncBucketsHourly ||= {};
     if (this.migrateLegacyUsageRows()) this.save();
   }
 
@@ -143,6 +147,7 @@ export class Store {
   }
 
   upsertUsageBatch(input) {
+    if (input.snapshot?.mode === "device_day_hour_provider") return this.upsertHourlySnapshotBatch(input);
     if (input.snapshot) return this.upsertSnapshotBatch(input);
     const now = new Date().toISOString();
     assertNoForbiddenUploadFields(input);
@@ -207,6 +212,10 @@ export class Store {
               delete this.db.usageDaily[existingKey];
             }
           }
+        }
+        if (this.db.usageDaily[key]?.hourlyDerived) {
+          accepted += 1;
+          continue;
         }
         const withCost = addCostToUsageItem(raw, this.priceMap());
         this.db.usageDaily[key] = {
@@ -297,6 +306,10 @@ export class Store {
           ];
         }
 
+        if (this.db.usageDaily[key]?.hourlyDerived) {
+          accepted += 1;
+          continue;
+        }
         const withCost = addCostToUsageItem(raw, this.priceMap());
         this.db.usageDaily[key] = {
           ...raw,
@@ -334,6 +347,7 @@ export class Store {
       deviceId: input.deviceId,
       day: snapshot.day,
       providerId: snapshot.providerId,
+      granularity: "daily",
       bucketFingerprint: serverBucketFingerprint,
       rowCount: accepted,
       totalTokens: serverBucketTotalTokens,
@@ -343,6 +357,182 @@ export class Store {
     this.invalidateAggregateCache();
     this.save();
     return { accepted, rejected, incomingKeys: [...incomingKeys] };
+  }
+
+  /// Hourly snapshot: write to usageHourly, then derive daily aggregates into usageDaily.
+  upsertHourlySnapshotBatch(input) {
+    const now = new Date().toISOString();
+    const snapshot = input.snapshot;
+    assertSnapshot(snapshot, input.items, input.participantId, input.deviceId);
+    const serverBucketFingerprint = computeBucketFingerprint(input.items || []);
+    const serverBucketTotalTokens = (input.items || []).reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+    const snapshotHour = snapshot.hour;
+
+    // Idempotency check
+    const existing = this.getHourlyBucketSync(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId);
+    if (existing && existing.bucketFingerprint === serverBucketFingerprint) {
+      return { accepted: existing.rowCount, rejected: 0, duplicate: true, noOp: true };
+    }
+
+    assertNoForbiddenUploadFields(input);
+    let accepted = 0;
+    let rejected = 0;
+    const incomingHourlyKeys = new Set();
+
+    // Write hourly rows
+    for (const incoming of input.items || []) {
+      try {
+        const raw = normalizeUsageTotal(incoming);
+        assertUsageItem(raw);
+        const workdirId = `${input.participantId}:${raw.workdirHash}`;
+        this.db.workdirs[workdirId] = {
+          id: workdirId,
+          participantId: input.participantId,
+          workdirHash: raw.workdirHash,
+          alias: raw.workdirAlias || "",
+          detectedName: raw.workdirDisplayName,
+          displayName: raw.workdirAlias || raw.workdirDisplayName,
+          sourceProvider: raw.providerId,
+          updatedAt: now,
+          lastSeenAt: now,
+          createdAt: this.db.workdirs[workdirId]?.createdAt || now
+        };
+        const hKey = hourlyUsageKey(raw, input.participantId, input.deviceId);
+        incomingHourlyKeys.add(hKey);
+
+        const withCost = addCostToUsageItem(raw, this.priceMap());
+        this.db.usageHourly[hKey] = {
+          ...raw,
+          hour: snapshotHour,
+          inputCostUsd: withCost.inputCostUsd,
+          outputCostUsd: withCost.outputCostUsd,
+          cacheReadCostUsd: withCost.cacheReadCostUsd,
+          cacheWriteCostUsd: withCost.cacheWriteCostUsd,
+          reasoningCostUsd: withCost.reasoningCostUsd,
+          estimatedCostUsd: withCost.estimatedCostUsd,
+          costQuality: withCost.costQuality,
+          pricingVersion: withCost.pricingVersion,
+          pricingModel: withCost.pricingModel,
+          pricingSource: withCost.pricingSource || "",
+          participantId: input.participantId,
+          deviceId: input.deviceId,
+          workdirId,
+          rawSourceRef: raw.rawSourceRef || "",
+          providerVersion: raw.providerVersion || "",
+          parserVersion: raw.parserVersion || raw.providerVersion || "",
+          sourceFingerprint: raw.sourceFingerprint || "",
+          uploadedAt: now
+        };
+        accepted += 1;
+      } catch {
+        rejected += 1;
+      }
+    }
+
+    // Delete stale hourly rows for this bucket
+    this.deleteHourlyBucketUsageRows(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId, [...incomingHourlyKeys]);
+
+    // Record hourly bucket metadata
+    this.recordHourlyBucketSync({
+      participantId: input.participantId,
+      deviceId: input.deviceId,
+      day: snapshot.day,
+      hour: snapshotHour,
+      providerId: snapshot.providerId,
+      granularity: "hourly",
+      bucketFingerprint: serverBucketFingerprint,
+      rowCount: accepted,
+      totalTokens: serverBucketTotalTokens,
+      clientGeneratedAt: input.clientGeneratedAt || ""
+    });
+
+    // Derive daily aggregates from hourly for the affected day+provider
+    this.deriveDailyFromHourly(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
+
+    this.invalidateAggregateCache();
+    this.save();
+    return { accepted, rejected, incomingKeys: [...incomingHourlyKeys] };
+  }
+
+  /// Derive daily rows from hourly rows for a given participant+device+day+provider.
+  /// Hourly-derived daily rows take priority over legacy daily rows.
+  deriveDailyFromHourly(participantId, deviceId, day, providerId) {
+    const now = new Date().toISOString();
+    // Collect all hourly rows for this bucket
+    const hourlyRows = Object.entries(this.db.usageHourly).filter(
+      ([, row]) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId
+    );
+    if (!hourlyRows.length) return;
+
+    // Group by (toolCode, workdirHash, model) and sum tokens
+    const groups = {};
+    for (const [, row] of hourlyRows) {
+      const gKey = [row.toolCode, row.workdirHash, row.model].join("|");
+      if (!groups[gKey]) {
+        groups[gKey] = { first: row, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
+      }
+      const g = groups[gKey];
+      g.count++;
+      g.inputTokens += Number(row.inputTokens || 0);
+      g.outputTokens += Number(row.outputTokens || 0);
+      g.cacheReadTokens += Number(row.cacheReadTokens || 0);
+      g.cacheWriteTokens += Number(row.cacheWriteTokens || 0);
+      g.reasoningTokens += Number(row.reasoningTokens || 0);
+      g.totalTokens += Number(row.totalTokens || 0);
+      g.estimatedCostUsd += Number(row.estimatedCostUsd || 0);
+    }
+
+    // Write derived daily rows, marking them as hourly-derived
+    const derivedKeys = new Set();
+    for (const [, g] of Object.entries(groups)) {
+      const r = g.first;
+      const dKey = usageKey(r, participantId, deviceId);
+      derivedKeys.add(dKey);
+      this.db.usageDaily[dKey] = {
+        day,
+        participantId,
+        deviceId,
+        toolCode: r.toolCode,
+        providerId,
+        workdirId: r.workdirId,
+        workdirHash: r.workdirHash,
+        workdirDisplayName: r.workdirDisplayName,
+        model: r.model,
+        inputTokens: g.inputTokens,
+        outputTokens: g.outputTokens,
+        cacheReadTokens: g.cacheReadTokens,
+        cacheWriteTokens: g.cacheWriteTokens,
+        reasoningTokens: g.reasoningTokens,
+        totalTokens: g.totalTokens,
+        estimatedCostUsd: g.estimatedCostUsd || null,
+        costQuality: r.costQuality || "",
+        pricingVersion: r.pricingVersion || "",
+        pricingModel: r.pricingModel || "",
+        pricingSource: r.pricingSource || "",
+        sourceQuality: r.sourceQuality || "unknown",
+        rawSourceRef: r.rawSourceRef || "",
+        providerVersion: r.providerVersion || "",
+        parserVersion: r.parserVersion || "",
+        sourceFingerprint: r.sourceFingerprint || "",
+        uploadedAt: now,
+        hourlyDerived: true
+      };
+    }
+
+    // Delete any non-derived daily rows for this bucket that are no longer valid
+    // (legacy rows that should be replaced by hourly-derived rows)
+    for (const [key, row] of Object.entries(this.db.usageDaily)) {
+      if (
+        row.participantId === participantId &&
+        row.deviceId === deviceId &&
+        row.day === day &&
+        row.providerId === providerId &&
+        row.hourlyDerived &&
+        !derivedKeys.has(key)
+      ) {
+        delete this.db.usageDaily[key];
+      }
+    }
   }
 
   invalidateAggregateCache() {
@@ -357,11 +547,12 @@ export class Store {
     return this.db.usageSyncBuckets[this.bucketSyncKey(participantId, deviceId, day, providerId)] || null;
   }
 
-  recordBucketSync({ participantId, deviceId, day, providerId, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt }) {
+  recordBucketSync({ participantId, deviceId, day, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt }) {
     const now = new Date().toISOString();
     const key = this.bucketSyncKey(participantId, deviceId, day, providerId);
     this.db.usageSyncBuckets[key] = {
       participantId, deviceId, day, providerId,
+      granularity: granularity || "daily",
       bucketFingerprint, rowCount, totalTokens,
       clientGeneratedAt: clientGeneratedAt || "",
       syncedAt: now,
@@ -377,9 +568,48 @@ export class Store {
         row.deviceId === deviceId &&
         row.day === day &&
         row.providerId === providerId &&
+        !row.hourlyDerived &&
         !keySet.has(key)
       ) {
         delete this.db.usageDaily[key];
+      }
+    }
+  }
+
+  // Hourly bucket methods
+  hourlyBucketSyncKey(participantId, deviceId, day, hour, providerId) {
+    return [participantId, deviceId, day, hour, providerId].join("|");
+  }
+
+  getHourlyBucketSync(participantId, deviceId, day, hour, providerId) {
+    return this.db.usageSyncBucketsHourly[this.hourlyBucketSyncKey(participantId, deviceId, day, hour, providerId)] || null;
+  }
+
+  recordHourlyBucketSync({ participantId, deviceId, day, hour, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt }) {
+    const now = new Date().toISOString();
+    const key = this.hourlyBucketSyncKey(participantId, deviceId, day, hour, providerId);
+    this.db.usageSyncBucketsHourly[key] = {
+      participantId, deviceId, day, hour, providerId,
+      granularity: granularity || "hourly",
+      bucketFingerprint, rowCount, totalTokens,
+      clientGeneratedAt: clientGeneratedAt || "",
+      syncedAt: now,
+      updatedAt: now
+    };
+  }
+
+  deleteHourlyBucketUsageRows(participantId, deviceId, day, hour, providerId, incomingUsageKeys) {
+    const keySet = new Set(incomingUsageKeys);
+    for (const [key, row] of Object.entries(this.db.usageHourly)) {
+      if (
+        row.participantId === participantId &&
+        row.deviceId === deviceId &&
+        row.day === day &&
+        row.hour === hour &&
+        row.providerId === providerId &&
+        !keySet.has(key)
+      ) {
+        delete this.db.usageHourly[key];
       }
     }
   }

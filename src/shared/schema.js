@@ -67,6 +67,20 @@ export function usageKey(item, participantId, deviceId) {
   ].join("|");
 }
 
+export function hourlyUsageKey(item, participantId, deviceId) {
+  const hour = item.hour != null ? item.hour : 0;
+  return [
+    item.day,
+    hour,
+    participantId,
+    deviceId,
+    item.toolCode,
+    item.providerId,
+    item.workdirHash,
+    item.model
+  ].join("|");
+}
+
 export function publicUsageItem(item) {
   const inputTokens = normalizeTokenNumber(item.inputTokens);
   const outputTokens = normalizeTokenNumber(item.outputTokens);
@@ -76,6 +90,7 @@ export function publicUsageItem(item) {
   const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
   const publicItem = {
     day: item.day,
+    hour: item.hour != null ? item.hour : 0,
     toolCode: item.toolCode,
     providerId: item.providerId,
     workdirHash: item.workdirHash,
@@ -118,18 +133,25 @@ function safeTraceText(value) {
 }
 
 export const BUCKET_FINGERPRINT_FIELDS = [
-  "day", "toolCode", "providerId", "workdirHash", "workdirDisplayName", "model",
+  "day", "hour", "toolCode", "providerId", "workdirHash", "workdirDisplayName", "model",
   "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
   "reasoningTokens", "totalTokens", "sourceQuality", "sourceFingerprint"
 ];
 
 export function assertSnapshot(snapshot, items, participantId, deviceId) {
   const snapshotItems = Array.isArray(items) ? items : [];
-  if (!snapshot || snapshot.mode !== "device_day_provider") {
-    throw new Error("snapshot mode must be device_day_provider");
+  const mode = snapshot?.mode;
+  const isHourly = mode === "device_day_hour_provider";
+  if (mode !== "device_day_provider" && !isHourly) {
+    throw new Error("snapshot mode must be device_day_provider or device_day_hour_provider");
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(snapshot.day)) {
     throw new Error("snapshot day must be YYYY-MM-DD");
+  }
+  if (isHourly) {
+    if (snapshot.hour == null || snapshot.hour < 0 || snapshot.hour > 23 || !Number.isInteger(snapshot.hour)) {
+      throw new Error("snapshot hour must be 0-23 for hourly mode");
+    }
   }
   if (!snapshot.providerId) {
     throw new Error("snapshot providerId is required");
@@ -155,6 +177,9 @@ export function assertSnapshot(snapshot, items, participantId, deviceId) {
     }
     if (snapshotItems[i].providerId !== snapshot.providerId) {
       throw new Error(`item ${i} providerId "${snapshotItems[i].providerId}" does not match snapshot providerId "${snapshot.providerId}"`);
+    }
+    if (isHourly && snapshotItems[i].hour !== snapshot.hour) {
+      throw new Error(`item ${i} hour "${snapshotItems[i].hour}" does not match snapshot hour "${snapshot.hour}"`);
     }
   }
 }

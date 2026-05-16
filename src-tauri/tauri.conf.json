@@ -43,11 +43,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "icons/tray-iconTemplate.png": "icons/tray-iconTemplate.png",
-      "../src/desktop/sidecar.cjs": "src/desktop/sidecar.cjs",
-      "../src/collector/": "src/collector/",
-      "../src/shared/": "src/shared/",
-      "../package.json": "package.json"
+      "binaries/": "",
+      "icons/tray-iconTemplate.png": "icons/tray-iconTemplate.png"
     }
   }
 }

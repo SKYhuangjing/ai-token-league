@@ -39,7 +39,7 @@ jobs:
           VERSION="${TAG#v}"
           PACKAGE_VERSION="$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")"
           TAURI_VERSION="$(node -e "console.log(JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version)")"
-          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           echo "tag=$TAG version=$VERSION package=$PACKAGE_VERSION tauri=$TAURI_VERSION cargo=$CARGO_VERSION"
           if [[ "$VERSION" != "$PACKAGE_VERSION" || "$VERSION" != "$TAURI_VERSION" || "$VERSION" != "$CARGO_VERSION" ]]; then
             echo "Version mismatch: tag=$TAG package=$PACKAGE_VERSION tauri=$TAURI_VERSION cargo=$CARGO_VERSION" >&2
@@ -51,10 +51,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - run: npm test
       - run: |
-          node --check src/desktop/sidecar.cjs
+          node --check src/desktop/tauri-bridge.js
           node --check src/desktop/renderer.js
           node --check src/shared/update.js
           node --check scripts/build-github-tauri-update-json.js
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
 
   build:
     needs:
@@ -102,6 +104,17 @@ jobs:
         if: matrix.native_cli_package != ''
         run: npm install --no-save ${{ matrix.native_cli_package }}
       - run: npm run preset
+      - name: Build bundled Rust collector sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p atl-collector --target "${{ matrix.target }}"
+          mkdir -p src-tauri/binaries
+          if [[ "${{ matrix.os }}" == windows-* ]]; then
+            cp "target/${{ matrix.target }}/release/atl-collector.exe" "src-tauri/binaries/atl-collector.exe"
+          else
+            cp "target/${{ matrix.target }}/release/atl-collector" "src-tauri/binaries/atl-collector"
+          fi
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,9 +4,10 @@ import mysql from "mysql2/promise";
 import { Store } from "./store.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { localDay } from "../shared/date.js";
-import { displayTotalTokens, usageKey } from "../shared/schema.js";
+import { displayTotalTokens } from "../shared/schema.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
+const MIGRATION_002_PATH = path.resolve("migrations/002_usage_hourly.sql");
 
 export class MySqlStore extends Store {
   static async create(config = {}) {
@@ -55,6 +56,12 @@ export class MySqlStore extends Store {
     if (String(process.env.MYSQL_AUTO_MIGRATE || "true").toLowerCase() === "false") return;
     const sql = fs.readFileSync(MIGRATION_PATH, "utf8");
     await this.pool.query(sql);
+    if (fs.existsSync(MIGRATION_002_PATH)) {
+      const sql2 = fs.readFileSync(MIGRATION_002_PATH, "utf8");
+      for (const stmt of sql2.split(";").map(s => s.trim()).filter(s => s.length > 0)) {
+        await this.pool.query(stmt);
+      }
+    }
     await this.ensureMysqlSchema();
   }
 
@@ -88,6 +95,7 @@ export class MySqlStore extends Store {
         deviceId VARCHAR(96) NOT NULL,
         day DATE NOT NULL,
         providerId VARCHAR(96) NOT NULL,
+        granularity VARCHAR(16) NOT NULL DEFAULT 'daily',
         bucketFingerprint VARCHAR(128) NOT NULL,
         rowCount INT NOT NULL,
         totalTokens BIGINT NOT NULL,
@@ -98,6 +106,13 @@ export class MySqlStore extends Store {
         INDEX idx_sync_bucket_participant_day (participantId, day)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     );
+    const [bucketGranularityColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'usage_sync_buckets' AND COLUMN_NAME = 'granularity'`
+    );
+    if (!bucketGranularityColumns.length) {
+      await this.pool.query("ALTER TABLE usage_sync_buckets ADD COLUMN granularity VARCHAR(16) NOT NULL DEFAULT 'daily' AFTER providerId");
+    }
   }
 
   async load() {
@@ -111,6 +126,8 @@ export class MySqlStore extends Store {
     const [modelPriceCache] = await this.pool.query("SELECT * FROM model_price_cache");
     const [modelPriceCacheMeta] = await this.pool.query("SELECT * FROM model_price_cache_meta WHERE source = 'openrouter'");
     const syncBuckets = await this.pool.query("SELECT * FROM usage_sync_buckets").catch(() => [[]]);
+    const usageHourlyRows = await this.pool.query("SELECT * FROM usage_hourly").catch(() => [[]]);
+    const syncBucketsHourly = await this.pool.query("SELECT * FROM usage_sync_buckets_hourly").catch(() => [[]]);
     this.db.participants = Object.fromEntries(participants.map((row) => [row.id, normalizeRow(row)]));
     this.db.devices = Object.fromEntries(devices.map((row) => [row.id, normalizeRow(row)]));
     this.db.workdirs = Object.fromEntries(workdirs.map((row) => [row.id, normalizeRow(row)]));
@@ -126,6 +143,10 @@ export class MySqlStore extends Store {
     this.db.usageSyncBuckets = Object.fromEntries(
       syncBuckets[0].map((row) => [row.bucketKey, normalizeRow(row)])
     );
+    this.db.usageHourly = Object.fromEntries(usageHourlyRows[0].map((row) => [row.usageKey, usageFromRow(row)]));
+    this.db.usageSyncBucketsHourly = Object.fromEntries(
+      syncBucketsHourly[0].map((row) => [row.bucketKey, normalizeRow(row)])
+    );
     if (this.migrateLegacyUsageRows()) await this.syncUsageDaily();
   }
 
@@ -136,6 +157,11 @@ export class MySqlStore extends Store {
   }
 
   async upsertUsageBatch(input) {
+    if (input.snapshot?.mode === "device_day_hour_provider") {
+      const result = Store.prototype.upsertUsageBatch.call(this, input);
+      if (!result.noOp) await this.syncAllTables();
+      return result;
+    }
     if (input.snapshot) return this.upsertSnapshotBatch(input);
     const result = super.upsertUsageBatch(input);
     if (!result.duplicate) await this.syncAllTables();
@@ -161,9 +187,9 @@ export class MySqlStore extends Store {
       const now = new Date().toISOString();
       await conn.query(
         `INSERT IGNORE INTO usage_sync_buckets
-          (bucketKey, participantId, deviceId, day, providerId, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [bucketKey, input.participantId, input.deviceId, snapshot.day, snapshot.providerId, "__lock__", 0, 0, input.clientGeneratedAt || "", now, now]
+          (bucketKey, participantId, deviceId, day, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [bucketKey, input.participantId, input.deviceId, snapshot.day, snapshot.providerId, "daily", "__lock__", 0, 0, input.clientGeneratedAt || "", now, now]
       );
       await conn.query("SELECT bucketKey FROM usage_sync_buckets WHERE bucketKey = ? FOR UPDATE", [bucketKey]);
 
@@ -229,9 +255,9 @@ export class MySqlStore extends Store {
       const meta = this.getBucketSync(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
       if (meta) {
         await conn.query(
-          `REPLACE INTO usage_sync_buckets (bucketKey, participantId, deviceId, day, providerId, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [bucketKey, meta.participantId, meta.deviceId, meta.day, meta.providerId, meta.bucketFingerprint, meta.rowCount, meta.totalTokens, meta.clientGeneratedAt, meta.syncedAt, meta.updatedAt]
+          `REPLACE INTO usage_sync_buckets (bucketKey, participantId, deviceId, day, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [bucketKey, meta.participantId, meta.deviceId, meta.day, meta.providerId, meta.granularity || "daily", meta.bucketFingerprint, meta.rowCount, meta.totalTokens, meta.clientGeneratedAt, meta.syncedAt, meta.updatedAt]
         );
       }
     });
@@ -300,6 +326,8 @@ export class MySqlStore extends Store {
     await withTransaction(this.pool, async (conn) => {
       await conn.query("DELETE FROM upload_batches WHERE participantId = ?", [participantId]);
       await conn.query("DELETE FROM usage_sync_buckets WHERE participantId = ?", [participantId]);
+      await conn.query("DELETE FROM usage_sync_buckets_hourly WHERE participantId = ?", [participantId]).catch(() => {});
+      await conn.query("DELETE FROM usage_hourly WHERE participantId = ?", [participantId]).catch(() => {});
       await conn.query("DELETE FROM usage_daily WHERE participantId = ?", [participantId]);
       await conn.query("DELETE FROM workdirs WHERE participantId = ?", [participantId]);
       await conn.query("DELETE FROM devices WHERE participantId = ?", [participantId]);
@@ -318,7 +346,9 @@ export class MySqlStore extends Store {
   async syncUsageDaily() {
     await withTransaction(this.pool, async (conn) => {
       await conn.query("DELETE FROM usage_daily");
+      await conn.query("DELETE FROM usage_hourly").catch(() => {});
       await insertUsageRows(conn, Object.entries(this.db.usageDaily));
+      await insertUsageHourlyRows(conn, Object.entries(this.db.usageHourly || {}));
     });
   }
 
@@ -331,6 +361,9 @@ export class MySqlStore extends Store {
   async syncAllTables() {
     await withTransaction(this.pool, async (conn) => {
       await conn.query("DELETE FROM usage_daily");
+      await conn.query("DELETE FROM usage_hourly").catch(() => {});
+      await conn.query("DELETE FROM usage_sync_buckets");
+      await conn.query("DELETE FROM usage_sync_buckets_hourly").catch(() => {});
       await replaceParticipants(conn, Object.values(this.db.participants));
       await replaceDevices(conn, Object.values(this.db.devices));
       await replaceWorkdirs(conn, Object.values(this.db.workdirs));
@@ -338,6 +371,9 @@ export class MySqlStore extends Store {
       await replaceModelPriceAliases(conn, this.db.modelPriceAliases);
       await replaceModelPriceCache(conn, this.db.modelPriceCache);
       await insertUsageRows(conn, Object.entries(this.db.usageDaily));
+      await insertUsageHourlyRows(conn, Object.entries(this.db.usageHourly || {}));
+      await replaceUsageSyncBuckets(conn, Object.values(this.db.usageSyncBuckets || {}));
+      await replaceUsageSyncBucketsHourly(conn, Object.values(this.db.usageSyncBucketsHourly || {}));
       await replaceUploadBatches(conn, Object.values(this.db.uploadBatches));
     });
   }
@@ -498,6 +534,69 @@ async function replaceUploadBatches(conn, rows) {
   );
 }
 
+async function replaceUsageSyncBuckets(conn, rows) {
+  if (!rows.length) return;
+  await conn.query(
+    `INSERT INTO usage_sync_buckets
+      (bucketKey, participantId, deviceId, day, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+     VALUES ?
+     ON DUPLICATE KEY UPDATE
+      granularity = VALUES(granularity),
+      bucketFingerprint = VALUES(bucketFingerprint),
+      rowCount = VALUES(rowCount),
+      totalTokens = VALUES(totalTokens),
+      clientGeneratedAt = VALUES(clientGeneratedAt),
+      syncedAt = VALUES(syncedAt),
+      updatedAt = VALUES(updatedAt)`,
+    [rows.map((row) => [
+      [row.participantId, row.deviceId, row.day, row.providerId].join("|"),
+      row.participantId,
+      row.deviceId,
+      row.day,
+      row.providerId,
+      row.granularity || "daily",
+      row.bucketFingerprint,
+      row.rowCount || 0,
+      row.totalTokens || 0,
+      row.clientGeneratedAt || "",
+      row.syncedAt || new Date().toISOString(),
+      row.updatedAt || new Date().toISOString()
+    ])]
+  );
+}
+
+async function replaceUsageSyncBucketsHourly(conn, rows) {
+  if (!rows.length) return;
+  await conn.query(
+    `INSERT INTO usage_sync_buckets_hourly
+      (bucketKey, participantId, deviceId, day, hour, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+     VALUES ?
+     ON DUPLICATE KEY UPDATE
+      granularity = VALUES(granularity),
+      bucketFingerprint = VALUES(bucketFingerprint),
+      rowCount = VALUES(rowCount),
+      totalTokens = VALUES(totalTokens),
+      clientGeneratedAt = VALUES(clientGeneratedAt),
+      syncedAt = VALUES(syncedAt),
+      updatedAt = VALUES(updatedAt)`,
+    [rows.map((row) => [
+      [row.participantId, row.deviceId, row.day, row.hour ?? 0, row.providerId].join("|"),
+      row.participantId,
+      row.deviceId,
+      row.day,
+      row.hour ?? 0,
+      row.providerId,
+      row.granularity || "hourly",
+      row.bucketFingerprint,
+      row.rowCount || 0,
+      row.totalTokens || 0,
+      row.clientGeneratedAt || "",
+      row.syncedAt || new Date().toISOString(),
+      row.updatedAt || new Date().toISOString()
+    ])]
+  );
+}
+
 async function insertUsageRows(conn, entries) {
   if (!entries.length) return;
   await conn.query(
@@ -510,6 +609,48 @@ async function insertUsageRows(conn, entries) {
     [entries.map(([usageKey, row]) => [
       usageKey,
       row.day,
+      row.participantId,
+      row.deviceId,
+      row.toolCode,
+      row.providerId,
+      row.workdirId,
+      row.workdirHash,
+      row.workdirDisplayName,
+      row.model,
+      row.inputTokens || 0,
+      row.outputTokens || 0,
+      row.cacheReadTokens || 0,
+      row.cacheWriteTokens || 0,
+      row.reasoningTokens || 0,
+      row.totalTokens || 0,
+      row.estimatedCostUsd,
+      row.costQuality || "",
+      row.pricingVersion || "",
+      row.pricingModel || "",
+      row.pricingSource || "",
+      row.sourceQuality || "unknown",
+      row.rawSourceRef || "",
+      row.providerVersion || "",
+      row.parserVersion || "",
+      row.sourceFingerprint || "",
+      row.uploadedAt || null
+    ])]
+  );
+}
+
+async function insertUsageHourlyRows(conn, entries) {
+  if (!entries.length) return;
+  await conn.query(
+    `INSERT INTO usage_hourly
+      (usageKey, day, hour, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
+       model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
+       estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
+       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
+     VALUES ?`,
+    [entries.map(([usageKey, row]) => [
+      usageKey,
+      row.day,
+      row.hour ?? 0,
       row.participantId,
       row.deviceId,
       row.toolCode,
@@ -552,6 +693,7 @@ function usageFromRow(row) {
   };
   return {
     day: toDayString(row.day),
+    hour: row.hour ?? 0,
     participantId: row.participantId,
     deviceId: row.deviceId,
     toolCode: row.toolCode,

@@ -2,14 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { Store } from "../src/backend/store.js";
 import { generateIdentity, newId, signPayload, hmacSha256Hex } from "../src/shared/crypto.js";
 import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
 import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, SNAPSHOT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
-import { groupByBucket } from "../src/collector/core.js";
-import { loadSyncManifest, saveSyncManifest, clearSyncManifest } from "../src/collector/config.js";
 import {
   buildInstallerMetadataFromGithubRelease,
   buildTauriUpdateJson,
@@ -22,272 +19,17 @@ import {
   verifyFileChecksum
 } from "../src/shared/update.js";
 import { parseLatestChangelog } from "../src/shared/changelog.js";
-import { scanUsage } from "../src/collector/core.js";
-import { addCursorToken, exportConfig, exportIdentity, importIdentity, initConfig, migrateLegacyCursorProviderEnabled, normalizeSilentUpdateMode, updateConfig } from "../src/collector/config.js";
-import { claudeCodeLocalProvider } from "../src/collector/providers/claude-code-local.js";
-import { codexLocalProvider } from "../src/collector/providers/codex-local.js";
-import { cursorDashboardUsageProvider, eventsToUsageEvents, sqlReady } from "../src/collector/providers/cursor-dashboard-usage.js";
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
 import { addDays, localDay } from "../src/shared/date.js";
 import { currentBusinessDay } from "../src/backend/day-context.js";
-import { runVerification } from "../scripts/verify-collector-ccusage.js";
 
-const require = createRequire(import.meta.url);
-const initSqlJs = require("sql.js/dist/sql-asm.js");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
 process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
 
 function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
-}
-
-async function testScan() {
-  const identity = generateIdentity();
-  const config = {
-    participantId: identity.participantId,
-    workdirAliases: {},
-    providerRootsOnly: true,
-    providerRoots: {
-      codex_local: path.resolve("samples/codex"),
-      claude_code_local: path.resolve("samples/claude/projects")
-    }
-  };
-  const result = await scanUsage(config);
-  assert.equal(result.items.length, 2);
-  const codex = result.items.find((item) => item.toolCode === "codex");
-  const claude = result.items.find((item) => item.toolCode === "claude_code");
-  assert.ok(codex.totalTokens > 0);
-  assert.ok(claude.totalTokens > 0);
-  assert.equal(codex.workdirDisplayName, "codex-project");
-  assert.equal(claude.workdirDisplayName, "claude-project");
-  assert.equal(claude.inputTokens, 2000);
-  assert.equal(claude.cacheReadTokens, 260);
-  assert.equal(claude.cacheWriteTokens, 200);
-  assert.equal(claude.totalTokens, claude.inputTokens + claude.outputTokens + claude.cacheReadTokens + claude.cacheWriteTokens);
-  assert.ok(codex.sourceFingerprint);
-  assert.ok(codex.rawSourceRef);
-  assert.ok(codex.providerVersion);
-  assert.ok(codex.parserVersion);
-  const cachedResult = await scanUsage({ ...config, __usageCacheIndex: result.sourceIndex });
-  assert.equal(cachedResult.items.length, 2);
-  assert.ok(cachedResult.health.some((item) => item.reusedFiles > 0));
-  return { identity, items: result.items };
-}
-
-async function testCollectorCcusageVerification() {
-  const day = localDay();
-  const codexSource = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-  const claudeSource = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  if (!fs.existsSync(codexSource) || !fs.existsSync(path.join(claudeSource, "projects"))) return;
-  const snapshot = path.join(tmp, "ccusage-local-snapshot");
-  const codexRoot = path.join(snapshot, "codex");
-  const claudeConfigDir = path.join(snapshot, "claude");
-  fs.cpSync(codexSource, codexRoot, { recursive: true });
-  fs.mkdirSync(claudeConfigDir, { recursive: true });
-  fs.cpSync(path.join(claudeSource, "projects"), path.join(claudeConfigDir, "projects"), { recursive: true });
-  const result = await runVerification({
-    day,
-    codexRoot,
-    claudeConfigDir,
-    claudeRoot: path.join(claudeConfigDir, "projects")
-  });
-  assert.equal(result.success, true, JSON.stringify(result.checks, null, 2));
-}
-
-async function testProviderEnabledSwitches() {
-  const identity = generateIdentity();
-  const config = {
-    participantId: identity.participantId,
-    workdirAliases: {},
-    providerRootsOnly: true,
-    providerEnabled: {
-      codex_local: false,
-      claude_code_local: true
-    },
-    providerRoots: {
-      codex_local: path.resolve("samples/codex"),
-      claude_code_local: path.resolve("samples/claude/projects")
-    }
-  };
-  const result = await scanUsage(config);
-  assert.equal(result.items.some((item) => item.providerId === "codex_local"), false);
-  assert.equal(result.items.some((item) => item.providerId === "claude_code_local"), true);
-  assert.equal(codexLocalProvider.reportHealth(config).enabled, false);
-  assert.equal(claudeCodeLocalProvider.reportHealth(config).enabled, true);
-  assert.equal(cursorDashboardUsageProvider.reportHealth({ providerEnabled: { cursor_dashboard_usage: true } }).enabled, true);
-  const updated = updateConfig({ providerEnabled: { codex_local: true } }, config, { persist: false });
-  assert.equal(updated.providerEnabled.codex_local, true);
-  assert.equal(updated.providerEnabled.claude_code_local, true);
-  const cursorToggled = updateConfig({
-    providerEnabled: { cursor_dashboard_usage: true },
-    cursorDashboardUsage: { enabled: false }
-  }, { providerEnabled: { cursor_dashboard_usage: false }, cursorDashboardUsage: { enabled: true } }, { persist: false });
-  assert.equal(cursorToggled.providerEnabled.cursor_dashboard_usage, true);
-  assert.equal(Object.hasOwn(cursorToggled.cursorDashboardUsage, "enabled"), false);
-}
-
-function testLegacyCursorEnabledMigration() {
-  const enabled = migrateLegacyCursorProviderEnabled({
-    providerEnabled: {},
-    cursorDashboardUsage: { enabled: true, workosSessionToken: "", workosSessionTokens: [] }
-  }, { persist: false });
-  assert.equal(enabled.providerEnabled.cursor_dashboard_usage, true);
-  assert.equal(Object.hasOwn(enabled.cursorDashboardUsage, "enabled"), false);
-  const disabled = migrateLegacyCursorProviderEnabled({
-    providerEnabled: {},
-    cursorDashboardUsage: { enabled: false, workosSessionToken: "", workosSessionTokens: [] }
-  }, { persist: false });
-  assert.equal(disabled.providerEnabled.cursor_dashboard_usage, false);
-  assert.equal(Object.hasOwn(disabled.cursorDashboardUsage, "enabled"), false);
-  const explicit = migrateLegacyCursorProviderEnabled({
-    providerEnabled: { cursor_dashboard_usage: false },
-    cursorDashboardUsage: { enabled: true, workosSessionToken: "", workosSessionTokens: [] }
-  }, { persist: false });
-  assert.equal(explicit.providerEnabled.cursor_dashboard_usage, false);
-  assert.equal(Object.hasOwn(explicit.cursorDashboardUsage, "enabled"), false);
-}
-
-function testCursorDashboardMapping() {
-  const items = eventsToUsageEvents([
-    {
-      timestamp: "1776866406216",
-      model: "composer-2-fast",
-      tokenUsage: {
-        inputTokens: 100,
-        outputTokens: 20,
-        cacheReadTokens: 300,
-        cacheWriteTokens: 40
-      }
-    }
-  ]);
-  assert.equal(items.length, 1);
-  assert.equal(items[0].toolCode, "cursor");
-  assert.equal(items[0].workdirCandidate, "virtual:cursor-dashboard:Cursor");
-  assert.equal(items[0].model, "composer-2-fast");
-  assert.equal(items[0].totalTokens, 460);
-  assert.ok(items[0].sourceFingerprint);
-  const defaultModelItems = eventsToUsageEvents([
-    {
-      timestamp: "1776866406216",
-      model: "default",
-      tokenUsage: { inputTokens: 10, outputTokens: 20 }
-    },
-    {
-      timestamp: "1776866406217",
-      tokenUsage: { inputTokens: 5, outputTokens: 5 }
-    }
-  ]);
-  assert.deepEqual(defaultModelItems.map((item) => item.model), ["Auto", "Auto"]);
-  const premiumModelItems = eventsToUsageEvents([
-    {
-      timestamp: "1776866406218",
-      model: "Premium (Codex 5.3)",
-      tokenUsage: { inputTokens: 3, outputTokens: 4 }
-    }
-  ]);
-  assert.equal(premiumModelItems[0].model, "Premium (Codex 5.3)");
-  assert.equal(localDay("2026-04-29T18:30:00.000Z", "Asia/Shanghai"), "2026-04-30");
-  const namedItems = eventsToUsageEvents([
-    {
-      timestamp: "1776866406216",
-      model: "gpt-5",
-      tokenUsage: { inputTokens: 1, outputTokens: 2 }
-    }
-  ], { accountName: "cursor@example.com" });
-  assert.equal(namedItems[0].workdirCandidate, "virtual:cursor-dashboard:Cursor · cursor@example.com");
-  const duplicateSources = cursorDashboardUsageProvider.scanSessions({
-    providerEnabled: { cursor_dashboard_usage: true },
-    cursorDashboardUsage: {
-      autoDetectLocal: false,
-      workosSessionTokens: [
-        { token: "user_01TESTCURSOR::manual", accountName: "user_01TESTCURSOR" },
-        { token: "user_01TESTCURSOR::manual", accountName: "cursor@example.com" }
-      ]
-    }
-  });
-  assert.equal(duplicateSources.length, 1);
-  assert.equal(duplicateSources[0].accountName, "cursor@example.com");
-  const duplicateAccounts = cursorDashboardUsageProvider.scanSessions({
-    providerEnabled: { cursor_dashboard_usage: true },
-    cursorDashboardUsage: {
-      autoDetectLocal: false,
-      workosSessionTokens: [
-        { token: "user_01TESTCURSOR::state-token", accountName: "cursor@example.com" },
-        { token: "user_01TESTCURSOR::account-token", accountName: "cursor@example.com" }
-      ]
-    }
-  });
-  assert.equal(duplicateAccounts.length, 1);
-}
-
-async function testCursorLocalTokenDetection() {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
-  const token = jwtWithSub("auth0|user_01TESTCURSOR");
-  db.run("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)");
-  db.run("INSERT INTO ItemTable VALUES (?, ?)", ["cursorAuth/accessToken", token]);
-  const dbPath = path.join(tmp, "cursor-state.vscdb");
-  fs.writeFileSync(dbPath, Buffer.from(db.export()));
-  db.close();
-  process.env.CURSOR_STATE_DB_PATH = dbPath;
-  try {
-    await sqlReady;
-    const sources = cursorDashboardUsageProvider.scanSessions({ providerEnabled: { cursor_dashboard_usage: true } });
-    const localSource = sources.find((source) => source.sourceKind === "local_cursor_state");
-    assert.ok(localSource);
-    assert.ok(decodeURIComponent(localSource.cookie).includes("user_01TESTCURSOR::"));
-    const health = cursorDashboardUsageProvider.reportHealth({ providerEnabled: { cursor_dashboard_usage: false } });
-    assert.equal(health.detected, true);
-    assert.equal(health.enabled, false);
-    assert.ok(health.roots.includes("user_01TESTCURSOR"));
-    assert.ok(health.roots.every((root) => !root.startsWith("local_cursor_")));
-  } finally {
-    delete process.env.CURSOR_STATE_DB_PATH;
-  }
-}
-
-async function testCodexLocalSkipsUnknownModel() {
-  const file = path.join(tmp, "codex-missing-model.jsonl");
-  fs.writeFileSync(file, `${JSON.stringify({
-    timestamp: "2026-04-29T08:00:00.000Z",
-    session_id: "codex-missing-model",
-    cwd: "/Users/sky/demo/codex-project",
-    token_count: { input_tokens: 1200, output_tokens: 300, reasoning_tokens: 150, total_tokens: 1650 }
-  })}\n`);
-  const items = await codexLocalProvider.parseUsage(file);
-  assert.equal(items.length, 0);
-}
-
-async function testCodexLocalNormalizesInputTokens() {
-  const file = path.join(tmp, "codex-cache-normalized.jsonl");
-  fs.writeFileSync(file, `${JSON.stringify({
-    timestamp: "2026-04-29T08:00:00.000Z",
-    session_id: "codex-cache-normalized",
-    cwd: "/Users/sky/demo/codex-project",
-    model: "gpt-5",
-    token_count: {
-      input_tokens: 1200,
-      output_tokens: 300,
-      cached_input_tokens: 200,
-      cache_creation_input_tokens: 50,
-      reasoning_tokens: 150,
-      total_tokens: 1500
-    }
-  })}\n`);
-  const items = await codexLocalProvider.parseUsage(file);
-  assert.equal(items.length, 1);
-  assert.equal(items[0].inputTokens, 950);
-  assert.equal(items[0].cacheReadTokens, 200);
-  assert.equal(items[0].cacheWriteTokens, 50);
-  assert.equal(items[0].totalTokens, 1500);
-}
-
-function jwtWithSub(sub) {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({ sub })).toString("base64url");
-  return `${header}.${payload}.signature`;
 }
 
 function testBackendUpload(identity, items) {
@@ -909,83 +651,6 @@ function testSnapshotLegacyCoexistence() {
   console.log("  testSnapshotLegacyCoexistence passed");
 }
 
-function testCollectorBucketGrouping() {
-  const items = [
-    { day: "2026-05-14", providerId: "codex_local", workdirHash: "h1", model: "gpt-5", totalTokens: 100, inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
-    { day: "2026-05-14", providerId: "codex_local", workdirHash: "h2", model: "gpt-5", totalTokens: 200, inputTokens: 200, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
-    { day: "2026-05-14", providerId: "claude_code_local", workdirHash: "h3", model: "claude-4", totalTokens: 300, inputTokens: 300, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
-    { day: "2026-05-13", providerId: "codex_local", workdirHash: "h4", model: "gpt-5", totalTokens: 50, inputTokens: 50, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact" },
-  ];
-
-  const buckets = groupByBucket(items);
-  assert.equal(buckets.size, 3, "should have 3 buckets (2 days x 2 providers, 1 overlap)");
-
-  const codexToday = buckets.get("2026-05-14|codex_local");
-  assert.ok(codexToday, "codex today bucket should exist");
-  assert.equal(codexToday.items.length, 2);
-  assert.equal(codexToday.day, "2026-05-14");
-  assert.equal(codexToday.providerId, "codex_local");
-
-  const claudeToday = buckets.get("2026-05-14|claude_code_local");
-  assert.ok(claudeToday);
-  assert.equal(claudeToday.items.length, 1);
-
-  const codexYesterday = buckets.get("2026-05-13|codex_local");
-  assert.ok(codexYesterday);
-  assert.equal(codexYesterday.items.length, 1);
-
-  // fingerprint determinism within a bucket
-  const fp1 = computeBucketFingerprint(codexToday.items);
-  const fp2 = computeBucketFingerprint([...codexToday.items].reverse());
-  assert.equal(fp1, fp2);
-
-  console.log("  testCollectorBucketGrouping passed");
-}
-
-function testSyncManifestIO() {
-  const tmpPath = path.join(os.tmpdir(), `test-manifest-${Date.now()}.json`);
-
-  // initially no manifest
-  assert.equal(loadSyncManifest(tmpPath), null);
-
-  // save and load
-  const manifest = {
-    version: 1,
-    buckets: {
-      "2026-05-14|codex_local": {
-        day: "2026-05-14", providerId: "codex_local",
-        fingerprint: "fp_abc", rowCount: 3, totalTokens: 450,
-        syncedAt: "2026-05-14T10:00:00Z"
-      }
-    }
-  };
-  saveSyncManifest(manifest, tmpPath);
-  const loaded = loadSyncManifest(tmpPath);
-  assert.ok(loaded);
-  assert.equal(loaded.version, 1);
-  assert.ok(loaded.buckets["2026-05-14|codex_local"]);
-
-  // corrupt file → null
-  fs.writeFileSync(tmpPath, "not valid json!!!");
-  assert.equal(loadSyncManifest(tmpPath), null);
-
-  // wrong version → null
-  fs.writeFileSync(tmpPath, JSON.stringify({ version: 99, buckets: {} }));
-  assert.equal(loadSyncManifest(tmpPath), null);
-
-  // clear manifest
-  saveSyncManifest(manifest, tmpPath);
-  clearSyncManifest(tmpPath);
-  assert.equal(loadSyncManifest(tmpPath), null);
-
-  // save null → deletes file
-  saveSyncManifest(manifest, tmpPath);
-  saveSyncManifest(null, tmpPath);
-  assert.equal(loadSyncManifest(tmpPath), null);
-
-  console.log("  testSyncManifestIO passed");
-}
-
 function makeSnapshotItem(overrides) {
   return {
     day: "2026-05-14", toolCode: "codex", providerId: "codex_local",
@@ -1010,6 +675,29 @@ function makeSnapshotPayload(items, participantId, deviceId, options = {}) {
       mode: "device_day_provider",
       day: overrideDay,
       providerId: overrideProvider,
+      bucketFingerprint: computeBucketFingerprint(snapshotItems),
+      rowCount: snapshotItems.length,
+      totalTokens: snapshotItems.reduce((s, i) => s + (i.totalTokens || 0), 0)
+    },
+    items: snapshotItems
+  };
+}
+
+function makeHourlySnapshotPayload(items, participantId, deviceId, options = {}) {
+  const {
+    providerId = items[0]?.providerId || "codex_local",
+    day = items[0]?.day || "2026-05-14",
+    hour = items[0]?.hour ?? 10
+  } = typeof options === "string" ? { providerId: options } : options;
+  const snapshotItems = items.map((i) => ({ ...i, providerId, day, hour }));
+  return {
+    participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    snapshot: {
+      mode: "device_day_hour_provider",
+      day,
+      hour,
+      providerId,
       bucketFingerprint: computeBucketFingerprint(snapshotItems),
       rowCount: snapshotItems.length,
       totalTokens: snapshotItems.reduce((s, i) => s + (i.totalTokens || 0), 0)
@@ -1118,6 +806,45 @@ function testSnapshotReplaceSemantics() {
 
   if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
   console.log("  testSnapshotReplaceSemantics passed");
+}
+
+function testHourlySnapshotDerivesDailyAndProtectsFromLegacy() {
+  const tmp = path.join(os.tmpdir(), `test-hourly-snapshot-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_hourly", did = "d_hourly";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "hourly", identityPublicKey: "pk_hourly", os: "test", appVersion: "0.1.0"
+  });
+
+  const hour10 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "h1", inputTokens: 100, outputTokens: 50, totalTokens: 150 })
+  ], pid, did, { hour: 10 });
+  const hour11 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 11, workdirHash: "h1", inputTokens: 20, outputTokens: 30, totalTokens: 50 })
+  ], pid, did, { hour: 11 });
+  store.upsertUsageBatch(hour10);
+  store.upsertUsageBatch(hour11);
+
+  assert.equal(Object.keys(store.db.usageHourly).length, 2);
+  const dailyRows = Object.values(store.db.usageDaily);
+  assert.equal(dailyRows.length, 1);
+  assert.equal(dailyRows[0].totalTokens, 200);
+  assert.equal(dailyRows[0].hourlyDerived, true);
+
+  const legacyOverwrite = [makeSnapshotItem({ workdirHash: "h1", inputTokens: 999, outputTokens: 1, totalTokens: 1000 })];
+  store.upsertUsageBatch({ participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(), items: legacyOverwrite });
+  assert.equal(Object.values(store.db.usageDaily)[0].totalTokens, 200, "legacy daily must not overwrite hourly-derived daily");
+
+  const hour10Reduced = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "h1", inputTokens: 10, outputTokens: 5, totalTokens: 15 })
+  ], pid, did, { hour: 10 });
+  store.upsertUsageBatch(hour10Reduced);
+  assert.equal(Object.keys(store.db.usageHourly).length, 2, "hourly replace must not delete other hours");
+  assert.equal(Object.values(store.db.usageDaily)[0].totalTokens, 65);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testHourlySnapshotDerivesDailyAndProtectsFromLegacy passed");
 }
 
 function testBucketMetadataSchema() {
@@ -1231,8 +958,8 @@ function testSnapshotProtocolPayload() {
 
   assert.throws(() => assertSnapshot({ ...snap3, rowCount: 0 }, [], "p_abc", "d_xyz"), /empty-bucket snapshot is not supported/);
 
-  // BUCKET_FINGERPRINT_FIELDS has exactly 14 fields
-  assert.equal(BUCKET_FINGERPRINT_FIELDS.length, 14);
+  // BUCKET_FINGERPRINT_FIELDS has exactly 15 fields (including hour)
+  assert.equal(BUCKET_FINGERPRINT_FIELDS.length, 15);
 
   console.log("  testSnapshotProtocolPayload passed");
 }
@@ -1442,123 +1169,6 @@ function testPublicChangelogParsing() {
 - Internal release helper.
 `);
   assert.equal(noPublicItems.sections.length, 0);
-}
-
-function testIdentityImport() {
-  const identity = generateIdentity();
-  const config = {
-    participantId: identity.participantId,
-    nickname: "origin",
-    identityPublicKey: identity.identityPublicKey,
-    identityPrivateKey: identity.identityPrivateKey,
-    deviceId: newId("d")
-  };
-  const exported = exportIdentity(config);
-  const imported = importIdentity(exported, { deviceId: newId("d"), apiBaseUrl: "http://127.0.0.1:8787" }, { persist: false });
-  assert.equal(imported.participantId, config.participantId);
-  assert.notEqual(imported.deviceId, "");
-}
-
-function testUpdateConfigKeepsIdentity() {
-  const identity = generateIdentity();
-  const current = {
-    participantId: identity.participantId,
-    nickname: "origin",
-    identityPublicKey: identity.identityPublicKey,
-    identityPrivateKey: identity.identityPrivateKey,
-    deviceId: newId("d"),
-    apiBaseUrl: "http://127.0.0.1:8787",
-    apiConnection: { status: "reachable", apiBaseUrl: "http://127.0.0.1:8787" },
-    syncStatus: { status: "success", apiBaseUrl: "http://127.0.0.1:8787" },
-    lastSyncAt: "2026-04-30T01:00:00.000Z",
-    autoRefreshEnabled: true,
-    refreshIntervalMinutes: 15
-  };
-  const updated = updateConfig({
-    nickname: "renamed",
-    apiBaseUrl: "",
-    apiConnection: { status: "not_configured", apiBaseUrl: "" },
-    syncStatus: {},
-    lastSyncAt: "",
-    autoRefreshEnabled: false,
-    refreshIntervalMinutes: 3
-  }, current, { persist: false });
-  assert.equal(updated.participantId, current.participantId);
-  assert.equal(updated.deviceId, current.deviceId);
-  assert.equal(updated.nickname, "renamed");
-  assert.equal(updated.apiBaseUrl, "");
-  assert.equal(updated.apiConnection.status, "not_configured");
-  assert.deepEqual(updated.syncStatus, {});
-  assert.equal(updated.lastSyncAt, "");
-  assert.equal(updated.showEstimatedCost, false);
-  assert.equal(updated.autoRefreshEnabled, true);
-  assert.equal(updated.refreshIntervalMinutes, 3);
-  assert.equal(updated.silentUpdateMode, "auto_download");
-  const silentUpdated = updateConfig({ silentUpdateMode: "auto_apply_on_idle" }, updated, { persist: false });
-  assert.equal(silentUpdated.silentUpdateMode, "auto_download");
-  const invalidSilentUpdate = updateConfig({ silentUpdateMode: "bad" }, silentUpdated, { persist: false });
-  assert.equal(invalidSilentUpdate.silentUpdateMode, "auto_download");
-  assert.equal(normalizeSilentUpdateMode("auto_download"), "auto_download");
-  assert.equal(normalizeSilentUpdateMode("bad"), "auto_download");
-  const exported = exportConfig(silentUpdated);
-  assert.equal(Object.hasOwn(exported, "autoRefreshEnabled"), false);
-  assert.equal(Object.hasOwn(exported, "silentUpdateMode"), false);
-}
-
-function testInitConfigKeepsPresetFields() {
-  const config = initConfig({
-    nickname: "preset-user",
-    apiBaseUrl: "https://api.example",
-    language: "en",
-    showEstimatedCost: true,
-    providerEnabled: {
-      codex_local: false,
-      claude_code_local: true,
-      cursor_dashboard_usage: true
-    }
-  }, { persist: false });
-  assert.equal(config.nickname, "preset-user");
-  assert.equal(config.apiBaseUrl, "https://api.example");
-  assert.equal(config.language, "en");
-  assert.equal(config.showEstimatedCost, true);
-  assert.equal(config.autoRefreshEnabled, true);
-  assert.equal(config.silentUpdateMode, "auto_download");
-  assert.equal(Object.hasOwn(config.cursorDashboardUsage, "enabled"), false);
-  assert.deepEqual(config.providerEnabled, {
-    claude_code_local: true,
-    codex_local: false,
-    cursor_dashboard_usage: true
-  });
-}
-
-function testAddCursorTokenKeepsMultipleAccounts() {
-  const identity = generateIdentity();
-  const current = {
-    participantId: identity.participantId,
-    nickname: "origin",
-    identityPublicKey: identity.identityPublicKey,
-    identityPrivateKey: identity.identityPrivateKey,
-    deviceId: newId("d"),
-    cursorDashboardUsage: { workosSessionToken: "", workosSessionTokens: [] }
-  };
-  const first = addCursorToken(JSON.stringify({
-    email: "a@example.com",
-    access_token: jwtWithSub("auth0|user_01A")
-  }), current, { persist: false });
-  const second = addCursorToken(JSON.stringify({
-    email: "b@example.com",
-    access_token: jwtWithSub("auth0|user_01B")
-  }), first, { persist: false });
-  assert.equal(Object.hasOwn(second.cursorDashboardUsage, "enabled"), false);
-  assert.equal(second.providerEnabled.cursor_dashboard_usage, true);
-  assert.equal(second.cursorDashboardUsage.workosSessionTokens.length, 2);
-  assert.deepEqual(second.cursorDashboardUsage.workosSessionTokens.map((item) => item.accountName), ["a@example.com", "b@example.com"]);
-  const cookieToken = `user_01COOKIE::${jwtWithSub("auth0|user_01COOKIE")}`;
-  const fromCookieHeader = addCursorToken(`cursor_anonymous_id=local-id; WorkosCursorSessionToken=${encodeURIComponent(cookieToken)}; statsig_stable_id=stable-id`, current, { persist: false });
-  assert.equal(fromCookieHeader.cursorDashboardUsage.workosSessionTokens.length, 1);
-  assert.equal(fromCookieHeader.cursorDashboardUsage.workosSessionTokens[0].token, cookieToken);
-  assert.equal(fromCookieHeader.cursorDashboardUsage.workosSessionTokens[0].accountName, "user_01COOKIE");
-  assert.throws(() => addCursorToken("not-a-token", current, { persist: false }), /Cursor token is empty or invalid/);
 }
 
 function testDisplayAndPricing() {
@@ -1805,9 +1415,52 @@ function testLoadOrGenerateSalt() {
   fs.unlinkSync(saltPath);
 }
 
-const { identity, items } = await testScan();
-await testProviderEnabledSwitches();
-testLegacyCursorEnabledMigration();
+function makeBackendUploadFixture() {
+  const identity = generateIdentity();
+  const items = [
+    {
+      day: localDay(),
+      toolCode: "codex",
+      providerId: "codex_local",
+      workdirHash: "wd_codex",
+      workdirDisplayName: "codex-project",
+      model: "gpt-5",
+      inputTokens: 950,
+      outputTokens: 300,
+      cacheReadTokens: 200,
+      cacheWriteTokens: 50,
+      reasoningTokens: 150,
+      totalTokens: 1500,
+      sourceQuality: "exact",
+      rawSourceRef: "codex-sample.jsonl",
+      providerVersion: "0.1.2",
+      parserVersion: "0.1.2",
+      sourceFingerprint: "sf_codex"
+    },
+    {
+      day: localDay(),
+      toolCode: "claude_code",
+      providerId: "claude_code_local",
+      workdirHash: "wd_claude",
+      workdirDisplayName: "claude-project",
+      model: "claude-sonnet-4",
+      inputTokens: 2000,
+      outputTokens: 500,
+      cacheReadTokens: 260,
+      cacheWriteTokens: 200,
+      reasoningTokens: 0,
+      totalTokens: 2960,
+      sourceQuality: "exact",
+      rawSourceRef: "claude-sample.jsonl",
+      providerVersion: "0.1.1",
+      parserVersion: "0.1.1",
+      sourceFingerprint: "sf_claude"
+    }
+  ];
+  return { identity, items };
+}
+
+const { identity, items } = makeBackendUploadFixture();
 testHmacSha256Hex();
 testBoardAnonymizer();
 testBoardAnonymizerDailyRotation();
@@ -1822,21 +1475,11 @@ await testBoardApiBusinessDayMetadata();
 testStoreBusinessDayScopedCache();
 testAdminUsageRowRangeFeedsParticipantDetail();
 testSourceFingerprintDedupeKeepsDistinctDays();
-testIdentityImport();
-testUpdateConfigKeepsIdentity();
-testInitConfigKeepsPresetFields();
-testAddCursorTokenKeepsMultipleAccounts();
-await testCursorLocalTokenDetection();
-testCursorDashboardMapping();
-await testCodexLocalSkipsUnknownModel();
-await testCodexLocalNormalizesInputTokens();
-await testCollectorCcusageVerification();
 testForbiddenUploadFields();
 testSnapshotProtocolPayload();
 testBucketMetadataSchema();
 testSnapshotReplaceSemantics();
-testCollectorBucketGrouping();
-testSyncManifestIO();
+testHourlySnapshotDerivesDailyAndProtectsFromLegacy();
 testSnapshotWorkdirHashChange();
 testSnapshotProviderDisabled();
 testSnapshotLegacyCoexistence();

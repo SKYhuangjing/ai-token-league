@@ -6,7 +6,7 @@
     ? { invoke: window.__TAURI__.core.invoke, event: window.__TAURI__.event }
     : { invoke: () => Promise.reject(new Error("Tauri not loaded")), event: {} };
 
-  // Forward a command to the Node sidecar via the Rust relay.
+  // Forward a command to the bundled Rust collector sidecar.
   // Arguments are normalised into an array so the sidecar can spread them.
   function fwd(command) {
     return (...args) => invoke("forward_to_sidecar", { command, args: args.length <= 1 ? (args[0] ?? null) : args });
@@ -38,7 +38,7 @@
     getConfig:           fwd("config:get"),
     checkApi:            fwd("api:check"),
     initConfig:          fwd("config:init"),
-    updateConfig:        fwd("config:update"),
+    updateConfig:        (input) => invoke("update_config", { input }),
 
     // ── Identity / Config / Diagnostics export (Rust handles dialogs) ──
     exportIdentity:      () => invoke("export_identity_dialog"),
@@ -48,7 +48,7 @@
     importConfig:        () => invoke("import_config_dialog"),
 
     // ── Background ──────────────────────────────────────────────
-    backgroundStatus:    fwd("background:status"),
+    backgroundStatus:    () => invoke("background_status"),
 
     // ── Provider roots ──────────────────────────────────────────
     addProviderRoot:     (providerId) => invoke("add_provider_root_dialog", { providerId }),

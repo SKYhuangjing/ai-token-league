@@ -1,0 +1,19 @@
+[package]
+name = "atl-collector"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "atl-collector"
+path = "src/main.rs"
+
+[dependencies]
+collector-core = { path = "../collector-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+urlencoding = { workspace = true }

@@ -8,6 +8,7 @@ use std::thread;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_autostart::ManagerExt;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -54,6 +55,28 @@ struct SidecarState {
     dead: Arc<AtomicBool>,
 }
 
+#[derive(Clone)]
+struct BackgroundState {
+    status: Arc<Mutex<Value>>,
+}
+
+impl Default for BackgroundState {
+    fn default() -> Self {
+        Self {
+            status: Arc::new(Mutex::new(json!({
+                "enabled": false,
+                "running": false,
+                "lastRunAt": null,
+                "lastMode": "disabled",
+                "lastResult": null,
+                "lastError": null,
+                "nextRunAt": null,
+                "updateCheck": {"status": "idle"}
+            }))),
+        }
+    }
+}
+
 impl Drop for SidecarState {
     fn drop(&mut self) {
         if let Ok(mut child) = self.child.lock() {
@@ -63,6 +86,29 @@ impl Drop for SidecarState {
             }
         }
     }
+}
+
+async fn set_background_status(background: &BackgroundState, patch: Value) {
+    let mut status = background.status.lock().await;
+    if let (Some(target), Some(source)) = (status.as_object_mut(), patch.as_object()) {
+        for (key, value) in source {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn apply_launch_at_login(app: &AppHandle, config: &Value) -> Result<(), String> {
+    let enabled = config
+        .get("launchAtLogin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // ── Sidecar communication ──────────────────────────────────────────
@@ -109,91 +155,54 @@ async fn call_sidecar(
 
 // ── Sidecar lifecycle ──────────────────────────────────────────────
 
-fn resolve_node_path() -> String {
-    // Prefer stable absolute locations when launched from Finder or a packaged app.
-    // This avoids paying login-shell startup cost on the common macOS paths.
-    let candidates = if cfg!(target_os = "windows") {
-        vec![
-            "C:\\Program Files\\nodejs\\node.exe",
-            "C:\\Program Files (x86)\\nodejs\\node.exe",
-        ]
-    } else if cfg!(target_os = "linux") {
-        vec![
-            "/usr/bin/node",
-            "/usr/local/bin/node",
-            "/snap/bin/node",
-        ]
-    } else {
-        vec![
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-            "/usr/bin/node",
-        ]
-    };
-    for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return c.to_string();
-        }
-    }
-
-    // Terminal/dev launches usually have node in PATH already.
-    if Command::new("node")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
-    {
-        return "node".to_string();
-    }
-
-    // Last resort: nvm/fnm/volta can require shell initialisation.
-    for shell in &["/bin/zsh", "/bin/bash"] {
-        if let Ok(out) = Command::new(shell)
-            .args(["-l", "-c", "command -v node"])
-            .output()
-        {
-            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path.is_empty() && std::path::Path::new(&path).exists() {
-                return path;
-            }
-        }
-    }
-
-    // Fallback — will fail with a clear error if node is truly missing
-    "node".to_string()
-}
-
 fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
 
-    // Try resource dir first (packaged), then cwd (dev)
+    // Try resource dir first (packaged), then workspace target (dev)
     let resource_dir = app
         .path()
         .resource_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let script_path = {
-        let from_resource = format!("{}/src/desktop/sidecar.cjs", resource_dir);
-        let from_cwd = format!("{}/src/desktop/sidecar.cjs", cwd);
+    let collector_path = {
+        let binary_name = if cfg!(target_os = "windows") {
+            "atl-collector.exe"
+        } else {
+            "atl-collector"
+        };
+
+        // Packaged: resource dir
+        let from_resource = format!("{}/{}", resource_dir, binary_name);
+        // Dev: workspace target/debug
+        let from_debug = format!("{}/target/debug/{}", cwd, binary_name);
+        // Dev: workspace target/release
+        let from_release = format!("{}/target/release/{}", cwd, binary_name);
+
         if std::path::Path::new(&from_resource).exists() {
             from_resource
+        } else if std::path::Path::new(&from_debug).exists() {
+            from_debug
+        } else if std::path::Path::new(&from_release).exists() {
+            from_release
         } else {
-            from_cwd
+            return Err(format!(
+                "atl-collector binary not found (tried {}, {}, {})",
+                from_resource, from_debug, from_release
+            ));
         }
     };
 
-    let node_path = resolve_node_path();
-    let mut child = Command::new(&node_path)
-        .arg(&script_path)
+    let mut child = Command::new(&collector_path)
+        .arg("--sidecar")
+        .env("ATL_RESOURCE_DIR", &resource_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to spawn sidecar (node={}): {}", node_path, e))?;
+        .map_err(|e| format!("Failed to spawn collector ({}): {}", collector_path, e))?;
 
     let stdin = child.stdin.take().ok_or("No stdin")?;
     let stdout = child.stdout.take().ok_or("No stdout")?;
@@ -445,6 +454,17 @@ async fn forward_to_sidecar(
     args: Value,
 ) -> Result<Value, String> {
     call_sidecar(&state, &command, args).await
+}
+
+#[tauri::command]
+async fn update_config(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    input: Value,
+) -> Result<Value, String> {
+    let config = call_sidecar(&state, "config:update", input).await?;
+    apply_launch_at_login(&app, &config)?;
+    Ok(config)
 }
 
 #[tauri::command]
@@ -727,6 +747,101 @@ async fn set_dock_visible(app: AppHandle, visible: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn background_status(background: State<'_, BackgroundState>) -> Result<Value, String> {
+    Ok(background.status.lock().await.clone())
+}
+
+fn start_background_refresh(app: AppHandle, background: BackgroundState) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let config = {
+                let sidecar = app.state::<SidecarState>();
+                call_sidecar(&sidecar, "config:get", json!(null)).await.ok()
+            };
+            let refresh_minutes = config
+                .as_ref()
+                .and_then(|v| v.get("refreshIntervalMinutes"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(15)
+                .max(1);
+            let next_run_at = checked_at_after(refresh_minutes * 60);
+            set_background_status(&background, json!({
+                "enabled": true,
+                "nextRunAt": next_run_at,
+                "updateCheck": {"status": "idle"}
+            })).await;
+
+            tokio::time::sleep(std::time::Duration::from_secs(refresh_minutes * 60)).await;
+
+            let started_at = checked_at_iso();
+            set_background_status(&background, json!({
+                "running": true,
+                "lastRunAt": started_at,
+                "lastError": null,
+                "lastResult": null,
+                "nextRunAt": null
+            })).await;
+            let _ = app.emit("tray:refresh-start", json!(null));
+
+            let api_base_url = config
+                .as_ref()
+                .and_then(|v| v.get("apiBaseUrl"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let (mode, result) = {
+                let sidecar = app.state::<SidecarState>();
+                if api_base_url.is_empty() {
+                    ("scan", call_sidecar(&sidecar, "usage:scan", json!({"force": true})).await)
+                } else {
+                    ("sync", call_sidecar(&sidecar, "usage:sync", json!(null)).await)
+                }
+            };
+
+            match result {
+                Ok(value) => {
+                    let count = value
+                        .get("scanned")
+                        .or_else(|| value.get("rowCount"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let text = if mode == "sync" {
+                        if value.get("queued").and_then(|v| v.as_bool()) == Some(true) {
+                            format!("Queued {} rows", count)
+                        } else {
+                            format!("Uploaded {} rows", count)
+                        }
+                    } else {
+                        format!("Refreshed {} rows", count)
+                    };
+                    set_background_status(&background, json!({
+                        "running": false,
+                        "lastMode": mode,
+                        "lastResult": text,
+                        "lastError": null
+                    })).await;
+                    let _ = app.emit("tray:refresh-done", json!(null));
+                }
+                Err(error) => {
+                    set_background_status(&background, json!({
+                        "running": false,
+                        "lastMode": mode,
+                        "lastResult": "Failed",
+                        "lastError": error
+                    })).await;
+                    let _ = app.emit("tray:refresh-failed", json!(null));
+                }
+            }
+
+            if app.try_state::<SidecarState>().is_some() {
+                rebuild_tray_menu(&app).await;
+            }
+        }
+    });
+}
+
 fn chrono_ts() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -736,12 +851,24 @@ fn chrono_ts() -> String {
     format!("{}", secs)
 }
 
+fn checked_at_after(offset_secs: u64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        + std::time::Duration::from_secs(offset_secs);
+    iso_from_unix_secs(duration.as_secs())
+}
+
 fn checked_at_iso() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap();
-    let secs = duration.as_secs();
+    iso_from_unix_secs(duration.as_secs())
+}
+
+fn iso_from_unix_secs(secs: u64) -> String {
     // Simple ISO-like format: YYYY-MM-DDTHH:MM:SSZ
     let days = secs / 86400;
     let time_of_day = secs % 86400;
@@ -776,30 +903,26 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
-            // Pre-check: ensure Node.js is available before spawning sidecar
-            let node_path = resolve_node_path();
-            if Command::new(&node_path)
-                .arg("--version")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_err()
-            {
-                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-                app.dialog()
-                    .message("AI Token League requires Node.js to run.\n\nPlease install Node.js 18+ from https://nodejs.org and restart the application.")
-                    .title("Node.js Required")
-                    .kind(MessageDialogKind::Error)
-                    .blocking_show();
-                std::process::exit(1);
-            }
-
             let state = spawn_sidecar(app.handle().clone())?;
             app.manage(state);
+            let background = BackgroundState::default();
+            app.manage(background.clone());
 
             // Setup tray
             setup_tray(app.handle())?;
+            start_background_refresh(app.handle().clone(), background);
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<SidecarState>();
+                if let Ok(config) = call_sidecar(&state, "config:get", json!(null)).await {
+                    let _ = apply_launch_at_login(&handle, &config);
+                }
+            });
 
             // Window close → hide to tray
             if let Some(window) = app.get_webview_window("main") {
@@ -818,8 +941,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             forward_to_sidecar,
+            update_config,
             platform,
             set_dock_visible,
+            background_status,
             export_identity_dialog,
             export_config_dialog,
             export_diagnostics_dialog,

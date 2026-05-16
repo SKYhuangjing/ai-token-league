@@ -51,8 +51,9 @@ Reasoning tokens are diagnostic and cost-related fields, not part of the main ra
 
 ```text
 src/backend/      Node.js backend, API, JSON/MySQL stores, OpenRouter pricing
-src/collector/    CLI collector, provider registry, local config, scan/sync logic
-src/desktop/      Tauri desktop app (renderer + Node.js sidecar)
+collector-core/   Rust collector core: config, providers, scan/sync, diagnostics
+atl-collector/    Rust CLI and Tauri sidecar binary
+src/desktop/      Tauri desktop renderer and bridge
 src/shared/       Shared schema, pricing, crypto, dates, display helpers
 src/web/          Public and admin Web UI (index.html, admin.html, app.js, admin.js, styles.css)
 tests/            Node-based test runner
@@ -106,8 +107,8 @@ Desktop feature quick self-test:
 When a desktop client feature is still in development and the immediate goal is to self-test the local behavior or confirm the UI direction, use the fast local dev loop:
 
 ```bash
-node --check src/desktop/sidecar.cjs
 node --check src/desktop/renderer.js
+cargo test --workspace
 npm run desktop
 ```
 
@@ -197,6 +198,14 @@ Two version axes are intentionally separate:
 
 - Client version: `package.json` `"version"`; controls desktop/CLI/server package version, installer filenames, release manifests, update checks, and changelog entries.
 - Product baseline: `package.json` `"productBaseline"`; controls product iteration docs such as `doc/<baseline>-baseline.md`, `doc/<baseline>-development-tasks.md`, and roadmap sections.
+
+### GitHub Remote Auth
+
+This local machine has working SSH credentials for GitHub. Prefer SSH for GitHub push and release-flow checks instead of the HTTPS `github` remote, which may fail non-interactively when it tries to read a password.
+
+```bash
+git push git@github.com:SKYhuangjing/ai-token-league.git <branch-or-tag>
+```
 
 ### Step 1: Bump client version or product baseline
 
@@ -356,10 +365,10 @@ For server deployment, release channel configuration, and client preset setup, s
 Use the smallest verification that covers the touched surface:
 
 - README or docs only: inspect rendered Markdown-sensitive links and run `git diff --check`.
-- Claude Code or Codex collector changes: run `npm test`, then run `npm run collector:verify-ccusage -- --day <YYYY-MM-DD>`. The verifier runs `ccusage@latest` and `@ccusage/codex@latest` through `npx --yes` against local data; token totals and provider-specific input/cache fields must match the script output.
+- Claude Code or Codex collector changes: run `npm test` and `cargo test --workspace`; when checking real local totals against ccusage, use a temporary external/manual comparison, not a legacy in-repo collector path.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop feature quick self-test: if the goal is local behavior or UI-direction confirmation during development, run the desktop feature quick self-test loop above. This is enough for development-stage self-test, not for final delivery.
-- Desktop UI changes before merge or handoff: run `node --check src/desktop/sidecar.cjs`, `node --check src/desktop/renderer.js`, `npm test`, and `npm run desktop` to verify the Tauri app launches.
+- Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm test`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches.
 - Packaging, updater, preset, install/download UX, or package-resource changes: run tests, then build with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.
 
@@ -374,7 +383,7 @@ All user-facing UI text must support `zh-CN` and `en` via `src/shared/i18n.js`.
 - **New features**: must add i18n keys for both `zh-CN` and `en` in `src/shared/i18n.js`, and use `t()` / `data-i18n` in all UI code.
 - **No hardcoded user-facing strings**: do not hardcode Chinese or English text in HTML or JS that users see.
 - **Number formatting**: use `src/shared/display.js` `formatTokenCompact()` for locale-aware number display; do not duplicate inline.
-- **Exception**: CLI (`src/collector/cli.js`) is English-only and does not require i18n.
+- **Exception**: Rust CLI (`atl-collector`) is English-only and does not require i18n.
 - **Verification**: new UI features must be tested with both `zh-CN` and `en` language settings.
 
 ## Documentation Rules
