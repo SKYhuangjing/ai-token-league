@@ -114,6 +114,8 @@ npm run desktop
 
 Manually exercise the feature entry, the core state, and any relevant empty or error state. Treat this as development-stage self-test evidence only; it does not replace merge, release, smoke, or packaged-runtime verification.
 
+Do not package by default for ordinary desktop UI or renderer changes. Package only when the changed surface can differ between Tauri dev mode and the installed/bundled runtime.
+
 Tests:
 
 ```bash
@@ -139,7 +141,7 @@ scripts/release.sh --platform all --yes
 scripts/release.sh --platform all --env env.local --upload --yes
 ```
 
-For local development changes that touch packaged desktop behavior, presets, updater/release metadata, or install/download UX, build exactly one current-machine zip before treating the work as done. The agent or script must identify the environment; the user should not have to choose a platform:
+For local development changes that touch packaged desktop behavior, bundled assets, presets, updater/release metadata, package-resource wiring, or install/download UX, build exactly one current-machine zip before treating the work as done. The agent or script must identify the environment; the user should not have to choose a platform:
 
 ```bash
 scripts/release.sh --platform current --env env.local --yes
@@ -372,8 +374,8 @@ Use the smallest verification that covers the touched surface:
 - Claude Code or Codex collector changes: run `npm test` and `cargo test --workspace`; when checking real local totals against ccusage, use a temporary external/manual comparison, not a legacy in-repo collector path.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop feature quick self-test: if the goal is local behavior or UI-direction confirmation during development, run the desktop feature quick self-test loop above. This is enough for development-stage self-test, not for final delivery.
-- Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm test`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches.
-- Packaging, updater, preset, install/download UX, or package-resource changes: run tests, then build with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
+- Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm test`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches. This is the default path for renderer/UI behavior.
+- Packaging, updater, preset, bundled-asset, install/download UX, or package-resource changes: run tests, then build with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.
 
 Smoke checklist: `doc/smoke-checklist.md`.

@@ -224,18 +224,18 @@ npm run desktop
 
 `npm start`、`npm run package:*`、`npm run release:*` 是底层命令，适合定向验证或排障；日常服务启动和完整发布优先使用上面的脚本入口。
 
-本地开发如果改到桌面打包资源、预置配置、更新/发布元数据、安装或下载体验，只需要构建当前电脑可用的一个 zip 包；平台由脚本自动识别：
-
-```bash
-scripts/release.sh --platform current --env env.local --yes
-```
-
 常用命令：
 
 ```bash
 npm test
 npm run smoke
 npm run desktop
+```
+
+普通桌面 UI 或 renderer 改动默认用 `npm run desktop` 验证，不需要重新打包。本地开发只有改到打包后才会变化的面，才构建当前电脑可用的一个 zip 包：桌面打包资源、bundled assets、预置配置、更新/发布元数据、安装或下载体验。平台由脚本自动识别：
+
+```bash
+scripts/release.sh --platform current --env env.local --yes
 ```
 
 构建：

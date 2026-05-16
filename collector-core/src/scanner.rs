@@ -71,7 +71,10 @@ pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>)
     let codex_files = codex.scan_sessions(config);
     for file in &codex_files {
         let source_meta = crate::provider::common::source_metadata(file, codex.id(), codex.version());
-        let items = if let Some(cached) = cache_items.get(&source_meta.source_fingerprint) {
+        let items = if let Some(cached) = cache_items
+            .get(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
             cached.clone()
         } else {
             let events = codex.parse_usage(file);
@@ -98,7 +101,10 @@ pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>)
     let claude_files = claude.scan_sessions(config);
     for file in &claude_files {
         let source_meta = crate::provider::common::source_metadata(file, claude.id(), claude.version());
-        let items = if let Some(cached) = cache_items.get(&source_meta.source_fingerprint) {
+        let items = if let Some(cached) = cache_items
+            .get(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
             cached.clone()
         } else {
             let events = claude.parse_usage(file);
@@ -257,6 +263,12 @@ pub fn group_by_bucket(items: &[Value]) -> Vec<(String, Value)> {
         .collect()
 }
 
+fn cached_items_have_hour(items: &[Value]) -> bool {
+    items
+        .iter()
+        .all(|item| item.get("hour").and_then(|v| v.as_i64()).is_some_and(|hour| (0..=23).contains(&hour)))
+}
+
 /// Finalize a raw provider event: resolve workdir, apply publicUsageItem.
 fn finalize_event(event: Value, config: &AppConfig) -> Value {
     let candidate = event["workdirCandidate"].as_str().unwrap_or("");
@@ -345,5 +357,12 @@ mod tests {
         let buckets = group_by_bucket(&items);
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets[0].1["mode"], "device_day_hour_provider");
+    }
+
+    #[test]
+    fn test_cached_items_have_hour_rejects_legacy_rows() {
+        assert!(cached_items_have_hour(&[json!({ "hour": 10 })]));
+        assert!(!cached_items_have_hour(&[json!({ "day": "2026-05-16" })]));
+        assert!(!cached_items_have_hour(&[json!({ "hour": 24 })]));
     }
 }

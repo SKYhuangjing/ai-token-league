@@ -224,18 +224,18 @@ Project scripts are the preferred entrypoints for service and release workflows:
 
 `npm start`, `npm run package:*`, and `npm run release:*` are low-level commands for targeted verification or debugging. Prefer the script entrypoints for normal service startup and full release work.
 
-For local development changes that touch desktop package resources, presets, update/release metadata, install, or download UX, build exactly one zip for the current machine. The script detects the platform:
-
-```bash
-scripts/release.sh --platform current --env env.local --yes
-```
-
 Common checks:
 
 ```bash
 npm test
 npm run smoke
 npm run desktop
+```
+
+Ordinary desktop UI or renderer changes use `npm run desktop` by default and do not require rebuilding a package. Build exactly one zip for the current machine only when the change can differ in the packaged runtime: desktop package resources, bundled assets, presets, update/release metadata, install, or download UX. The script detects the platform:
+
+```bash
+scripts/release.sh --platform current --env env.local --yes
 ```
 
 Build packages:

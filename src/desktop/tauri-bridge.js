@@ -107,7 +107,8 @@
     resetWithCloud:      fwd("app:reset-with-cloud"),
 
     // ── Tray ────────────────────────────────────────────────────
-    rebuildTrayMenu:     fwd("tray:rebuild-menu"),
+    rebuildTrayMenu:     () => invoke("rebuild_tray_menu_command"),
+    updateTrayCost:      fwd("tray:cost-state"),
 
     // ── Dock (macOS) ───────────────────────────────────────────
     setDockVisible:      (visible) => invoke("set_dock_visible", { visible }),

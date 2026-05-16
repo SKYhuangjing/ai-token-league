@@ -141,7 +141,7 @@ async fn call_sidecar(
         .await
         .map_err(|_| "sidecar channel closed".to_string())?;
 
-    let response = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
+    let response = tokio::time::timeout(sidecar_timeout_for_command(command), rx)
         .await
         .map_err(|_| "sidecar timeout".to_string())?
         .map_err(|_| "sidecar response dropped".to_string())?;
@@ -150,6 +150,15 @@ async fn call_sidecar(
         Ok(response.data)
     } else {
         Err(response.error)
+    }
+}
+
+fn sidecar_timeout_for_command(command: &str) -> std::time::Duration {
+    match command {
+        "usage:scan" | "usage:scan-start" | "usage:scan-status" | "usage:sync" => {
+            std::time::Duration::from_secs(10 * 60)
+        }
+        _ => std::time::Duration::from_secs(30),
     }
 }
 
@@ -417,9 +426,21 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     "refresh" => {
                         let _ = app_handle.emit("tray:refresh-start", ());
-                        let _ = call_sidecar(&app_handle.state::<SidecarState>(), "usage:scan-start", json!(null)).await;
-                        rebuild_tray_menu(&app_handle).await;
-                        let _ = app_handle.emit("tray:refresh-done", ());
+                        match call_sidecar(
+                            &app_handle.state::<SidecarState>(),
+                            "usage:scan-start",
+                            json!({"force": true}),
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                rebuild_tray_menu(&app_handle).await;
+                                let _ = app_handle.emit("tray:refresh-done", ());
+                            }
+                            Err(error) => {
+                                let _ = app_handle.emit("tray:refresh-failed", json!(error));
+                            }
+                        }
                     }
                     "visit-cloud" => {
                         if !url.is_empty() {
@@ -449,11 +470,26 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
 #[tauri::command]
 async fn forward_to_sidecar(
+    app: AppHandle,
     state: State<'_, SidecarState>,
     command: String,
     args: Value,
 ) -> Result<Value, String> {
-    call_sidecar(&state, &command, args).await
+    let result = call_sidecar(&state, &command, args).await?;
+    if command_updates_usage_cache(&command) {
+        rebuild_tray_menu(&app).await;
+    }
+    Ok(result)
+}
+
+fn command_updates_usage_cache(command: &str) -> bool {
+    matches!(command, "usage:scan" | "usage:scan-start" | "usage:sync")
+}
+
+#[tauri::command]
+async fn rebuild_tray_menu_command(app: AppHandle) -> Result<Value, String> {
+    rebuild_tray_menu(&app).await;
+    Ok(json!({"ok": true}))
 }
 
 #[tauri::command]
@@ -940,8 +976,12 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                         "running": false,
                         "lastMode": mode,
                         "lastResult": text,
-                        "lastError": null
+                        "lastError": null,
+                        "cacheScannedAt": value.get("scannedAt").cloned().unwrap_or(Value::Null),
+                        "sourceFingerprint": value.get("sourceFingerprint").cloned().unwrap_or(Value::Null),
+                        "rowCount": count
                     })).await;
+                    rebuild_tray_menu(&app).await;
                     let _ = app.emit("tray:refresh-done", json!(null));
                 }
                 Err(error) => {
@@ -953,10 +993,6 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                     })).await;
                     let _ = app.emit("tray:refresh-failed", json!(null));
                 }
-            }
-
-            if app.try_state::<SidecarState>().is_some() {
-                rebuild_tray_menu(&app).await;
             }
         }
     });
@@ -1062,6 +1098,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             forward_to_sidecar,
+            rebuild_tray_menu_command,
             update_config,
             platform,
             set_dock_visible,

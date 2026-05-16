@@ -59,12 +59,14 @@ let latestIdentityBusinessDay = "";
 let latestClientInfo = null;
 let lastIdentityCheckLocalDay = localDay();
 let identityRefreshTimer = null;
+let runtimeEventHandlersRegistered = false;
 let overviewRange = "today";
 let workdirsRange = "today";
 let sourcesProviderTab = "claude_code_local";
 let latestSyncInfo = "";
 let pricingRefreshPromise = null;
 let mandatoryUpdateActive = false;
+let latestTrayCostKey = "";
 
 function showToast(message) {
   const toast = document.querySelector("#toast");
@@ -95,6 +97,7 @@ document.querySelectorAll('[data-section="settings"]').forEach((button) => {
 });
 
 $("#brand-refresh").addEventListener("click", () => {
+  if (scanRunning || $("#brand-refresh").disabled) return;
   logRuntimeEvent("refresh_click", { location: "brand" });
   run(() => loadToday(true));
 });
@@ -279,6 +282,7 @@ async function saveInstantPreference(field, value) {
 
   try {
     if (field === "showEstimatedCost" && value) await refreshPricing();
+    if (field === "showEstimatedCost" && !value) await syncTrayCostState();
     renderInstantPreferenceViews();
     const config = await api.updateConfig({ [field]: value });
     latestConfig = config;
@@ -423,7 +427,7 @@ function selectSection(section) {
 function handlePrimaryNavigationClick(section) {
   selectSection(section);
   if (section === "overview") {
-    run(() => loadToday(true));
+    if (!scanRunning) run(() => loadToday(true));
   }
   if (section === "sources") run(loadHealth);
 }
@@ -690,6 +694,7 @@ async function resetWithCloud() {
 }
 
 async function boot() {
+  registerRuntimeEventHandlers();
   const config = await api.getConfig();
   if (config) {
     latestConfig = config;
@@ -724,6 +729,11 @@ async function boot() {
     showToast(t("desktop.renderer.openSettings"));
     document.querySelector('[data-section="settings"]').click();
   }
+}
+
+function registerRuntimeEventHandlers() {
+  if (runtimeEventHandlersRegistered) return;
+  runtimeEventHandlersRegistered = true;
   api.onUpdateProgress((data) => {
     updateCheckProgress(data);
   });
@@ -744,9 +754,9 @@ async function boot() {
     });
   }
   if (api.onTrayRefreshFailed) {
-    api.onTrayRefreshFailed(() => {
+    api.onTrayRefreshFailed((error) => {
       setScanState(false);
-      showToast(t("desktop.renderer.refreshStatusFailed", { error: "Background refresh failed" }));
+      showToast(t("desktop.renderer.refreshStatusFailed", { error: error || "Background refresh failed" }));
     });
   }
 }
@@ -836,11 +846,16 @@ function updateCheckProgress(data) {
 }
 
 async function loadToday(force = false) {
-  const status = await api.startUsageScan({ force });
-  applyUsageScanStatus(status, { force });
-  schedulePricingRefresh();
-  loadMyIdentity().catch(() => {});
-  pollUsageScan();
+  setScanState(true, force);
+  try {
+    const status = await api.startUsageScan({ force });
+    applyUsageScanStatus(status, { force });
+    schedulePricingRefresh();
+    await finalizeUsageScanStatus(status, force);
+  } catch (error) {
+    setScanState(false);
+    throw error;
+  }
 }
 
 async function loadMyIdentity() {
@@ -886,7 +901,9 @@ function apiBaseUrlChanged(previousConfig = {}, nextConfig = {}) {
 
 function setScanState(running, force = false) {
   scanRunning = running;
-  $("#brand-refresh").disabled = running;
+  const refreshButton = $("#brand-refresh");
+  refreshButton.disabled = running;
+  refreshButton.setAttribute("aria-disabled", running ? "true" : "false");
   if (running) {
     showToast(t("desktop.renderer.scanningLocal"));
   }
@@ -895,9 +912,40 @@ function setScanState(running, force = false) {
 }
 
 async function loadTrend(force = false) {
-  const status = await api.startUsageScan({ force });
-  applyUsageScanStatus(status, { force });
-  schedulePricingRefresh();
+  setScanState(true, force);
+  try {
+    const status = await api.startUsageScan({ force });
+    applyUsageScanStatus(status, { force });
+    schedulePricingRefresh();
+    await finalizeUsageScanStatus(status, force);
+  } catch (error) {
+    setScanState(false);
+    throw error;
+  }
+}
+
+async function finalizeUsageScanStatus(status, showCompletionToast = false) {
+  loadMyIdentity().catch(() => {});
+  if (status.running || status.syncRunning) {
+    restartUsageScanPoll();
+    return;
+  }
+  if (scanPollTimer) {
+    clearInterval(scanPollTimer);
+    scanPollTimer = null;
+  }
+  setScanState(false);
+  await refreshForegroundSyncStatus(status);
+  if (showCompletionToast) {
+    showToast(t("desktop.rail.scanComplete"));
+  }
+}
+
+function restartUsageScanPoll() {
+  if (scanPollTimer) {
+    clearInterval(scanPollTimer);
+    scanPollTimer = null;
+  }
   pollUsageScan();
 }
 
@@ -1549,6 +1597,7 @@ function renderToday() {
     : `<div class="empty-state">${t("desktop.renderer.noModelUsage")}</div>`;
   renderOverviewTrend(rangeItems);
   renderRailStatus();
+  syncTrayCostState();
 }
 
 function renderWorkdirs() {
@@ -1571,12 +1620,12 @@ function renderWorkdirs() {
 }
 
 function renderOverviewTrend(items) {
-  const grain = overviewRange === "30d" ? "week" : overviewRange === "all" ? "month" : "day";
-  const trendRange = overviewRange === "today" ? "7d" : overviewRange;
-  const trendItems = usageForRange(trendRange);
-  const rows = groupByGrain(trendItems, grain);
+  const grain = overviewTrendGrain();
+  const rows = overviewRange === "today"
+    ? groupByHour(items)
+    : groupByGrain(usageForRange(overviewRange), grain).filter(hasPositiveUsage);
   const max = Math.max(...rows.map((row) => row.totalTokens), 1);
-  const peakIdx = rows.reduce((best, row, i) => row.totalTokens > rows[best].totalTokens ? i : best, 0);
+  const peakIdx = rows.length ? rows.reduce((best, row, i) => row.totalTokens > rows[best].totalTokens ? i : best, 0) : -1;
 
   $("#overview-trend-summary").textContent = rows.length
     ? t(`desktop.overview.trend.${overviewRange}`)
@@ -1593,7 +1642,7 @@ function renderOverviewTrend(items) {
     sparkEl.style.gridTemplateColumns = gridCols;
     sparkEl.innerHTML = rows.map((row, i) => {
       const isHot = i === peakIdx;
-      return `<div class="spark-bar${isHot ? " hot" : ""}" data-open-overview-trend="${escapeHtml(row.periodStart)}|${escapeHtml(row.periodEnd)}" style="height:${Math.max(12, (row.totalTokens / max) * 100)}%; transition: height 0.3s ease; cursor: pointer;">
+      return `<div class="spark-bar${isHot ? " hot" : ""}" data-open-overview-trend="${escapeHtml(trendBucketKey(row))}" style="height:${Math.max(12, (row.totalTokens / max) * 100)}%; transition: height 0.3s ease; cursor: pointer;">
         ${renderSparkBarValue(row)}
       </div>`;
     }).join("");
@@ -1605,6 +1654,13 @@ function renderOverviewTrend(items) {
     sparkEl.innerHTML = `<div class="empty-state">${t("desktop.renderer.noLocalUsageFound")}</div>`;
     axisEl.innerHTML = "";
   }
+}
+
+function overviewTrendGrain() {
+  if (overviewRange === "today") return "hour";
+  if (overviewRange === "30d") return "week";
+  if (overviewRange === "all") return "month";
+  return "day";
 }
 
 function renderSparkBarValue(row) {
@@ -1646,7 +1702,78 @@ function groupByGrain(items, grain) {
     .map((row) => ({ ...row, missingPriceModels: sortedBreakdown(row.missingPriceModels || {}) }));
 }
 
+function groupByHour(items) {
+  const map = new Map();
+  for (const item of items) {
+    const hour = clampHour(item.hour);
+    const key = `${item.day}|${hour}`;
+    const row = map.get(key) || emptyTrendRow({
+      periodStart: item.day,
+      periodEnd: item.day,
+      hour,
+      bucketLabel: formatHourLabel(hour)
+    });
+    const withCost = addDisplayCostToUsageItem(item);
+    addUsageToTrendRow(row, item, withCost);
+    addCostBreakdownItem(row.modelBreakdownMap, item.model || "unknown", item, withCost);
+    addCostBreakdownItem(row.workdirBreakdownMap, item.workdirDisplayName || "unknown", item, withCost);
+    map.set(key, row);
+  }
+  return [...map.values()]
+    .sort((a, b) => a.periodStart.localeCompare(b.periodStart) || (a.hour ?? 0) - (b.hour ?? 0))
+    .map(finalizeTrendRow)
+    .filter(hasPositiveUsage);
+}
+
+function emptyTrendRow(extra = {}) {
+  return {
+    periodStart: "",
+    periodEnd: "",
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    estimatedCostUsd: 0,
+    costQuality: "",
+    pricingVersion: "",
+    totalTokens: 0,
+    modelBreakdownMap: {},
+    workdirBreakdownMap: {},
+    ...extra
+  };
+}
+
+function addUsageToTrendRow(row, item, withCost = addDisplayCostToUsageItem(item)) {
+  row.inputTokens += item.inputTokens || 0;
+  row.outputTokens += item.outputTokens || 0;
+  row.reasoningTokens += item.reasoningTokens || 0;
+  row.cacheReadTokens += item.cacheReadTokens || 0;
+  row.cacheWriteTokens += item.cacheWriteTokens || 0;
+  row.totalTokens += item.totalTokens || 0;
+  aggregateCost(row, withCost);
+  return row;
+}
+
+function finalizeTrendRow(row) {
+  return {
+    ...row,
+    compositionSummary: tokenCompositionSummary(row),
+    missingPriceModels: sortedBreakdown(row.missingPriceModels || {}),
+    modelBreakdown: finalizeCostBreakdown(row.modelBreakdownMap || {}),
+    workdirBreakdown: finalizeCostBreakdown(row.workdirBreakdownMap || {})
+  };
+}
+
+function hasPositiveUsage(row) {
+  return Number(row?.totalTokens || 0) > 0;
+}
+
 function formatAxisLabel(row, grain) {
+  if (grain === "hour") {
+    const hour = clampHour(row.hour);
+    return `<span>${hour % 6 === 0 ? formatHourLabel(hour) : ""}</span>`;
+  }
   const start = new Date(row.periodStart + "T00:00:00Z");
   if (grain === "month") {
     return `<span>${start.getUTCFullYear()}/${String(start.getUTCMonth() + 1).padStart(2, "0")}</span>`;
@@ -2055,7 +2182,8 @@ function groupTrend(items) {
         costQuality: "",
         modelBreakdownMap: {},
         workdirBreakdownMap: {},
-        modelDetailMap: {}
+        modelDetailMap: {},
+        detailItems: []
       };
     const withCost = addDisplayCostToUsageItem(item);
     const modelDetailKey = `${item.workdirDisplayName || "unknown"}|${item.model || "unknown"}`;
@@ -2082,6 +2210,7 @@ function groupTrend(items) {
     aggregateCost(row, withCost);
     addCostBreakdownItem(row.modelBreakdownMap, item.model || "unknown", item, withCost);
     addCostBreakdownItem(row.workdirBreakdownMap, item.workdirDisplayName || "unknown", item, withCost);
+    row.detailItems.push(item);
     modelDetail.inputTokens += item.inputTokens || 0;
     modelDetail.outputTokens += item.outputTokens || 0;
     modelDetail.reasoningTokens += item.reasoningTokens || 0;
@@ -2100,9 +2229,12 @@ function groupTrend(items) {
       missingPriceModels: sortedBreakdown(row.missingPriceModels || {}),
       modelBreakdown: finalizeCostBreakdown(row.modelBreakdownMap || {}),
       workdirBreakdown: finalizeCostBreakdown(row.workdirBreakdownMap || {}),
+      detailBreakdown: groupOverviewDetailBreakdown(row.detailItems || [], meta.grain),
+      detailBreakdownTitle: detailBreakdownTitleForParentGrain(meta.grain),
       modelDetails: Object.values(row.modelDetailMap || {}).sort((a, b) => b.totalTokens - a.totalTokens),
       models: [...row.models].sort()
-    }));
+    }))
+    .filter(hasPositiveUsage);
 }
 
 function groupWorkdirs(items) {
@@ -2328,8 +2460,33 @@ function renderTrendSelection(row) {
         ${renderDetailMeters(row.workdirBreakdown)}
       </section>
     </div>
+    ${renderTrendDetailBreakdown(row)}
     ${renderTrendModelDetails(row)}
   </section>`;
+}
+
+function renderTrendDetailBreakdown(row) {
+  const details = (row.detailBreakdown || []).filter(hasPositiveUsage);
+  if (!details.length) return "";
+  const max = Math.max(...details.map((item) => item.totalTokens), 1);
+  return `<section class="visual-card drawer-meter-card">
+    <h3>${escapeHtml(row.detailBreakdownTitle || "")}</h3>
+    <div class="hour-detail-grid">
+      ${details.map((item) => {
+        const pct = Math.max(3, (item.totalTokens / max) * 100);
+        return `<article class="hour-detail-row">
+          <span>${escapeHtml(formatDetailBreakdownPeriod(item))}</span>
+          <i style="--bar:${pct}%"></i>
+          <strong title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</strong>
+        </article>`;
+      }).join("")}
+    </div>
+  </section>`;
+}
+
+function formatDetailBreakdownPeriod(row) {
+  if (row.hour !== undefined) return row.bucketLabel || formatHourLabel(row.hour);
+  return formatTrendPeriod(row);
 }
 
 function renderTrendDetailHero(row) {
@@ -2380,12 +2537,16 @@ function openDetailDrawer({ eyebrow, title, body }) {
 }
 
 function openTrendBreakdownDrawer(periodKey) {
-  const [start, end] = periodKey.split("|");
-  const trendRange = overviewRange === "today" ? "7d" : overviewRange;
-  const allItems = usageForRange(trendRange).filter((item) => item.day >= start && item.day <= end);
+  const [start, end, hourValue] = periodKey.split("|");
+  const hour = hourValue === undefined ? null : clampHour(Number(hourValue));
+  const allItems = usageForRange(overviewRange).filter((item) => (
+    item.day >= start &&
+    item.day <= end &&
+    (hour === null || clampHour(item.hour) === hour)
+  ));
   if (!allItems.length) return;
 
-  const row = aggregatePeriodRow(allItems, start, end);
+  const row = aggregatePeriodRow(allItems, start, end, hour, overviewTrendGrain());
   openDetailDrawer({
     eyebrow: t("desktop.trend.detailEyebrow"),
     title: formatTrendPeriod(row),
@@ -2393,10 +2554,11 @@ function openTrendBreakdownDrawer(periodKey) {
   });
 }
 
-function aggregatePeriodRow(items, periodStart, periodEnd) {
+function aggregatePeriodRow(items, periodStart, periodEnd, hour = null, parentGrain = "day") {
   const row = {
     periodStart,
     periodEnd,
+    ...(hour === null ? {} : { hour, bucketLabel: formatHourLabel(hour) }),
     inputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
@@ -2426,8 +2588,27 @@ function aggregatePeriodRow(items, periodStart, periodEnd) {
     compositionSummary: tokenCompositionSummary(row),
     missingPriceModels: sortedBreakdown(row.missingPriceModels || {}),
     modelBreakdown: finalizeCostBreakdown(row.modelBreakdownMap || {}),
-    workdirBreakdown: finalizeCostBreakdown(row.workdirBreakdownMap || {})
+    workdirBreakdown: finalizeCostBreakdown(row.workdirBreakdownMap || {}),
+    detailBreakdown: groupOverviewDetailBreakdown(items, parentGrain, hour),
+    detailBreakdownTitle: detailBreakdownTitleForParentGrain(parentGrain)
   };
+}
+
+function groupOverviewDetailBreakdown(items, parentGrain, hour = null) {
+  if (hour !== null || parentGrain === "hour") return [];
+  if (parentGrain === "day") return groupByHour(items);
+  if (parentGrain === "week") return groupByGrain(items, "day").filter(hasPositiveUsage);
+  if (parentGrain === "month") return groupByGrain(items, "week").filter(hasPositiveUsage);
+  if (parentGrain === "year") return groupByGrain(items, "month").filter(hasPositiveUsage);
+  return [];
+}
+
+function detailBreakdownTitleForParentGrain(parentGrain) {
+  if (parentGrain === "day") return t("desktop.trend.hourlyDetail");
+  if (parentGrain === "week") return t("desktop.trend.dailyDetail");
+  if (parentGrain === "month") return t("desktop.trend.weeklyDetail");
+  if (parentGrain === "year") return t("desktop.trend.monthlyDetail");
+  return "";
 }
 
 function openWorkdirDrawer(workdirHash) {
@@ -2545,7 +2726,7 @@ function aggregateComposition(items) {
 }
 
 function trendBucketKey(row) {
-  return `${row.periodStart}|${row.periodEnd}`;
+  return row.hour !== undefined ? `${row.periodStart}|${row.periodEnd}|${row.hour}` : `${row.periodStart}|${row.periodEnd}`;
 }
 
 function humanDominant(value = "") {
@@ -2793,10 +2974,10 @@ function schedulePricingRefresh() {
 }
 
 async function refreshPricing({ renderOnComplete = false } = {}) {
-  if (!latestConfig?.showEstimatedCost) return;
   if (!latestConfig?.apiBaseUrl) {
     serverPriceMap = null;
     pricingSource = t("desktop.renderer.serverPricingUnavailable");
+    await syncTrayCostState();
     if (renderOnComplete) renderInstantPreferenceViews();
     return;
   }
@@ -2812,7 +2993,30 @@ async function refreshPricing({ renderOnComplete = false } = {}) {
     serverPriceMap = null;
     pricingSource = t("desktop.renderer.serverPricingError", { error: error.message });
   } finally {
+    await syncTrayCostState();
     if (renderOnComplete) renderInstantPreferenceViews();
+  }
+}
+
+async function syncTrayCostState() {
+  if (!api.updateTrayCost) return;
+  const cost = aggregateUsageCost(usageForRange("today"));
+  const estimatedCostUsd = latestConfig?.showEstimatedCost && cost.hasKnownPrice
+    ? Number(cost.estimatedCostUsd || 0)
+    : null;
+  const key = JSON.stringify({
+    estimatedCostUsd,
+    missingPriceTokens: cost.missingPriceTokens || 0,
+    rows: usageForRange("today").length
+  });
+  if (key === latestTrayCostKey) return;
+  latestTrayCostKey = key;
+  try {
+    await api.updateTrayCost({ estimatedCostUsd });
+    await api.rebuildTrayMenu?.();
+  } catch (error) {
+    latestTrayCostKey = "";
+    console.error(error);
   }
 }
 
@@ -2877,8 +3081,19 @@ function formatDate(value) {
 }
 
 function formatTrendPeriod(row) {
+  if (row?.hour !== undefined) return `${formatDate(row.periodStart)} ${formatHourLabel(row.hour)}`;
   if (row.periodStart === row.periodEnd) return formatDate(row.periodStart);
   return `${formatDate(row.periodStart)} - ${formatDate(row.periodEnd)}`;
+}
+
+function clampHour(value) {
+  const hour = Number(value ?? 0);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return 0;
+  return hour;
+}
+
+function formatHourLabel(hour) {
+  return `${String(clampHour(hour)).padStart(2, "0")}:00`;
 }
 
 function trendViewMeta() {

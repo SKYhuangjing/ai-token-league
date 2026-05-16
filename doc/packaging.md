@@ -72,7 +72,7 @@ scripts/release.sh --platform current --env env.local --yes
 
 Use `--platform all` only for explicit cross-platform packaging or release-facing changes.
 
-Use a clean build when validating UI or packaging changes:
+Use a clean build when validating packaged UI behavior or packaging changes:
 
 ```bash
 rm -rf src-tauri/target/release/bundle
@@ -240,7 +240,7 @@ The upload script reads `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_
 
 ## Verify
 
-Run these before treating the package as current:
+Run these before treating a package-related change as current. Ordinary desktop UI and renderer changes should use the dev-mode verification in `AGENTS.md` instead of this package checklist.
 
 ```bash
 node --check src/desktop/renderer.js

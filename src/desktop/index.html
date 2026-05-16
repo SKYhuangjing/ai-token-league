@@ -255,9 +255,11 @@
               <div>
                 <h4 data-i18n="desktop.about.updatePolicy">Update Policy</h4>
               </div>
-              <div class="row-card row-action-card update-card" id="check-update" role="button" tabindex="0">
-                <span class="setting-icon icon" style="--icon: url('./icons/rotate-cw.svg')" aria-hidden="true"></span>
-                <div><strong data-i18n="desktop.app.checkUpdate">Check for updates</strong><span class="muted" id="update-status-text" data-i18n="desktop.renderer.updateVersionsDash">Local - · Latest -</span></div>
+              <div class="row-card update-card">
+                <button class="update-check-button row-action-card" id="check-update" type="button">
+                  <span class="setting-icon icon" style="--icon: url('./icons/rotate-cw.svg')" aria-hidden="true"></span>
+                  <span><strong data-i18n="desktop.app.checkUpdate">Check for updates</strong><span class="muted" id="update-status-text" data-i18n="desktop.renderer.updateVersionsDash">Local - · Latest -</span></span>
+                </button>
                 <div class="row-inline-actions">
                   <span class="badge" id="update-badge" hidden data-i18n="desktop.renderer.latestDash">-</span>
                   <button class="outline-button row-inline-action" id="download-update" type="button" hidden disabled data-i18n="desktop.app.downloadRestart">Download update</button>
@@ -268,7 +270,7 @@
             </div>
           </section>
 
-          <section class="settings-panel" data-settings-panel="about">
+          <section class="settings-panel about-panel" data-settings-panel="about">
             <div class="stack">
               <div>
                 <h4 data-i18n="desktop.backup.title">Data Protection</h4>
@@ -281,23 +283,28 @@
                 </div>
                 <label class="toggle-row"><input id="localBackupEnabled" type="checkbox" /><span data-i18n="status.off">Off</span></label>
               </div>
-              <div class="backup-settings-grid">
-                <label class="field">
-                  <span data-i18n="desktop.backup.directory">Backup folder</span>
-                  <input id="localBackupDirectory" readonly />
-                </label>
-                <label class="field">
-                  <span data-i18n="desktop.backup.retention">Keep recent backups</span>
-                  <select id="localBackupRetention">
-                    <option value="3">3</option>
-                    <option value="7">7</option>
-                    <option value="14">14</option>
-                    <option value="30">30</option>
-                  </select>
-                </label>
-                <div class="row-inline-actions backup-actions">
-                  <button class="outline-button row-inline-action" id="choose-backup-directory" type="button" data-i18n="desktop.backup.chooseFolder">Choose folder</button>
-                  <button class="outline-button row-inline-action" id="reveal-backup-directory" type="button" data-i18n="desktop.backup.reveal">Show in Finder</button>
+              <div class="row-card backup-settings-card">
+                <span class="setting-icon icon" style="--icon: url('./icons/database.svg')" aria-hidden="true"></span>
+                <div class="backup-settings-body">
+                  <div class="backup-settings-grid">
+                    <label class="field">
+                      <span data-i18n="desktop.backup.directory">Backup folder</span>
+                      <input id="localBackupDirectory" readonly />
+                    </label>
+                    <label class="field">
+                      <span data-i18n="desktop.backup.retention">Keep recent backups</span>
+                      <select id="localBackupRetention">
+                        <option value="3">3</option>
+                        <option value="7">7</option>
+                        <option value="14">14</option>
+                        <option value="30">30</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="row-inline-actions backup-actions">
+                    <button class="outline-button row-inline-action" id="choose-backup-directory" type="button" data-i18n="desktop.backup.chooseFolder">Choose folder</button>
+                    <button class="outline-button row-inline-action" id="reveal-backup-directory" type="button" data-i18n="desktop.backup.reveal">Show in Finder</button>
+                  </div>
                 </div>
               </div>
               <div class="row-inline-actions backup-actions">

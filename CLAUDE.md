@@ -23,10 +23,11 @@ npm test                            # Run tests
 npm run smoke                       # Backend smoke test
 npm run desktop                     # Launch Tauri desktop app (dev mode)
 scripts/release.sh                  # Interactive release builder (version/platform/env/upload)
-scripts/release.sh --platform current --yes  # Non-interactive current-platform build
 ```
 
 Use project scripts as the first-line operational interface: service startup goes through `scripts/start-server.sh`; packaging and release go through `scripts/release.sh`. Raw `npm start`, `npx tauri build`, and `npm run release:*` are low-level commands for focused verification or debugging.
+
+Ordinary desktop UI and renderer changes use the dev loop (`node --check`, relevant tests, `npm run desktop`). Use `scripts/release.sh --platform current --env env.local --yes` only when validating packaged runtime behavior, bundled assets, presets, updater/release metadata, package-resource wiring, or install/download UX.
 
 ## Rules
 

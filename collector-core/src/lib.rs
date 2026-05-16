@@ -3,7 +3,6 @@ pub mod crypto;
 pub mod schema;
 pub mod date;
 pub mod version;
-pub mod pricing;
 pub mod workdir;
 pub mod config;
 pub mod scanner;
