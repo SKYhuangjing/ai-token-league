@@ -172,9 +172,6 @@ async fn handle_command(
             let cfg = config::load_config();
             if let Some(c) = cfg.as_ref() {
                 let cached = read_usage_cache();
-                if runtime.source_cache.is_empty() {
-                    runtime.source_cache = source_cache_from_snapshot(cached.as_ref());
-                }
                 let items = cached
                     .as_ref()
                     .and_then(|value| value.get("items").and_then(|v| v.as_array()).cloned())
@@ -363,15 +360,6 @@ async fn handle_command(
             let started_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let snapshot = usage_snapshot(&cfg, runtime, force).await?;
-            let from_cache = snapshot["fromCache"].as_bool().unwrap_or(false);
-            let mut sync_result = serde_json::Value::Null;
-            let mut sync_error = serde_json::Value::Null;
-            if !from_cache && !cfg.api_base_url.trim().is_empty() {
-                match sync_snapshot(&cfg, &snapshot).await {
-                    Ok(result) => sync_result = result,
-                    Err(error) => sync_error = serde_json::json!(error),
-                }
-            }
             let finished_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let status = serde_json::json!({
@@ -381,8 +369,8 @@ async fn handle_command(
                 "startedAt": started_at,
                 "finishedAt": finished_at,
                 "error": null,
-                "syncResult": sync_result,
-                "syncError": sync_error,
+                "syncResult": null,
+                "syncError": null,
                 "snapshot": snapshot
             });
             runtime.last_scan_status = Some(status.clone());
@@ -498,18 +486,16 @@ async fn usage_snapshot(
 ) -> Result<serde_json::Value, String> {
     if !force {
         if let Some(cached) = read_usage_cache().filter(is_fresh_usage_cache) {
-            if runtime.source_cache.is_empty() {
-                runtime.source_cache = source_cache_from_snapshot(Some(&cached));
-            }
             return Ok(public_usage_snapshot(cached, true));
         }
     }
     if runtime.source_cache.is_empty() {
-        runtime.source_cache = source_cache_from_snapshot(read_usage_cache().as_ref());
+        runtime.source_cache = read_source_index_cache();
     }
     let result = scanner::scan_usage_async(cfg, &mut runtime.source_cache).await;
     runtime.source_cache = result.source_index.clone();
-    let snapshot = build_usage_snapshot(result.items, result.health, &result.source_index, false);
+    let snapshot = build_usage_snapshot(result.items, result.health, false);
+    write_source_index_cache(&result.source_index, &snapshot)?;
     write_usage_cache(&snapshot)?;
     Ok(snapshot)
 }
@@ -517,7 +503,6 @@ async fn usage_snapshot(
 fn build_usage_snapshot(
     items: Vec<serde_json::Value>,
     health: Vec<serde_json::Value>,
-    source_index: &HashMap<String, Vec<serde_json::Value>>,
     from_cache: bool,
 ) -> serde_json::Value {
     let scanned_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -530,14 +515,14 @@ fn build_usage_snapshot(
         "rowCount": row_count,
         "scannedAt": scanned_at,
         "sourceFingerprint": fingerprint,
-        "fromCache": from_cache,
-        "sourceIndex": source_index
+        "fromCache": from_cache
     })
 }
 
 fn public_usage_snapshot(mut snapshot: serde_json::Value, from_cache: bool) -> serde_json::Value {
     if let Some(obj) = snapshot.as_object_mut() {
         obj.insert("fromCache".to_string(), serde_json::json!(from_cache));
+        obj.remove("sourceIndex");
     }
     snapshot
 }
@@ -558,7 +543,11 @@ fn read_usage_cache() -> Option<serde_json::Value> {
 
 fn write_usage_cache(snapshot: &serde_json::Value) -> Result<(), String> {
     config::ensure_app_dir();
-    let text = serde_json::to_string_pretty(snapshot).map_err(|e| e.to_string())?;
+    let mut light_snapshot = snapshot.clone();
+    if let Some(obj) = light_snapshot.as_object_mut() {
+        obj.remove("sourceIndex");
+    }
+    let text = serde_json::to_string_pretty(&light_snapshot).map_err(|e| e.to_string())?;
     fs::write(config::usage_cache_path(), format!("{}\n", text)).map_err(|e| e.to_string())
 }
 
@@ -576,9 +565,10 @@ fn source_cache_from_snapshot(
     snapshot: Option<&serde_json::Value>,
 ) -> HashMap<String, Vec<serde_json::Value>> {
     let mut result = HashMap::new();
-    let Some(raw_source_index) = snapshot.and_then(|v| v.get("sourceIndex")) else {
+    let Some(snapshot) = snapshot else {
         return result;
     };
+    let raw_source_index = snapshot.get("sourceIndex").unwrap_or(snapshot);
     let source_index = raw_source_index.get("sources").unwrap_or(raw_source_index);
     if let Some(obj) = source_index.as_object() {
         for (fingerprint, value) in obj {
@@ -590,6 +580,31 @@ fn source_cache_from_snapshot(
         }
     }
     result
+}
+
+fn read_source_index_cache() -> HashMap<String, Vec<serde_json::Value>> {
+    if let Some(value) = fs::read_to_string(config::source_index_cache_path())
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+    {
+        return source_cache_from_snapshot(Some(&value));
+    }
+    source_cache_from_snapshot(read_usage_cache().as_ref())
+}
+
+fn write_source_index_cache(
+    source_index: &HashMap<String, Vec<serde_json::Value>>,
+    snapshot: &serde_json::Value,
+) -> Result<(), String> {
+    config::ensure_app_dir();
+    let value = serde_json::json!({
+        "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
+        "scannedAt": snapshot.get("scannedAt").cloned().unwrap_or(serde_json::Value::Null),
+        "sourceFingerprint": snapshot.get("sourceFingerprint").cloned().unwrap_or(serde_json::Value::Null),
+        "sources": source_index
+    });
+    let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    fs::write(config::source_index_cache_path(), format!("{}\n", text)).map_err(|e| e.to_string())
 }
 
 async fn sync_snapshot(
@@ -1348,6 +1363,11 @@ mod tests {
                 }
             }
         });
+        let source_index_cache = serde_json::json!({
+            "sources": {
+                "fingerprint-c": [{"day": "2026-05-16", "totalTokens": 3}]
+            }
+        });
 
         assert_eq!(
             source_cache_from_snapshot(Some(&direct))["fingerprint-a"].len(),
@@ -1355,6 +1375,10 @@ mod tests {
         );
         assert_eq!(
             source_cache_from_snapshot(Some(&wrapped))["fingerprint-b"].len(),
+            1
+        );
+        assert_eq!(
+            source_cache_from_snapshot(Some(&source_index_cache))["fingerprint-c"].len(),
             1
         );
     }

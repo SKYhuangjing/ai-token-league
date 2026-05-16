@@ -51,6 +51,7 @@ struct SidecarState {
     #[allow(dead_code)]
     event_tx: broadcast::Sender<SidecarEvent>,
     tray_actions: Arc<Mutex<HashMap<String, TrayMenuMeta>>>,
+    tray_rebuild_pending: Arc<AtomicBool>,
     child: Arc<std::sync::Mutex<Option<Child>>>,
     dead: Arc<AtomicBool>,
 }
@@ -282,7 +283,7 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
                         "tray:rebuild" => {
                             let app = app_reader.clone();
                             tauri::async_runtime::spawn(async move {
-                                rebuild_tray_menu(&app).await;
+                                rebuild_tray_menu_coalesced(&app).await;
                             });
                         }
                         "app:restart" => {
@@ -313,6 +314,7 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
         pending,
         event_tx,
         tray_actions: Arc::new(Mutex::new(HashMap::new())),
+        tray_rebuild_pending: Arc::new(AtomicBool::new(false)),
         child: child_handle,
         dead,
     })
@@ -386,6 +388,17 @@ async fn rebuild_tray_menu(app: &AppHandle) {
     }
 }
 
+async fn rebuild_tray_menu_coalesced(app: &AppHandle) {
+    let state = app.state::<SidecarState>();
+    let pending = state.tray_rebuild_pending.clone();
+    if pending.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    rebuild_tray_menu(app).await;
+    pending.store(false, Ordering::SeqCst);
+}
+
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Use template tray icon on macOS (adapts to dark/light menu bar)
     let default_icon = app.default_window_icon().cloned().unwrap();
@@ -434,7 +447,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         .await
                         {
                             Ok(_) => {
-                                rebuild_tray_menu(&app_handle).await;
+                                rebuild_tray_menu_coalesced(&app_handle).await;
                                 let _ = app_handle.emit("tray:refresh-done", ());
                             }
                             Err(error) => {
@@ -477,7 +490,7 @@ async fn forward_to_sidecar(
 ) -> Result<Value, String> {
     let result = call_sidecar(&state, &command, args).await?;
     if command_updates_usage_cache(&command) {
-        rebuild_tray_menu(&app).await;
+        rebuild_tray_menu_coalesced(&app).await;
     }
     Ok(result)
 }
@@ -488,7 +501,7 @@ fn command_updates_usage_cache(command: &str) -> bool {
 
 #[tauri::command]
 async fn rebuild_tray_menu_command(app: AppHandle) -> Result<Value, String> {
-    rebuild_tray_menu(&app).await;
+    rebuild_tray_menu_coalesced(&app).await;
     Ok(json!({"ok": true}))
 }
 
@@ -981,7 +994,7 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                         "sourceFingerprint": value.get("sourceFingerprint").cloned().unwrap_or(Value::Null),
                         "rowCount": count
                     })).await;
-                    rebuild_tray_menu(&app).await;
+                    rebuild_tray_menu_coalesced(&app).await;
                     let _ = app.emit("tray:refresh-done", json!(null));
                 }
                 Err(error) => {

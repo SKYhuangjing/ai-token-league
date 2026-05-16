@@ -67,6 +67,7 @@ let latestSyncInfo = "";
 let pricingRefreshPromise = null;
 let mandatoryUpdateActive = false;
 let latestTrayCostKey = "";
+let foregroundSyncRunning = false;
 
 function showToast(message) {
   const toast = document.querySelector("#toast");
@@ -935,7 +936,7 @@ async function finalizeUsageScanStatus(status, showCompletionToast = false) {
     scanPollTimer = null;
   }
   setScanState(false);
-  await refreshForegroundSyncStatus(status);
+  startForegroundSync(status);
   if (showCompletionToast) {
     showToast(t("desktop.rail.scanComplete"));
   }
@@ -961,7 +962,7 @@ function pollUsageScan() {
       if (!status.running && !status.syncRunning) {
         clearInterval(scanPollTimer);
         scanPollTimer = null;
-        await refreshForegroundSyncStatus(status);
+        startForegroundSync(status);
         showToast(t("desktop.rail.scanComplete"));
         loadMyIdentity().catch((error) => console.error(error));
       }
@@ -1011,6 +1012,25 @@ async function refreshForegroundSyncStatus(status) {
   if (status.syncResult) renderSyncStatus(latestConfig, status.syncResult);
   if (status.syncError) setStatusMessage(t("desktop.renderer.refreshFailed", { error: status.syncError }));
   await loadBackgroundStatus({ config: latestConfig });
+}
+
+function startForegroundSync(status) {
+  if (foregroundSyncRunning) return;
+  if (status?.snapshot?.fromCache) return;
+  if (!latestConfig?.apiBaseUrl || !latestConfig?.participantId) return;
+  foregroundSyncRunning = true;
+  api.syncUsage()
+    .then((result) => {
+      renderSyncStatus(latestConfig, result);
+      return loadBackgroundStatus({ config: latestConfig });
+    })
+    .catch((error) => {
+      setStatusMessage(t("desktop.renderer.refreshFailed", { error: error.message }));
+      console.error(error);
+    })
+    .finally(() => {
+      foregroundSyncRunning = false;
+    });
 }
 
 function applyUsageSnapshot(usage) {
@@ -2061,7 +2081,7 @@ async function loadBackgroundStatus({ config = latestConfig, refreshConfig = fal
     if (scanStatus.running) {
       pollUsageScan();
     } else {
-      await refreshForegroundSyncStatus(scanStatus);
+      startForegroundSync(scanStatus);
     }
   }
 }

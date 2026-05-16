@@ -25,6 +25,10 @@ pub fn usage_cache_path() -> PathBuf {
     app_dir().join("usage-cache.json")
 }
 
+pub fn source_index_cache_path() -> PathBuf {
+    app_dir().join("source-index-cache.json")
+}
+
 pub fn runtime_log_path() -> PathBuf {
     app_dir().join("runtime-log.jsonl")
 }
@@ -497,6 +501,7 @@ pub fn reset_local_data() {
     let _ = fs::remove_file(queue_path());
     let _ = fs::remove_file(manifest_path());
     let _ = fs::remove_file(usage_cache_path());
+    let _ = fs::remove_file(source_index_cache_path());
     let _ = fs::remove_file(runtime_log_path());
 }
 
