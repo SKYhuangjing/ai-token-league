@@ -6,6 +6,21 @@
 
 ---
 
+## [0.6.3] - 2026-05-16
+
+### 变更
+
+- [Desktop] 将本地采集、桌面 sidecar 和 CLI 运行时从 Node.js 迁移到内置 Rust `atl-collector` 二进制。
+- [Desktop] 新增本地小时维度采集和 hourly snapshot 上报，为后续按每日工作时间段统计做准备。
+- [Desktop] 更新 Tauri 打包和 GitHub release 构建流程，使各目标平台都内置 Rust collector sidecar。
+
+### 修复
+
+- [Desktop] 在 Rust 运行路径上保留 Cursor dashboard 采集、打包 preset 加载、后台刷新、登录启动和离线上传队列行为。
+- [Web] 保持 legacy daily 上报兼容，新 hourly 上报由服务端派生并保护 daily 汇总。
+
+---
+
 ## [0.6.2] - 2026-05-14
 
 ### 新增

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.3] - 2026-05-16
+
+### Changed
+
+- [Desktop] Migrated local collection, desktop sidecar, and CLI runtime from Node.js to the bundled Rust `atl-collector` binary.
+- [Desktop] Added hourly local collection and hourly snapshot upload so future reporting can analyze daily working-time bands.
+- [Desktop] Updated Tauri packaging and GitHub release builds to bundle the Rust collector sidecar for each target platform.
+
+### Fixed
+
+- [Desktop] Preserved Cursor dashboard collection, packaged preset loading, background refresh, launch-at-login, and offline upload queue behavior on the Rust runtime path.
+- [Web] Kept legacy daily uploads compatible while new hourly uploads derive protected daily totals on the server.
+
+---
+
 ## [0.6.2] - 2026-05-14
 
 ### Added
