@@ -825,11 +825,17 @@ async function buildTrayMenuData() {
     const todayItems = cached.items.filter((i) => i.day === today);
     if (todayItems.length) {
       const todayTotal = todayItems.reduce((s, i) => s + (i.totalTokens || 0), 0);
-      items.push({ id: "today", label: trayT("tray.tokensToday", { count: display.formatTokenCompact(todayTotal) }), disabled: true });
+      items.push({ id: "today", label: trayT("tray.tokensToday", { count: display.formatTokenCompact(todayTotal) }), action: "noop" });
 
       if (cachedPriceMap && todayItems.length) {
-        const cost = pricing.aggregateCost(todayItems, cachedPriceMap);
-        if (cost > 0) items.push({ id: "cost", label: trayT("tray.cost", { cost: display.formatUsd(cost) }), disabled: true });
+        let totalCost = 0;
+        for (const row of todayItems) {
+          try {
+            const r = pricing.estimateUsageCost(row, cachedPriceMap);
+            if (r.estimatedCostUsd !== null) totalCost += r.estimatedCostUsd;
+          } catch {}
+        }
+        if (totalCost > 0) items.push({ id: "cost", label: trayT("tray.cost", { cost: display.formatUsd(totalCost) }), action: "noop" });
       }
 
       items.push({ type: "separator" });
@@ -840,7 +846,7 @@ async function buildTrayMenuData() {
         items.push({ id: "models-title", label: trayT("tray.modelsTitle"), disabled: true });
         for (const [model, total] of topModels) {
           const shortModel = model.includes("/") ? model.split("/").pop() : model;
-          items.push({ id: `model:${model}`, label: `  ${shortModel}  ${display.formatTokenCompact(total)}`, disabled: true });
+          items.push({ id: `model:${model}`, label: `  ${shortModel}  ${display.formatTokenCompact(total)}`, action: "noop" });
         }
       }
 
@@ -851,14 +857,14 @@ async function buildTrayMenuData() {
         items.push({ type: "separator" });
         items.push({ id: "providers-title", label: trayT("tray.providersTitle"), disabled: true });
         for (const [pid, total] of providers) {
-          items.push({ id: `provider:${pid}`, label: `  ${TRAY_PROVIDER_NAMES[pid] || pid}  ${display.formatTokenCompact(total)}`, disabled: true });
+          items.push({ id: `provider:${pid}`, label: `  ${TRAY_PROVIDER_NAMES[pid] || pid}  ${display.formatTokenCompact(total)}`, action: "noop" });
         }
       }
     } else {
-      items.push({ id: "no-usage", label: trayT("tray.noUsage"), disabled: true });
+      items.push({ id: "no-usage", label: trayT("tray.noUsage"), action: "noop" });
     }
   } else {
-    items.push({ id: "no-usage", label: trayT("tray.noUsage"), disabled: true });
+    items.push({ id: "no-usage", label: trayT("tray.noUsage"), action: "noop" });
   }
 
   items.push({ type: "separator" });

@@ -420,6 +420,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     "quit" => {
                         app_handle.exit(0);
                     }
+                    "noop" => {}
                     _ => {}
                 }
             });
