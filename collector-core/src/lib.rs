@@ -9,4 +9,6 @@ pub mod config;
 pub mod scanner;
 pub mod sync;
 pub mod diagnostics;
+pub mod observability;
+pub mod local_backup;
 pub mod provider;

@@ -1082,6 +1082,80 @@ button.row-card:focus-visible .badge,
   white-space: nowrap;
 }
 
+.backup-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, 120px) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.backup-settings-grid input,
+.backup-settings-grid select {
+  min-height: 38px;
+}
+
+.backup-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.backup-list {
+  display: grid;
+  gap: 6px;
+}
+
+.backup-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.26);
+  font-size: 12px;
+}
+
+.backup-list-row strong,
+.backup-list-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-list-row small {
+  color: var(--muted);
+}
+
+.diagnostics-status {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.26);
+}
+
+.diagnostics-status small {
+  display: block;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.diagnostics-metrics {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.diagnostics-metrics span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .update-card .badge {
   padding: 5px 9px;
 }

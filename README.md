@@ -57,7 +57,7 @@
 - **Trend**：查看个人 Daily 30d、Weekly 12w、Monthly 12m 趋势。
 - **Settings**：Profile、App、Sources、Cloud、About 分域配置。
 - **首次启动向导**：新用户先确认身份、隐私、来源和云端连接，再开始采集。
-- **诊断导出**：本地导出脱敏诊断包，用于排查客户端扫描、同步和云端数据差异。
+- **诊断导出**：本地导出脱敏诊断包，包含运行日志、扫描/同步摘要和队列状态，用于排查客户端扫描、同步和云端数据差异。
 - **应用更新**：支持手动检查、下载校验、重启升级和可配置静默更新。
 
 ### 4. CLI 采集器
@@ -122,13 +122,17 @@ reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
 | 本地身份、来源、alias、provider 配置 | `~/.ai-token-league/config.json` |
 | 本地 usage cache | `~/.ai-token-league/usage-cache.json` |
 | upload queue | `~/.ai-token-league/upload-queue.json` |
+| sync manifest | `~/.ai-token-league/sync-manifest.json` |
+| runtime log | `~/.ai-token-league/runtime-log.jsonl`，最多 2MB / 最近 500 条，本地轮转，诊断导出时脱敏 |
 | 后端 JSON 存储 | `data/db.json` |
 
 实用建议：
 
 1. 不要把 `~/.ai-token-league` 目录直接公开分享。
-2. 导出诊断包前确认只包含脱敏聚合事实。
-3. 公共机器使用后，清理本地配置和上传队列。
+2. `Settings > About > 数据保护` 可以做立即备份、开启自动备份、选择备份文件夹并设置保留数量；默认建议位置是 `~/Documents/AI Token League Backups/`。
+3. 本机备份文件包含恢复所需的敏感配置，可能包含身份私钥和本机 token；只用于个人迁移或恢复，不要公开分享。
+4. 导出诊断包前确认只包含脱敏聚合事实。
+5. 公共机器使用后，清理本地配置和上传队列。
 
 ---
 

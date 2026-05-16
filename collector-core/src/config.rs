@@ -88,6 +88,30 @@ impl Default for CursorDashboardUsageConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LocalBackupConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub directory: String,
+    #[serde(default = "default_backup_retention")]
+    pub retention_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_backup_at: Option<String>,
+}
+
+impl Default for LocalBackupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: String::new(),
+            retention_count: default_backup_retention(),
+            last_backup_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     pub participant_id: String,
     #[serde(default = "default_nickname")]
@@ -120,6 +144,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub cursor_dashboard_usage: CursorDashboardUsageConfig,
     #[serde(default)]
+    pub local_backup: LocalBackupConfig,
+    #[serde(default)]
     pub api_connection: serde_json::Value,
     #[serde(default)]
     pub sync_status: serde_json::Value,
@@ -151,6 +177,7 @@ fn default_nickname() -> String { "anonymous".to_string() }
 fn default_true() -> bool { true }
 fn default_silent_update_mode() -> String { DEFAULT_SILENT_UPDATE_MODE.to_string() }
 fn default_refresh_interval() -> u64 { 15 }
+fn default_backup_retention() -> u64 { 7 }
 
 pub fn normalize_silent_update_mode(value: &str) -> &str {
     if SILENT_UPDATE_MODES.contains(&value) { value } else { DEFAULT_SILENT_UPDATE_MODE }
@@ -273,6 +300,7 @@ pub fn init_config(input: serde_json::Value, persist: bool) -> AppConfig {
         hide_dock_icon: input["hideDockIcon"].as_bool().unwrap_or(false),
         desktop_auto_initialized: input["desktopAutoInitialized"].as_bool().unwrap_or(false),
         cursor_dashboard_usage: CursorDashboardUsageConfig::default(),
+        local_backup: LocalBackupConfig::default(),
         api_connection: input.get("apiConnection").cloned().filter(|v| !v.is_null()).unwrap_or_else(|| serde_json::json!({})),
         sync_status: serde_json::json!({}),
         workdir_aliases: HashMap::new(),
@@ -362,6 +390,7 @@ pub fn import_config(imported: serde_json::Value) -> Result<AppConfig, String> {
         hide_dock_icon: imported["hideDockIcon"].as_bool().unwrap_or(false),
         desktop_auto_initialized: false,
         cursor_dashboard_usage: serde_json::from_value(imported["cursorDashboardUsage"].clone()).unwrap_or_default(),
+        local_backup: serde_json::from_value(imported["localBackup"].clone()).unwrap_or_default(),
         api_connection: serde_json::json!({}),
         sync_status: serde_json::json!({}),
         workdir_aliases: serde_json::from_value(imported["workdirAliases"].clone()).unwrap_or_default(),
@@ -562,6 +591,15 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
     if let Some(cdu) = input.get("cursorDashboardUsage") {
         let merged: CursorDashboardUsageConfig = serde_json::from_value(cdu.clone()).unwrap_or_default();
         config.cursor_dashboard_usage = merged;
+    }
+
+    if let Some(local_backup) = input.get("localBackup") {
+        let mut merged = config.local_backup.clone();
+        if let Some(v) = local_backup["enabled"].as_bool() { merged.enabled = v; }
+        if let Some(v) = local_backup["directory"].as_str() { merged.directory = v.trim().to_string(); }
+        if let Some(v) = local_backup["retentionCount"].as_u64() { merged.retention_count = v.clamp(1, 30); }
+        if let Some(v) = local_backup["lastBackupAt"].as_str() { merged.last_backup_at = Some(v.to_string()); }
+        config.local_backup = merged;
     }
 
     config.updated_at = Some(now_iso());

@@ -57,7 +57,7 @@ Current version: `0.6.3`
 - **Trend**: review personal Daily 30d, Weekly 12w, and Monthly 12m trends.
 - **Settings**: Profile, App, Sources, Cloud, and About settings are separated by ownership.
 - **First-run wizard**: new users confirm identity, privacy, sources, and cloud connection before collection starts.
-- **Diagnostics export**: write a sanitized local diagnostics bundle for scan/sync/cloud reconciliation.
+- **Diagnostics export**: write a sanitized local diagnostics bundle with runtime logs, scan/sync summaries, and queue state for scan/sync/cloud reconciliation.
 - **App updates**: supports manual check, checksum-verified download, restart update, and configurable silent update.
 
 ### 4. CLI Collector
@@ -122,13 +122,17 @@ Default local storage:
 | Local identity, sources, aliases, provider config | `~/.ai-token-league/config.json` |
 | Local usage cache | `~/.ai-token-league/usage-cache.json` |
 | Upload queue | `~/.ai-token-league/upload-queue.json` |
+| Sync manifest | `~/.ai-token-league/sync-manifest.json` |
+| Runtime log | `~/.ai-token-league/runtime-log.jsonl`, capped at 2MB / recent 500 events, rotated locally, and sanitized in diagnostics exports |
 | Backend JSON store | `data/db.json` |
 
 Practical safety tips:
 
 1. Do not share the `~/.ai-token-league` directory directly.
-2. Confirm diagnostics exports contain sanitized aggregate facts only.
-3. On shared machines, remove local config and upload queue data after use.
+2. `Settings > About > Data Protection` supports Back up now, automatic backup, backup folder selection, and retention count. The suggested default folder is `~/Documents/AI Token League Backups/`.
+3. Local backup files contain sensitive recovery data and may include identity private keys and local tokens; use them only for personal migration or recovery.
+4. Confirm diagnostics exports contain sanitized aggregate facts only.
+5. On shared machines, remove local config and upload queue data after use.
 
 ---
 

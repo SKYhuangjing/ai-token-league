@@ -25,7 +25,41 @@ pub async fn run() -> Result<(), String> {
         };
 
         let id = request.id.clone();
+        let command_name = request.command.clone();
+        let args_summary = collector_core::observability::summarize_command_args(&command_name, &request.args);
+        let started = std::time::Instant::now();
+        if command_name != "runtime:log"
+            && command_name != "ping"
+            && command_name != "diagnostics:status"
+            && command_name != "diagnostics:clear-runtime-log"
+        {
+            collector_core::observability::append_runtime_event(
+                "sidecar",
+                "command_start",
+                "info",
+                serde_json::json!({
+                    "command": command_name.clone(),
+                    "args": args_summary
+                }),
+            );
+        }
         let result = handle_command(request, &mut runtime).await;
+        if command_name != "runtime:log"
+            && command_name != "ping"
+            && command_name != "diagnostics:status"
+            && command_name != "diagnostics:clear-runtime-log"
+        {
+            collector_core::observability::append_runtime_event(
+                "sidecar",
+                if result.is_ok() { "command_end" } else { "command_error" },
+                if result.is_ok() { "info" } else { "error" },
+                serde_json::json!({
+                    "command": command_name.clone(),
+                    "durationMs": started.elapsed().as_millis() as u64,
+                    "result": collector_core::observability::summarize_command_result(&command_name, &result)
+                }),
+            );
+        }
         let response = match result {
             Ok(data) => SidecarResponse::ok(id, data),
             Err(e) => SidecarResponse::error(id, e),
@@ -191,12 +225,39 @@ async fn handle_command(
         }
         Command::DiagnosticsExportPrepare => {
             let cfg = config::ensure_desktop_config();
-            Ok(collector_core::diagnostics::export_diagnostics(
-                &cfg,
-                &serde_json::json!(null),
-                &[],
-                &[],
-            ))
+            Ok(collector_core::diagnostics::export_diagnostics(&cfg))
+        }
+        Command::DiagnosticsStatus => Ok(collector_core::observability::diagnostics_status()),
+        Command::DiagnosticsClearRuntimeLog => {
+            let result = collector_core::observability::clear_runtime_log();
+            Ok(result)
+        }
+        Command::RuntimeLog => {
+            let source = request.args["source"].as_str().unwrap_or("renderer");
+            let event = request.args["event"].as_str().unwrap_or("event");
+            let level = request.args["level"].as_str().unwrap_or("info");
+            let data = request.args.get("data").cloned().unwrap_or_else(|| serde_json::json!({}));
+            collector_core::observability::append_runtime_event(source, event, level, data);
+            Ok(serde_json::json!({"ok": true}))
+        }
+        Command::LocalBackupExportPrepare => {
+            collector_core::local_backup::export_local_backup()
+        }
+        Command::LocalBackupStatus => {
+            Ok(collector_core::local_backup::backup_status())
+        }
+        Command::LocalBackupCreate => {
+            let reason = request.args["reason"].as_str().unwrap_or("manual");
+            collector_core::local_backup::create_backup_in_configured_directory(reason)
+        }
+        Command::LocalBackupRunDueAuto => {
+            collector_core::local_backup::run_due_auto_backup()
+        }
+        Command::LocalBackupInspect => {
+            collector_core::local_backup::inspect_backup(&request.args)
+        }
+        Command::LocalBackupRestoreApply => {
+            collector_core::local_backup::restore_local_backup(request.args)
         }
         Command::ApiCheck => {
             let url = request.args["apiBaseUrl"].as_str().unwrap_or("").to_string();

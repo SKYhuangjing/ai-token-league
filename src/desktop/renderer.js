@@ -14,6 +14,28 @@ function localeTokenCompact(value) {
 const api = window.tokenLeague;
 const $ = (selector) => document.querySelector(selector);
 
+function logRuntimeEvent(event, data = {}, level = "info") {
+  if (!api?.logEvent) return;
+  api.logEvent({ source: "renderer", event, level, data }).catch(() => {});
+}
+
+window.addEventListener("error", (event) => {
+  logRuntimeEvent("renderer_error", {
+    message: event.message,
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno
+  }, "error");
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason || {};
+  logRuntimeEvent("renderer_unhandled_rejection", {
+    message: reason.message || String(reason),
+    stack: reason.stack || ""
+  }, "error");
+});
+
 let latestUsage = [];
 let latestHealth = [];
 let allUsage = [];
@@ -31,6 +53,8 @@ let scanPollTimer = null;
 let backgroundStatusTimer = null;
 let latestUpdateState = null;
 let latestBackgroundStatus = null;
+let latestBackupStatus = null;
+let latestDiagnosticsStatus = null;
 let latestIdentityBusinessDay = "";
 let latestClientInfo = null;
 let lastIdentityCheckLocalDay = localDay();
@@ -58,6 +82,7 @@ function setStatusMessage(message) {
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
+    logRuntimeEvent("navigation_click", { section: button.dataset.section || "" });
     handlePrimaryNavigationClick(button.dataset.section);
   });
 });
@@ -69,16 +94,24 @@ document.querySelectorAll('[data-section="settings"]').forEach((button) => {
   });
 });
 
-$("#brand-refresh").addEventListener("click", () => run(() => loadToday(true)));
+$("#brand-refresh").addEventListener("click", () => {
+  logRuntimeEvent("refresh_click", { location: "brand" });
+  run(() => loadToday(true));
+});
 
 $("#rail-restart-update").addEventListener("click", () => run(async () => {
+  logRuntimeEvent("update_restart_click");
   $("#rail-restart-update").disabled = true;
   await api.installAndRestartUpdate();
 }));
 $("#refresh-health").addEventListener("click", () => run(async () => {
+  logRuntimeEvent("source_health_refresh_click");
   await loadHealth();
 }));
-document.querySelectorAll("[data-sync-now]").forEach((button) => button.addEventListener("click", () => run(syncNow)));
+document.querySelectorAll("[data-sync-now]").forEach((button) => button.addEventListener("click", () => {
+  logRuntimeEvent("sync_now_click", { location: button.dataset.syncNow || "" });
+  run(syncNow);
+}));
 $("#wizard-skip").addEventListener("click", (e) => { e.preventDefault(); run(skipWizard); });
 $("#wizard-next-0").addEventListener("click", () => wizardGo(1));
 $("#wizard-back-1").addEventListener("click", () => wizardGo(0));
@@ -297,6 +330,13 @@ $("#download-installer").addEventListener("click", (event) => {
   run(downloadInstaller);
 });
 $("#export-diagnostics").addEventListener("click", () => run(exportDiagnostics));
+$("#clear-runtime-log").addEventListener("click", () => run(clearRuntimeLog));
+$("#backup-now").addEventListener("click", () => run(exportLocalBackup));
+$("#restore-local-backup").addEventListener("click", () => run(restoreLocalBackup));
+$("#choose-backup-directory").addEventListener("click", () => run(chooseBackupDirectory));
+$("#reveal-backup-directory").addEventListener("click", () => run(revealBackupDirectory));
+$("#localBackupEnabled").addEventListener("change", () => run(saveBackupPreferences));
+$("#localBackupRetention").addEventListener("change", () => run(saveBackupPreferences));
 $("#enforcement-download-update").addEventListener("click", (event) => {
   event.stopPropagation();
   run(downloadUpdate);
@@ -674,7 +714,9 @@ async function boot() {
     const backgroundLoad = loadBackgroundStatus({ config });
     startBackgroundStatusTimer();
     const systemLoad = loadSystemStatus();
-    const bootResults = await Promise.allSettled([initialScan, identityLoad, backgroundLoad, systemLoad]);
+    const backupLoad = loadBackupStatus();
+    const diagnosticsLoad = loadDiagnosticsStatus();
+    const bootResults = await Promise.allSettled([initialScan, identityLoad, backgroundLoad, systemLoad, backupLoad, diagnosticsLoad]);
     const failed = bootResults.find((result) => result.status === "rejected");
     if (failed) setStatusMessage(failed.reason?.message || t("desktop.renderer.actionFailed"));
     checkMandatoryFromConfig();
@@ -1053,6 +1095,7 @@ function renderConfig(config) {
   renderCursorTokenSummary(config?.cursorDashboardUsage);
   renderCloudStatus(config);
   renderSyncStatus(config);
+  renderBackupStatus(latestBackupStatus);
   renderSystemStatus({ client: null, server: config?.apiConnection || null, update: latestUpdateState });
   renderSilentUpdateStatus(null, config);
   renderWizard();
@@ -1165,18 +1208,207 @@ async function exportDiagnostics() {
   button.disabled = true;
   $("#diagnostics-message").dataset.tone = "";
   $("#diagnostics-message").textContent = t("desktop.renderer.preparingDiag");
+  logRuntimeEvent("diagnostics_export_start");
   try {
     const result = await api.exportDiagnostics();
     if (result.canceled) {
       $("#diagnostics-message").textContent = t("desktop.renderer.diagCanceled");
+      logRuntimeEvent("diagnostics_export_canceled");
       return;
     }
     $("#diagnostics-message").dataset.tone = "ok";
     $("#diagnostics-message").textContent = t("desktop.renderer.diagExported", { logs: result.logCount || 0, rows: result.usageRowCount || 0 });
     $("#diagnostics-message").title = result.filePath || "";
+    logRuntimeEvent("diagnostics_export_done", {
+      logCount: result.logCount || 0,
+      usageRowCount: result.usageRowCount || 0
+    });
+    await loadDiagnosticsStatus();
   } finally {
     button.disabled = false;
   }
+}
+
+async function loadDiagnosticsStatus() {
+  if (!api.diagnosticsStatus) return;
+  latestDiagnosticsStatus = await api.diagnosticsStatus();
+  renderDiagnosticsStatus(latestDiagnosticsStatus);
+}
+
+async function clearRuntimeLog() {
+  const button = $("#clear-runtime-log");
+  button.disabled = true;
+  $("#diagnostics-message").dataset.tone = "";
+  $("#diagnostics-message").textContent = t("desktop.renderer.clearingRuntimeLog");
+  try {
+    await api.clearRuntimeLog();
+    await loadDiagnosticsStatus();
+    $("#diagnostics-message").dataset.tone = "ok";
+    $("#diagnostics-message").textContent = t("desktop.renderer.runtimeLogCleared");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderDiagnosticsStatus(status = latestDiagnosticsStatus) {
+  latestDiagnosticsStatus = status || {};
+  const runtimeLog = latestDiagnosticsStatus.runtimeLog || {};
+  const retention = latestDiagnosticsStatus.retention || {};
+  setTextIfPresent("#diagnostics-log-size", t("desktop.diagnostics.logSize", { size: formatBytes(runtimeLog.sizeBytes || 0) }));
+  setTextIfPresent("#diagnostics-log-events", t("desktop.diagnostics.logEvents", { count: runtimeLog.retainedEvents || 0 }));
+  setTextIfPresent("#diagnostics-log-latest", t("desktop.diagnostics.latestEvent", { time: runtimeLog.latestEventAt ? formatDateTime(runtimeLog.latestEventAt) : "-" }));
+  setTextIfPresent("#diagnostics-retention", t("desktop.diagnostics.retention", {
+    size: formatBytes(retention.maxBytes || runtimeLog.maxBytes || 0),
+    count: retention.maxEvents || runtimeLog.maxExportEvents || 0
+  }));
+}
+
+async function exportLocalBackup() {
+  const button = $("#backup-now");
+  button.disabled = true;
+  setBackupMessage(t("desktop.renderer.preparingBackup"), "");
+  try {
+    await ensureBackupDirectory();
+    const result = await api.createLocalBackup({ reason: "manual" });
+    renderBackupStatus({ ...(latestBackupStatus || {}), ...result });
+    setBackupMessage(t("desktop.renderer.backupExported", { count: result.backups?.length || 0 }), "ok");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function restoreLocalBackup() {
+  const button = $("#restore-local-backup");
+  button.disabled = true;
+  setBackupMessage("", "");
+  try {
+    const picked = await api.pickLocalBackup();
+    if (picked.canceled) {
+      setBackupMessage(t("desktop.renderer.backupCanceled"), "");
+      return;
+    }
+    const summary = picked.summary || {};
+    const ok = confirm(t("desktop.renderer.confirmRestoreBackup", {
+      date: summary.createdAt ? formatDateTime(summary.createdAt) : "-",
+      files: summary.fileCount || 0,
+      size: formatBytes(summary.totalBytes || 0)
+    }));
+    if (!ok) {
+      setBackupMessage(t("desktop.renderer.backupCanceled"), "");
+      return;
+    }
+    setBackupMessage(t("desktop.renderer.restoringBackup"), "");
+    const result = await api.restoreLocalBackupFile(picked.filePath);
+    setBackupMessage(t("desktop.renderer.backupRestored", { count: result.restored || 0 }), "ok");
+    $("#backup-message").title = result.snapshotPath || "";
+    latestConfig = await api.getConfig();
+    renderConfig(latestConfig);
+    await loadToday(true);
+    await loadBackgroundStatus();
+    await loadBackupStatus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function ensureBackupDirectory() {
+  const current = latestConfig?.localBackup || {};
+  if (String(current.directory || "").trim()) return current.directory;
+  const chosen = await api.chooseBackupDirectory();
+  if (chosen.canceled) throw new Error(t("desktop.renderer.backupCanceled"));
+  const localBackup = {
+    ...current,
+    directory: chosen.directory,
+    retentionCount: Number(current.retentionCount || 7)
+  };
+  latestConfig = await api.updateConfig({ localBackup });
+  renderConfig(latestConfig);
+  return chosen.directory;
+}
+
+async function chooseBackupDirectory() {
+  const chosen = await api.chooseBackupDirectory();
+  if (chosen.canceled) {
+    setBackupMessage(t("desktop.renderer.backupCanceled"), "");
+    return;
+  }
+  const localBackup = {
+    ...(latestConfig?.localBackup || {}),
+    directory: chosen.directory,
+    retentionCount: Number($("#localBackupRetention")?.value || latestConfig?.localBackup?.retentionCount || 7)
+  };
+  latestConfig = await api.updateConfig({ localBackup });
+  renderConfig(latestConfig);
+  await loadBackupStatus();
+  setBackupMessage(t("desktop.renderer.backupFolderSaved"), "ok");
+}
+
+async function saveBackupPreferences() {
+  const current = latestConfig?.localBackup || {};
+  let directory = current.directory || "";
+  const enabled = $("#localBackupEnabled")?.checked ?? false;
+  if (enabled && !directory.trim()) {
+    const chosen = await api.chooseBackupDirectory();
+    if (chosen.canceled) {
+      $("#localBackupEnabled").checked = false;
+      setBackupMessage(t("desktop.renderer.backupCanceled"), "");
+      return;
+    }
+    directory = chosen.directory;
+  }
+  const localBackup = {
+    ...current,
+    enabled,
+    directory,
+    retentionCount: Number($("#localBackupRetention")?.value || current.retentionCount || 7)
+  };
+  latestConfig = await api.updateConfig({ localBackup });
+  renderConfig(latestConfig);
+  await loadBackupStatus();
+  setBackupMessage(t("desktop.renderer.backupSettingsSaved"), "ok");
+}
+
+async function revealBackupDirectory() {
+  const directory = latestBackupStatus?.effectiveDirectory || latestConfig?.localBackup?.directory || "";
+  if (!directory) {
+    setBackupMessage(t("desktop.renderer.backupFolderMissing"), "error");
+    return;
+  }
+  await api.revealBackupDirectory(directory);
+}
+
+async function loadBackupStatus() {
+  latestBackupStatus = await api.localBackupStatus();
+  renderBackupStatus(latestBackupStatus);
+}
+
+function renderBackupStatus(status = latestBackupStatus) {
+  latestBackupStatus = status || {};
+  const backupConfig = latestConfig?.localBackup || {};
+  if ($("#localBackupEnabled")) $("#localBackupEnabled").checked = Boolean(backupConfig.enabled);
+  if ($("#localBackupRetention")) $("#localBackupRetention").value = String(backupConfig.retentionCount || 7);
+  if ($("#localBackupDirectory")) $("#localBackupDirectory").value = backupConfig.directory || status?.effectiveDirectory || "";
+  const list = $("#backup-recent-list");
+  if (!list) return;
+  const backups = status?.backups || [];
+  list.innerHTML = backups.length
+    ? backups.slice(0, 5).map((item) => `
+      <div class="backup-list-row" title="${escapeHtml(item.filePath || "")}">
+        <div>
+          <strong>${escapeHtml(item.fileName || "")}</strong>
+          <small>${item.createdAt ? formatDateTime(item.createdAt) : "-"}</small>
+        </div>
+        <span>${formatBytes(item.bytes || 0)}</span>
+      </div>
+    `).join("")
+    : `<div class="empty-state">${t("desktop.backup.noBackups")}</div>`;
+}
+
+function setBackupMessage(message, tone = "") {
+  const el = $("#backup-message");
+  if (!el) return;
+  el.dataset.tone = tone;
+  el.textContent = message;
 }
 
 function renderSystemStatus(state = {}) {
@@ -2457,6 +2689,10 @@ async function run(fn) {
   } catch (error) {
     setStatusMessage(t("desktop.renderer.actionFailed"));
     setSaveMessage(error.message, "error");
+    logRuntimeEvent("action_failed", {
+      message: error.message || String(error),
+      stack: error.stack || ""
+    }, "error");
     console.error(error);
   }
 }
@@ -2626,6 +2862,13 @@ function formatTime(value) {
 function formatDateTime(value) {
   const date = new Date(value);
   return `${date.toLocaleDateString([], { month: "short", day: "2-digit" })} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatDate(value) {

@@ -271,12 +271,63 @@
           <section class="settings-panel" data-settings-panel="about">
             <div class="stack">
               <div>
+                <h4 data-i18n="desktop.backup.title">Data Protection</h4>
+              </div>
+              <div class="row-card">
+                <span class="setting-icon icon" style="--icon: url('./icons/database.svg')" aria-hidden="true"></span>
+                <div>
+                  <strong data-i18n="desktop.backup.auto">Automatic backup</strong>
+                  <div class="muted" data-i18n="desktop.backup.sensitiveDesc">Includes identity keys, local tokens, cache, queue, and sync state.</div>
+                </div>
+                <label class="toggle-row"><input id="localBackupEnabled" type="checkbox" /><span data-i18n="status.off">Off</span></label>
+              </div>
+              <div class="backup-settings-grid">
+                <label class="field">
+                  <span data-i18n="desktop.backup.directory">Backup folder</span>
+                  <input id="localBackupDirectory" readonly />
+                </label>
+                <label class="field">
+                  <span data-i18n="desktop.backup.retention">Keep recent backups</span>
+                  <select id="localBackupRetention">
+                    <option value="3">3</option>
+                    <option value="7">7</option>
+                    <option value="14">14</option>
+                    <option value="30">30</option>
+                  </select>
+                </label>
+                <div class="row-inline-actions backup-actions">
+                  <button class="outline-button row-inline-action" id="choose-backup-directory" type="button" data-i18n="desktop.backup.chooseFolder">Choose folder</button>
+                  <button class="outline-button row-inline-action" id="reveal-backup-directory" type="button" data-i18n="desktop.backup.reveal">Show in Finder</button>
+                </div>
+              </div>
+              <div class="row-inline-actions backup-actions">
+                <button class="outline-button row-inline-action" id="backup-now" type="button" data-i18n="desktop.backup.now">Back up now</button>
+                <button class="outline-button row-inline-action" id="restore-local-backup" type="button" data-i18n="desktop.backup.restore">Restore from backup</button>
+              </div>
+              <div id="backup-recent-list" class="backup-list"></div>
+              <span id="backup-message" class="action-message" aria-live="polite"></span>
+            </div>
+
+            <div class="stack">
+              <div>
                 <h4 data-i18n="desktop.about.diagnosticsTitle">Diagnostics &amp; Reset</h4>
               </div>
               <button class="row-card" id="export-diagnostics" type="button">
                 <span class="setting-icon icon" style="--icon: url('./icons/file-down.svg')" aria-hidden="true"></span>
                 <div><strong data-i18n="desktop.app.exportDiagnostics">Export diagnostics</strong></div>
               </button>
+              <div class="diagnostics-status" id="diagnostics-status">
+                <div>
+                  <strong data-i18n="desktop.diagnostics.runtimeLog">Runtime log</strong>
+                  <small id="diagnostics-retention"></small>
+                </div>
+                <div class="diagnostics-metrics">
+                  <span id="diagnostics-log-size">-</span>
+                  <span id="diagnostics-log-events">-</span>
+                  <span id="diagnostics-log-latest">-</span>
+                </div>
+                <button class="outline-button row-inline-action" id="clear-runtime-log" type="button" data-i18n="desktop.diagnostics.clearRuntimeLog">Clear runtime log</button>
+              </div>
               <button class="row-card destructive-action-row" id="reset-local-data" type="button">
                 <span class="setting-icon icon" style="--icon: url('./icons/trash-2.svg')" aria-hidden="true"></span>
                 <div><strong data-i18n="desktop.reset.title">Reset local data</strong></div>

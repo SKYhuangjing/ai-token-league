@@ -44,8 +44,19 @@
     exportIdentity:      () => invoke("export_identity_dialog"),
     exportConfig:        () => invoke("export_config_dialog"),
     exportDiagnostics:   () => invoke("export_diagnostics_dialog"),
+    diagnosticsStatus:   fwd("diagnostics:status"),
+    clearRuntimeLog:     fwd("diagnostics:clear-runtime-log"),
+    exportLocalBackup:   () => invoke("export_local_backup_dialog"),
     importIdentity:      () => invoke("import_identity_dialog"),
     importConfig:        () => invoke("import_config_dialog"),
+    restoreLocalBackup:  () => invoke("restore_local_backup_dialog"),
+    localBackupStatus:   fwd("local-backup:status"),
+    createLocalBackup:   fwd("local-backup:create"),
+    runDueAutoBackup:    fwd("local-backup:run-due-auto"),
+    chooseBackupDirectory: () => invoke("choose_local_backup_directory_dialog"),
+    pickLocalBackup:     () => invoke("pick_local_backup_dialog"),
+    restoreLocalBackupFile: (filePath) => invoke("restore_local_backup_file", { filePath }),
+    revealBackupDirectory: (path) => invoke("reveal_local_backup_directory", { path }),
 
     // ── Background ──────────────────────────────────────────────
     backgroundStatus:    () => invoke("background_status"),
@@ -82,6 +93,7 @@
 
     // ── App ─────────────────────────────────────────────────────
     appVersion:          fwd("app:version"),
+    logEvent:            fwd("runtime:log"),
 
     // ── Updates (native Tauri updater) ───────────────────────────
     checkUpdate:              () => invoke("check_update"),

@@ -464,6 +464,7 @@ async fn update_config(
 ) -> Result<Value, String> {
     let config = call_sidecar(&state, "config:update", input).await?;
     apply_launch_at_login(&app, &config)?;
+    let _ = call_sidecar(&state, "local-backup:run-due-auto", json!(null)).await;
     Ok(config)
 }
 
@@ -552,7 +553,44 @@ async fn export_diagnostics_dialog(
                 .and_then(|u| u.get("rowCount"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            Ok(json!({"canceled": false, "filePath": p.to_string_lossy(), "usageRowCount": row_count}))
+            let log_count = data
+                .get("runtimeLog")
+                .and_then(|u| u.as_array())
+                .map(|v| v.len())
+                .unwrap_or(0);
+            Ok(json!({"canceled": false, "filePath": p.to_string_lossy(), "usageRowCount": row_count, "logCount": log_count}))
+        }
+        None => Ok(json!({"canceled": true})),
+    }
+}
+
+#[tauri::command]
+async fn export_local_backup_dialog(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let data = call_sidecar(&state, "local-backup:export:prepare", json!(null)).await?;
+    let ts = chrono_ts();
+    let default_name = format!("ai-token-league-backup-{}.json", ts);
+    let file_path = app
+        .dialog()
+        .file()
+        .set_title("Back Up AI Token League Local Data")
+        .set_file_name(&default_name)
+        .add_filter("JSON", &["json"])
+        .blocking_save_file();
+    match file_path {
+        Some(path) => {
+            let p = path.into_path().map_err(|e| e.to_string())?;
+            std::fs::write(&p, serde_json::to_string_pretty(&data).unwrap() + "\n")
+                .map_err(|e| e.to_string())?;
+            let entry_count = data
+                .get("entries")
+                .and_then(|entries| entries.as_array())
+                .map(|entries| entries.len())
+                .unwrap_or(0);
+            Ok(json!({"canceled": false, "filePath": p.to_string_lossy(), "entryCount": entry_count}))
         }
         None => Ok(json!({"canceled": true})),
     }
@@ -604,6 +642,88 @@ async fn import_config_dialog(
         }
         None => Ok(json!({"canceled": true})),
     }
+}
+
+#[tauri::command]
+async fn restore_local_backup_dialog(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let file_path = app
+        .dialog()
+        .file()
+        .set_title("Restore AI Token League Local Data")
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file();
+    match file_path {
+        Some(path) => {
+            let p = path.into_path().map_err(|e| e.to_string())?;
+            let content = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+            let backup: Value =
+                serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            call_sidecar(&state, "local-backup:restore:apply", backup).await
+        }
+        None => Ok(json!({"canceled": true})),
+    }
+}
+
+#[tauri::command]
+async fn choose_local_backup_directory_dialog(app: AppHandle) -> Result<Value, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let dir_path = app
+        .dialog()
+        .file()
+        .set_title("Choose AI Token League Backup Folder")
+        .blocking_pick_folder();
+    match dir_path {
+        Some(path) => {
+            let p = path.into_path().map_err(|e| e.to_string())?;
+            Ok(json!({"canceled": false, "directory": p.to_string_lossy()}))
+        }
+        None => Ok(json!({"canceled": true})),
+    }
+}
+
+#[tauri::command]
+async fn pick_local_backup_dialog(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let file_path = app
+        .dialog()
+        .file()
+        .set_title("Choose AI Token League Backup")
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file();
+    match file_path {
+        Some(path) => {
+            let p = path.into_path().map_err(|e| e.to_string())?;
+            let content = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+            let backup: Value =
+                serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let summary = call_sidecar(&state, "local-backup:inspect", backup).await?;
+            Ok(json!({"canceled": false, "filePath": p.to_string_lossy(), "summary": summary}))
+        }
+        None => Ok(json!({"canceled": true})),
+    }
+}
+
+#[tauri::command]
+async fn restore_local_backup_file(
+    state: State<'_, SidecarState>,
+    file_path: String,
+) -> Result<Value, String> {
+    let content = std::fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+    let backup: Value =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    call_sidecar(&state, "local-backup:restore:apply", backup).await
+}
+
+#[tauri::command]
+async fn reveal_local_backup_directory(path: String) -> Result<(), String> {
+    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -922,6 +1042,7 @@ pub fn run() {
                 if let Ok(config) = call_sidecar(&state, "config:get", json!(null)).await {
                     let _ = apply_launch_at_login(&handle, &config);
                 }
+                let _ = call_sidecar(&state, "local-backup:run-due-auto", json!(null)).await;
             });
 
             // Window close → hide to tray
@@ -948,8 +1069,14 @@ pub fn run() {
             export_identity_dialog,
             export_config_dialog,
             export_diagnostics_dialog,
+            export_local_backup_dialog,
             import_identity_dialog,
             import_config_dialog,
+            restore_local_backup_dialog,
+            choose_local_backup_directory_dialog,
+            pick_local_backup_dialog,
+            restore_local_backup_file,
+            reveal_local_backup_directory,
             add_provider_root_dialog,
             check_update,
             download_update,
