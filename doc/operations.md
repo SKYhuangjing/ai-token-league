@@ -228,9 +228,76 @@ PUBLIC_BOARD_AUTH_PASSWORD=<your-password>
 
 ## 2. 下载通道配置
 
-### 2.1 OSS 存储配置
+### 2.1 分发模式
 
-发布产物上传到阿里云 OSS。需要以下环境变量：
+客户端只访问服务端 release 端点，不直接内置 GitHub 或 OSS 地址。服务端根据 `RELEASE_SOURCE` 选择上游：
+
+| 模式 | 适用场景 | 构建/发布入口 | 服务端上游 |
+| --- | --- | --- | --- |
+| `github` | 官方公开发布 | GitHub Actions `Release` workflow | GitHub Release assets |
+| `static` | 自部署、私有部署、OSS/CDN 分发 | `scripts/release.sh --platform all --env <env> --upload --yes` + `scripts/publish-release.js` | 静态 `tauri-update.json` / `installer.json` / `latest.json` |
+
+服务端 release 端点保持一致：
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/release/config` | 返回 release 配置、兼容信息和安装包元数据 |
+| `GET /api/tauri/update.json` | Tauri 客户端唯一更新入口；服务端从 GitHub Release 或自部署 metadata 获取并返回 updater JSON |
+| `GET /api/release/latest` | 返回 macOS zip updater 的 release manifest |
+| `GET /api/health` | 返回完整健康信息（含版本和兼容状态） |
+
+### 2.2 GitHub Release 发布流
+
+GitHub Actions 是官方发布流。触发方式是推送 `v*` tag，tag 版本必须与 `package.json`、根 `Cargo.toml`、`src-tauri/tauri.conf.json` 一致。
+
+推荐使用 GitHub Actions 做正式全平台构建，因为它按平台提供真实构建环境：
+
+| 目标平台 | GitHub runner | 关键依赖 |
+| --- | --- | --- |
+| macOS arm64 / Intel | `macos-latest` | Node.js 22、Rust stable、Xcode Command Line Tools、`aarch64-apple-darwin` / `x86_64-apple-darwin` targets |
+| Windows x64 | `windows-latest` | Node.js 22、Rust stable MSVC、Visual Studio Build Tools、`@tauri-apps/cli-win32-x64-msvc` |
+| Linux x64 | `ubuntu-22.04` | Node.js 22、Rust stable、`libwebkit2gtk-4.1-dev`、`libappindicator3-dev`、`librsvg2-dev`、`patchelf`、`@tauri-apps/cli-linux-x64-gnu` |
+
+不要把 macOS 上的 Windows/Linux 交叉构建当成正式发布链路；它只能用于开发期验证或排障。
+
+```bash
+git tag v0.6.3
+git push github v0.6.3
+```
+
+必需 GitHub Actions secrets：
+
+```text
+TAURI_SIGNING_PRIVATE_KEY=<tauri updater private key>
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<optional password>
+```
+
+稳定性约束：
+
+- `prepare-release` 输出的 `release_id` 是整条 workflow 的 release 真源。
+- draft release 在发布前可能显示为 `untagged-*`，所以生成 `latest.json`、上传 `latest.json`、校验 assets、发布 release 都必须按 `release_id` 操作。
+- workflow rerun 会复用最新匹配 draft、删除重复 draft、清空旧 assets，再由 build matrix 上传新 assets。
+- 已发布 release 默认不覆盖；只有显式设置 `ALLOW_PUBLISHED_RELEASE_OVERWRITE=true` 才允许替换。
+
+GitHub Release 成功后，服务端配置：
+
+```text
+RELEASE_SOURCE=github
+RELEASE_GITHUB_REPOSITORY=SKYhuangjing/ai-token-league
+RELEASE_GITHUB_TAG=          # 留空使用 latest release；填写 v0.6.3 可固定版本
+RELEASE_GITHUB_TOKEN=        # 可选，private repo 或规避匿名 API rate limit 时使用
+```
+
+### 2.3 自部署静态发布流
+
+自部署不依赖 GitHub Release。发布环境负责构建全平台产物、生成 metadata、上传到 OSS/CDN/静态文件服务；服务端只读取公开 metadata。
+
+自部署资产有两种稳定来源：
+
+1. 仍使用 GitHub Actions 构建四平台产物，然后把 Release assets 镜像到自己的 OSS/CDN。
+2. 自备 macOS、Windows、Ubuntu 三类构建机；每台只构建本平台产物，最终汇总到同一个 release `dist/` 后再执行 `node scripts/publish-release.js`。
+
+OSS 发布环境需要以下变量：
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
@@ -242,7 +309,7 @@ PUBLIC_BOARD_AUTH_PASSWORD=<your-password>
 | `RELEASE_OSS_ACCESS_KEY_SECRET` | SK（写入权限） | - |
 
 OSS 权限要求：
-- AK/SK：写入权限，仅用于发布环境执行 `release:upload` / `release:publish`
+- AK/SK：写入权限，仅用于发布环境执行 `scripts/release.sh --upload` 或 `node scripts/publish-release.js`
 - 服务端运行环境：只需要 `RELEASE_PUBLIC_BASE_URL` 等公开 release 配置，不需要 OSS AK/SK
 - Bucket 公开读：客户端和 Web 前端直接从 OSS 下载
 
@@ -253,23 +320,32 @@ cp env.example env.local
 # 编辑 env.local，填入 OSS 凭据
 ```
 
-服务端部署环境至少配置公开下载基址：
+服务端部署环境配置静态 metadata：
 
 ```text
+RELEASE_SOURCE=static
+RELEASE_TAURI_UPDATE_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league/releases/tauri-update.json
+RELEASE_INSTALLER_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league/releases/installer.json
 RELEASE_PUBLIC_BASE_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league
 ```
 
-### 2.2 发布流程
+发布入口：
 
-首选入口是交互式发布脚本，它会按顺序处理版本确认、平台选择、env/preset、安装包和上传：
+```bash
+scripts/release.sh --platform all --env env.local --upload --yes
+```
+
+先 dry run 再正式上传：
+
+```bash
+node scripts/publish-release.js --env env.local --dry-run
+node scripts/publish-release.js --env env.local
+```
+
+交互式发布脚本仍可用于本机验证或人工发布，它会按顺序处理版本确认、平台选择、env/preset、安装包和上传：
 
 ```bash
 scripts/release.sh
-```
-
-常用非交互示例：
-
-```bash
 scripts/release.sh --platform current --yes
 scripts/release.sh --platform all --env env.local --upload --yes
 ```
@@ -278,16 +354,16 @@ scripts/release.sh --platform all --env env.local --upload --yes
 
 ```bash
 # 1. 构建所有产物（zip + 安装包 + preset）
-npm run release:build
+scripts/release.sh --platform all --env env.local --yes
 
 # 2. 验证 manifest（不上传）
-npm run release:dry-run
+node scripts/publish-release.js --env env.local --dry-run
 
 # 3. 上传到 OSS
-npm run release:upload
+node scripts/publish-release.js --env env.local
 
 # 4. 或者一步完成（构建 + 上传）
-npm run release:publish
+scripts/release.sh --platform all --env env.local --upload --yes
 ```
 
 构建产物：
@@ -326,7 +402,7 @@ src-tauri/target/release/bundle/AI Token League.app.tar.gz.sig      (minisign si
 | `RELEASE_UPLOAD_HEADERS_TIMEOUT_MS` | `1200000` | HTTP headers 超时（20 分钟） |
 | `RELEASE_UPLOAD_BODY_TIMEOUT_MS` | `1200000` | HTTP body 超时（20 分钟） |
 
-### 2.3 版本兼容控制
+### 2.4 版本兼容控制
 
 控制客户端最低版本的两个环境变量：
 
@@ -344,7 +420,7 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 | `true` | 是 | HTTP 426 拒绝 |
 | `true` | 否 | 正常通过 |
 
-### 2.4 Cloud Usage Snapshot Sync
+### 2.5 Cloud Usage Snapshot Sync
 
 0.7 引入 protocol v2 的 `device_day_provider` bucket snapshot 同步协议，用于收敛云端 usage 数据到本地 collector 真实状态。
 
@@ -370,34 +446,7 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 | `usage_sync_buckets`（MySQL 表） | 服务端 bucket 同步元数据，不参与 ranking truth |
 | `scripts/query-usage-daily.js --sync-buckets` | 查询 sync metadata 用于运营诊断 |
 
-服务端 release 端点：
-
-| 端点 | 说明 |
-| --- | --- |
-| `GET /api/release/config` | 返回 release 配置、兼容信息和安装包元数据 |
-| `GET /api/tauri/update.json` | Tauri 客户端唯一更新入口；服务端从 GitHub Release 或自部署 metadata 获取并返回 updater JSON |
-| `GET /api/release/latest` | 返回 macOS zip updater 的 release manifest |
-| `GET /api/health` | 返回完整健康信息（含版本和兼容状态） |
-
-GitHub Release 分发配置：
-
-```text
-RELEASE_SOURCE=github
-RELEASE_GITHUB_REPOSITORY=SKYhuangjing/ai-token-league
-RELEASE_GITHUB_TAG=          # 留空使用 latest release；填写 v0.6.3 可固定版本
-RELEASE_GITHUB_TOKEN=        # 可选，private repo 或规避匿名 API rate limit 时使用
-```
-
-自部署分发配置：
-
-```text
-RELEASE_SOURCE=static
-RELEASE_TAURI_UPDATE_URL=https://download.example.com/releases/latest.json
-RELEASE_INSTALLER_URL=https://download.example.com/releases/installer.json
-RELEASE_PUBLIC_BASE_URL=https://download.example.com
-```
-
-### 2.5 下载通道验证
+### 2.6 下载通道验证
 
 发布后在服务端机器或 CI 中验证：
 

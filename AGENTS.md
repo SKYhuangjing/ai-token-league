@@ -147,6 +147,8 @@ scripts/release.sh --platform current --env env.local --yes
 
 Use `--platform all` only for explicit release-facing verification, not routine local debugging.
 
+Formal full-platform releases should use the GitHub Actions matrix or real per-OS build hosts: macOS for macOS artifacts, Windows for Windows artifacts, and Ubuntu for Linux artifacts. macOS-hosted Windows/Linux cross-builds are developer diagnostics only, not the stable release path.
+
 Low-level build commands:
 
 ```bash
@@ -186,6 +188,8 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | `scripts/bump-version.js` | Client version and/or product baseline bump across package/docs metadata. | `npm run bump -- <version>` or `npm run bump -- --baseline <major.minor>` |
 | `scripts/build-preset.js` | Generate `assets/preset.json` from `PRESET_*` env values or an env file before packaging. | `npm run preset -- --env env.local` |
 | `scripts/publish-release.js` | Build release manifests and upload updater/installer artifacts to OSS; supports dry run. | `node scripts/publish-release.js --env env.local --dry-run` |
+| `scripts/prepare-github-release.js` | GitHub Actions helper: create or reuse one draft release, delete stale duplicate drafts, clear old assets, and output the canonical `release_id`. | Called by `.github/workflows/release.yml` |
+| `scripts/upload-github-release-asset.js` | GitHub Actions helper: upload a generated release asset such as `latest.json` by `release_id`, with optional clobber. | Called by `.github/workflows/release.yml` |
 | `scripts/patch-dmg-readme.js` | Add `assets/mac-install-readme.txt` into generated macOS DMGs; normally called by installer npm scripts. | `node scripts/patch-dmg-readme.js` |
 | `scripts/generate-icons.js` | Regenerate desktop and web icon assets from `assets/app-icon-source.png`. | `npm run icons` |
 | `scripts/network-probe.mjs` | Print local network interfaces for LAN/server access diagnostics. | `node scripts/network-probe.mjs` |
@@ -240,7 +244,7 @@ scripts/release.sh        # interactive: guides through platform, env, upload
 Or manually:
 
 ```bash
-npm run release:build     # clean build: zip + installer artifacts
+scripts/release.sh --platform all --env env.local --yes     # clean build: zip + installer artifacts
 node scripts/publish-release.js --env env.local --dry-run   # verify manifest
 node scripts/publish-release.js --env env.local             # upload to OSS
 ```

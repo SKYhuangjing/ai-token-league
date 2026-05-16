@@ -5,16 +5,18 @@ import { buildTauriUpdateJson, githubReleaseApiUrl, selectGithubAsset } from "..
 
 const repo = argValue("repo") || process.env.RELEASE_GITHUB_REPOSITORY || process.env.GITHUB_REPOSITORY || "SKYhuangjing/ai-token-league";
 const tag = argValue("tag") || process.env.GITHUB_REF_NAME || "";
+const releaseId = argValue("release-id") || process.env.RELEASE_GITHUB_RELEASE_ID || "";
 const apiBaseUrl = argValue("api-base-url") || process.env.RELEASE_GITHUB_API_BASE_URL || "https://api.github.com";
 const output = path.resolve(argValue("output") || "latest.json");
 const token = process.env.RELEASE_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "";
 
-if (!tag) throw new Error("missing release tag (use --tag vX.Y.Z)");
+if (!tag && !releaseId) throw new Error("missing release identity (use --release-id <id> or --tag vX.Y.Z)");
 
-const release = await fetchJson(githubReleaseApiUrl({ repository: repo, tag, apiBaseUrl }), githubHeaders());
-const version = String(release.tag_name || tag).replace(/^v/, "");
+const release = await fetchJson(githubReleaseApiUrl({ repository: repo, tag, releaseId, apiBaseUrl }), githubHeaders());
+const releaseTag = tag || release.tag_name || "";
+const version = releaseVersion({ release, tag: releaseTag });
 const assetNames = Array.isArray(release.assets) ? release.assets.map((asset) => asset.name).filter(Boolean) : [];
-console.log(`release assets (${assetNames.length}):`);
+console.log(`release ${release.id || releaseId || releaseTag} assets (${assetNames.length}):`);
 for (const name of assetNames) console.log(`  - ${name}`);
 
 const artifacts = [];
@@ -69,6 +71,14 @@ function updaterDefinitions() {
       match: (name) => name.endsWith(".AppImage") && /(x64|x86_64|amd64|linux)/i.test(name)
     }
   ];
+}
+
+function releaseVersion({ release, tag }) {
+  const fromTag = String(tag || release?.tag_name || "").trim().replace(/^v/, "");
+  if (fromTag && !fromTag.startsWith("untagged-")) return fromTag;
+  const fromName = String(release?.name || "").match(/\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/);
+  if (fromName) return fromName[0];
+  throw new Error("release version could not be resolved from tag or release name");
 }
 
 async function fetchJson(url, headers) {

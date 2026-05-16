@@ -9,6 +9,24 @@ This document is the operational checklist for rebuilding desktop distribution a
 - Dependencies installed with `npm install`.
 - Run commands from the project root.
 
+## Build Environment Matrix
+
+Official full-platform release builds must run on matching operating systems. Do not treat macOS-hosted Windows or Linux cross-builds as the formal release path; those are only acceptable for developer diagnostics.
+
+| Target | Required build host | Required setup |
+| --- | --- | --- |
+| macOS arm64 | GitHub Actions `macos-latest` or local macOS | Node.js 22, Rust stable, Xcode Command Line Tools, `rustup target add aarch64-apple-darwin` |
+| macOS Intel | GitHub Actions `macos-latest` or local macOS | Node.js 22, Rust stable, Xcode Command Line Tools, `rustup target add x86_64-apple-darwin` |
+| Windows x64 | GitHub Actions `windows-latest` or Windows build host | Node.js 22, Rust stable MSVC toolchain, Visual Studio Build Tools, `@tauri-apps/cli-win32-x64-msvc` |
+| Linux x64 | GitHub Actions `ubuntu-22.04` or Ubuntu build host | Node.js 22, Rust stable, `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`, `@tauri-apps/cli-linux-x64-gnu` |
+
+Updater artifacts must be signed in the build environment:
+
+```text
+TAURI_SIGNING_PRIVATE_KEY=<tauri updater private key>
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<optional password>
+```
+
 ## Interactive Release Script
 
 The primary way to build and release is through the interactive script:
@@ -90,9 +108,13 @@ Tauri produces these artifacts in `src-tauri/target/release/bundle/`:
 - `deb/ai-token-league_<version>_amd64.deb` — Debian package
 - `appimage/AI Token League_<version>_amd64.AppImage.tar.gz` + `.sig` — updater package
 
-## Release Manifest Dry Run
+## Distribution Release Flow
 
 GitHub Release is the primary release path. The client does not read GitHub directly; it calls the app server at `/api/tauri/update.json`, and the server reads either GitHub Release assets or self-hosted metadata based on env.
+
+### GitHub Release
+
+GitHub Actions is the recommended official release builder because it provides the required macOS, Windows, and Ubuntu runners in one matrix. Local `scripts/release.sh --platform all` is for self-hosted build farms or focused release troubleshooting, not the default official release path.
 
 Required GitHub Actions secrets:
 
@@ -101,14 +123,46 @@ TAURI_SIGNING_PRIVATE_KEY=<tauri updater private key>
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<optional password>
 ```
 
-Release by pushing a version tag that matches `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`:
+Before tagging, verify the release line locally:
+
+```bash
+npm test
+cargo test --workspace
+node --check scripts/prepare-github-release.js
+node --check scripts/upload-github-release-asset.js
+node --check scripts/build-github-tauri-update-json.js
+```
+
+Release by pushing a `v*` tag that matches `package.json`, root `Cargo.toml`, and `src-tauri/tauri.conf.json`:
 
 ```bash
 git tag v0.6.3
 git push github v0.6.3
 ```
 
-The workflow builds macOS arm64, macOS Intel, Windows x64, and Linux x64; uploads installers plus signed updater packages; generates a merged `latest.json`; then publishes the GitHub Release.
+The workflow builds macOS arm64, macOS Intel, Windows x64, and Linux x64; uploads installers plus signed updater packages; generates a merged `latest.json`; verifies the expected release assets; then publishes the GitHub Release.
+
+The canonical release object inside the workflow is `release_id`, not the tag lookup endpoint. GitHub draft releases can appear as `untagged-*` until published, so release steps must pass the `release_id` from `prepare-release` into build, upload, verify, and publish operations. Do not replace this with `/releases/tags/<tag>` in draft-time steps.
+
+Reruns are expected to be idempotent:
+
+- `scripts/prepare-github-release.js` reuses the latest matching draft release.
+- Older duplicate drafts with the same release name are deleted.
+- Existing assets on the selected draft are removed before the matrix build uploads fresh assets.
+- Published releases are not overwritten unless `ALLOW_PUBLISHED_RELEASE_OVERWRITE=true` is explicitly set.
+
+The expected GitHub Release assets are:
+
+```text
+latest.json
+*.app.tar.gz
+*.app.tar.gz.sig
+*.dmg
+*-setup.exe
+*-setup.exe.sig
+*.AppImage
+*.AppImage.sig
+```
 
 Configure the app server to distribute from GitHub:
 
@@ -119,14 +173,40 @@ RELEASE_GITHUB_TAG=          # optional pin; empty means latest release
 RELEASE_GITHUB_TOKEN=        # optional for private repo or higher API rate limit
 ```
 
-For self-hosted distribution, keep the same client endpoint and point the server at hosted metadata:
+### Self-Hosted Distribution
+
+Self-hosted distribution keeps the same client/server API shape, but does not use GitHub Release. Build every supported platform, publish static metadata to your download host, and point the app server at those metadata files.
+
+There are two supported ways to produce self-hosted assets:
+
+- Reuse the GitHub Actions release assets, then mirror them to OSS/CDN and publish the static metadata.
+- Run separate trusted build hosts for macOS, Windows, and Ubuntu, collect all platform artifacts into one release `dist/`, then run `scripts/publish-release.js`.
+
+Use `scripts/release.sh --platform all --env <env-file> --upload --yes` when the host is OSS-compatible and `env-file` contains `RELEASE_OSS_*` credentials. Use `node scripts/publish-release.js --env <env-file> --dry-run` before the real upload.
+
+The static host must expose:
+
+```text
+<public-base>/releases/tauri-update.json
+<public-base>/releases/latest.json
+<public-base>/releases/installer.json
+<public-base>/releases/<version>/installer.json
+<public-base>/releases/checksums.txt
+<public-base>/releases/<version>/<installer-and-updater-assets>
+```
+
+Configure the app server to distribute from self-hosted metadata:
 
 ```text
 RELEASE_SOURCE=static
-RELEASE_TAURI_UPDATE_URL=https://example.com/releases/latest.json
+RELEASE_TAURI_UPDATE_URL=https://example.com/releases/tauri-update.json
 RELEASE_INSTALLER_URL=https://example.com/releases/installer.json
 RELEASE_PUBLIC_BASE_URL=https://example.com
 ```
+
+The server runtime must not receive OSS write credentials. Keep `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_SECRET` only in the trusted release environment that runs the upload.
+
+### Static Manifest Dry Run
 
 Release resource configuration is read from env. `scripts/publish-release.js` requires an explicit `--env` flag or `RELEASE_*` environment variables; it does not default to `env.local`.
 
@@ -152,7 +232,7 @@ node scripts/publish-release.js --env env.local
 To rebuild and upload separately:
 
 ```bash
-scripts/release.sh --platform all --yes          # clean build
+scripts/release.sh --platform all --env env.local --yes  # clean build
 node scripts/publish-release.js --env env.local  # upload with progress bar
 ```
 
@@ -165,6 +245,9 @@ Run these before treating the package as current:
 ```bash
 node --check src/desktop/renderer.js
 node --check scripts/publish-release.js
+node --check scripts/prepare-github-release.js
+node --check scripts/upload-github-release-asset.js
+node --check scripts/build-github-tauri-update-json.js
 cargo test --workspace
 npm test
 npm run desktop

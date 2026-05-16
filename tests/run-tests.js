@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Store } from "../src/backend/store.js";
@@ -1035,6 +1037,10 @@ async function testVersionCompatibilityAndManifest() {
     tag: "v0.6.3"
   }), "https://api.github.com/repos/SKYhuangjing/ai-token-league/releases/tags/v0.6.3");
   assert.equal(githubReleaseApiUrl({
+    repository: "SKYhuangjing/ai-token-league",
+    releaseId: "123456"
+  }), "https://api.github.com/repos/SKYhuangjing/ai-token-league/releases/123456");
+  assert.equal(githubReleaseApiUrl({
     repository: "SKYhuangjing/ai-token-league"
   }), "https://api.github.com/repos/SKYhuangjing/ai-token-league/releases/latest");
 
@@ -1126,6 +1132,76 @@ function githubAsset(name, size, url, sha256) {
     browser_download_url: url,
     digest: `sha256:${sha256}`
   };
+}
+
+async function testBuildGithubTauriUpdateJsonUsesReleaseId() {
+  const releaseId = "123456";
+  const output = path.join(tmp, "mock-latest.json");
+  const server = http.createServer((req, res) => {
+    if (req.url === `/repos/SKYhuangjing/ai-token-league/releases/${releaseId}`) {
+      const base = `http://127.0.0.1:${server.address().port}`;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        id: Number(releaseId),
+        tag_name: "untagged-draft",
+        name: "AI Token League 0.6.3",
+        html_url: "https://github.com/SKYhuangjing/ai-token-league/releases/tag/untagged-draft",
+        created_at: "2026-05-16T00:00:00Z",
+        assets: [
+          { name: "AI Token League_0.6.3_darwin_aarch64.app.tar.gz", browser_download_url: `${base}/download/mac-arm64` },
+          { name: "AI Token League_0.6.3_darwin_aarch64.app.tar.gz.sig", browser_download_url: `${base}/sig/mac-arm64` },
+          { name: "AI Token League_0.6.3_darwin_x64.app.tar.gz", browser_download_url: `${base}/download/mac-x64` },
+          { name: "AI Token League_0.6.3_darwin_x64.app.tar.gz.sig", browser_download_url: `${base}/sig/mac-x64` },
+          { name: "AI Token League_0.6.3_windows_x64-setup.exe", browser_download_url: `${base}/download/win` },
+          { name: "AI Token League_0.6.3_windows_x64-setup.exe.sig", browser_download_url: `${base}/sig/win` },
+          { name: "AI Token League_0.6.3_linux_amd64.AppImage", browser_download_url: `${base}/download/linux` },
+          { name: "AI Token League_0.6.3_linux_amd64.AppImage.sig", browser_download_url: `${base}/sig/linux` }
+        ]
+      }));
+      return;
+    }
+    if (req.url?.startsWith("/sig/")) {
+      res.setHeader("content-type", "text/plain");
+      res.end(`signature-${req.url.slice("/sig/".length)}`);
+      return;
+    }
+    res.statusCode = 404;
+    res.end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const apiBaseUrl = `http://127.0.0.1:${server.address().port}`;
+    await runNodeScript([
+      "scripts/build-github-tauri-update-json.js",
+      "--repo", "SKYhuangjing/ai-token-league",
+      "--release-id", releaseId,
+      "--api-base-url", apiBaseUrl,
+      "--output", output
+    ]);
+    const latest = JSON.parse(fs.readFileSync(output, "utf8"));
+    assert.equal(latest.version, "0.6.3");
+    assert.equal(latest.platforms["darwin-aarch64"].signature, "signature-mac-arm64");
+    assert.equal(latest.platforms["windows-x86_64"].signature, "signature-win");
+    assert.equal(latest.platforms["linux-x86_64"].signature, "signature-linux");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function runNodeScript(args) {
+  const child = spawn(process.execPath, args, {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  if (code !== 0) {
+    throw new Error(`script failed (${code}): ${args.join(" ")}\n${stdout}${stderr}`);
+  }
+  return stdout;
 }
 
 function testProductBaseline() {
@@ -1486,6 +1562,7 @@ testSnapshotLegacyCoexistence();
 testProductBaseline();
 testPublicChangelogParsing();
 await testVersionCompatibilityAndManifest();
+await testBuildGithubTauriUpdateJsonUsesReleaseId();
 testDisplayAndPricing();
 await testOpenRouterRefresh();
 console.log("All tests passed");

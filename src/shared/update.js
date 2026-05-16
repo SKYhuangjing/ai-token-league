@@ -203,11 +203,12 @@ export const INSTALLER_PLATFORMS = {
   "linux-x64": { ext: "AppImage", label: "Linux x64" }
 };
 
-export function githubReleaseApiUrl({ repository, tag = "", apiBaseUrl = "https://api.github.com" } = {}) {
+export function githubReleaseApiUrl({ repository, tag = "", releaseId = "", apiBaseUrl = "https://api.github.com" } = {}) {
   const repo = String(repository || "").trim();
   if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new Error("github repository must be owner/name");
   const base = trimSlash(apiBaseUrl || "https://api.github.com");
-  const suffix = tag ? `tags/${encodeURIComponent(tag)}` : "latest";
+  const id = String(releaseId || "").trim();
+  const suffix = id ? encodeURIComponent(id) : tag ? `tags/${encodeURIComponent(tag)}` : "latest";
   return `${base}/repos/${repo}/releases/${suffix}`;
 }
 

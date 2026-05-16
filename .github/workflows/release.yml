@@ -55,6 +55,8 @@ jobs:
           node --check src/desktop/renderer.js
           node --check src/shared/update.js
           node --check scripts/build-github-tauri-update-json.js
+          node --check scripts/prepare-github-release.js
+          node --check scripts/upload-github-release-asset.js
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux dependencies
         run: |
@@ -150,38 +152,17 @@ jobs:
           ref: ${{ needs.validate.outputs.tag }}
       - id: release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId' 2>/dev/null)"; then
-            gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | while read -r asset_name; do
-              [[ -n "$asset_name" ]] && gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes >/dev/null
-            done
-          else
-            target_commit="$(git rev-parse HEAD)"
-            release_json="$(
-              gh api -X POST "repos/$REPOSITORY/releases" \
-                -f tag_name="$RELEASE_TAG" \
-                -f target_commitish="$target_commit" \
-                -f name="AI Token League $RELEASE_VERSION" \
-                -f body="Automated release for AI Token League $RELEASE_VERSION." \
-                -F draft=true \
-                -F prerelease=false
-            )"
-            release_id="$(node -e 'const fs=require("fs"); const release=JSON.parse(fs.readFileSync(0,"utf8")); console.log(release.id)' <<< "$release_json")"
-          fi
-          if [[ -z "$release_id" || "$release_id" == "null" ]]; then
-            echo "Failed to resolve release id for $RELEASE_TAG" >&2
-            exit 1
-          fi
-          gh api -X PATCH "repos/$REPOSITORY/releases/$release_id" \
-            -F prerelease=false \
-            -f name="AI Token League $RELEASE_VERSION" \
-            -f body="Automated release for AI Token League $RELEASE_VERSION."
-          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+          node scripts/prepare-github-release.js \
+            --repo "$REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --version "$RELEASE_VERSION" \
+            --target "$(git rev-parse HEAD)"
 
   publish:
     needs:
@@ -205,17 +186,24 @@ jobs:
         run: |
           node scripts/build-github-tauri-update-json.js \
             --repo "${{ github.repository }}" \
+            --release-id "${{ needs.prepare-release.outputs.release_id }}" \
             --tag "${{ needs.validate.outputs.tag }}" \
             --output latest.json
       - name: Upload merged updater JSON
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.validate.outputs.tag }}" latest.json --clobber
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/upload-github-release-asset.js \
+            --repo "${{ github.repository }}" \
+            --release-id "${{ needs.prepare-release.outputs.release_id }}" \
+            --file latest.json \
+            --name latest.json \
+            --clobber
       - name: Verify release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "${{ needs.validate.outputs.tag }}" --json assets --jq '.assets[].name' | tee assets.txt
+          gh api "repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}" --jq '.assets[].name' | tee assets.txt
           grep -q '^latest.json$' assets.txt
           grep -q '\.app\.tar\.gz$' assets.txt
           grep -q -- '-setup\.exe$' assets.txt
@@ -224,4 +212,10 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ needs.validate.outputs.tag }}" --draft=false --latest
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}" \
+            -F draft=false \
+            -F prerelease=false \
+            -f name="AI Token League ${{ needs.validate.outputs.version }}" \
+            -f body="Automated release for AI Token League ${{ needs.validate.outputs.version }}." \
+            -f make_latest=true
