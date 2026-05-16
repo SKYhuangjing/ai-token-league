@@ -13,17 +13,30 @@ if (!tag) throw new Error("missing release tag (use --tag vX.Y.Z)");
 
 const release = await fetchJson(githubReleaseApiUrl({ repository: repo, tag, apiBaseUrl }), githubHeaders());
 const version = String(release.tag_name || tag).replace(/^v/, "");
+const assetNames = Array.isArray(release.assets) ? release.assets.map((asset) => asset.name).filter(Boolean) : [];
+console.log(`release assets (${assetNames.length}):`);
+for (const name of assetNames) console.log(`  - ${name}`);
+
 const artifacts = [];
 for (const definition of updaterDefinitions()) {
   const asset = selectGithubAsset(release, definition.match);
-  if (!asset) throw new Error(`missing updater asset for ${definition.platform}`);
+  if (!asset) {
+    console.warn(`warning: missing updater asset for ${definition.platform}; skipping updater platform`);
+    continue;
+  }
   const signatureAsset = selectGithubAsset(release, (name) => name === `${asset.name}.sig`);
-  if (!signatureAsset) throw new Error(`missing updater signature for ${asset.name}`);
+  if (!signatureAsset) {
+    console.warn(`warning: missing updater signature for ${asset.name}; skipping updater platform`);
+    continue;
+  }
   artifacts.push({
     platform: definition.platform,
     url: asset.browser_download_url,
     signature: (await fetchText(signatureAsset.browser_download_url, githubHeaders())).trim()
   });
+}
+if (!artifacts.length) {
+  throw new Error("no signed updater artifacts found");
 }
 
 const updateJson = buildTauriUpdateJson({
