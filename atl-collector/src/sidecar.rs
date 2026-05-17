@@ -157,7 +157,7 @@ async fn handle_command(
         }
         Command::ProvidersHealth => {
             let cfg = config::ensure_desktop_config();
-            Ok(provider_health(&cfg))
+            Ok(serde_json::json!(scanner::provider_health(&cfg)))
         }
         Command::IdentityExportPrepare => {
             let cfg = config::load_config().ok_or("Not initialized")?;
@@ -1006,41 +1006,6 @@ fn provider_display_name(provider: &str) -> String {
         .find(|(id, _)| *id == provider)
         .map(|(_, name)| (*name).to_string())
         .unwrap_or_else(|| provider.to_string())
-}
-
-fn provider_health(config: &config::AppConfig) -> serde_json::Value {
-    let codex = collector_core::provider::codex_local::CodexProvider;
-    let claude = collector_core::provider::claude_code_local::ClaudeCodeLocalProvider;
-    let cursor = collector_core::provider::cursor_dashboard::CursorDashboardProvider;
-    let codex_roots = codex.scan_sessions(config);
-    let claude_roots = claude.scan_sessions(config);
-    let cursor_sources = cursor.discover_sources(config);
-    serde_json::json!([
-        {
-            "providerId": codex.id(),
-            "enabled": config.provider_enabled.get(codex.id()).copied().unwrap_or(true),
-            "detected": !codex_roots.is_empty(),
-            "ok": !codex_roots.is_empty(),
-            "roots": codex_roots,
-            "scannedFiles": codex_roots.len()
-        },
-        {
-            "providerId": claude.id(),
-            "enabled": config.provider_enabled.get(claude.id()).copied().unwrap_or(true),
-            "detected": !claude_roots.is_empty(),
-            "ok": !claude_roots.is_empty(),
-            "roots": claude_roots,
-            "scannedFiles": claude_roots.len()
-        },
-        {
-            "providerId": cursor.id(),
-            "enabled": config.provider_enabled.get(cursor.id()).copied().unwrap_or(false),
-            "detected": !cursor_sources.is_empty(),
-            "ok": !cursor_sources.is_empty(),
-            "roots": cursor_sources.iter().map(|s| s.account_name.clone()).collect::<Vec<_>>(),
-            "scannedFiles": cursor_sources.len()
-        }
-    ])
 }
 
 async fn check_api_connection(api_base_url: &str) -> Result<serde_json::Value, String> {
