@@ -1,4 +1,4 @@
-use chrono::{Timelike, Local, NaiveDate, TimeZone};
+use chrono::{Local, NaiveDate, TimeZone, Timelike};
 
 pub fn app_time_zone() -> String {
     if let Ok(tz) = std::env::var("APP_TIME_ZONE") {
@@ -26,7 +26,10 @@ pub fn local_day() -> String {
 pub fn local_day_from_timestamp_ms(ms: i64) -> String {
     let secs = ms / 1000;
     let nsecs = ((ms % 1000).unsigned_abs() as u32) * 1_000_000;
-    let dt = Local.timestamp_opt(secs, nsecs).single().unwrap_or_else(Local::now);
+    let dt = Local
+        .timestamp_opt(secs, nsecs)
+        .single()
+        .unwrap_or_else(Local::now);
     format!("{}", dt.format("%Y-%m-%d"))
 }
 
@@ -34,7 +37,10 @@ pub fn local_day_from_timestamp_ms(ms: i64) -> String {
 pub fn local_hour_from_timestamp_ms(ms: i64) -> u32 {
     let secs = ms / 1000;
     let nsecs = ((ms % 1000).unsigned_abs() as u32) * 1_000_000;
-    let dt = Local.timestamp_opt(secs, nsecs).single().unwrap_or_else(Local::now);
+    let dt = Local
+        .timestamp_opt(secs, nsecs)
+        .single()
+        .unwrap_or_else(Local::now);
     dt.time().hour()
 }
 

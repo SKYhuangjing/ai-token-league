@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 /// Normalize a path for hashing: resolve, forward slashes, trim trailing slash, lowercase.
 pub fn normalize_path_for_hash(input_path: &str) -> String {
-    let resolved = Path::new(input_path).canonicalize().unwrap_or_else(|_| PathBuf::from(input_path));
+    let resolved = Path::new(input_path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(input_path));
     let s = resolved.to_string_lossy();
     let s = s.replace('\\', "/");
     let s = s.trim_end_matches('/');
@@ -12,7 +14,9 @@ pub fn normalize_path_for_hash(input_path: &str) -> String {
 
 /// Detect display name from a path (last component).
 pub fn detect_display_name(input_path: &str) -> String {
-    let resolved = Path::new(input_path).canonicalize().unwrap_or_else(|_| PathBuf::from(input_path));
+    let resolved = Path::new(input_path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(input_path));
     resolved
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -30,7 +34,11 @@ pub struct WorkdirResult {
 /// Compute workdir hash and display name from a candidate path.
 pub fn workdir_from_candidate(candidate: &str, participant_id: &str) -> WorkdirResult {
     if candidate.starts_with("virtual:") {
-        let display_name = candidate.rsplit(':').next().unwrap_or("virtual").to_string();
+        let display_name = candidate
+            .rsplit(':')
+            .next()
+            .unwrap_or("virtual")
+            .to_string();
         return WorkdirResult {
             local_path: String::new(),
             workdir_hash: sha256_hex(&format!("{}:{}", candidate, participant_id)),
@@ -70,7 +78,9 @@ mod tests {
         );
         assert!(result.local_path.is_empty());
         assert_eq!(result.display_name, "Cursor · user@example.com");
-        assert!(result.workdir_hash.starts_with(|c: char| c.is_ascii_hexdigit()));
+        assert!(result
+            .workdir_hash
+            .starts_with(|c: char| c.is_ascii_hexdigit()));
     }
 
     #[test]

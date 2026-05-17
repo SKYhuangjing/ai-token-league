@@ -1,8 +1,8 @@
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
 use rand::RngCore;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::fmt::Write;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -92,7 +92,7 @@ const ED25519_SPKI_PREFIX: &[u8] = &[
     0x30, 0x05, // SEQUENCE, 5 bytes
     0x06, 0x03, 0x55, 0x3d, 0x65, // OID 1.3.101.112
     0x03, 0x21, // BIT STRING, 33 bytes
-    0x00,       // no unused bits
+    0x00, // no unused bits
 ];
 
 /// Node.js Ed25519 private key PEM: PKCS8 DER encoded.
@@ -173,14 +173,17 @@ fn parse_public_key(pem: &str) -> Option<VerifyingKey> {
 }
 
 pub fn sign_payload(private_key_pem: &str, payload: &serde_json::Value) -> String {
-    let signing_key = parse_private_key(private_key_pem)
-        .expect("Invalid private key PEM");
+    let signing_key = parse_private_key(private_key_pem).expect("Invalid private key PEM");
     let message = canonical_json(payload);
     let signature = signing_key.sign(message.as_bytes());
     BASE64.encode(signature.to_bytes())
 }
 
-pub fn verify_payload(public_key_pem: &str, payload: &serde_json::Value, signature_b64: &str) -> bool {
+pub fn verify_payload(
+    public_key_pem: &str,
+    payload: &serde_json::Value,
+    signature_b64: &str,
+) -> bool {
     let verifying_key = match parse_public_key(public_key_pem) {
         Some(k) => k,
         None => return false,
@@ -232,7 +235,10 @@ mod tests {
     #[test]
     fn test_canonical_json_nested() {
         let input = json!({"b": {"d": 4, "c": 3}, "a": [2, 1]});
-        assert_eq!(canonical_json(&input), "{\"a\":[2,1],\"b\":{\"c\":3,\"d\":4}}");
+        assert_eq!(
+            canonical_json(&input),
+            "{\"a\":[2,1],\"b\":{\"c\":3,\"d\":4}}"
+        );
     }
 
     #[test]
@@ -269,7 +275,11 @@ mod tests {
         let identity = generate_identity();
         let payload = json!({"day": "2024-01-01", "totalTokens": 1000});
         let sig = sign_payload(&identity.identity_private_key, &payload);
-        assert!(verify_payload(&identity.identity_public_key, &payload, &sig));
+        assert!(verify_payload(
+            &identity.identity_public_key,
+            &payload,
+            &sig
+        ));
     }
 
     #[test]
@@ -278,7 +288,11 @@ mod tests {
         let payload = json!({"day": "2024-01-01", "totalTokens": 1000});
         let sig = sign_payload(&identity.identity_private_key, &payload);
         let tampered = json!({"day": "2024-01-01", "totalTokens": 999});
-        assert!(!verify_payload(&identity.identity_public_key, &tampered, &sig));
+        assert!(!verify_payload(
+            &identity.identity_public_key,
+            &tampered,
+            &sig
+        ));
     }
 
     #[test]
@@ -329,9 +343,18 @@ mod tests {
             (json!([{}, {"a": 1}]), "[{},{\"a\":1}]"),
             (json!({}), "{}"),
             (json!({"z": 1, "a": 2, "m": 3}), "{\"a\":2,\"m\":3,\"z\":1}"),
-            (json!({"b": {"d": 4, "c": 3}, "a": [2, 1]}), "{\"a\":[2,1],\"b\":{\"c\":3,\"d\":4}}"),
-            (json!({"名前": "テスト", "key": "value"}), "{\"key\":\"value\",\"名前\":\"テスト\"}"),
-            (json!({"a": {"b": {"c": {"d": 1}}}}), "{\"a\":{\"b\":{\"c\":{\"d\":1}}}}"),
+            (
+                json!({"b": {"d": 4, "c": 3}, "a": [2, 1]}),
+                "{\"a\":[2,1],\"b\":{\"c\":3,\"d\":4}}",
+            ),
+            (
+                json!({"名前": "テスト", "key": "value"}),
+                "{\"key\":\"value\",\"名前\":\"テスト\"}",
+            ),
+            (
+                json!({"a": {"b": {"c": {"d": 1}}}}),
+                "{\"a\":{\"b\":{\"c\":{\"d\":1}}}}",
+            ),
         ];
         for (input, expected) in cases {
             assert_eq!(canonical_json(&input), expected, "mismatch for {:?}", input);
@@ -341,9 +364,21 @@ mod tests {
     /// SHA-256 golden cases from Node.js.
     #[test]
     fn test_sha256_golden_cases() {
-        assert_eq!(sha256_hex("hello"), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
-        assert_eq!(sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-        assert_eq!(sha256_hex("world"), "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7");
-        assert_eq!(sha256_hex("test123"), "ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae");
+        assert_eq!(
+            sha256_hex("hello"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+        assert_eq!(
+            sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex("world"),
+            "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7"
+        );
+        assert_eq!(
+            sha256_hex("test123"),
+            "ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae"
+        );
     }
 }

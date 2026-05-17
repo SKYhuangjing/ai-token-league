@@ -11,9 +11,15 @@ pub const VERSION: &str = "0.1.1";
 pub struct ClaudeCodeLocalProvider;
 
 impl ClaudeCodeLocalProvider {
-    pub fn id(&self) -> &str { PROVIDER_ID }
-    pub fn tool_code(&self) -> &str { TOOL_CODE }
-    pub fn version(&self) -> &str { VERSION }
+    pub fn id(&self) -> &str {
+        PROVIDER_ID
+    }
+    pub fn tool_code(&self) -> &str {
+        TOOL_CODE
+    }
+    pub fn version(&self) -> &str {
+        VERSION
+    }
 
     pub fn auto_roots(&self, _config: &AppConfig) -> Vec<String> {
         let home = dirs::home_dir().unwrap_or_default();
@@ -133,10 +139,28 @@ impl ClaudeCodeLocalProvider {
                 None => continue,
             };
 
-            let raw_input_tokens = token_field(usage, &["input_tokens", "inputTokens", "prompt_tokens"]);
-            let output_tokens = token_field(usage, &["output_tokens", "outputTokens", "completion_tokens"]);
-            let cache_read_tokens = token_field(usage, &["cache_read_input_tokens", "cacheReadTokens", "cache_read_tokens"]);
-            let cache_write_tokens = token_field(usage, &["cache_creation_input_tokens", "cacheWriteTokens", "cache_write_tokens"]);
+            let raw_input_tokens =
+                token_field(usage, &["input_tokens", "inputTokens", "prompt_tokens"]);
+            let output_tokens = token_field(
+                usage,
+                &["output_tokens", "outputTokens", "completion_tokens"],
+            );
+            let cache_read_tokens = token_field(
+                usage,
+                &[
+                    "cache_read_input_tokens",
+                    "cacheReadTokens",
+                    "cache_read_tokens",
+                ],
+            );
+            let cache_write_tokens = token_field(
+                usage,
+                &[
+                    "cache_creation_input_tokens",
+                    "cacheWriteTokens",
+                    "cache_write_tokens",
+                ],
+            );
             let reasoning_tokens = token_field(usage, &["reasoning_tokens", "reasoningTokens"]);
 
             // Claude Code does NOT subtract cache from input (ccusage semantics)
@@ -163,7 +187,10 @@ impl ClaudeCodeLocalProvider {
             };
 
             // Workdir candidate
-            let mut workdir_candidate = deep_find_string(row, &["cwd", "workdir", "working_directory", "project_path"]);
+            let mut workdir_candidate = deep_find_string(
+                row,
+                &["cwd", "workdir", "working_directory", "project_path"],
+            );
             if workdir_candidate.is_empty() {
                 workdir_candidate = decode_project_dir(file);
             }
@@ -199,15 +226,18 @@ impl ClaudeCodeLocalProvider {
 /// Paths like `-Users-sky-foo` are decoded to `/Users/sky/foo`.
 fn decode_project_dir(file: &str) -> String {
     let path = Path::new(file);
-    let components: Vec<&std::ffi::OsStr> = path.components().filter_map(|c| {
-        match c {
+    let components: Vec<&std::ffi::OsStr> = path
+        .components()
+        .filter_map(|c| match c {
             std::path::Component::Normal(s) => Some(s),
             _ => None,
-        }
-    }).collect();
+        })
+        .collect();
 
     // Find last "projects" segment
-    let projects_idx = components.iter().rposition(|c| c == &std::ffi::OsStr::new("projects"));
+    let projects_idx = components
+        .iter()
+        .rposition(|c| c == &std::ffi::OsStr::new("projects"));
     match projects_idx {
         Some(idx) if idx + 1 < components.len() => {
             let encoded = components[idx + 1].to_string_lossy();
@@ -243,7 +273,8 @@ mod tests {
 
     #[test]
     fn test_decode_project_dir_dashed() {
-        let result = decode_project_dir("/home/.claude/projects/-Users-sky-my-project/session.jsonl");
+        let result =
+            decode_project_dir("/home/.claude/projects/-Users-sky-my-project/session.jsonl");
         assert_eq!(result, "/Users/sky/my/project");
     }
 

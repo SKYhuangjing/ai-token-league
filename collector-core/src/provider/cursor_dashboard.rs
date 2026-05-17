@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use crate::crypto::sha256_hex;
 use crate::provider::common::*;
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::Datelike;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -13,9 +13,15 @@ pub const VERSION: &str = "0.1.1";
 pub struct CursorDashboardProvider;
 
 impl CursorDashboardProvider {
-    pub fn id(&self) -> &str { PROVIDER_ID }
-    pub fn tool_code(&self) -> &str { TOOL_CODE }
-    pub fn version(&self) -> &str { VERSION }
+    pub fn id(&self) -> &str {
+        PROVIDER_ID
+    }
+    pub fn tool_code(&self) -> &str {
+        TOOL_CODE
+    }
+    pub fn version(&self) -> &str {
+        VERSION
+    }
 
     pub fn is_enabled(&self, config: &AppConfig) -> bool {
         config.provider_enabled.get(PROVIDER_ID) == Some(&true)
@@ -66,7 +72,9 @@ impl CursorDashboardProvider {
             let m = naive.month();
             chrono::NaiveDate::from_ymd_opt(y, m, 1)
                 .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+                .map(|dt| {
+                    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)
+                })
                 .unwrap_or(now)
         };
 
@@ -137,15 +145,14 @@ impl CursorDashboardProvider {
             let cache_read_tokens = token_field(token_usage, &["cacheReadTokens"]);
             let cache_write_tokens = token_field(token_usage, &["cacheWriteTokens"]);
             let reasoning_tokens: i64 = 0;
-            let total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_write_tokens;
+            let total_tokens =
+                input_tokens + output_tokens + cache_read_tokens + cache_write_tokens;
 
             if total_tokens == 0 {
                 continue;
             }
 
-            let model = normalize_cursor_model(
-                event["model"].as_str().unwrap_or(""),
-            );
+            let model = normalize_cursor_model(event["model"].as_str().unwrap_or(""));
 
             let timestamp = event["timestamp"].as_i64().unwrap_or(0);
             let day = if timestamp > 0 {
@@ -233,10 +240,7 @@ fn cursor_token_to_cookie(value: &str) -> String {
     }
 
     if decoded.contains("::") {
-        return format!(
-            "WorkosCursorSessionToken={}",
-            urlencoding::encode(&decoded)
-        );
+        return format!("WorkosCursorSessionToken={}", urlencoding::encode(&decoded));
     }
 
     // Try to extract userId from JWT
@@ -252,11 +256,7 @@ fn cursor_token_to_cookie(value: &str) -> String {
 }
 
 fn cursor_account_name_from_token(token: &str) -> String {
-    token
-        .split("::")
-        .next()
-        .unwrap_or("Cursor")
-        .to_string()
+    token.split("::").next().unwrap_or("Cursor").to_string()
 }
 
 fn cursor_user_id_from_token(token: &str) -> Option<String> {
@@ -275,10 +275,7 @@ fn cursor_user_id_from_token(token: &str) -> Option<String> {
 fn source_name_score(name: &str) -> i32 {
     if name.contains('@') {
         3
-    } else if !name.is_empty()
-        && !name.starts_with("user_")
-        && name != "Cursor"
-    {
+    } else if !name.is_empty() && !name.starts_with("user_") && name != "Cursor" {
         2
     } else if !name.is_empty() {
         1
@@ -345,11 +342,9 @@ fn read_token_from_cursor_sqlite() -> Option<(String, String)> {
         return None;
     }
 
-    let conn = rusqlite::Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .ok()?;
+    let conn =
+        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
 
     let token: String = conn
         .query_row(
@@ -424,7 +419,12 @@ fn discover_local_cursor_sources() -> Result<Vec<CursorSource>, String> {
     for path in config_paths {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(obj) = serde_json::from_str::<Value>(&content) {
-                let token_keys = ["cursorAuth/accessToken", "accessToken", "sessionToken", "WorkosCursorSessionToken"];
+                let token_keys = [
+                    "cursorAuth/accessToken",
+                    "accessToken",
+                    "sessionToken",
+                    "WorkosCursorSessionToken",
+                ];
                 for key in &token_keys {
                     let token = deep_find_string(&obj, &[*key]);
                     if !token.is_empty() {
@@ -466,11 +466,13 @@ fn discover_cockpit_accounts() -> Result<Vec<CursorSource>, String> {
                     if access_token.is_empty() {
                         continue;
                     }
-                    let user_id = account["id"].as_str()
+                    let user_id = account["id"]
+                        .as_str()
                         .or_else(|| account["auth_id"].as_str())
                         .unwrap_or("")
                         .to_string();
-                    let email = account["email"].as_str()
+                    let email = account["email"]
+                        .as_str()
                         .or_else(|| account["cachedEmail"].as_str())
                         .unwrap_or(&user_id)
                         .to_string();
@@ -548,6 +550,9 @@ mod tests {
         assert_eq!(items[0]["inputTokens"], 100);
         assert_eq!(items[0]["totalTokens"], 165);
         assert_eq!(items[0]["model"], "claude-3-opus");
-        assert!(items[0]["workdirCandidate"].as_str().unwrap().contains("test@example.com"));
+        assert!(items[0]["workdirCandidate"]
+            .as_str()
+            .unwrap()
+            .contains("test@example.com"));
     }
 }

@@ -15,7 +15,10 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
             let cfg = config::load_config();
             match cfg {
                 Some(c) => {
-                    println!("OK  participant={} device={}", c.participant_id, c.device_id);
+                    println!(
+                        "OK  participant={} device={}",
+                        c.participant_id, c.device_id
+                    );
                 }
                 None => {
                     println!("NOT INITIALIZED  run 'atl-collector init' first");
@@ -61,12 +64,8 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
             }
             let cache = std::collections::HashMap::new();
             let result = scanner::scan_usage_async(&cfg, &cache).await;
-            let sync_result = collector_core::sync::sync_usage(
-                &cfg,
-                &result.items,
-                &cfg.api_base_url,
-            )
-            .await?;
+            let sync_result =
+                collector_core::sync::sync_usage(&cfg, &result.items, &cfg.api_base_url).await?;
             println!(
                 "Synced: accepted={}, rejected={}, noop={}, queued={}",
                 sync_result.accepted,
@@ -82,11 +81,15 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
             }
             let client = reqwest::Client::new();
             collector_core::sync::register_device(&client, &cfg, &cfg.api_base_url).await?;
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "registered": true,
-                "participantId": cfg.participant_id,
-                "deviceId": cfg.device_id
-            })).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "registered": true,
+                    "participantId": cfg.participant_id,
+                    "deviceId": cfg.device_id
+                }))
+                .unwrap()
+            );
         }
         crate::Commands::ExportIdentity => {
             let cfg = config::load_config().ok_or("Not initialized")?;

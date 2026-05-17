@@ -102,7 +102,11 @@ pub fn display_total_tokens(item: &serde_json::Value) -> i64 {
 }
 
 pub fn usage_key(item: &serde_json::Value, participant_id: &str, device_id: &str) -> String {
-    let hour = item.get("hour").and_then(|v| v.as_i64()).map(|h| h.to_string()).unwrap_or_default();
+    let hour = item
+        .get("hour")
+        .and_then(|v| v.as_i64())
+        .map(|h| h.to_string())
+        .unwrap_or_default();
     format!(
         "{}|{}|{}|{}|{}|{}|{}|{}",
         item["day"].as_str().unwrap_or(""),
@@ -162,11 +166,12 @@ pub fn assert_no_forbidden_upload_fields(value: &Value, path: &str) {
             let forbidden = forbidden_set();
             for (key, child) in map {
                 if forbidden.contains(key.as_str()) {
-                    let prefix = if path.is_empty() { String::new() } else { format!("{}.", path) };
-                    panic!(
-                        "forbidden upload field: {}{}",
-                        prefix, key
-                    );
+                    let prefix = if path.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}.", path)
+                    };
+                    panic!("forbidden upload field: {}{}", prefix, key);
                 }
                 let child_path = if path.is_empty() {
                     key.clone()
@@ -183,8 +188,14 @@ pub fn assert_no_forbidden_upload_fields(value: &Value, path: &str) {
 /// Validates required fields on a usage item.
 pub fn assert_usage_item(item: &Value) {
     let required = [
-        "day", "toolCode", "providerId", "workdirHash", "workdirDisplayName", "model",
-        "totalTokens", "sourceQuality",
+        "day",
+        "toolCode",
+        "providerId",
+        "workdirHash",
+        "workdirDisplayName",
+        "model",
+        "totalTokens",
+        "sourceQuality",
     ];
     for key in &required {
         let v = &item[*key];

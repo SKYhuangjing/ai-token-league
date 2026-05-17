@@ -65,6 +65,9 @@ async fn main() {
             std::process::exit(1);
         }
     } else {
-        println!("atl-collector {} -- use --help for usage", env!("CARGO_PKG_VERSION"));
+        println!(
+            "atl-collector {} -- use --help for usage",
+            env!("CARGO_PKG_VERSION")
+        );
     }
 }

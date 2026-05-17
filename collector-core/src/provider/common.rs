@@ -178,7 +178,11 @@ fn date_string_to_ms(s: &str) -> Result<i64, ()> {
             return Ok(dt.and_utc().timestamp_millis());
         }
         if let Ok(d) = chrono::NaiveDate::parse_from_str(s, fmt) {
-            return Ok(d.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc().timestamp_millis());
+            return Ok(d
+                .and_hms_opt(0, 0, 0)
+                .unwrap_or_default()
+                .and_utc()
+                .timestamp_millis());
         }
     }
     // Try as milliseconds directly

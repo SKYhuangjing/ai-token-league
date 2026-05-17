@@ -11,9 +11,15 @@ pub const VERSION: &str = "0.1.2";
 pub struct CodexProvider;
 
 impl CodexProvider {
-    pub fn id(&self) -> &str { PROVIDER_ID }
-    pub fn tool_code(&self) -> &str { TOOL_CODE }
-    pub fn version(&self) -> &str { VERSION }
+    pub fn id(&self) -> &str {
+        PROVIDER_ID
+    }
+    pub fn tool_code(&self) -> &str {
+        TOOL_CODE
+    }
+    pub fn version(&self) -> &str {
+        VERSION
+    }
 
     pub fn roots(&self, config: &AppConfig) -> Vec<String> {
         let auto = self.auto_roots(config);
@@ -145,7 +151,10 @@ impl CodexProvider {
             let workdir_candidate = if !session_cwd.is_empty() {
                 session_cwd.clone()
             } else {
-                let found = deep_find_string(row, &["cwd", "workdir", "working_directory", "project_path"]);
+                let found = deep_find_string(
+                    row,
+                    &["cwd", "workdir", "working_directory", "project_path"],
+                );
                 if found.is_empty() {
                     std::env::current_dir()
                         .map(|d| d.to_string_lossy().to_string())
@@ -251,12 +260,35 @@ fn extract_usage(row: &Value) -> Option<UsageResult> {
     };
 
     let raw_input_tokens = token_field(usage, &["input_tokens", "inputTokens", "prompt_tokens"]);
-    let output_tokens = token_field(usage, &["output_tokens", "outputTokens", "completion_tokens"]);
-    let cache_read_tokens = token_field(usage, &["cached_input_tokens", "cache_read_tokens", "cacheReadTokens"]);
-    let cache_write_tokens = token_field(usage, &[
-        "cache_creation_input_tokens", "cacheWriteTokens", "cache_write_tokens", "cached_input_write_tokens",
-    ]);
-    let reasoning_tokens = token_field(usage, &["reasoning_output_tokens", "reasoning_tokens", "reasoningTokens"]);
+    let output_tokens = token_field(
+        usage,
+        &["output_tokens", "outputTokens", "completion_tokens"],
+    );
+    let cache_read_tokens = token_field(
+        usage,
+        &[
+            "cached_input_tokens",
+            "cache_read_tokens",
+            "cacheReadTokens",
+        ],
+    );
+    let cache_write_tokens = token_field(
+        usage,
+        &[
+            "cache_creation_input_tokens",
+            "cacheWriteTokens",
+            "cache_write_tokens",
+            "cached_input_write_tokens",
+        ],
+    );
+    let reasoning_tokens = token_field(
+        usage,
+        &[
+            "reasoning_output_tokens",
+            "reasoning_tokens",
+            "reasoningTokens",
+        ],
+    );
 
     // Codex: subtract cache tokens from input
     let input_tokens = 0i64.max(raw_input_tokens - cache_read_tokens - cache_write_tokens);
@@ -269,7 +301,8 @@ fn extract_usage(row: &Value) -> Option<UsageResult> {
         return None;
     }
 
-    let is_cumulative = sample_usage.is_some() && info.and_then(|i| i.get("last_token_usage")).is_none();
+    let is_cumulative =
+        sample_usage.is_some() && info.and_then(|i| i.get("last_token_usage")).is_none();
     let quality = if raw_input_tokens > 0 || output_tokens > 0 {
         "exact"
     } else {
