@@ -20,6 +20,7 @@ jobs:
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
+      release_body: ${{ steps.release-body.outputs.release_body }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,8 +56,19 @@ jobs:
           node --check src/desktop/renderer.js
           node --check src/shared/update.js
           node --check scripts/build-github-tauri-update-json.js
+          node --check scripts/build-release-body.js
           node --check scripts/prepare-github-release.js
           node --check scripts/upload-github-release-asset.js
+      - id: release-body
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-release-body.js --version "${{ steps.meta.outputs.version }}" > release-body.md
+          {
+            echo "release_body<<EOF"
+            cat release-body.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux dependencies
         run: |
@@ -130,10 +142,7 @@ jobs:
           tagName: ${{ needs.validate.outputs.tag }}
           releaseId: ${{ needs.prepare-release.outputs.release_id }}
           releaseName: AI Token League ${{ needs.validate.outputs.version }}
-          releaseBody: |
-            Automated release for AI Token League ${{ needs.validate.outputs.version }}.
-
-            Assets include desktop installers and signed Tauri updater packages.
+          releaseBody: ${{ needs.validate.outputs.release_body }}
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: false
@@ -158,11 +167,13 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          node scripts/build-release-body.js --version "$RELEASE_VERSION" > release-body.md
           node scripts/prepare-github-release.js \
             --repo "$REPOSITORY" \
             --tag "$RELEASE_TAG" \
             --version "$RELEASE_VERSION" \
-            --target "$(git rev-parse HEAD)"
+            --target "$(git rev-parse HEAD)" \
+            --body-file release-body.md
 
   publish:
     needs:
@@ -213,9 +224,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          node scripts/build-release-body.js --version "${{ needs.validate.outputs.version }}" > release-body.md
           gh api -X PATCH "repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}" \
             -F draft=false \
             -F prerelease=false \
             -f name="AI Token League ${{ needs.validate.outputs.version }}" \
-            -f body="Automated release for AI Token League ${{ needs.validate.outputs.version }}." \
+            -f body="$(cat release-body.md)" \
             -f make_latest=true

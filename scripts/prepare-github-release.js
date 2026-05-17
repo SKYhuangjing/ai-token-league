@@ -8,7 +8,10 @@ const targetCommitish = argValue("target") || process.env.GITHUB_SHA || "";
 const apiBaseUrl = trimSlash(argValue("api-base-url") || process.env.RELEASE_GITHUB_API_BASE_URL || "https://api.github.com");
 const token = process.env.GITHUB_TOKEN || process.env.RELEASE_GITHUB_TOKEN || "";
 const releaseName = argValue("name") || `AI Token League ${version}`;
-const releaseBody = argValue("body") || `Automated release for AI Token League ${version}.`;
+const bodyFile = argValue("body-file");
+const releaseBody = bodyFile
+  ? fs.readFileSync(bodyFile, "utf8").trim()
+  : argValue("body") || `AI Token League ${version}\n\nSee CHANGELOG.md for the release changes.`;
 const allowPublishedOverwrite = process.env.ALLOW_PUBLISHED_RELEASE_OVERWRITE === "true";
 
 if (!repo) throw new Error("missing GitHub repository");

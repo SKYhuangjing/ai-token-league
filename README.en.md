@@ -123,13 +123,13 @@ Default local storage:
 | Local usage cache | `~/.ai-token-league/usage-cache.json` |
 | Upload queue | `~/.ai-token-league/upload-queue.json` |
 | Sync manifest | `~/.ai-token-league/sync-manifest.json` |
-| Runtime log | `~/.ai-token-league/runtime-log.jsonl`, capped at 2MB / recent 500 events, rotated locally, and sanitized in diagnostics exports |
+| Runtime log | `~/.ai-token-league/log/runtime.YYYY-MM-DD.log`, keeps the last 3 days by default and is sanitized in diagnostics exports |
 | Backend JSON store | `data/db.json` |
 
 Practical safety tips:
 
 1. Do not share the `~/.ai-token-league` directory directly.
-2. `Settings > About > Data Protection` supports Back up now, automatic backup, backup folder selection, and retention count. The suggested default folder is `~/Documents/AI Token League Backups/`.
+2. `Settings > About > Data Protection` enables automatic backup by default and supports Back up now, restore from backup, backup folder selection, opening the backup folder, clearing backups, and retention days. The default folder is `~/.ai-token-league/backup/`.
 3. Local backup files contain sensitive recovery data and may include identity private keys and local tokens; use them only for personal migration or recovery.
 4. Confirm diagnostics exports contain sanitized aggregate facts only.
 5. On shared machines, remove local config and upload queue data after use.

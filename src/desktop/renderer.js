@@ -13,6 +13,7 @@ function localeTokenCompact(value) {
 
 const api = window.tokenLeague;
 const $ = (selector) => document.querySelector(selector);
+const AUTO_BACKUP_DAILY_START = { hour: 0, minute: 0 };
 
 function logRuntimeEvent(event, data = {}, level = "info") {
   if (!api?.logEvent) return;
@@ -71,7 +72,7 @@ let foregroundSyncRunning = false;
 
 function showToast(message) {
   const toast = document.querySelector("#toast");
-  if (!toast) return;
+  if (!toast || !message) return;
   toast.textContent = message;
   toast.classList.add("show");
   window.clearTimeout(showToast.timer);
@@ -336,12 +337,15 @@ $("#download-installer").addEventListener("click", (event) => {
 });
 $("#export-diagnostics").addEventListener("click", () => run(exportDiagnostics));
 $("#clear-runtime-log").addEventListener("click", () => run(clearRuntimeLog));
+$("#reveal-runtime-log-directory").addEventListener("click", () => run(revealRuntimeLogDirectory));
 $("#backup-now").addEventListener("click", () => run(exportLocalBackup));
-$("#restore-local-backup").addEventListener("click", () => run(restoreLocalBackup));
+$("#restore-local-backup")?.addEventListener("click", () => run(restoreLocalBackup));
+$("#clear-local-backups").addEventListener("click", () => run(clearLocalBackups));
 $("#choose-backup-directory").addEventListener("click", () => run(chooseBackupDirectory));
 $("#reveal-backup-directory").addEventListener("click", () => run(revealBackupDirectory));
 $("#localBackupEnabled").addEventListener("change", () => run(saveBackupPreferences));
 $("#localBackupRetention").addEventListener("change", () => run(saveBackupPreferences));
+$("#runtimeLogRetentionDays").addEventListener("change", () => run(saveRuntimeLogPreferences));
 $("#enforcement-download-update").addEventListener("click", (event) => {
   event.stopPropagation();
   run(downloadUpdate);
@@ -1158,6 +1162,7 @@ function renderConfig(config) {
   if ($("#showEstimatedCost")) $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
   if ($("#showRawTokens")) $("#showRawTokens").checked = config?.showRawTokens ?? false;
   if ($("#refreshIntervalMinutes")) $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
+  if ($("#runtimeLogRetentionDays")) $("#runtimeLogRetentionDays").value = config?.runtimeLogRetentionDays ?? 3;
   if ($("#launchAtLogin")) $("#launchAtLogin").checked = config?.launchAtLogin ?? false;
   if ($("#hideDockIcon")) $("#hideDockIcon").checked = config?.hideDockIcon ?? false;
   renderCursorTokenSummary(config?.cursorDashboardUsage);
@@ -1318,17 +1323,25 @@ async function clearRuntimeLog() {
   }
 }
 
+async function revealRuntimeLogDirectory() {
+  if (api.revealRuntimeLogDirectory) {
+    await api.revealRuntimeLogDirectory();
+  }
+}
+
+async function saveRuntimeLogPreferences() {
+  const days = Number($("#runtimeLogRetentionDays")?.value || latestConfig?.runtimeLogRetentionDays || 3);
+  latestConfig = await api.updateConfig({ runtimeLogRetentionDays: days });
+  renderConfig(latestConfig);
+  await loadDiagnosticsStatus();
+}
+
 function renderDiagnosticsStatus(status = latestDiagnosticsStatus) {
   latestDiagnosticsStatus = status || {};
-  const runtimeLog = latestDiagnosticsStatus.runtimeLog || {};
   const retention = latestDiagnosticsStatus.retention || {};
-  setTextIfPresent("#diagnostics-log-size", t("desktop.diagnostics.logSize", { size: formatBytes(runtimeLog.sizeBytes || 0) }));
-  setTextIfPresent("#diagnostics-log-events", t("desktop.diagnostics.logEvents", { count: runtimeLog.retainedEvents || 0 }));
-  setTextIfPresent("#diagnostics-log-latest", t("desktop.diagnostics.latestEvent", { time: runtimeLog.latestEventAt ? formatDateTime(runtimeLog.latestEventAt) : "-" }));
-  setTextIfPresent("#diagnostics-retention", t("desktop.diagnostics.retention", {
-    size: formatBytes(retention.maxBytes || runtimeLog.maxBytes || 0),
-    count: retention.maxEvents || runtimeLog.maxExportEvents || 0
-  }));
+  if ($("#runtimeLogRetentionDays")) {
+    $("#runtimeLogRetentionDays").value = String(latestConfig?.runtimeLogRetentionDays || retention.days || 3);
+  }
 }
 
 async function exportLocalBackup() {
@@ -1411,6 +1424,19 @@ async function chooseBackupDirectory() {
   setBackupMessage(t("desktop.renderer.backupFolderSaved"), "ok");
 }
 
+async function clearLocalBackups() {
+  const button = $("#clear-local-backups");
+  button.disabled = true;
+  setBackupMessage("", "");
+  try {
+    const result = await api.clearLocalBackups();
+    renderBackupStatus({ ...(latestBackupStatus || {}), ...result });
+    setBackupMessage(t("desktop.renderer.backupsCleared", { count: result.removed || 0 }), "ok");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function saveBackupPreferences() {
   const current = latestConfig?.localBackup || {};
   let directory = current.directory || "";
@@ -1454,22 +1480,20 @@ function renderBackupStatus(status = latestBackupStatus) {
   latestBackupStatus = status || {};
   const backupConfig = latestConfig?.localBackup || {};
   if ($("#localBackupEnabled")) $("#localBackupEnabled").checked = Boolean(backupConfig.enabled);
-  if ($("#localBackupRetention")) $("#localBackupRetention").value = String(backupConfig.retentionCount || 7);
+  if ($("#localBackupRetention")) $("#localBackupRetention").value = String(backupConfig.retentionCount || status?.retentionDays || 7);
   if ($("#localBackupDirectory")) $("#localBackupDirectory").value = backupConfig.directory || status?.effectiveDirectory || "";
-  const list = $("#backup-recent-list");
-  if (!list) return;
-  const backups = status?.backups || [];
-  list.innerHTML = backups.length
-    ? backups.slice(0, 5).map((item) => `
-      <div class="backup-list-row" title="${escapeHtml(item.filePath || "")}">
-        <div>
-          <strong>${escapeHtml(item.fileName || "")}</strong>
-          <small>${item.createdAt ? formatDateTime(item.createdAt) : "-"}</small>
-        </div>
-        <span>${formatBytes(item.bytes || 0)}</span>
-      </div>
-    `).join("")
-    : `<div class="empty-state">${t("desktop.backup.noBackups")}</div>`;
+  if ($("#backup-schedule-copy")) {
+    $("#backup-schedule-copy").textContent = t("desktop.backup.schedule", {
+      time: formatBackupScheduleTime(AUTO_BACKUP_DAILY_START)
+    });
+  }
+}
+
+function formatBackupScheduleTime({ hour, minute }) {
+  if (getCurrentLang() === "zh-CN") {
+    return `${hour} 点 ${String(minute).padStart(2, "0")} 分`;
+  }
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function setBackupMessage(message, tone = "") {

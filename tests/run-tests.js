@@ -20,7 +20,7 @@ import {
   validateReleaseConfig,
   verifyFileChecksum
 } from "../src/shared/update.js";
-import { parseLatestChangelog } from "../src/shared/changelog.js";
+import { parseLatestChangelog, parseChangelogVersion } from "../src/shared/changelog.js";
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
 import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
 import { addDays, localDay } from "../src/shared/date.js";
@@ -1245,6 +1245,87 @@ function testPublicChangelogParsing() {
 - Internal release helper.
 `);
   assert.equal(noPublicItems.sections.length, 0);
+
+  const targeted = parseChangelogVersion(`## [0.6.3] - 2026-05-16
+
+### Changed
+
+- [Desktop] Current release.
+
+## [0.6.2] - 2026-05-14
+
+### Fixed
+
+- [Web] Previous release.
+`, "0.6.2");
+  assert.equal(targeted.version, "0.6.2");
+  assert.equal(targeted.sections[0].items[0].text, "Previous release.");
+}
+
+function testDesktopDataProtectionControls() {
+  const html = fs.readFileSync("src/desktop/index.html", "utf8");
+  const renderer = fs.readFileSync("src/desktop/renderer.js", "utf8");
+  const i18n = fs.readFileSync("src/shared/i18n.js", "utf8");
+
+  for (const id of [
+    "localBackupRetention",
+    "choose-backup-directory",
+    "reveal-backup-directory",
+    "backup-now",
+    "restore-local-backup",
+    "clear-local-backups"
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`), `missing backup control ${id}`);
+  }
+  assert.match(html, /id="runtimeLogRetentionDays"/);
+  assert.match(html, /id="reveal-runtime-log-directory"/);
+  assert.match(html, /id="clear-runtime-log"/);
+  assert.match(html, /icons\/file-text\.svg/);
+  assert.match(html, /id="backup-schedule-copy"/);
+  assert.doesNotMatch(html, /backup-recent-list/);
+  assert.doesNotMatch(html, /diagnostics-log-size|diagnostics-log-events|diagnostics-log-latest/);
+  assert.match(renderer, /restoreLocalBackup/);
+  assert.match(renderer, /clearLocalBackups/);
+  assert.match(i18n, /"desktop\.backup\.restore": "备份恢复"/);
+  assert.match(i18n, /"desktop\.backup\.schedule": "每天 \{time\} 后自动备份数据。"/);
+}
+
+function testLocalBackupSchedulerIsIndependent() {
+  const lib = fs.readFileSync("src-tauri/src/lib.rs", "utf8");
+  assert.match(lib, /fn start_local_backup_scheduler/);
+  assert.match(lib, /start_local_backup_scheduler\(app\.handle\(\)\.clone\(\)\)/);
+  const refreshStart = lib.indexOf("fn start_background_refresh");
+  const refreshEnd = lib.indexOf("fn start_local_backup_scheduler");
+  assert.ok(refreshStart >= 0 && refreshEnd > refreshStart, "missing background refresh or backup scheduler");
+  const refreshBody = lib.slice(refreshStart, refreshEnd);
+  assert.doesNotMatch(refreshBody, /local-backup:run-due-auto/);
+}
+
+async function testReleaseBodyUsesChangelog() {
+  const changelog = path.join(tmp, "CHANGELOG-release-body.md");
+  fs.writeFileSync(changelog, `# Changelog
+
+## [0.6.3] - 2026-05-16
+
+### Changed
+
+- [Desktop] Migrated the desktop collector runtime to Rust.
+- Internal build cleanup.
+
+### Fixed
+
+- [Web] Kept legacy daily uploads compatible.
+`);
+  const output = await runNodeScript([
+    "scripts/build-release-body.js",
+    "--version", "0.6.3",
+    "--changelog", changelog
+  ]);
+  assert.match(output, /AI Token League 0\.6\.3/);
+  assert.match(output, /Migrated the desktop collector runtime to Rust/);
+  assert.match(output, /Kept legacy daily uploads compatible/);
+  assert.doesNotMatch(output, /Internal build cleanup/);
+  assert.doesNotMatch(output, /Automated release/);
 }
 
 function testDisplayAndPricing() {
@@ -1561,6 +1642,9 @@ testSnapshotProviderDisabled();
 testSnapshotLegacyCoexistence();
 testProductBaseline();
 testPublicChangelogParsing();
+testDesktopDataProtectionControls();
+testLocalBackupSchedulerIsIndependent();
+await testReleaseBodyUsesChangelog();
 await testVersionCompatibilityAndManifest();
 await testBuildGithubTauriUpdateJsonUsesReleaseId();
 testDisplayAndPricing();

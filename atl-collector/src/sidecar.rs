@@ -248,6 +248,7 @@ async fn handle_command(
             let reason = request.args["reason"].as_str().unwrap_or("manual");
             collector_core::local_backup::create_backup_in_configured_directory(reason)
         }
+        Command::LocalBackupClear => collector_core::local_backup::clear_configured_backups(),
         Command::LocalBackupRunDueAuto => collector_core::local_backup::run_due_auto_backup(),
         Command::LocalBackupInspect => collector_core::local_backup::inspect_backup(&request.args),
         Command::LocalBackupRestoreApply => {
@@ -1204,6 +1205,7 @@ mod tests {
             desktop_auto_initialized: true,
             cursor_dashboard_usage: config::CursorDashboardUsageConfig::default(),
             local_backup: config::LocalBackupConfig::default(),
+            runtime_log_retention_days: 3,
             api_connection: serde_json::json!({}),
             sync_status: serde_json::json!({}),
             workdir_aliases: HashMap::new(),
@@ -1272,11 +1274,9 @@ mod tests {
         assert!(labels[1].starts_with("立即刷新 ("));
         assert_eq!(labels[2], "访问云端 (anon)");
         assert!(labels.iter().any(|label| *label == "📊 今日令牌: 2,000"));
-        assert!(
-            labels
-                .iter()
-                .any(|label| label.starts_with("💰 预估费用: "))
-        );
+        assert!(labels
+            .iter()
+            .any(|label| label.starts_with("💰 预估费用: ")));
         assert!(labels.iter().any(|label| *label == "模型消耗"));
         assert!(labels.iter().any(|label| *label == "  gpt-5  1,500"));
         assert!(labels.iter().any(|label| *label == "来源"));

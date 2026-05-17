@@ -2,15 +2,16 @@ use crate::config;
 use serde_json::{json, Map, Value};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::path::PathBuf;
 
-const MAX_RUNTIME_LOG_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_RUNTIME_LOG_EVENTS: usize = 500;
+const DEFAULT_RUNTIME_LOG_RETENTION_DAYS: u64 = 3;
 const REDACTED: &str = "[redacted]";
 const PATH_REDACTED: &str = "[path-redacted]";
 
 pub fn append_runtime_event(source: &str, event: &str, level: &str, data: Value) {
     config::ensure_app_dir();
-    rotate_runtime_log_if_needed();
+    migrate_legacy_runtime_log();
+    prune_runtime_log_by_days(runtime_log_retention_days());
     let entry = json!({
         "ts": now_iso(),
         "level": normalize_level(level),
@@ -18,34 +19,49 @@ pub fn append_runtime_event(source: &str, event: &str, level: &str, data: Value)
         "event": sanitize_label(event),
         "data": sanitize_value(data),
     });
+    let _ = fs::create_dir_all(config::runtime_log_dir());
     let path = config::runtime_log_path();
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        if let Ok(line) = serde_json::to_string(&entry) {
-            let _ = writeln!(file, "{}", line);
-        }
+        let _ = writeln!(file, "{}", format_log_line(&entry));
     }
 }
 
 pub fn read_recent_runtime_events(limit: usize) -> Vec<Value> {
-    let path = config::runtime_log_path();
-    let Ok(content) = fs::read_to_string(path) else {
-        return vec![];
-    };
-    let mut rows = content
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    migrate_legacy_runtime_log();
+    prune_runtime_log_by_days(runtime_log_retention_days());
+    let mut rows = runtime_log_files()
+        .into_iter()
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .flat_map(|content| {
+            content
+                .lines()
+                .filter_map(parse_log_line)
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
-    let max = limit.min(MAX_RUNTIME_LOG_EVENTS);
-    if rows.len() > max {
-        rows.drain(0..rows.len() - max);
+    rows.sort_by(|a, b| {
+        a.get("ts")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("ts").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+    if rows.len() > limit {
+        rows.drain(0..rows.len() - limit);
     }
     rows
 }
 
 pub fn runtime_log_summary() -> Value {
-    let path = config::runtime_log_path();
-    let size_bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    let events = read_recent_runtime_events(MAX_RUNTIME_LOG_EVENTS);
+    let retention_days = runtime_log_retention_days();
+    migrate_legacy_runtime_log();
+    prune_runtime_log_by_days(retention_days);
+    let files = runtime_log_files();
+    let size_bytes = files
+        .iter()
+        .filter_map(|path| fs::metadata(path).ok())
+        .map(|m| m.len())
+        .sum::<u64>();
+    let events = read_recent_runtime_events(usize::MAX);
     let latest_event_at = events
         .last()
         .and_then(|event| event.get("ts"))
@@ -53,35 +69,38 @@ pub fn runtime_log_summary() -> Value {
         .unwrap_or("");
     json!({
         "path": PATH_REDACTED,
-        "exists": path.exists(),
+        "exists": !files.is_empty(),
         "sizeBytes": size_bytes,
         "retainedEvents": events.len(),
         "latestEventAt": latest_event_at,
-        "maxBytes": MAX_RUNTIME_LOG_BYTES,
-        "maxExportEvents": MAX_RUNTIME_LOG_EVENTS
+        "retentionDays": retention_days
     })
 }
 
 pub fn diagnostics_status() -> Value {
+    let retention_days = runtime_log_retention_days();
     json!({
         "runtimeLog": runtime_log_summary(),
         "retention": {
-            "maxBytes": MAX_RUNTIME_LOG_BYTES,
-            "maxEvents": MAX_RUNTIME_LOG_EVENTS,
-            "exportEvents": MAX_RUNTIME_LOG_EVENTS,
-            "strategy": "size_and_recent_events"
+            "days": retention_days,
+            "strategy": "days"
         }
     })
 }
 
 pub fn clear_runtime_log() -> Value {
-    let path = config::runtime_log_path();
-    let existed = path.exists();
-    let removed = fs::remove_file(&path).is_ok();
+    let files = runtime_log_files();
+    let existed = !files.is_empty();
+    let mut removed_all = true;
+    for path in files {
+        if fs::remove_file(&path).is_err() {
+            removed_all = false;
+        }
+    }
     json!({
         "ok": true,
         "existed": existed,
-        "removed": removed || !existed,
+        "removed": removed_all || !existed,
         "runtimeLog": runtime_log_summary()
     })
 }
@@ -215,23 +234,171 @@ fn value_type(value: &Value) -> &'static str {
     }
 }
 
-fn rotate_runtime_log_if_needed() {
-    let path = config::runtime_log_path();
-    let Ok(meta) = fs::metadata(&path) else {
+fn runtime_log_retention_days() -> u64 {
+    config::load_config()
+        .map(|cfg| cfg.runtime_log_retention_days.clamp(1, 30))
+        .unwrap_or(DEFAULT_RUNTIME_LOG_RETENTION_DAYS)
+}
+
+fn prune_runtime_log_by_days(retention_days: u64) {
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    for path in runtime_log_files() {
+        let Some(file_day) = runtime_log_file_day(&path) else {
+            prune_runtime_log_file_content(&path, cutoff);
+            continue;
+        };
+        if file_day < cutoff.date_naive() {
+            let _ = fs::remove_file(path);
+        } else {
+            prune_runtime_log_file_content(&path, cutoff);
+        }
+    }
+}
+
+fn prune_runtime_log_file_content(path: &PathBuf, cutoff: chrono::DateTime<chrono::Utc>) {
+    let Ok(content) = fs::read_to_string(path) else {
+        let _ = fs::remove_file(path);
         return;
     };
-    if meta.len() <= MAX_RUNTIME_LOG_BYTES {
+    let retained = content
+        .lines()
+        .filter(|line| runtime_event_is_recent(line, cutoff))
+        .collect::<Vec<_>>();
+    if retained.len() != content.lines().count() {
+        let next = if retained.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", retained.join("\n"))
+        };
+        let _ = fs::write(path, next);
+    }
+}
+
+fn runtime_event_is_recent(line: &str, cutoff: chrono::DateTime<chrono::Utc>) -> bool {
+    let Some(value) = parse_log_line(line) else {
+        return false;
+    };
+    let Some(ts) = value.get("ts").and_then(|v| v.as_str()) else {
+        return true;
+    };
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|dt| dt.with_timezone(&chrono::Utc) >= cutoff)
+        .unwrap_or(true)
+}
+
+fn runtime_log_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(read_dir) = fs::read_dir(config::runtime_log_dir()) {
+        for item in read_dir.flatten() {
+            let path = item.path();
+            if is_runtime_log_file(&path) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+fn migrate_legacy_runtime_log() {
+    let legacy = config::legacy_runtime_log_path();
+    if !legacy.exists() {
         return;
     }
-    let Ok(content) = fs::read_to_string(&path) else {
-        let _ = fs::remove_file(&path);
+    let Ok(content) = fs::read_to_string(&legacy) else {
+        let _ = fs::remove_file(&legacy);
         return;
     };
-    let mut lines = content.lines().collect::<Vec<_>>();
-    if lines.len() > MAX_RUNTIME_LOG_EVENTS {
-        lines.drain(0..lines.len() - MAX_RUNTIME_LOG_EVENTS);
+    let _ = fs::create_dir_all(config::runtime_log_dir());
+    for line in content.lines() {
+        let Some(entry) = parse_log_line(line) else {
+            continue;
+        };
+        let path = runtime_log_path_for_entry(&entry);
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{}", format_log_line(&entry));
+        }
     }
-    let _ = fs::write(path, format!("{}\n", lines.join("\n")));
+    let _ = fs::remove_file(legacy);
+}
+
+fn runtime_log_path_for_entry(entry: &Value) -> PathBuf {
+    let day = entry
+        .get("ts")
+        .and_then(|v| v.as_str())
+        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Utc)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    config::runtime_log_dir().join(format!("runtime.{}.log", day))
+}
+
+fn is_runtime_log_file(path: &PathBuf) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .map(|name| {
+            name.starts_with("runtime.")
+                && name.ends_with(".log")
+                && name.len() == "runtime.2026-05-17.log".len()
+        })
+        .unwrap_or(false)
+}
+
+fn runtime_log_file_day(path: &PathBuf) -> Option<chrono::NaiveDate> {
+    let name = path.file_name()?.to_str()?;
+    if !name.starts_with("runtime.") || !name.ends_with(".log") {
+        return None;
+    }
+    let day = name.trim_start_matches("runtime.").trim_end_matches(".log");
+    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+}
+
+fn format_log_line(entry: &Value) -> String {
+    let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("");
+    let level = entry
+        .get("level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("info");
+    let source = entry.get("source").and_then(|v| v.as_str()).unwrap_or("");
+    let event = entry.get("event").and_then(|v| v.as_str()).unwrap_or("");
+    let data = entry.get("data").cloned().unwrap_or_else(|| json!({}));
+    let data_text = serde_json::to_string(&data).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "{} {} [{}] {} {}",
+        ts,
+        level.to_ascii_uppercase(),
+        source,
+        event,
+        data_text
+    )
+}
+
+fn parse_log_line(line: &str) -> Option<Value> {
+    if let Ok(value) = serde_json::from_str::<Value>(line) {
+        return Some(value);
+    }
+    let mut parts = line.splitn(5, ' ');
+    let ts = parts.next()?.trim();
+    let level = parts.next()?.trim().to_ascii_lowercase();
+    let source_wrapped = parts.next()?.trim();
+    let event = parts.next()?.trim();
+    let data_text = parts.next().unwrap_or("{}").trim();
+    let source = source_wrapped
+        .strip_prefix('[')
+        .and_then(|v| v.strip_suffix(']'))
+        .unwrap_or(source_wrapped);
+    let data =
+        serde_json::from_str::<Value>(data_text).unwrap_or_else(|_| json!({"message": data_text}));
+    Some(json!({
+        "ts": ts,
+        "level": level,
+        "source": source,
+        "event": event,
+        "data": data
+    }))
 }
 
 fn is_secret_key(key: &str) -> bool {
@@ -287,4 +454,61 @@ fn truncate(value: &str, max: usize) -> String {
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_home() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("atl-runtime-log-test-{}", suffix))
+    }
+
+    #[test]
+    fn runtime_log_retention_prunes_by_days_only() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+        config::ensure_app_dir();
+        fs::create_dir_all(config::runtime_log_dir()).unwrap();
+
+        let old_ts = (chrono::Utc::now() - chrono::Duration::days(5))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let recent_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        fs::write(
+            config::runtime_log_path(),
+            format!(
+                "{{\"ts\":\"{}\",\"event\":\"old\"}}\n{{\"ts\":\"{}\",\"event\":\"recent\"}}\n",
+                old_ts, recent_ts
+            ),
+        )
+        .unwrap();
+
+        let events = read_recent_runtime_events(usize::MAX);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["event"].as_str(), Some("recent"));
+        let summary = runtime_log_summary();
+        assert_eq!(summary["retentionDays"].as_u64(), Some(3));
+        assert!(config::runtime_log_path()
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("")
+            .ends_with(".log"));
+        assert!(summary["maxBytes"].is_null());
+        assert!(summary["maxExportEvents"].is_null());
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
 }

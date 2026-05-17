@@ -5,7 +5,7 @@ use crate::provider::codex_local::CodexProvider;
 use crate::provider::cursor_dashboard::CursorDashboardProvider;
 use crate::schema::{compute_bucket_fingerprint, public_usage_item};
 use crate::workdir::workdir_from_candidate;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -559,6 +559,7 @@ mod tests {
             desktop_auto_initialized: false,
             cursor_dashboard_usage: config::CursorDashboardUsageConfig::default(),
             local_backup: config::LocalBackupConfig::default(),
+            runtime_log_retention_days: 3,
             api_connection: json!({}),
             sync_status: json!({}),
             workdir_aliases: HashMap::new(),

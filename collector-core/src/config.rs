@@ -4,6 +4,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(test)]
+pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub const DEFAULT_AUTO_REFRESH_ENABLED: bool = true;
 pub const DEFAULT_SILENT_UPDATE_MODE: &str = "auto_download";
 pub const SILENT_UPDATE_MODES: &[&str] = &["notify", "auto_download", "auto_apply_on_idle"];
@@ -29,7 +32,16 @@ pub fn source_index_cache_path() -> PathBuf {
     app_dir().join("source-index-cache.json")
 }
 
+pub fn runtime_log_dir() -> PathBuf {
+    app_dir().join("log")
+}
+
 pub fn runtime_log_path() -> PathBuf {
+    let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    runtime_log_dir().join(format!("runtime.{}.log", day))
+}
+
+pub fn legacy_runtime_log_path() -> PathBuf {
     app_dir().join("runtime-log.jsonl")
 }
 
@@ -93,7 +105,7 @@ impl Default for CursorDashboardUsageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalBackupConfig {
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub directory: String,
@@ -106,7 +118,7 @@ pub struct LocalBackupConfig {
 impl Default for LocalBackupConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             directory: String::new(),
             retention_count: default_backup_retention(),
             last_backup_at: None,
@@ -149,6 +161,8 @@ pub struct AppConfig {
     pub cursor_dashboard_usage: CursorDashboardUsageConfig,
     #[serde(default)]
     pub local_backup: LocalBackupConfig,
+    #[serde(default = "default_runtime_log_retention_days")]
+    pub runtime_log_retention_days: u64,
     #[serde(default)]
     pub api_connection: serde_json::Value,
     #[serde(default)]
@@ -177,14 +191,31 @@ pub struct AppConfig {
     pub last_sync_error: Option<String>,
 }
 
-fn default_nickname() -> String { "anonymous".to_string() }
-fn default_true() -> bool { true }
-fn default_silent_update_mode() -> String { DEFAULT_SILENT_UPDATE_MODE.to_string() }
-fn default_refresh_interval() -> u64 { 15 }
-fn default_backup_retention() -> u64 { 7 }
+fn default_nickname() -> String {
+    "anonymous".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_silent_update_mode() -> String {
+    DEFAULT_SILENT_UPDATE_MODE.to_string()
+}
+fn default_refresh_interval() -> u64 {
+    15
+}
+fn default_backup_retention() -> u64 {
+    7
+}
+fn default_runtime_log_retention_days() -> u64 {
+    3
+}
 
 pub fn normalize_silent_update_mode(value: &str) -> &str {
-    if SILENT_UPDATE_MODES.contains(&value) { value } else { DEFAULT_SILENT_UPDATE_MODE }
+    if SILENT_UPDATE_MODES.contains(&value) {
+        value
+    } else {
+        DEFAULT_SILENT_UPDATE_MODE
+    }
 }
 
 pub fn load_config() -> Option<AppConfig> {
@@ -200,7 +231,10 @@ pub fn load_config() -> Option<AppConfig> {
     Some(config)
 }
 
-fn merge_object_values(base: serde_json::Value, override_value: serde_json::Value) -> serde_json::Value {
+fn merge_object_values(
+    base: serde_json::Value,
+    override_value: serde_json::Value,
+) -> serde_json::Value {
     let mut merged = base;
     if let (Some(target), Some(source)) = (merged.as_object_mut(), override_value.as_object()) {
         for (key, value) in source {
@@ -225,7 +259,11 @@ pub fn load_build_preset() -> serde_json::Value {
     let mut candidates = Vec::new();
     if let Ok(resource_dir) = std::env::var("ATL_RESOURCE_DIR") {
         if !resource_dir.trim().is_empty() {
-            candidates.push(PathBuf::from(resource_dir).join("assets").join("preset.json"));
+            candidates.push(
+                PathBuf::from(resource_dir)
+                    .join("assets")
+                    .join("preset.json"),
+            );
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -233,9 +271,15 @@ pub fn load_build_preset() -> serde_json::Value {
     }
 
     for path in candidates {
-        let Ok(content) = fs::read_to_string(path) else { continue; };
-        let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content) else { continue; };
-        let Some(raw_obj) = raw.as_object() else { continue; };
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let Some(raw_obj) = raw.as_object() else {
+            continue;
+        };
         let mut result = serde_json::Map::new();
         for key in ALLOWED_KEYS {
             if let Some(value) = raw_obj.get(*key) {
@@ -261,9 +305,15 @@ pub fn ensure_desktop_config() -> AppConfig {
     }
     let mut input = load_build_preset();
     if let Some(obj) = input.as_object_mut() {
-        obj.insert("desktopAutoInitialized".to_string(), serde_json::json!(true));
+        obj.insert(
+            "desktopAutoInitialized".to_string(),
+            serde_json::json!(true),
+        );
         if !obj.contains_key("nickname") {
-            obj.insert("nickname".to_string(), serde_json::json!(generated_nickname()));
+            obj.insert(
+                "nickname".to_string(),
+                serde_json::json!(generated_nickname()),
+            );
             obj.insert("nicknameAutoGenerated".to_string(), serde_json::json!(true));
         }
     }
@@ -283,13 +333,21 @@ pub fn save_config(config: &AppConfig) {
 pub fn init_config(input: serde_json::Value, persist: bool) -> AppConfig {
     let input = merge_object_values(load_build_preset(), input);
     let identity = generate_identity();
-    let interval = input["refreshIntervalMinutes"].as_u64().unwrap_or(15).max(1);
+    let interval = input["refreshIntervalMinutes"]
+        .as_u64()
+        .unwrap_or(15)
+        .max(1);
     let fallback_nickname = generated_nickname();
 
     let config = AppConfig {
         participant_id: identity.participant_id,
-        nickname: input["nickname"].as_str().unwrap_or(&fallback_nickname).to_string(),
-        nickname_auto_generated: input["nicknameAutoGenerated"].as_bool().unwrap_or(!input["nickname"].is_string()),
+        nickname: input["nickname"]
+            .as_str()
+            .unwrap_or(&fallback_nickname)
+            .to_string(),
+        nickname_auto_generated: input["nicknameAutoGenerated"]
+            .as_bool()
+            .unwrap_or(!input["nickname"].is_string()),
         identity_public_key: identity.identity_public_key,
         identity_private_key: identity.identity_private_key,
         device_id: new_id("d"),
@@ -305,13 +363,22 @@ pub fn init_config(input: serde_json::Value, persist: bool) -> AppConfig {
         desktop_auto_initialized: input["desktopAutoInitialized"].as_bool().unwrap_or(false),
         cursor_dashboard_usage: CursorDashboardUsageConfig::default(),
         local_backup: LocalBackupConfig::default(),
-        api_connection: input.get("apiConnection").cloned().filter(|v| !v.is_null()).unwrap_or_else(|| serde_json::json!({})),
+        runtime_log_retention_days: default_runtime_log_retention_days(),
+        api_connection: input
+            .get("apiConnection")
+            .cloned()
+            .filter(|v| !v.is_null())
+            .unwrap_or_else(|| serde_json::json!({})),
         sync_status: serde_json::json!({}),
         workdir_aliases: HashMap::new(),
         provider_roots: HashMap::new(),
         provider_enabled: serde_json::from_value(
-            input.get("providerEnabled").cloned().unwrap_or(serde_json::json!({}))
-        ).unwrap_or_default(),
+            input
+                .get("providerEnabled")
+                .cloned()
+                .unwrap_or(serde_json::json!({})),
+        )
+        .unwrap_or_default(),
         provider_ignored_auto_sources: HashMap::new(),
         created_at: Some(now_iso()),
         updated_at: None,
@@ -337,12 +404,28 @@ pub fn export_identity(config: &AppConfig) -> serde_json::Value {
     })
 }
 
-pub fn import_identity(identity: serde_json::Value, current: &AppConfig, persist: bool) -> AppConfig {
+pub fn import_identity(
+    identity: serde_json::Value,
+    current: &AppConfig,
+    persist: bool,
+) -> AppConfig {
     let mut config = current.clone();
-    config.participant_id = identity["participantId"].as_str().unwrap_or(&config.participant_id).to_string();
-    config.nickname = identity["nickname"].as_str().unwrap_or(&config.nickname).to_string();
-    config.identity_public_key = identity["identityPublicKey"].as_str().unwrap_or("").to_string();
-    config.identity_private_key = identity["identityPrivateKey"].as_str().unwrap_or("").to_string();
+    config.participant_id = identity["participantId"]
+        .as_str()
+        .unwrap_or(&config.participant_id)
+        .to_string();
+    config.nickname = identity["nickname"]
+        .as_str()
+        .unwrap_or(&config.nickname)
+        .to_string();
+    config.identity_public_key = identity["identityPublicKey"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    config.identity_private_key = identity["identityPrivateKey"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     config.desktop_auto_initialized = false;
     config.imported_at = Some(now_iso());
 
@@ -372,35 +455,64 @@ pub fn export_config(config: &AppConfig) -> serde_json::Value {
 }
 
 pub fn import_config(imported: serde_json::Value) -> Result<AppConfig, String> {
-    if imported["participantId"].is_null() || imported["identityPublicKey"].is_null() || imported["identityPrivateKey"].is_null() {
+    if imported["participantId"].is_null()
+        || imported["identityPublicKey"].is_null()
+        || imported["identityPrivateKey"].is_null()
+    {
         return Err("Invalid config file: missing identity fields".to_string());
     }
 
     let config = AppConfig {
         participant_id: imported["participantId"].as_str().unwrap_or("").to_string(),
-        nickname: imported["nickname"].as_str().unwrap_or("anonymous").to_string(),
+        nickname: imported["nickname"]
+            .as_str()
+            .unwrap_or("anonymous")
+            .to_string(),
         nickname_auto_generated: imported["nicknameAutoGenerated"].as_bool().unwrap_or(false),
-        identity_public_key: imported["identityPublicKey"].as_str().unwrap_or("").to_string(),
-        identity_private_key: imported["identityPrivateKey"].as_str().unwrap_or("").to_string(),
-        device_id: imported["deviceId"].as_str().unwrap_or(&new_id("d")).to_string(),
+        identity_public_key: imported["identityPublicKey"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        identity_private_key: imported["identityPrivateKey"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        device_id: imported["deviceId"]
+            .as_str()
+            .unwrap_or(&new_id("d"))
+            .to_string(),
         api_base_url: imported["apiBaseUrl"].as_str().unwrap_or("").to_string(),
         language: imported["language"].as_str().unwrap_or("").to_string(),
         show_estimated_cost: imported["showEstimatedCost"].as_bool().unwrap_or(false),
         show_raw_tokens: imported["showRawTokens"].as_bool().unwrap_or(false),
         auto_refresh_enabled: DEFAULT_AUTO_REFRESH_ENABLED,
         silent_update_mode: DEFAULT_SILENT_UPDATE_MODE.to_string(),
-        refresh_interval_minutes: imported["refreshIntervalMinutes"].as_u64().unwrap_or(15).max(1),
+        refresh_interval_minutes: imported["refreshIntervalMinutes"]
+            .as_u64()
+            .unwrap_or(15)
+            .max(1),
         launch_at_login: imported["launchAtLogin"].as_bool().unwrap_or(false),
         hide_dock_icon: imported["hideDockIcon"].as_bool().unwrap_or(false),
         desktop_auto_initialized: false,
-        cursor_dashboard_usage: serde_json::from_value(imported["cursorDashboardUsage"].clone()).unwrap_or_default(),
+        cursor_dashboard_usage: serde_json::from_value(imported["cursorDashboardUsage"].clone())
+            .unwrap_or_default(),
         local_backup: serde_json::from_value(imported["localBackup"].clone()).unwrap_or_default(),
+        runtime_log_retention_days: imported["runtimeLogRetentionDays"]
+            .as_u64()
+            .unwrap_or(default_runtime_log_retention_days())
+            .clamp(1, 30),
         api_connection: serde_json::json!({}),
         sync_status: serde_json::json!({}),
-        workdir_aliases: serde_json::from_value(imported["workdirAliases"].clone()).unwrap_or_default(),
-        provider_roots: serde_json::from_value(imported["providerRoots"].clone()).unwrap_or_default(),
-        provider_enabled: serde_json::from_value(imported["providerEnabled"].clone()).unwrap_or_default(),
-        provider_ignored_auto_sources: serde_json::from_value(imported["providerIgnoredAutoSources"].clone()).unwrap_or_default(),
+        workdir_aliases: serde_json::from_value(imported["workdirAliases"].clone())
+            .unwrap_or_default(),
+        provider_roots: serde_json::from_value(imported["providerRoots"].clone())
+            .unwrap_or_default(),
+        provider_enabled: serde_json::from_value(imported["providerEnabled"].clone())
+            .unwrap_or_default(),
+        provider_ignored_auto_sources: serde_json::from_value(
+            imported["providerIgnoredAutoSources"].clone(),
+        )
+        .unwrap_or_default(),
         created_at: None,
         updated_at: None,
         imported_at: Some(now_iso()),
@@ -421,7 +533,10 @@ pub fn add_provider_root(provider_id: &str, root_path: &str, current: &AppConfig
         .unwrap_or_else(|_| root_path.to_string());
 
     let mut config = current.clone();
-    let roots = config.provider_roots.entry(provider_id.to_string()).or_default();
+    let roots = config
+        .provider_roots
+        .entry(provider_id.to_string())
+        .or_default();
     if !roots.contains(&normalized) {
         roots.push(normalized);
     }
@@ -449,13 +564,18 @@ pub fn set_workdir_alias(workdir_hash: &str, alias: &str, current: &AppConfig) -
     if clean_alias.is_empty() {
         config.workdir_aliases.remove(workdir_hash);
     } else {
-        config.workdir_aliases.insert(workdir_hash.to_string(), clean_alias.to_string());
+        config
+            .workdir_aliases
+            .insert(workdir_hash.to_string(), clean_alias.to_string());
     }
     save_config(&config);
     config
 }
 
-pub fn add_cursor_token(input: serde_json::Value, current: &AppConfig) -> Result<AppConfig, String> {
+pub fn add_cursor_token(
+    input: serde_json::Value,
+    current: &AppConfig,
+) -> Result<AppConfig, String> {
     let mut records = parse_cursor_token_input(input)?;
     if records.is_empty() {
         return Err("Cursor token is empty or invalid".to_string());
@@ -475,7 +595,9 @@ pub fn add_cursor_token(input: serde_json::Value, current: &AppConfig) -> Result
         }
     }
     config.cursor_dashboard_usage.workos_session_token = String::new();
-    config.provider_enabled.insert("cursor_dashboard_usage".to_string(), true);
+    config
+        .provider_enabled
+        .insert("cursor_dashboard_usage".to_string(), true);
     config.updated_at = Some(now_iso());
     save_config(&config);
     Ok(config)
@@ -485,11 +607,17 @@ pub fn remove_cursor_token(input: serde_json::Value, current: &AppConfig) -> App
     let mut config = current.clone();
     if let Some(idx) = input.as_u64().map(|v| v as usize) {
         if idx < config.cursor_dashboard_usage.workos_session_tokens.len() {
-            config.cursor_dashboard_usage.workos_session_tokens.remove(idx);
+            config
+                .cursor_dashboard_usage
+                .workos_session_tokens
+                .remove(idx);
         }
     } else {
         let token = input.as_str().unwrap_or("").trim();
-        config.cursor_dashboard_usage.workos_session_tokens.retain(|item| item.token != token);
+        config
+            .cursor_dashboard_usage
+            .workos_session_tokens
+            .retain(|item| item.token != token);
     }
     config.updated_at = Some(now_iso());
     save_config(&config);
@@ -502,7 +630,8 @@ pub fn reset_local_data() {
     let _ = fs::remove_file(manifest_path());
     let _ = fs::remove_file(usage_cache_path());
     let _ = fs::remove_file(source_index_cache_path());
-    let _ = fs::remove_file(runtime_log_path());
+    let _ = fs::remove_file(legacy_runtime_log_path());
+    let _ = fs::remove_dir_all(runtime_log_dir());
 }
 
 fn parse_cursor_token_input(input: serde_json::Value) -> Result<Vec<CursorTokenRecord>, String> {
@@ -510,7 +639,8 @@ fn parse_cursor_token_input(input: serde_json::Value) -> Result<Vec<CursorTokenR
         return parse_cursor_token_text(text);
     }
     if input.is_object() {
-        let token = input["token"].as_str()
+        let token = input["token"]
+            .as_str()
             .or_else(|| input["value"].as_str())
             .unwrap_or("")
             .trim()
@@ -520,8 +650,12 @@ fn parse_cursor_token_input(input: serde_json::Value) -> Result<Vec<CursorTokenR
         }
         return Ok(vec![CursorTokenRecord {
             token,
-            account_name: input["accountName"].as_str().unwrap_or("").trim().to_string(),
-            added_at: Some(now_iso())
+            account_name: input["accountName"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+            added_at: Some(now_iso()),
         }]);
     }
     Ok(vec![])
@@ -533,7 +667,8 @@ fn parse_cursor_token_text(text: &str) -> Result<Vec<CursorTokenRecord>, String>
         return Ok(vec![]);
     }
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        let parsed: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| format!("Invalid Cursor token JSON: {}", e))?;
+        let parsed: serde_json::Value = serde_json::from_str(trimmed)
+            .map_err(|e| format!("Invalid Cursor token JSON: {}", e))?;
         if let Some(items) = parsed.as_array() {
             let mut records = Vec::new();
             for item in items {
@@ -546,15 +681,19 @@ fn parse_cursor_token_text(text: &str) -> Result<Vec<CursorTokenRecord>, String>
     Ok(vec![CursorTokenRecord {
         token: trimmed.to_string(),
         account_name: String::new(),
-        added_at: Some(now_iso())
+        added_at: Some(now_iso()),
     }])
 }
 
 pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: bool) -> AppConfig {
     let mut config = current.clone();
 
-    if let Some(v) = input["nickname"].as_str() { config.nickname = v.to_string(); }
-    if let Some(v) = input["nicknameAutoGenerated"].as_bool() { config.nickname_auto_generated = v; }
+    if let Some(v) = input["nickname"].as_str() {
+        config.nickname = v.to_string();
+    }
+    if let Some(v) = input["nicknameAutoGenerated"].as_bool() {
+        config.nickname_auto_generated = v;
+    }
     if let Some(v) = input["apiBaseUrl"].as_str() {
         let previous = normalize_api_base_url(&config.api_base_url);
         let next = normalize_api_base_url(v);
@@ -568,19 +707,45 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
             clear_sync_manifest();
         }
     }
-    if let Some(v) = input["language"].as_str() { config.language = v.to_string(); }
-    if let Some(v) = input["showEstimatedCost"].as_bool() { config.show_estimated_cost = v; }
-    if let Some(v) = input["showRawTokens"].as_bool() { config.show_raw_tokens = v; }
-    if let Some(v) = input["launchAtLogin"].as_bool() { config.launch_at_login = v; }
-    if let Some(v) = input["hideDockIcon"].as_bool() { config.hide_dock_icon = v; }
-    if let Some(v) = input["desktopAutoInitialized"].as_bool() { config.desktop_auto_initialized = v; }
-    if let Some(v) = input["refreshIntervalMinutes"].as_u64() { config.refresh_interval_minutes = v.max(1); }
-    if let Some(v) = input.get("apiConnection").cloned() { config.api_connection = v; }
-    if let Some(v) = input.get("syncStatus").cloned() { config.sync_status = v; }
-    if let Some(v) = input["lastSyncAt"].as_str() { config.last_sync_at = Some(v.to_string()); }
-    if let Some(v) = input["lastSyncStatus"].as_str() { config.last_sync_status = Some(v.to_string()); }
-    if let Some(v) = input["lastSyncApiBaseUrl"].as_str() { config.last_sync_api_base_url = Some(v.to_string()); }
-    if let Some(v) = input["lastSyncError"].as_str() { config.last_sync_error = Some(v.to_string()); }
+    if let Some(v) = input["language"].as_str() {
+        config.language = v.to_string();
+    }
+    if let Some(v) = input["showEstimatedCost"].as_bool() {
+        config.show_estimated_cost = v;
+    }
+    if let Some(v) = input["showRawTokens"].as_bool() {
+        config.show_raw_tokens = v;
+    }
+    if let Some(v) = input["launchAtLogin"].as_bool() {
+        config.launch_at_login = v;
+    }
+    if let Some(v) = input["hideDockIcon"].as_bool() {
+        config.hide_dock_icon = v;
+    }
+    if let Some(v) = input["desktopAutoInitialized"].as_bool() {
+        config.desktop_auto_initialized = v;
+    }
+    if let Some(v) = input["refreshIntervalMinutes"].as_u64() {
+        config.refresh_interval_minutes = v.max(1);
+    }
+    if let Some(v) = input.get("apiConnection").cloned() {
+        config.api_connection = v;
+    }
+    if let Some(v) = input.get("syncStatus").cloned() {
+        config.sync_status = v;
+    }
+    if let Some(v) = input["lastSyncAt"].as_str() {
+        config.last_sync_at = Some(v.to_string());
+    }
+    if let Some(v) = input["lastSyncStatus"].as_str() {
+        config.last_sync_status = Some(v.to_string());
+    }
+    if let Some(v) = input["lastSyncApiBaseUrl"].as_str() {
+        config.last_sync_api_base_url = Some(v.to_string());
+    }
+    if let Some(v) = input["lastSyncError"].as_str() {
+        config.last_sync_error = Some(v.to_string());
+    }
     if let Some(v) = input.get("providerIgnoredAutoSources").cloned() {
         config.provider_ignored_auto_sources = serde_json::from_value(v).unwrap_or_default();
     }
@@ -594,17 +759,29 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
     }
 
     if let Some(cdu) = input.get("cursorDashboardUsage") {
-        let merged: CursorDashboardUsageConfig = serde_json::from_value(cdu.clone()).unwrap_or_default();
+        let merged: CursorDashboardUsageConfig =
+            serde_json::from_value(cdu.clone()).unwrap_or_default();
         config.cursor_dashboard_usage = merged;
     }
 
     if let Some(local_backup) = input.get("localBackup") {
         let mut merged = config.local_backup.clone();
-        if let Some(v) = local_backup["enabled"].as_bool() { merged.enabled = v; }
-        if let Some(v) = local_backup["directory"].as_str() { merged.directory = v.trim().to_string(); }
-        if let Some(v) = local_backup["retentionCount"].as_u64() { merged.retention_count = v.clamp(1, 30); }
-        if let Some(v) = local_backup["lastBackupAt"].as_str() { merged.last_backup_at = Some(v.to_string()); }
+        if let Some(v) = local_backup["enabled"].as_bool() {
+            merged.enabled = v;
+        }
+        if let Some(v) = local_backup["directory"].as_str() {
+            merged.directory = v.trim().to_string();
+        }
+        if let Some(v) = local_backup["retentionCount"].as_u64() {
+            merged.retention_count = v.clamp(1, 30);
+        }
+        if let Some(v) = local_backup["lastBackupAt"].as_str() {
+            merged.last_backup_at = Some(v.to_string());
+        }
         config.local_backup = merged;
+    }
+    if let Some(v) = input["runtimeLogRetentionDays"].as_u64() {
+        config.runtime_log_retention_days = v.clamp(1, 30);
     }
 
     config.updated_at = Some(now_iso());
@@ -617,7 +794,10 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
 
 pub fn ignore_auto_source(provider_id: &str, source_id: &str, current: &AppConfig) -> AppConfig {
     let mut config = current.clone();
-    let list = config.provider_ignored_auto_sources.entry(provider_id.to_string()).or_default();
+    let list = config
+        .provider_ignored_auto_sources
+        .entry(provider_id.to_string())
+        .or_default();
     if !list.contains(&source_id.to_string()) {
         list.push(source_id.to_string());
     }
@@ -651,7 +831,11 @@ pub fn load_sync_manifest() -> Option<SyncManifest> {
     let path = manifest_path();
     let content = fs::read_to_string(&path).ok()?;
     let parsed: SyncManifest = serde_json::from_str(&content).ok()?;
-    if parsed.version == 1 { Some(parsed) } else { None }
+    if parsed.version == 1 {
+        Some(parsed)
+    } else {
+        None
+    }
 }
 
 pub fn save_sync_manifest(manifest: &SyncManifest) {

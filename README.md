@@ -123,13 +123,13 @@ reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
 | 本地 usage cache | `~/.ai-token-league/usage-cache.json` |
 | upload queue | `~/.ai-token-league/upload-queue.json` |
 | sync manifest | `~/.ai-token-league/sync-manifest.json` |
-| runtime log | `~/.ai-token-league/runtime-log.jsonl`，最多 2MB / 最近 500 条，本地轮转，诊断导出时脱敏 |
+| runtime log | `~/.ai-token-league/log/runtime.YYYY-MM-DD.log`，默认保留最近 3 天，诊断导出时脱敏 |
 | 后端 JSON 存储 | `data/db.json` |
 
 实用建议：
 
 1. 不要把 `~/.ai-token-league` 目录直接公开分享。
-2. `Settings > About > 数据保护` 可以做立即备份、开启自动备份、选择备份文件夹并设置保留数量；默认建议位置是 `~/Documents/AI Token League Backups/`。
+2. `Settings > About > 数据保护` 默认开启自动备份，可以做立即备份、从备份恢复、选择备份文件夹、打开备份目录、清空备份，并设置保留天数；默认位置是 `~/.ai-token-league/backup/`。
 3. 本机备份文件包含恢复所需的敏感配置，可能包含身份私钥和本机 token；只用于个人迁移或恢复，不要公开分享。
 4. 导出诊断包前确认只包含脱敏聚合事实。
 5. 公共机器使用后，清理本地配置和上传队列。

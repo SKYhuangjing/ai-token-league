@@ -93,15 +93,20 @@ pub fn export_local_backup() -> Result<Value, String> {
 }
 
 pub fn default_backup_directory() -> String {
-    let base = dirs::document_dir()
+    let base = dirs::home_dir()
+        .map(|home| home.join(".ai-token-league"))
+        .or_else(dirs::document_dir)
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("AI Token League Backups").to_string_lossy().to_string()
+    base.join("backup").to_string_lossy().to_string()
 }
 
 pub fn backup_status() -> Value {
     let cfg = config::load_config();
-    let backup = cfg.as_ref().map(|c| c.local_backup.clone()).unwrap_or_default();
+    let backup = cfg
+        .as_ref()
+        .map(|c| c.local_backup.clone())
+        .unwrap_or_default();
     let directory = if backup.directory.trim().is_empty() {
         default_backup_directory()
     } else {
@@ -112,8 +117,9 @@ pub fn backup_status() -> Value {
         "directory": backup.directory,
         "effectiveDirectory": directory,
         "retentionCount": backup.retention_count,
+        "retentionDays": backup.retention_count,
         "lastBackupAt": backup.last_backup_at,
-        "backups": list_backups_in_dir(&backup.directory)
+        "backups": list_backups_in_dir(&directory)
     })
 }
 
@@ -131,6 +137,7 @@ pub fn create_backup_in_configured_directory(reason: &str) -> Result<Value, Stri
     Ok(json!({
         "directory": directory,
         "retentionCount": cfg.local_backup.retention_count,
+        "retentionDays": cfg.local_backup.retention_count,
         "lastBackupAt": cfg.local_backup.last_backup_at,
         "backups": list_backups_in_dir(&cfg.local_backup.directory)
     }))
@@ -144,9 +151,6 @@ pub fn run_due_auto_backup() -> Result<Value, String> {
     if !cfg.local_backup.enabled {
         return Ok(json!({"ran": false, "reason": "disabled"}));
     }
-    if cfg.local_backup.directory.trim().is_empty() {
-        return Ok(json!({"ran": false, "reason": "directory_missing"}));
-    }
     if backed_up_today(cfg.local_backup.last_backup_at.as_deref()) {
         return Ok(json!({"ran": false, "reason": "already_backed_up_today"}));
     }
@@ -154,9 +158,26 @@ pub fn run_due_auto_backup() -> Result<Value, String> {
     Ok(json!({"ran": true, "result": result}))
 }
 
+pub fn clear_configured_backups() -> Result<Value, String> {
+    let cfg = config::load_config().ok_or("Not initialized")?;
+    let directory = if cfg.local_backup.directory.trim().is_empty() {
+        default_backup_directory()
+    } else {
+        cfg.local_backup.directory.clone()
+    };
+    let removed = clear_backups_in_dir(&directory)?;
+    Ok(json!({
+        "directory": directory,
+        "removed": removed,
+        "backups": list_backups_in_dir(&directory)
+    }))
+}
+
 pub fn inspect_backup(backup: &Value) -> Result<Value, String> {
     validate_backup(backup)?;
-    let entries = backup["entries"].as_array().ok_or("Invalid backup: entries must be an array")?;
+    let entries = backup["entries"]
+        .as_array()
+        .ok_or("Invalid backup: entries must be an array")?;
     let mut total_bytes = 0_u64;
     let mut files = Vec::new();
     for entry in entries {
@@ -273,7 +294,12 @@ fn validate_backup(backup: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn create_backup_file(directory: &str, retention_count: u64, reason: &str, update_retention: bool) -> Result<PathBuf, String> {
+fn create_backup_file(
+    directory: &str,
+    retention_days: u64,
+    reason: &str,
+    update_retention: bool,
+) -> Result<PathBuf, String> {
     let dir = PathBuf::from(directory);
     fs::create_dir_all(&dir).map_err(|e| format!("Cannot create backup directory: {}", e))?;
     let mut backup = export_local_backup()?;
@@ -285,21 +311,25 @@ fn create_backup_file(directory: &str, retention_count: u64, reason: &str, updat
     let content = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())? + "\n";
     write_atomic(&path, &content)?;
     if update_retention {
-        enforce_retention(&dir, retention_count.max(1))?;
+        enforce_retention_by_days(&dir, retention_days.max(1))?;
     }
     Ok(path)
 }
 
 fn list_backups_in_dir(directory: &str) -> Vec<Value> {
     let dir = PathBuf::from(directory);
-    let Ok(read_dir) = fs::read_dir(dir) else { return vec![]; };
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return vec![];
+    };
     let mut rows = Vec::new();
     for item in read_dir.flatten() {
         let path = item.path();
         if !is_backup_file(&path) {
             continue;
         }
-        let Ok(metadata) = item.metadata() else { continue; };
+        let Ok(metadata) = item.metadata() else {
+            continue;
+        };
         let created_at = fs::read_to_string(&path)
             .ok()
             .and_then(|content| serde_json::from_str::<Value>(&content).ok())
@@ -312,38 +342,75 @@ fn list_backups_in_dir(directory: &str) -> Vec<Value> {
             "createdAt": created_at
         }));
     }
-    rows.sort_by(|a, b| b["fileName"].as_str().unwrap_or("").cmp(a["fileName"].as_str().unwrap_or("")));
+    rows.sort_by(|a, b| {
+        b["fileName"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(a["fileName"].as_str().unwrap_or(""))
+    });
     rows
 }
 
-fn enforce_retention(directory: &Path, retention_count: u64) -> Result<(), String> {
-    let mut backups: Vec<PathBuf> = fs::read_dir(directory)
+fn enforce_retention_by_days(directory: &Path, retention_days: u64) -> Result<(), String> {
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let backups: Vec<PathBuf> = fs::read_dir(directory)
         .map_err(|e| format!("Cannot list backup directory: {}", e))?
         .flatten()
         .map(|item| item.path())
         .filter(|path| is_backup_file(path))
         .collect();
-    backups.sort();
-    let keep = retention_count as usize;
-    if backups.len() <= keep {
-        return Ok(());
-    }
-    for path in backups.iter().take(backups.len() - keep) {
-        fs::remove_file(path).map_err(|e| format!("Cannot remove old backup: {}", e))?;
+    for path in backups {
+        if backup_is_older_than(&path, cutoff) {
+            fs::remove_file(path).map_err(|e| format!("Cannot remove old backup: {}", e))?;
+        }
     }
     Ok(())
 }
 
+fn clear_backups_in_dir(directory: &str) -> Result<u64, String> {
+    let dir = PathBuf::from(directory);
+    let Ok(read_dir) = fs::read_dir(&dir) else {
+        return Ok(0);
+    };
+    let mut removed = 0_u64;
+    for item in read_dir.flatten() {
+        let path = item.path();
+        if !is_backup_file(&path) {
+            continue;
+        }
+        fs::remove_file(&path).map_err(|e| format!("Cannot remove backup: {}", e))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+fn backup_is_older_than(path: &Path, cutoff: chrono::DateTime<chrono::Utc>) -> bool {
+    let created_at = fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .and_then(|backup| backup["createdAt"].as_str().map(|s| s.to_string()));
+    let Some(created_at) = created_at else {
+        return false;
+    };
+    chrono::DateTime::parse_from_rfc3339(&created_at)
+        .map(|dt| dt.with_timezone(&chrono::Utc) < cutoff)
+        .unwrap_or(false)
+}
+
 fn is_backup_file(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|s| s.to_str()) else { return false; };
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
     name.starts_with("ai-token-league-backup-") && name.ends_with(".json")
 }
 
 fn backed_up_today(last_backup_at: Option<&str>) -> bool {
-    let Some(value) = last_backup_at else { return false; };
-    let today = chrono::Utc::now().date_naive();
+    let Some(value) = last_backup_at else {
+        return false;
+    };
+    let today = chrono::Local::now().date_naive();
     chrono::DateTime::parse_from_rfc3339(value)
-        .map(|dt| dt.with_timezone(&chrono::Utc).date_naive() == today)
+        .map(|dt| dt.with_timezone(&chrono::Local).date_naive() == today)
         .unwrap_or(false)
 }
 
@@ -365,10 +432,7 @@ fn write_atomic(path: &PathBuf, content: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_home() -> PathBuf {
         let suffix = SystemTime::now()
@@ -380,7 +444,7 @@ mod tests {
 
     #[test]
     fn backup_and_restore_client_files() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
         let previous_home = std::env::var("HOME").ok();
         let home = temp_home();
         std::env::set_var("HOME", &home);
@@ -394,6 +458,7 @@ mod tests {
         fs::write(config::usage_cache_path(), "{\"rowCount\":1}\n").unwrap();
         fs::write(config::queue_path(), "[]\n").unwrap();
         fs::write(config::manifest_path(), "{\"version\":1,\"buckets\":{}}\n").unwrap();
+        fs::create_dir_all(config::runtime_log_dir()).unwrap();
         fs::write(config::runtime_log_path(), "{\"event\":\"scan\"}\n").unwrap();
 
         let backup = export_local_backup().unwrap();
@@ -420,7 +485,7 @@ mod tests {
 
     #[test]
     fn restore_rejects_hash_mismatch() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
         let previous_home = std::env::var("HOME").ok();
         let home = temp_home();
         std::env::set_var("HOME", &home);
@@ -435,6 +500,81 @@ mod tests {
         });
         let err = restore_local_backup(backup).unwrap_err();
         assert!(err.contains("sha256 mismatch"));
+        let _ = fs::remove_dir_all(&home);
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[test]
+    fn backup_defaults_to_app_backup_dir_and_clears_files() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+
+        assert_eq!(
+            default_backup_directory(),
+            home.join(".ai-token-league")
+                .join("backup")
+                .to_string_lossy()
+                .to_string()
+        );
+        let cfg = config::init_config(json!({}), true);
+        assert_eq!(cfg.local_backup.enabled, true);
+        let created = create_backup_in_configured_directory("manual").unwrap();
+        assert_eq!(created["backups"].as_array().unwrap().len(), 1);
+        let cleared = clear_configured_backups().unwrap();
+        assert_eq!(cleared["removed"].as_u64(), Some(1));
+        assert_eq!(cleared["backups"].as_array().unwrap().len(), 0);
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[test]
+    fn backup_retention_removes_files_older_than_days() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+        let dir = home.join("backups");
+        fs::create_dir_all(&dir).unwrap();
+        let old_path = dir.join("ai-token-league-backup-20260501-000000-000.json");
+        let recent_path = dir.join("ai-token-league-backup-20260517-000000-000.json");
+        fs::write(
+            &old_path,
+            json!({
+                "backupVersion": BACKUP_VERSION,
+                "scope": "client-local-data",
+                "createdAt": (chrono::Utc::now() - chrono::Duration::days(10)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "entries": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            &recent_path,
+            json!({
+                "backupVersion": BACKUP_VERSION,
+                "scope": "client-local-data",
+                "createdAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "entries": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        enforce_retention_by_days(&dir, 7).unwrap();
+        assert!(!old_path.exists());
+        assert!(recent_path.exists());
+
         let _ = fs::remove_dir_all(&home);
         if let Some(value) = previous_home {
             std::env::set_var("HOME", value);

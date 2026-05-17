@@ -114,11 +114,7 @@ fn apply_launch_at_login(app: &AppHandle, config: &Value) -> Result<(), String> 
 
 // ── Sidecar communication ──────────────────────────────────────────
 
-async fn call_sidecar(
-    state: &SidecarState,
-    command: &str,
-    args: Value,
-) -> Result<Value, String> {
+async fn call_sidecar(state: &SidecarState, command: &str, args: Value) -> Result<Value, String> {
     if state.dead.load(Ordering::Relaxed) {
         return Err("sidecar process exited".to_string());
     }
@@ -343,17 +339,22 @@ async fn rebuild_tray_menu(app: &AppHandle) {
             menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app).unwrap());
             continue;
         }
-        let label = item
-            .get("label")
+        let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("");
+        let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let disabled = item
+            .get("disabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let action = item
+            .get("action")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let id = item
-            .get("id")
+            .unwrap_or("")
+            .to_string();
+        let url = item
+            .get("url")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let disabled = item.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false);
-        let action = item.get("action").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            .unwrap_or("")
+            .to_string();
 
         let menu_item = MenuItemBuilder::new(label)
             .id(id)
@@ -403,7 +404,11 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Use template tray icon on macOS (adapts to dark/light menu bar)
     let default_icon = app.default_window_icon().cloned().unwrap();
     let icon = if cfg!(target_os = "macos") {
-        app.path().resolve("icons/tray-iconTemplate.png", tauri::path::BaseDirectory::Resource)
+        app.path()
+            .resolve(
+                "icons/tray-iconTemplate.png",
+                tauri::path::BaseDirectory::Resource,
+            )
             .ok()
             .and_then(|p| std::fs::read(&p).ok())
             .and_then(|bytes| tauri::image::Image::from_bytes(&bytes).ok())
@@ -513,15 +518,18 @@ async fn update_config(
 ) -> Result<Value, String> {
     let config = call_sidecar(&state, "config:update", input).await?;
     apply_launch_at_login(&app, &config)?;
-    let _ = call_sidecar(&state, "local-backup:run-due-auto", json!(null)).await;
     Ok(config)
 }
 
 #[tauri::command]
 async fn platform() -> String {
-    if cfg!(target_os = "macos") { "darwin".into() }
-    else if cfg!(target_os = "windows") { "windows".into() }
-    else { "linux".into() }
+    if cfg!(target_os = "macos") {
+        "darwin".into()
+    } else if cfg!(target_os = "windows") {
+        "windows".into()
+    } else {
+        "linux".into()
+    }
 }
 
 // ── File dialog commands ───────────────────────────────────────────
@@ -607,10 +615,20 @@ async fn export_diagnostics_dialog(
                 .and_then(|u| u.as_array())
                 .map(|v| v.len())
                 .unwrap_or(0);
-            Ok(json!({"canceled": false, "filePath": p.to_string_lossy(), "usageRowCount": row_count, "logCount": log_count}))
+            Ok(
+                json!({"canceled": false, "filePath": p.to_string_lossy(), "usageRowCount": row_count, "logCount": log_count}),
+            )
         }
         None => Ok(json!({"canceled": true})),
     }
+}
+
+#[tauri::command]
+async fn reveal_runtime_log_directory() -> Result<(), String> {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let dir = home.join(".ai-token-league").join("log");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -639,7 +657,9 @@ async fn export_local_backup_dialog(
                 .and_then(|entries| entries.as_array())
                 .map(|entries| entries.len())
                 .unwrap_or(0);
-            Ok(json!({"canceled": false, "filePath": p.to_string_lossy(), "entryCount": entry_count}))
+            Ok(
+                json!({"canceled": false, "filePath": p.to_string_lossy(), "entryCount": entry_count}),
+            )
         }
         None => Ok(json!({"canceled": true})),
     }
@@ -661,8 +681,7 @@ async fn import_identity_dialog(
         Some(path) => {
             let p = path.into_path().map_err(|e| e.to_string())?;
             let content = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-            let identity: Value =
-                serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let identity: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
             call_sidecar(&state, "identity:import:apply", identity).await
         }
         None => Ok(json!({"canceled": true})),
@@ -685,8 +704,7 @@ async fn import_config_dialog(
         Some(path) => {
             let p = path.into_path().map_err(|e| e.to_string())?;
             let content = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-            let config: Value =
-                serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let config: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
             call_sidecar(&state, "config:import:apply", config).await
         }
         None => Ok(json!({"canceled": true})),
@@ -709,8 +727,7 @@ async fn restore_local_backup_dialog(
         Some(path) => {
             let p = path.into_path().map_err(|e| e.to_string())?;
             let content = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-            let backup: Value =
-                serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let backup: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
             call_sidecar(&state, "local-backup:restore:apply", backup).await
         }
         None => Ok(json!({"canceled": true})),
@@ -750,8 +767,7 @@ async fn pick_local_backup_dialog(
         Some(path) => {
             let p = path.into_path().map_err(|e| e.to_string())?;
             let content = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-            let backup: Value =
-                serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let backup: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
             let summary = call_sidecar(&state, "local-backup:inspect", backup).await?;
             Ok(json!({"canceled": false, "filePath": p.to_string_lossy(), "summary": summary}))
         }
@@ -765,14 +781,18 @@ async fn restore_local_backup_file(
     file_path: String,
 ) -> Result<Value, String> {
     let content = std::fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
-    let backup: Value =
-        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let backup: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     call_sidecar(&state, "local-backup:restore:apply", backup).await
 }
 
 #[tauri::command]
 async fn reveal_local_backup_directory(path: String) -> Result<(), String> {
     tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn clear_local_backups(state: State<'_, SidecarState>) -> Result<Value, String> {
+    call_sidecar(&state, "local-backup:clear", json!(null)).await
 }
 
 #[tauri::command]
@@ -804,8 +824,14 @@ async fn add_provider_root_dialog(
 // ── Updater commands ─────────────────────────────────────────────
 
 async fn updater_endpoints(state: &SidecarState) -> Vec<url::Url> {
-    let api_base = call_sidecar(state, "config:get", json!(null)).await.ok()
-        .and_then(|v| v.get("apiBaseUrl").and_then(|u| u.as_str()).map(|s| s.to_string()));
+    let api_base = call_sidecar(state, "config:get", json!(null))
+        .await
+        .ok()
+        .and_then(|v| {
+            v.get("apiBaseUrl")
+                .and_then(|u| u.as_str())
+                .map(|s| s.to_string())
+        });
     if let Some(base) = api_base {
         let base = base.trim_end_matches('/');
         let url_str = format!("{}/api/tauri/update.json", base);
@@ -826,14 +852,18 @@ async fn check_update(app: AppHandle, state: State<'_, SidecarState>) -> Result<
             "message": "Configure Cloud Connection before checking updates"
         }));
     }
-    let updater = app.updater_builder()
+    let updater = app
+        .updater_builder()
         .endpoints(endpoints)
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?;
     let update = updater.check().await.map_err(|e| e.to_string())?;
     let update_available = update.is_some();
-    let latest_version = update.as_ref().map(|u| u.version.clone()).unwrap_or_default();
+    let latest_version = update
+        .as_ref()
+        .map(|u| u.version.clone())
+        .unwrap_or_default();
     let message = if update_available {
         format!("Version {} is available", latest_version)
     } else {
@@ -857,7 +887,8 @@ async fn download_update(app: AppHandle, state: State<'_, SidecarState>) -> Resu
     if endpoints.is_empty() {
         return Err("Cloud not configured".to_string());
     }
-    let updater = app.updater_builder()
+    let updater = app
+        .updater_builder()
         .endpoints(endpoints)
         .map_err(|e| e.to_string())?
         .build()
@@ -873,8 +904,20 @@ async fn download_update(app: AppHandle, state: State<'_, SidecarState>) -> Resu
             |chunk_len, total| {
                 downloaded += chunk_len as u64;
                 let elapsed = start.elapsed().as_secs_f64();
-                let percent = total.map(|t| if t > 0 { (downloaded * 100 / t) as u64 } else { 0 }).unwrap_or(0);
-                let bps = if elapsed > 0.0 { (downloaded as f64 / elapsed) as u64 } else { 0 };
+                let percent = total
+                    .map(|t| {
+                        if t > 0 {
+                            (downloaded * 100 / t) as u64
+                        } else {
+                            0
+                        }
+                    })
+                    .unwrap_or(0);
+                let bps = if elapsed > 0.0 {
+                    (downloaded as f64 / elapsed) as u64
+                } else {
+                    0
+                };
                 let _ = app.emit(
                     "update:progress",
                     json!({ "downloadProgress": { "percent": percent, "bytesPerSecond": bps } }),
@@ -935,22 +978,30 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                 .unwrap_or(15)
                 .max(1);
             let next_run_at = checked_at_after(refresh_minutes * 60);
-            set_background_status(&background, json!({
-                "enabled": true,
-                "nextRunAt": next_run_at,
-                "updateCheck": {"status": "idle"}
-            })).await;
+            set_background_status(
+                &background,
+                json!({
+                    "enabled": true,
+                    "nextRunAt": next_run_at,
+                    "updateCheck": {"status": "idle"}
+                }),
+            )
+            .await;
 
             tokio::time::sleep(std::time::Duration::from_secs(refresh_minutes * 60)).await;
 
             let started_at = checked_at_iso();
-            set_background_status(&background, json!({
-                "running": true,
-                "lastRunAt": started_at,
-                "lastError": null,
-                "lastResult": null,
-                "nextRunAt": null
-            })).await;
+            set_background_status(
+                &background,
+                json!({
+                    "running": true,
+                    "lastRunAt": started_at,
+                    "lastError": null,
+                    "lastResult": null,
+                    "nextRunAt": null
+                }),
+            )
+            .await;
             let _ = app.emit("tray:refresh-start", json!(null));
 
             let api_base_url = config
@@ -963,9 +1014,15 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
             let (mode, result) = {
                 let sidecar = app.state::<SidecarState>();
                 if api_base_url.is_empty() {
-                    ("scan", call_sidecar(&sidecar, "usage:scan", json!({"force": true})).await)
+                    (
+                        "scan",
+                        call_sidecar(&sidecar, "usage:scan", json!({"force": true})).await,
+                    )
                 } else {
-                    ("sync", call_sidecar(&sidecar, "usage:sync", json!(null)).await)
+                    (
+                        "sync",
+                        call_sidecar(&sidecar, "usage:sync", json!(null)).await,
+                    )
                 }
             };
 
@@ -998,15 +1055,32 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                     let _ = app.emit("tray:refresh-done", json!(null));
                 }
                 Err(error) => {
-                    set_background_status(&background, json!({
-                        "running": false,
-                        "lastMode": mode,
-                        "lastResult": "Failed",
-                        "lastError": error
-                    })).await;
+                    set_background_status(
+                        &background,
+                        json!({
+                            "running": false,
+                            "lastMode": mode,
+                            "lastResult": "Failed",
+                            "lastError": error
+                        }),
+                    )
+                    .await;
                     let _ = app.emit("tray:refresh-failed", json!(null));
                 }
             }
+        }
+    });
+}
+
+fn start_local_backup_scheduler(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let sidecar = app.state::<SidecarState>();
+            let _ = call_sidecar(&sidecar, "local-backup:run-due-auto", json!(null)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(
+                seconds_until_next_local_midnight(),
+            ))
+            .await;
         }
     });
 }
@@ -1022,18 +1096,25 @@ fn chrono_ts() -> String {
 
 fn checked_at_after(offset_secs: u64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
         + std::time::Duration::from_secs(offset_secs);
     iso_from_unix_secs(duration.as_secs())
 }
 
+fn seconds_until_next_local_midnight() -> u64 {
+    use chrono::{Duration, Local};
+    let now = Local::now();
+    let tomorrow = now.date_naive() + Duration::days(1);
+    let Some(next_midnight) = tomorrow.and_hms_opt(0, 0, 0) else {
+        return 3600;
+    };
+    let delta = next_midnight - now.naive_local();
+    delta.num_seconds().max(60) as u64
+}
+
 fn checked_at_iso() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap();
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     iso_from_unix_secs(duration.as_secs())
 }
 
@@ -1048,19 +1129,46 @@ fn iso_from_unix_secs(secs: u64) -> String {
     let mut y = 1970;
     let mut remaining_days = days;
     loop {
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-        if remaining_days < days_in_year { break; }
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining_days < days_in_year {
+            break;
+        }
         remaining_days -= days_in_year;
         y += 1;
     }
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days: [u64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days: [u64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 0;
     while m < 12 && remaining_days >= month_days[m] {
         remaining_days -= month_days[m];
         m += 1;
     }
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m + 1, remaining_days + 1, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y,
+        m + 1,
+        remaining_days + 1,
+        hours,
+        minutes,
+        seconds
+    )
 }
 
 // ── Entry ──────────────────────────────────────────────────────────
@@ -1085,13 +1193,13 @@ pub fn run() {
             // Setup tray
             setup_tray(app.handle())?;
             start_background_refresh(app.handle().clone(), background);
+            start_local_backup_scheduler(app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<SidecarState>();
                 if let Ok(config) = call_sidecar(&state, "config:get", json!(null)).await {
                     let _ = apply_launch_at_login(&handle, &config);
                 }
-                let _ = call_sidecar(&state, "local-backup:run-due-auto", json!(null)).await;
             });
 
             // Window close → hide to tray
@@ -1119,6 +1227,7 @@ pub fn run() {
             export_identity_dialog,
             export_config_dialog,
             export_diagnostics_dialog,
+            reveal_runtime_log_directory,
             export_local_backup_dialog,
             import_identity_dialog,
             import_config_dialog,
@@ -1127,6 +1236,7 @@ pub fn run() {
             pick_local_backup_dialog,
             restore_local_backup_file,
             reveal_local_backup_directory,
+            clear_local_backups,
             add_provider_root_dialog,
             check_update,
             download_update,

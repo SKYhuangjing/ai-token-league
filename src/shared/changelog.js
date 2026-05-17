@@ -4,8 +4,15 @@ const TAG_PATTERN = USER_FACING_CHANGELOG_TAGS.join("|");
 const TAGGED_ITEM_RE = new RegExp(`^- \\[((?:${TAG_PATTERN})(?:, (?:${TAG_PATTERN}))*)\\] (.+)$`);
 
 export function parseLatestChangelog(md) {
+  return parseChangelogVersion(md);
+}
+
+export function parseChangelogVersion(md, targetVersion = "") {
   const versionRe = /^## \[([\d.]+)\]\s*-\s*(\d{4}-\d{2}-\d{2})/gm;
-  const first = versionRe.exec(md);
+  let first;
+  while ((first = versionRe.exec(md)) !== null) {
+    if (!targetVersion || first[1] === targetVersion) break;
+  }
   if (!first) return null;
 
   const version = first[1];

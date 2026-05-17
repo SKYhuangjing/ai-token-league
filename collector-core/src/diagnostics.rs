@@ -3,10 +3,12 @@ use serde_json::{json, Value};
 use std::fs;
 
 pub fn export_diagnostics(config: &AppConfig) -> Value {
-    let usage_cache = read_json_file(crate::config::usage_cache_path()).unwrap_or_else(|| json!(null));
+    let usage_cache =
+        read_json_file(crate::config::usage_cache_path()).unwrap_or_else(|| json!(null));
     let upload_queue = read_upload_queue_summary();
-    let sync_manifest = read_json_file(crate::config::manifest_path()).unwrap_or_else(|| json!(null));
-    let runtime_log = crate::observability::read_recent_runtime_events(500);
+    let sync_manifest =
+        read_json_file(crate::config::manifest_path()).unwrap_or_else(|| json!(null));
+    let runtime_log = crate::observability::read_recent_runtime_events(usize::MAX);
     json!({
         "exportedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "appVersion": env!("CARGO_PKG_VERSION"),
@@ -26,9 +28,15 @@ fn sanitize_config(config: &AppConfig) -> Value {
     if let Some(obj) = value.as_object_mut() {
         obj.remove("identityPrivateKey");
         obj.remove("workosSessionToken");
-        if let Some(cursor) = obj.get_mut("cursorDashboardUsage").and_then(|v| v.as_object_mut()) {
+        if let Some(cursor) = obj
+            .get_mut("cursorDashboardUsage")
+            .and_then(|v| v.as_object_mut())
+        {
             cursor.insert("workosSessionToken".to_string(), json!("[redacted]"));
-            if let Some(tokens) = cursor.get_mut("workosSessionTokens").and_then(|v| v.as_array_mut()) {
+            if let Some(tokens) = cursor
+                .get_mut("workosSessionTokens")
+                .and_then(|v| v.as_array_mut())
+            {
                 for token in tokens {
                     if let Some(token_obj) = token.as_object_mut() {
                         token_obj.insert("token".to_string(), json!("[redacted]"));
@@ -83,7 +91,11 @@ fn summarize_payload(payload: &Value) -> Value {
         .unwrap_or_default();
     let total_tokens: i64 = items
         .iter()
-        .map(|item| item.get("totalTokens").and_then(|v| v.as_i64()).unwrap_or(0))
+        .map(|item| {
+            item.get("totalTokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+        })
         .sum();
     json!({
         "clientGeneratedAt": payload.get("clientGeneratedAt").cloned().unwrap_or(Value::Null),
