@@ -6,6 +6,15 @@
 
 ---
 
+## [0.6.3-test.1] - 2026-05-17
+
+### 修复
+
+- [Desktop] 修复 GitHub draft release 阶段 updater JSON 生成逻辑：签名文件改用 release asset API 读取，updater 下载地址改写为稳定 tag 地址。
+- [Desktop, Web] 更新 GitHub release notes 生成逻辑，输出英文和简体中文两套 changelog 内容。
+
+---
+
 ## [0.6.3] - 2026-05-16
 
 ### 变更

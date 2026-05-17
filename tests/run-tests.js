@@ -1156,21 +1156,21 @@ async function testBuildGithubTauriUpdateJsonUsesReleaseId() {
         html_url: "https://github.com/SKYhuangjing/ai-token-league/releases/tag/untagged-draft",
         created_at: "2026-05-16T00:00:00Z",
         assets: [
-          { name: "AI Token League_0.6.3_darwin_aarch64.app.tar.gz", browser_download_url: `${base}/download/mac-arm64` },
-          { name: "AI Token League_0.6.3_darwin_aarch64.app.tar.gz.sig", browser_download_url: `${base}/sig/mac-arm64` },
-          { name: "AI Token League_0.6.3_darwin_x64.app.tar.gz", browser_download_url: `${base}/download/mac-x64` },
-          { name: "AI Token League_0.6.3_darwin_x64.app.tar.gz.sig", browser_download_url: `${base}/sig/mac-x64` },
-          { name: "AI Token League_0.6.3_windows_x64-setup.exe", browser_download_url: `${base}/download/win` },
-          { name: "AI Token League_0.6.3_windows_x64-setup.exe.sig", browser_download_url: `${base}/sig/win` },
-          { name: "AI Token League_0.6.3_linux_amd64.AppImage", browser_download_url: `${base}/download/linux` },
-          { name: "AI Token League_0.6.3_linux_amd64.AppImage.sig", browser_download_url: `${base}/sig/linux` }
+          { name: "AI Token League_0.6.3_darwin_aarch64.app.tar.gz", browser_download_url: `${base}/download/untagged/mac-arm64` },
+          { name: "AI Token League_0.6.3_darwin_aarch64.app.tar.gz.sig", url: `${base}/asset/sig/mac-arm64`, browser_download_url: `${base}/download/untagged/mac-arm64.sig` },
+          { name: "AI Token League_0.6.3_darwin_x64.app.tar.gz", browser_download_url: `${base}/download/untagged/mac-x64` },
+          { name: "AI Token League_0.6.3_darwin_x64.app.tar.gz.sig", url: `${base}/asset/sig/mac-x64`, browser_download_url: `${base}/download/untagged/mac-x64.sig` },
+          { name: "AI Token League_0.6.3_windows_x64-setup.exe", browser_download_url: `${base}/download/untagged/win` },
+          { name: "AI Token League_0.6.3_windows_x64-setup.exe.sig", url: `${base}/asset/sig/win`, browser_download_url: `${base}/download/untagged/win.sig` },
+          { name: "AI Token League_0.6.3_linux_amd64.AppImage", browser_download_url: `${base}/download/untagged/linux` },
+          { name: "AI Token League_0.6.3_linux_amd64.AppImage.sig", url: `${base}/asset/sig/linux`, browser_download_url: `${base}/download/untagged/linux.sig` }
         ]
       }));
       return;
     }
-    if (req.url?.startsWith("/sig/")) {
+    if (req.url?.startsWith("/asset/sig/")) {
       res.setHeader("content-type", "text/plain");
-      res.end(`signature-${req.url.slice("/sig/".length)}`);
+      res.end(`signature-${req.url.slice("/asset/sig/".length)}`);
       return;
     }
     res.statusCode = 404;
@@ -1183,12 +1183,18 @@ async function testBuildGithubTauriUpdateJsonUsesReleaseId() {
       "scripts/build-github-tauri-update-json.js",
       "--repo", "SKYhuangjing/ai-token-league",
       "--release-id", releaseId,
+      "--tag", "v0.6.3",
       "--api-base-url", apiBaseUrl,
       "--output", output
     ]);
     const latest = JSON.parse(fs.readFileSync(output, "utf8"));
     assert.equal(latest.version, "0.6.3");
+    assert.equal(latest.notes, "https://github.com/SKYhuangjing/ai-token-league/releases/tag/v0.6.3");
     assert.equal(latest.platforms["darwin-aarch64"].signature, "signature-mac-arm64");
+    assert.equal(
+      latest.platforms["darwin-aarch64"].url,
+      "https://github.com/SKYhuangjing/ai-token-league/releases/download/v0.6.3/AI%20Token%20League_0.6.3_darwin_aarch64.app.tar.gz"
+    );
     assert.equal(latest.platforms["windows-x86_64"].signature, "signature-win");
     assert.equal(latest.platforms["linux-x86_64"].signature, "signature-linux");
   } finally {
@@ -1268,6 +1274,15 @@ function testPublicChangelogParsing() {
 `, "0.6.2");
   assert.equal(targeted.version, "0.6.2");
   assert.equal(targeted.sections[0].items[0].text, "Previous release.");
+
+  const prerelease = parseChangelogVersion(`## [0.6.3-test.1] - 2026-05-17
+
+### Fixed
+
+- [Desktop] Test release.
+`, "0.6.3-test.1");
+  assert.equal(prerelease.version, "0.6.3-test.1");
+  assert.equal(prerelease.sections[0].items[0].text, "Test release.");
 }
 
 function testDesktopDataProtectionControls() {
@@ -1311,6 +1326,7 @@ function testLocalBackupSchedulerIsIndependent() {
 
 async function testReleaseBodyUsesChangelog() {
   const changelog = path.join(tmp, "CHANGELOG-release-body.md");
+  const changelogZh = path.join(tmp, "CHANGELOG-release-body.zh-CN.md");
   fs.writeFileSync(changelog, `# Changelog
 
 ## [0.6.3] - 2026-05-16
@@ -1324,15 +1340,34 @@ async function testReleaseBodyUsesChangelog() {
 
 - [Web] Kept legacy daily uploads compatible.
 `);
+  fs.writeFileSync(changelogZh, `# 更新日志
+
+## [0.6.3] - 2026-05-16
+
+### 变更
+
+- [Desktop] 将桌面采集运行时迁移到 Rust。
+- 内部构建清理。
+
+### 修复
+
+- [Web] 保持 legacy daily 上报兼容。
+`);
   const output = await runNodeScript([
     "scripts/build-release-body.js",
     "--version", "0.6.3",
-    "--changelog", changelog
+    "--changelog", changelog,
+    "--changelog-zh", changelogZh
   ]);
   assert.match(output, /AI Token League 0\.6\.3/);
+  assert.match(output, /## English/);
+  assert.match(output, /## 简体中文/);
   assert.match(output, /Migrated the desktop collector runtime to Rust/);
+  assert.match(output, /将桌面采集运行时迁移到 Rust/);
   assert.match(output, /Kept legacy daily uploads compatible/);
+  assert.match(output, /保持 legacy daily 上报兼容/);
   assert.doesNotMatch(output, /Internal build cleanup/);
+  assert.doesNotMatch(output, /内部构建清理/);
   assert.doesNotMatch(output, /Automated release/);
 }
 

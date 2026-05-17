@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.3-test.1] - 2026-05-17
+
+### Fixed
+
+- [Desktop] Fixed GitHub draft release updater JSON generation by reading signature assets through the release asset API and writing stable tag-based updater download URLs.
+- [Desktop, Web] Updated GitHub release notes generation to include both English and Simplified Chinese changelog sections.
+
+---
+
 ## [0.6.3] - 2026-05-16
 
 ### Changed

@@ -15,6 +15,8 @@ if (!tag && !releaseId) throw new Error("missing release identity (use --release
 const release = await fetchJson(githubReleaseApiUrl({ repository: repo, tag, releaseId, apiBaseUrl }), githubHeaders());
 const releaseTag = tag || release.tag_name || "";
 const version = releaseVersion({ release, tag: releaseTag });
+const downloadTag = stableReleaseTag({ tag: releaseTag, release });
+const releasePageUrl = githubReleasePageUrl({ repo, tag: downloadTag, release });
 const assetNames = Array.isArray(release.assets) ? release.assets.map((asset) => asset.name).filter(Boolean) : [];
 console.log(`release ${release.id || releaseId || releaseTag} assets (${assetNames.length}):`);
 for (const name of assetNames) console.log(`  - ${name}`);
@@ -31,10 +33,17 @@ for (const definition of updaterDefinitions()) {
     console.warn(`warning: missing updater signature for ${asset.name}; skipping updater platform`);
     continue;
   }
+  let signature = "";
+  try {
+    signature = (await fetchText(githubAssetApiUrl(signatureAsset), githubHeaders({ assetDownload: true }))).trim();
+  } catch (error) {
+    console.warn(`warning: failed to fetch updater signature for ${asset.name}: ${error.message}; skipping updater platform`);
+    continue;
+  }
   artifacts.push({
     platform: definition.platform,
-    url: asset.browser_download_url,
-    signature: (await fetchText(signatureAsset.browser_download_url, githubHeaders())).trim()
+    url: githubAssetStableDownloadUrl({ repo, tag: downloadTag, asset }),
+    signature
   });
 }
 if (!artifacts.length) {
@@ -43,10 +52,10 @@ if (!artifacts.length) {
 
 const updateJson = buildTauriUpdateJson({
   version,
-  publicBaseUrl: release.html_url || `https://github.com/${repo}`,
+  publicBaseUrl: releasePageUrl,
   artifacts,
   pubDate: release.published_at || release.created_at || new Date().toISOString(),
-  notes: release.html_url || ""
+  notes: releasePageUrl
 });
 
 fs.writeFileSync(output, `${JSON.stringify(updateJson, null, 2)}\n`);
@@ -81,6 +90,28 @@ function releaseVersion({ release, tag }) {
   throw new Error("release version could not be resolved from tag or release name");
 }
 
+function stableReleaseTag({ tag, release }) {
+  const candidates = [tag, release?.tag_name].map((value) => String(value || "").trim());
+  const stable = candidates.find((value) => value && !value.startsWith("untagged-"));
+  if (stable) return stable;
+  console.warn("warning: release has no stable tag; updater artifact urls may be draft-only");
+  return candidates.find(Boolean) || "";
+}
+
+function githubAssetStableDownloadUrl({ repo, tag, asset }) {
+  if (!tag) return String(asset?.browser_download_url || "").trim();
+  return `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(asset.name)}`;
+}
+
+function githubReleasePageUrl({ repo, tag, release }) {
+  if (tag) return `https://github.com/${repo}/releases/tag/${encodeURIComponent(tag)}`;
+  return String(release?.html_url || `https://github.com/${repo}`).trim();
+}
+
+function githubAssetApiUrl(asset) {
+  return String(asset?.url || asset?.browser_download_url || "").trim();
+}
+
 async function fetchJson(url, headers) {
   const response = await fetch(url, { headers });
   if (!response.ok) throw new Error(`request failed: ${response.status} ${url}`);
@@ -93,9 +124,9 @@ async function fetchText(url, headers) {
   return response.text();
 }
 
-function githubHeaders() {
+function githubHeaders({ assetDownload = false } = {}) {
   const headers = {
-    accept: "application/vnd.github+json",
+    accept: assetDownload ? "application/octet-stream" : "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
     "user-agent": "ai-token-league-release-workflow"
   };

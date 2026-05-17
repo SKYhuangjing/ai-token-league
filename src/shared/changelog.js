@@ -8,7 +8,7 @@ export function parseLatestChangelog(md) {
 }
 
 export function parseChangelogVersion(md, targetVersion = "") {
-  const versionRe = /^## \[([\d.]+)\]\s*-\s*(\d{4}-\d{2}-\d{2})/gm;
+  const versionRe = /^## \[(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\]\s*-\s*(\d{4}-\d{2}-\d{2})/gm;
   let first;
   while ((first = versionRe.exec(md)) !== null) {
     if (!targetVersion || first[1] === targetVersion) break;
