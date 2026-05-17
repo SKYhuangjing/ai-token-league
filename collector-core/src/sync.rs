@@ -1,10 +1,13 @@
-use crate::config::{AppConfig, SyncManifest, load_sync_manifest, queue_path, save_sync_manifest};
+use crate::config::{load_sync_manifest, queue_path, save_sync_manifest, AppConfig, SyncManifest};
 use crate::crypto::sign_payload;
 use crate::schema::compute_bucket_fingerprint;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
+
+const MAX_QUEUE_DRAIN_PER_RUN: usize = 50;
+const MAX_RETRY_DELAY_MINUTES: i64 = 6 * 60;
 
 /// Result of a sync operation.
 pub struct SyncResult {
@@ -40,6 +43,8 @@ struct UploadQueueEntry {
     #[serde(default)]
     last_attempt_at: String,
     #[serde(default)]
+    next_attempt_at: String,
+    #[serde(default)]
     last_error: String,
 }
 
@@ -70,7 +75,7 @@ pub async fn sync_usage(
     register_device(&client, config, api_base_url).await?;
 
     // Drain upload queue
-    let queue_uploaded = drain_upload_queue(&client, config, api_base_url).await;
+    let queue_uploaded = drain_upload_queue(&client, &mut manifest, api_base_url).await;
 
     // Upload dirty buckets
     let mut accepted = 0;
@@ -78,7 +83,6 @@ pub async fn sync_usage(
     let mut uploaded = 0;
     let mut noop = 0;
     let mut failed_buckets: Vec<FailedUpload> = Vec::new();
-    let permanent_failed_keys = permanent_failed_queue_keys();
 
     for (_key, bucket) in &buckets {
         let bucket_items = bucket["items"].as_array().cloned().unwrap_or_default();
@@ -141,15 +145,6 @@ pub async fn sync_usage(
             "identityPublicKey": config.identity_public_key
         });
 
-        if permanent_failed_keys.contains_key(&queue_key_for_payload(&body)) {
-            rejected += 1;
-            failed_buckets.push(FailedUpload {
-                payload: body,
-                error: "HTTP 400 Bad Request".to_string(),
-            });
-            continue;
-        }
-
         match client
             .post(format!("{}/api/usage/daily-batch", api_base_url))
             .json(&body)
@@ -160,19 +155,17 @@ pub async fn sync_usage(
                 if resp.status().is_success() {
                     accepted += 1;
                     uploaded += 1;
-                    // Update manifest
-                    manifest.buckets.insert(
-                        bucket_key,
-                        json!({
-                            "day": day,
-                            "hour": hour,
-                            "providerId": provider_id,
-                            "fingerprint": fingerprint,
-                            "rowCount": row_count,
-                            "totalTokens": total_tokens,
-                            "syncedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                        }),
+                    update_manifest_bucket(
+                        &mut manifest,
+                        &bucket_key,
+                        day,
+                        hour,
+                        provider_id,
+                        &fingerprint,
+                        row_count,
+                        total_tokens,
                     );
+                    save_sync_manifest(&manifest);
                 } else {
                     rejected += 1;
                     failed_buckets.push(FailedUpload {
@@ -247,7 +240,7 @@ pub async fn register_device(
 
 async fn drain_upload_queue(
     client: &reqwest::Client,
-    _config: &AppConfig,
+    manifest: &mut SyncManifest,
     api_base_url: &str,
 ) -> usize {
     let mut queue = read_upload_queue();
@@ -256,11 +249,13 @@ async fn drain_upload_queue(
     }
     let mut uploaded = 0usize;
     let mut remaining = Vec::new();
+    let mut attempted = 0usize;
     for mut entry in queue.items.drain(..) {
-        if is_permanent_upload_error(&entry.last_error) {
+        if attempted >= MAX_QUEUE_DRAIN_PER_RUN || !is_queue_entry_due(&entry) {
             remaining.push(entry);
             continue;
         }
+        attempted += 1;
         entry.attempts += 1;
         entry.last_attempt_at = now_iso();
         match client
@@ -274,13 +269,17 @@ async fn drain_upload_queue(
         {
             Ok(resp) if resp.status().is_success() => {
                 uploaded += 1;
+                update_manifest_from_payload(manifest, &entry.payload);
+                save_sync_manifest(manifest);
             }
             Ok(resp) => {
                 entry.last_error = format!("HTTP {}", resp.status());
+                entry.next_attempt_at = next_retry_at(entry.attempts);
                 remaining.push(entry);
             }
             Err(error) => {
                 entry.last_error = error.to_string();
+                entry.next_attempt_at = next_retry_at(entry.attempts);
                 remaining.push(entry);
             }
         }
@@ -308,6 +307,7 @@ fn enqueue_failed_buckets(buckets: &[FailedUpload]) {
             existing.payload_hash = payload_hash;
             existing.payload = payload.clone();
             existing.last_error = failed.error.clone();
+            existing.next_attempt_at = next_retry_at(existing.attempts);
             continue;
         }
         queue.items.push(UploadQueueEntry {
@@ -320,23 +320,11 @@ fn enqueue_failed_buckets(buckets: &[FailedUpload]) {
             created_at: now_iso(),
             attempts: 0,
             last_attempt_at: String::new(),
+            next_attempt_at: next_retry_at(0),
             last_error: failed.error.clone(),
         });
     }
     write_upload_queue(&queue);
-}
-
-fn is_permanent_upload_error(error: &str) -> bool {
-    error.starts_with("HTTP 400")
-}
-
-fn permanent_failed_queue_keys() -> HashMap<String, bool> {
-    read_upload_queue()
-        .items
-        .into_iter()
-        .filter(|entry| is_permanent_upload_error(&entry.last_error))
-        .map(|entry| (entry.queue_key, true))
-        .collect()
 }
 
 fn queue_key_for_payload(payload: &Value) -> String {
@@ -363,6 +351,98 @@ fn queue_key_for_payload(payload: &Value) -> String {
         "{}|{}|{}|{}|{}|{}",
         participant_id, device_id, mode, day, hour, provider_id
     )
+}
+
+fn manifest_bucket_key_for_payload(payload: &Value) -> String {
+    let snapshot = &payload["snapshot"];
+    let day = snapshot["day"].as_str().unwrap_or("");
+    let hour = snapshot
+        .get("hour")
+        .and_then(|v| v.as_i64())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "0".to_string());
+    let provider_id = snapshot["providerId"].as_str().unwrap_or("");
+    if day.is_empty() || provider_id.is_empty() {
+        return String::new();
+    }
+    format!("{}|{}|{}", day, hour, provider_id)
+}
+
+fn update_manifest_from_payload(manifest: &mut SyncManifest, payload: &Value) {
+    let snapshot = &payload["snapshot"];
+    let bucket_key = manifest_bucket_key_for_payload(payload);
+    if bucket_key.is_empty() {
+        return;
+    }
+    let items = payload["items"].as_array().cloned().unwrap_or_default();
+    let fingerprint = snapshot["bucketFingerprint"]
+        .as_str()
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| compute_bucket_fingerprint(&items));
+    let day = snapshot["day"].as_str().unwrap_or("");
+    let hour = snapshot.get("hour").and_then(|v| v.as_i64()).unwrap_or(0);
+    let provider_id = snapshot["providerId"].as_str().unwrap_or("");
+    let row_count = snapshot["rowCount"]
+        .as_i64()
+        .unwrap_or(items.len() as i64)
+        .max(0) as usize;
+    let total_tokens = snapshot["totalTokens"].as_i64().unwrap_or_else(|| {
+        items
+            .iter()
+            .map(|item| item["totalTokens"].as_i64().unwrap_or(0))
+            .sum()
+    });
+    update_manifest_bucket(
+        manifest,
+        &bucket_key,
+        day,
+        hour,
+        provider_id,
+        &fingerprint,
+        row_count,
+        total_tokens,
+    );
+}
+
+fn update_manifest_bucket(
+    manifest: &mut SyncManifest,
+    bucket_key: &str,
+    day: &str,
+    hour: i64,
+    provider_id: &str,
+    fingerprint: &str,
+    row_count: usize,
+    total_tokens: i64,
+) {
+    manifest.buckets.insert(
+        bucket_key.to_string(),
+        json!({
+            "day": day,
+            "hour": hour,
+            "providerId": provider_id,
+            "fingerprint": fingerprint,
+            "rowCount": row_count,
+            "totalTokens": total_tokens,
+            "syncedAt": now_iso()
+        }),
+    );
+}
+
+fn is_queue_entry_due(entry: &UploadQueueEntry) -> bool {
+    if entry.next_attempt_at.trim().is_empty() {
+        return true;
+    }
+    let Ok(next_attempt_at) = chrono::DateTime::parse_from_rfc3339(&entry.next_attempt_at) else {
+        return true;
+    };
+    chrono::Utc::now() >= next_attempt_at.with_timezone(&chrono::Utc)
+}
+
+fn next_retry_at(attempts: u32) -> String {
+    let exponent = attempts.saturating_sub(1).min(8);
+    let delay_minutes = (1_i64 << exponent).min(MAX_RETRY_DELAY_MINUTES);
+    (chrono::Utc::now() + chrono::Duration::minutes(delay_minutes))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn count_pending_queue() -> usize {
@@ -409,6 +489,9 @@ fn normalize_upload_queue(mut queue: UploadQueue) -> UploadQueue {
             if !entry.last_error.is_empty() {
                 existing.last_error = entry.last_error;
             }
+            if !entry.next_attempt_at.is_empty() {
+                existing.next_attempt_at = entry.next_attempt_at;
+            }
             existing.payload_hash = entry.payload_hash;
             existing.payload = entry.payload;
         } else {
@@ -454,8 +537,12 @@ mod tests {
                 "mode": "device_day_hour_provider",
                 "day": "2026-05-16",
                 "hour": 8,
-                "providerId": "codex_local"
-            }
+                "providerId": "codex_local",
+                "bucketFingerprint": "fp1",
+                "rowCount": 1,
+                "totalTokens": 42
+            },
+            "items": [{"day": "2026-05-16", "hour": 8, "providerId": "codex_local", "totalTokens": 42}]
         })
     }
 
@@ -482,6 +569,7 @@ mod tests {
                     created_at: "t1".to_string(),
                     attempts: 1,
                     last_attempt_at: "2026-05-16T00:00:00.000Z".to_string(),
+                    next_attempt_at: "2026-05-16T00:02:00.000Z".to_string(),
                     last_error: "HTTP 400 Bad Request".to_string(),
                 },
                 UploadQueueEntry {
@@ -494,6 +582,7 @@ mod tests {
                     created_at: "t2".to_string(),
                     attempts: 3,
                     last_attempt_at: "2026-05-16T00:01:00.000Z".to_string(),
+                    next_attempt_at: "2026-05-16T00:04:00.000Z".to_string(),
                     last_error: "HTTP 400 Bad Request".to_string(),
                 },
             ],
@@ -505,8 +594,40 @@ mod tests {
     }
 
     #[test]
-    fn http_400_is_permanent_upload_error() {
-        assert!(is_permanent_upload_error("HTTP 400 Bad Request"));
-        assert!(!is_permanent_upload_error("HTTP 500 Internal Server Error"));
+    fn manifest_updates_from_queued_snapshot_payload() {
+        let mut manifest = SyncManifest {
+            version: 1,
+            buckets: HashMap::new(),
+        };
+        update_manifest_from_payload(&mut manifest, &hourly_payload("2026-05-16T00:00:00.000Z"));
+        let row = manifest.buckets.get("2026-05-16|8|codex_local").unwrap();
+        assert_eq!(row["fingerprint"], "fp1");
+        assert_eq!(row["rowCount"], 1);
+        assert_eq!(row["totalTokens"], 42);
+    }
+
+    #[test]
+    fn queue_retry_respects_next_attempt_at() {
+        let due = UploadQueueEntry {
+            id: "q1".to_string(),
+            payload_hash: "h1".to_string(),
+            participant_id: "p1".to_string(),
+            device_id: "d1".to_string(),
+            queue_key: String::new(),
+            payload: hourly_payload("2026-05-16T00:00:00.000Z"),
+            created_at: "t1".to_string(),
+            attempts: 1,
+            last_attempt_at: String::new(),
+            next_attempt_at: (chrono::Utc::now() - chrono::Duration::minutes(1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            last_error: "HTTP 400 Bad Request".to_string(),
+        };
+        let not_due = UploadQueueEntry {
+            next_attempt_at: (chrono::Utc::now() + chrono::Duration::minutes(10))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            ..due.clone()
+        };
+        assert!(is_queue_entry_due(&due));
+        assert!(!is_queue_entry_due(&not_due));
     }
 }
