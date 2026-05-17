@@ -22,6 +22,14 @@ import {
 } from "../src/shared/update.js";
 import { parseLatestChangelog, parseChangelogVersion } from "../src/shared/changelog.js";
 import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
+import {
+  compositionRatio, createEmptyComposition, dominantComposition,
+  mergeTokenComposition, tokenCompositionSummary, tokenCompositionDetails,
+  costQualityLabel, TOKEN_COMPOSITION_FIELDS, COST_COMPOSITION_FIELDS
+} from "../src/shared/composition.js";
+import { generateNickname, loadClientNicknames } from "../src/shared/nickname-generator.js";
+import { PRESET_ALLOWED_KEYS, loadBuildPreset } from "../src/shared/preset.js";
+import { hourlyUsageKey, publicUsageItem, assertUsageItem, primaryTokenTotal, SOURCE_QUALITY, FORBIDDEN_UPLOAD_FIELDS } from "../src/shared/schema.js";
 import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
 import { addDays, localDay } from "../src/shared/date.js";
 import { currentBusinessDay } from "../src/backend/day-context.js";
@@ -1649,4 +1657,1170 @@ await testVersionCompatibilityAndManifest();
 await testBuildGithubTauriUpdateJsonUsesReleaseId();
 testDisplayAndPricing();
 await testOpenRouterRefresh();
+// ─── Composition module tests ────────────────────────────────────────────────
+
+function testCompositionRatio() {
+  assert.equal(compositionRatio(50, 100), 0.5);
+  assert.equal(compositionRatio(0, 100), 0);
+  assert.equal(compositionRatio(100, 0), 0);
+  assert.equal(compositionRatio(null, 100), 0);
+  assert.equal(compositionRatio(100, null), 0);
+  assert.equal(compositionRatio(-1, 100), -0.01);
+  assert.ok(Math.abs(compositionRatio(1, 3) - 0.3333) < 0.01);
+  console.log("  testCompositionRatio passed");
+}
+
+function testCreateEmptyComposition() {
+  const empty = createEmptyComposition();
+  assert.equal(empty.inputTokens, 0);
+  assert.equal(empty.outputTokens, 0);
+  assert.equal(empty.cacheReadTokens, 0);
+  assert.equal(empty.cacheWriteTokens, 0);
+  assert.equal(empty.reasoningTokens, 0);
+  assert.equal(empty.totalTokens, 0);
+  console.log("  testCreateEmptyComposition passed");
+}
+
+function testMergeTokenComposition() {
+  const target = createEmptyComposition();
+  mergeTokenComposition(target, { inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+  assert.equal(target.inputTokens, 100);
+  assert.equal(target.outputTokens, 50);
+  assert.equal(target.totalTokens, 150);
+
+  mergeTokenComposition(target, { inputTokens: 200, outputTokens: 100, totalTokens: 300 });
+  assert.equal(target.inputTokens, 300);
+  assert.equal(target.outputTokens, 150);
+  assert.equal(target.totalTokens, 450);
+
+  const empty = createEmptyComposition();
+  mergeTokenComposition(empty, {});
+  assert.equal(empty.totalTokens, 0);
+
+  const withCache = createEmptyComposition();
+  mergeTokenComposition(withCache, { cacheReadTokens: 80, cacheWriteTokens: 20, totalTokens: 100 });
+  assert.equal(withCache.cacheReadTokens, 80);
+  assert.equal(withCache.cacheWriteTokens, 20);
+  console.log("  testMergeTokenComposition passed");
+}
+
+function testDominantComposition() {
+  assert.equal(dominantComposition({ inputTokens: 900, outputTokens: 100 }), "input-heavy");
+  assert.equal(dominantComposition({ inputTokens: 100, outputTokens: 900 }), "output-heavy");
+  assert.equal(dominantComposition({ cacheReadTokens: 500, cacheWriteTokens: 400 }), "cache-heavy");
+  assert.equal(dominantComposition({ reasoningTokens: 800 }), "reasoning-heavy");
+  assert.equal(dominantComposition({}), "no-usage");
+  assert.equal(dominantComposition({ inputTokens: 0, outputTokens: 0 }), "no-usage");
+  assert.equal(dominantComposition({ inputTokens: 50, outputTokens: 50, cacheReadTokens: 50, cacheWriteTokens: 50 }), "cache-heavy");
+  console.log("  testDominantComposition passed");
+}
+
+function testTokenCompositionSummary() {
+  const input = tokenCompositionSummary({ inputTokens: 800, outputTokens: 200, totalTokens: 1000 });
+  assert.match(input, /输入/);
+  assert.match(input, /输出/);
+  assert.ok(input.includes("80%"));
+  assert.ok(input.includes("20%"));
+
+  const empty = tokenCompositionSummary({ totalTokens: 0 });
+  assert.equal(empty, "无构成");
+
+  const withCache = tokenCompositionSummary({ inputTokens: 100, outputTokens: 100, cacheReadTokens: 200, totalTokens: 400 });
+  assert.match(withCache, /缓存/);
+  console.log("  testTokenCompositionSummary passed");
+}
+
+function testTokenCompositionDetails() {
+  const item = { inputTokens: 500, outputTokens: 300, totalTokens: 1000 };
+  const details = tokenCompositionDetails(item);
+  assert.equal(details.length, TOKEN_COMPOSITION_FIELDS.length);
+  assert.equal(details[0].field, "inputTokens");
+  assert.equal(details[0].tokens, 500);
+  assert.ok(Math.abs(details[0].ratio - 0.5) < 0.001);
+  console.log("  testTokenCompositionDetails passed");
+}
+
+function testCostQualityLabel() {
+  assert.equal(costQualityLabel("exact_price"), "精确");
+  assert.equal(costQualityLabel("estimated_price"), "预估");
+  assert.equal(costQualityLabel("unknown_price"), "缺失价格");
+  assert.equal(costQualityLabel(""), "缺失价格");
+  assert.equal(costQualityLabel("other"), "缺失价格");
+  console.log("  testCostQualityLabel passed");
+}
+
+function testCompositionFieldCounts() {
+  assert.equal(TOKEN_COMPOSITION_FIELDS.length, 5);
+  assert.equal(COST_COMPOSITION_FIELDS.length, 5);
+  console.log("  testCompositionFieldCounts passed");
+}
+
+// ─── Nickname generator tests ────────────────────────────────────────────────
+
+function testNicknameGenerator() {
+  const nick = generateNickname(["快乐猫", "小熊猫", "向日葵"]);
+  assert.ok(nick.includes("-"));
+  const [noun, suffix] = nick.split("-");
+  assert.ok(["快乐猫", "小熊猫", "向日葵"].includes(noun));
+  assert.equal(suffix.length, 3);
+  assert.match(suffix, /^[A-Z]\d{2}$/);
+
+  const names = loadClientNicknames();
+  assert.ok(Array.isArray(names));
+  assert.ok(names.length >= 10);
+
+  const withoutArg = generateNickname();
+  assert.ok(typeof withoutArg === "string");
+  assert.ok(withoutArg.length > 0);
+
+  const nicks = new Set();
+  for (let i = 0; i < 200; i++) nicks.add(generateNickname(["测试"]));
+  assert.ok(nicks.size > 50, "nickname should have sufficient randomness");
+  console.log("  testNicknameGenerator passed");
+}
+
+// ─── Preset module tests ─────────────────────────────────────────────────────
+
+function testPresetModule() {
+  assert.ok(PRESET_ALLOWED_KEYS.includes("apiBaseUrl"));
+  assert.ok(PRESET_ALLOWED_KEYS.includes("language"));
+  assert.ok(PRESET_ALLOWED_KEYS.includes("refreshIntervalMinutes"));
+  assert.ok(PRESET_ALLOWED_KEYS.includes("providerEnabled"));
+  assert.ok(!PRESET_ALLOWED_KEYS.includes("identityPrivateKey"));
+
+  const preset = loadBuildPreset("/nonexistent/path");
+  assert.deepEqual(preset, {});
+
+  const presetDir = path.join(tmp, "preset-app");
+  const presetAssetDir = path.join(presetDir, "assets");
+  fs.mkdirSync(presetAssetDir, { recursive: true });
+  fs.writeFileSync(path.join(presetAssetDir, "preset.json"), JSON.stringify({
+    apiBaseUrl: "https://example.com",
+    language: "en",
+    identityPrivateKey: "secret",
+    extraKey: "ignored"
+  }));
+  const loaded = loadBuildPreset(presetDir);
+  assert.equal(loaded.apiBaseUrl, "https://example.com");
+  assert.equal(loaded.language, "en");
+  assert.equal(Object.hasOwn(loaded, "identityPrivateKey"), false);
+  assert.equal(Object.hasOwn(loaded, "extraKey"), false);
+  console.log("  testPresetModule passed");
+}
+
+// ─── Schema module extended tests ────────────────────────────────────────────
+
+function testSchemaNormalizeTokenNumber() {
+  assert.equal(normalizeTokenNumber(100), 100);
+  assert.equal(normalizeTokenNumber(100.7), 101);
+  assert.equal(normalizeTokenNumber(0), 0);
+  assert.equal(normalizeTokenNumber(-5), 0);
+  assert.equal(normalizeTokenNumber(null), 0);
+  assert.equal(normalizeTokenNumber(undefined), 0);
+  assert.equal(normalizeTokenNumber("100"), 100);
+  assert.equal(normalizeTokenNumber(NaN), 0);
+  assert.equal(normalizeTokenNumber(Infinity), 0);
+  console.log("  testSchemaNormalizeTokenNumber passed");
+}
+
+function testSchemaDisplayTotalTokens() {
+  assert.equal(displayTotalTokens({ inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 25 }), 375);
+  assert.equal(displayTotalTokens({}), 0);
+  assert.equal(displayTotalTokens({ inputTokens: 100 }), 100);
+  assert.equal(displayTotalTokens({ inputTokens: 100, reasoningTokens: 50 }), 100);
+  console.log("  testSchemaDisplayTotalTokens passed");
+}
+
+function testSchemaPrimaryTokenTotal() {
+  assert.equal(primaryTokenTotal({ inputTokens: 100, outputTokens: 200 }), 300);
+  assert.equal(primaryTokenTotal({}), 0);
+  assert.equal(primaryTokenTotal({ inputTokens: 100 }), 100);
+  console.log("  testSchemaPrimaryTokenTotal passed");
+}
+
+function testSchemaUsageKey() {
+  const item = { day: "2026-05-14", toolCode: "codex", providerId: "codex_local", workdirHash: "hash1", model: "gpt-5" };
+  const key = usageKey(item, "p_1", "d_1");
+  assert.equal(key, "2026-05-14|p_1|d_1|codex|codex_local|hash1|gpt-5");
+  console.log("  testSchemaUsageKey passed");
+}
+
+function testSchemaHourlyUsageKey() {
+  const item = { day: "2026-05-14", hour: 10, toolCode: "codex", providerId: "codex_local", workdirHash: "hash1", model: "gpt-5" };
+  const key = hourlyUsageKey(item, "p_1", "d_1");
+  assert.equal(key, "2026-05-14|10|p_1|d_1|codex|codex_local|hash1|gpt-5");
+  const noHour = hourlyUsageKey({ day: "2026-05-14", toolCode: "codex", providerId: "codex_local", workdirHash: "hash1", model: "gpt-5" }, "p_1", "d_1");
+  assert.ok(noHour.includes("|0|"));
+  console.log("  testSchemaHourlyUsageKey passed");
+}
+
+function testSchemaPublicUsageItem() {
+  const raw = {
+    day: "2026-05-14", toolCode: "codex", providerId: "codex_local",
+    workdirHash: "hash1", workdirDisplayName: "my-project",
+    model: "gpt-5", inputTokens: 100.7, outputTokens: 200,
+    cacheReadTokens: 50, cacheWriteTokens: 25, reasoningTokens: 10,
+    totalTokens: 386, sourceQuality: "exact",
+    rawSourceRef: "session.jsonl", providerVersion: "0.1", parserVersion: "0.1",
+    sourceFingerprint: "fp_1"
+  };
+  const pub = publicUsageItem(raw);
+  assert.equal(pub.inputTokens, 101);
+  assert.equal(pub.outputTokens, 200);
+  assert.equal(pub.totalTokens, 376);
+  assert.equal(pub.sourceQuality, "exact");
+  assert.equal(Object.hasOwn(pub, "prompt"), false);
+
+  const minimal = publicUsageItem({ day: "2026-05-14", toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "m" });
+  assert.equal(minimal.sourceQuality, "unknown");
+  assert.equal(minimal.hour, 0);
+  console.log("  testSchemaPublicUsageItem passed");
+}
+
+function testSchemaAssertUsageItem() {
+  assert.doesNotThrow(() => assertUsageItem({
+    day: "2026-05-14", toolCode: "codex", providerId: "codex_local",
+    workdirHash: "h", workdirDisplayName: "p", model: "m",
+    totalTokens: 100, sourceQuality: "exact"
+  }));
+  assert.throws(() => assertUsageItem({ day: "2026-05-14", toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "m", totalTokens: 100, sourceQuality: "bad" }), /invalid sourceQuality/);
+  assert.throws(() => assertUsageItem({ toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "m", totalTokens: 100, sourceQuality: "exact" }), /missing day/);
+  assert.throws(() => assertUsageItem({ day: "2026-05-14", toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "m", totalTokens: -1, sourceQuality: "exact" }), /invalid totalTokens/);
+  assert.throws(() => assertUsageItem({ day: "2026-05-14", toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "m", totalTokens: 100, sourceQuality: "exact", prompt: "secret" }), /forbidden/);
+  console.log("  testSchemaAssertUsageItem passed");
+}
+
+function testSchemaSourceQuality() {
+  assert.equal(SOURCE_QUALITY.size, 5);
+  assert.ok(SOURCE_QUALITY.has("exact"));
+  assert.ok(SOURCE_QUALITY.has("partial"));
+  assert.ok(SOURCE_QUALITY.has("estimated"));
+  assert.ok(SOURCE_QUALITY.has("imported"));
+  assert.ok(SOURCE_QUALITY.has("unknown"));
+  console.log("  testSchemaSourceQuality passed");
+}
+
+function testSchemaForbiddenFields() {
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("prompt"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("identityPrivateKey"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("assistantResponse"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("fullTranscript"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("absolutePath"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("localPath"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("access_token"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("refresh_token"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("cookie"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("sourceFileContent"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("workosSessionToken"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("cursor_auth_raw"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("cursor_usage_raw"));
+  assert.ok(FORBIDDEN_UPLOAD_FIELDS.has("content"));
+  console.log("  testSchemaForbiddenFields passed");
+}
+
+// ─── HTTP API server-level tests ─────────────────────────────────────────────
+
+async function createTestServer(envOverrides = {}) {
+  const dbPath = path.join(tmp, `db-api-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  const saved = {};
+  const envKeys = ["DB_PATH", "ADMIN_USERNAME", "ADMIN_PASSWORD", "BOARD_SECURITY_LEVEL", "BOARD_ANONYMIZATION_SALT", "PUBLIC_BOARD_AUTH_USERNAME", "PUBLIC_BOARD_AUTH_PASSWORD", "OPENROUTER_PRICING_AUTO_REFRESH"];
+  for (const key of envKeys) saved[key] = process.env[key];
+  process.env.DB_PATH = dbPath;
+  process.env.OPENROUTER_PRICING_AUTO_REFRESH = "false";
+  if (envOverrides.ADMIN_USERNAME !== undefined) process.env.ADMIN_USERNAME = envOverrides.ADMIN_USERNAME;
+  else delete process.env.ADMIN_USERNAME;
+  if (envOverrides.ADMIN_PASSWORD !== undefined) process.env.ADMIN_PASSWORD = envOverrides.ADMIN_PASSWORD;
+  else delete process.env.ADMIN_PASSWORD;
+  if (envOverrides.BOARD_SECURITY_LEVEL) process.env.BOARD_SECURITY_LEVEL = envOverrides.BOARD_SECURITY_LEVEL;
+  else delete process.env.BOARD_SECURITY_LEVEL;
+  if (envOverrides.BOARD_ANONYMIZATION_SALT) process.env.BOARD_ANONYMIZATION_SALT = envOverrides.BOARD_ANONYMIZATION_SALT;
+  else delete process.env.BOARD_ANONYMIZATION_SALT;
+  if (envOverrides.PUBLIC_BOARD_AUTH_USERNAME) process.env.PUBLIC_BOARD_AUTH_USERNAME = envOverrides.PUBLIC_BOARD_AUTH_USERNAME;
+  else delete process.env.PUBLIC_BOARD_AUTH_USERNAME;
+  if (envOverrides.PUBLIC_BOARD_AUTH_PASSWORD) process.env.PUBLIC_BOARD_AUTH_PASSWORD = envOverrides.PUBLIC_BOARD_AUTH_PASSWORD;
+  else delete process.env.PUBLIC_BOARD_AUTH_PASSWORD;
+  const nonce = Date.now();
+  const { createServer } = await import(`../src/backend/server.js?api-test-${nonce}=${nonce}`);
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const cleanup = async () => {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    for (const key of envKeys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  };
+  return { server, port, baseUrl, cleanup, dbPath };
+}
+
+async function testHealthEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/health`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.ok(body.serverVersion);
+    assert.ok(body.serverProtocolVersion);
+    assert.ok(body.serverTime);
+    assert.ok(body.compatibility);
+    assert.ok(body.compatibility.status);
+    console.log("  testHealthEndpoint passed");
+  } finally { await cleanup(); }
+}
+
+async function testDeviceRegistrationEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const regRes = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId,
+        deviceId: newId("d"),
+        nickname: "reg-test",
+        identityPublicKey: identity.identityPublicKey,
+        os: "test",
+        appVersion: APP_VERSION
+      })
+    });
+    assert.equal(regRes.status, 200);
+    const regBody = await regRes.json();
+    assert.ok(regBody.deviceId);
+    assert.ok(regBody.compatibility);
+
+    const dupRes = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId,
+        deviceId: newId("d2"),
+        nickname: "reg-test",
+        identityPublicKey: identity.identityPublicKey,
+        os: "test",
+        appVersion: APP_VERSION
+      })
+    });
+    assert.equal(dupRes.status, 200);
+
+    const badRes = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    assert.equal(badRes.status, 500);
+    console.log("  testDeviceRegistrationEndpoint passed");
+  } finally { await cleanup(); }
+}
+
+async function testUsageUploadEndpointSignatureVerification() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "sig-test",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{
+        day: localDay(), toolCode: "codex", providerId: "codex_local",
+        workdirHash: "wd_sig", workdirDisplayName: "sig-project",
+        model: "gpt-5", inputTokens: 100, outputTokens: 50,
+        cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+        totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_sig"
+      }]
+    };
+    const signature = signPayload(identity.identityPrivateKey, payload);
+    const validRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature })
+    });
+    assert.equal(validRes.status, 200);
+    const validBody = await validRes.json();
+    assert.equal(validBody.accepted, 1);
+
+    const invalidSigRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: "invalid-signature" })
+    });
+    assert.equal(invalidSigRes.status, 401);
+    assert.equal((await invalidSigRes.json()).error, "invalid signature");
+
+    const noSigRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(noSigRes.status, 401);
+    console.log("  testUsageUploadEndpointSignatureVerification passed");
+  } finally { await cleanup(); }
+}
+
+async function testUsageUploadRejectsUnregistered() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const payload = {
+      participantId: identity.participantId, deviceId: newId("d"),
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "m", totalTokens: 100, sourceQuality: "exact", sourceFingerprint: "sf" }]
+    };
+    const res = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+    });
+    assert.equal(res.status, 404);
+    assert.equal((await res.json()).error, "participant is not registered");
+    console.log("  testUsageUploadRejectsUnregistered passed");
+  } finally { await cleanup(); }
+}
+
+async function testAdminAuthEnforcement() {
+  const { baseUrl, cleanup } = await createTestServer({ ADMIN_USERNAME: "admin", ADMIN_PASSWORD: "secret" });
+  try {
+    const noAuthRes = await fetch(`${baseUrl}/api/admin/usage`);
+    assert.equal(noAuthRes.status, 401);
+
+    const badAuthRes = await fetch(`${baseUrl}/api/admin/usage`, {
+      headers: { authorization: `Basic ${Buffer.from("admin:wrong").toString("base64")}` }
+    });
+    assert.equal(badAuthRes.status, 401);
+
+    const goodAuthRes = await fetch(`${baseUrl}/api/admin/usage`, {
+      headers: { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` }
+    });
+    assert.equal(goodAuthRes.status, 200);
+
+    const adminHtmlNoAuth = await fetch(`${baseUrl}/admin.html`);
+    assert.equal(adminHtmlNoAuth.status, 401);
+
+    const adminHtmlAuth = await fetch(`${baseUrl}/admin.html`, {
+      headers: { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` }
+    });
+    assert.equal(adminHtmlAuth.status, 200);
+    console.log("  testAdminAuthEnforcement passed");
+  } finally { await cleanup(); }
+}
+
+async function testAdminAuthDisabledWhenNotConfigured() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/admin/usage`);
+    assert.equal(res.status, 200);
+    console.log("  testAdminAuthDisabledWhenNotConfigured passed");
+  } finally { await cleanup(); }
+}
+
+async function testBoardPublicMode() {
+  const { baseUrl, cleanup } = await createTestServer({ BOARD_SECURITY_LEVEL: "public" });
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "board-pub",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "gpt-5", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_bp" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+    });
+
+    const lbRes = await fetch(`${baseUrl}/api/board/leaderboard?period=today`);
+    assert.equal(lbRes.status, 200);
+    const lb = await lbRes.json();
+    assert.equal(lb.identityMode, "public");
+    assert.equal(lb.identityLabel, "nickname");
+    assert.equal(lb.items[0].displayName, "board-pub");
+
+    const summaryRes = await fetch(`${baseUrl}/api/board/summary`);
+    assert.equal(summaryRes.status, 200);
+    const summary = await summaryRes.json();
+    assert.equal(summary.identityMode, "public");
+    assert.ok(summary.todayTokens >= 150);
+
+    const idRes = await fetch(`${baseUrl}/api/board/my-identity?participantId=${identity.participantId}`);
+    assert.equal(idRes.status, 200);
+    const idBody = await idRes.json();
+    assert.equal(idBody.identityMode, "public");
+    console.log("  testBoardPublicMode passed");
+  } finally { await cleanup(); }
+}
+
+async function testBoardAuthenticatedMode() {
+  const { baseUrl, cleanup } = await createTestServer({
+    BOARD_SECURITY_LEVEL: "authenticated",
+    PUBLIC_BOARD_AUTH_USERNAME: "boarduser",
+    PUBLIC_BOARD_AUTH_PASSWORD: "boardpass"
+  });
+  try {
+    const noAuthRes = await fetch(`${baseUrl}/api/board/leaderboard?period=today`);
+    assert.equal(noAuthRes.status, 401);
+
+    const authRes = await fetch(`${baseUrl}/api/board/leaderboard?period=today`, {
+      headers: { authorization: `Basic ${Buffer.from("boarduser:boardpass").toString("base64")}` }
+    });
+    assert.equal(authRes.status, 200);
+
+    const noAuthHtml = await fetch(`${baseUrl}/leaderboard.html`);
+    assert.equal(noAuthHtml.status, 401);
+
+    const authHtml = await fetch(`${baseUrl}/leaderboard.html`, {
+      headers: { authorization: `Basic ${Buffer.from("boarduser:boardpass").toString("base64")}` }
+    });
+    assert.equal(authHtml.status, 200);
+    console.log("  testBoardAuthenticatedMode passed");
+  } finally { await cleanup(); }
+}
+
+async function testSelfServiceDeletionReplayProtection() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "del-test",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payload = { participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "gpt-5", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_del" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+    });
+
+    const freshTs = new Date().toISOString();
+    const delPayload = { participantId: identity.participantId, timestamp: freshTs };
+    const delSig = signPayload(identity.identityPrivateKey, delPayload);
+    const delRes = await fetch(`${baseUrl}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...delPayload, signature: delSig })
+    });
+    assert.equal(delRes.status, 200);
+    assert.equal((await delRes.json()).deleted, true);
+
+    const oldTs = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const oldPayload = { participantId: identity.participantId, timestamp: oldTs };
+    const oldSig = signPayload(identity.identityPrivateKey, oldPayload);
+    const oldRes = await fetch(`${baseUrl}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...oldPayload, signature: oldSig })
+    });
+    assert.equal(oldRes.status, 401);
+    assert.equal((await oldRes.json()).error, "timestamp is too old or invalid");
+
+    const missingFields = await fetch(`${baseUrl}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ participantId: identity.participantId })
+    });
+    assert.equal(missingFields.status, 400);
+    console.log("  testSelfServiceDeletionReplayProtection passed");
+  } finally { await cleanup(); }
+}
+
+async function testLeaderboardEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/leaderboard?range=today&tool=all`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(Array.isArray(body.items));
+    assert.equal(body.tool, "all");
+    console.log("  testLeaderboardEndpoint passed");
+  } finally { await cleanup(); }
+}
+
+async function testBoardParticipantDetailAndTrend() {
+  const { baseUrl, cleanup } = await createTestServer({ BOARD_SECURITY_LEVEL: "public" });
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "detail-test",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "gpt-5", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_dt" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+    });
+
+    const detailRes = await fetch(`${baseUrl}/api/board/participants/${identity.participantId}?period=today`);
+    assert.equal(detailRes.status, 200);
+    const detail = await detailRes.json();
+    assert.equal(detail.rank, 1);
+    assert.ok(detail.models.length >= 1);
+
+    const trendRes = await fetch(`${baseUrl}/api/board/participants/${identity.participantId}/trend?grain=week&range=last30`);
+    assert.equal(trendRes.status, 200);
+    const trend = await trendRes.json();
+    assert.ok(trend.items.length >= 1);
+
+    const missingRes = await fetch(`${baseUrl}/api/board/participants/p_missing?period=today`);
+    assert.equal(missingRes.status, 404);
+    console.log("  testBoardParticipantDetailAndTrend passed");
+  } finally { await cleanup(); }
+}
+
+async function testModelPricesPublicEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/model-prices`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.custom !== undefined);
+    assert.ok(body.openrouter !== undefined);
+    assert.ok(body.aliases !== undefined);
+    console.log("  testModelPricesPublicEndpoint passed");
+  } finally { await cleanup(); }
+}
+
+async function testAdminCrudViaHttp() {
+  const { baseUrl, cleanup } = await createTestServer({ ADMIN_USERNAME: "admin", ADMIN_PASSWORD: "secret" });
+  const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+  try {
+    const devicesRes = await fetch(`${baseUrl}/api/admin/devices`, { headers: auth });
+    assert.equal(devicesRes.status, 200);
+
+    const qualityRes = await fetch(`${baseUrl}/api/admin/quality?range=month`, { headers: auth });
+    assert.equal(qualityRes.status, 200);
+
+    const priceRes = await fetch(`${baseUrl}/api/admin/model-prices`, { headers: auth });
+    assert.equal(priceRes.status, 200);
+
+    const upsertRes = await fetch(`${baseUrl}/api/admin/model-prices`, {
+      method: "POST", headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ model: "http-test-model", inputCostPerMTok: 1, outputCostPerMTok: 2 })
+    });
+    const upsertBody = await upsertRes.json();
+    assert.equal(upsertRes.status, 200, `upsert model price: ${JSON.stringify(upsertBody)}`);
+    assert.equal(upsertBody.price.model, "http-test-model");
+
+    const aliasRes = await fetch(`${baseUrl}/api/admin/model-price-aliases`, {
+      method: "POST", headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ model: "alias-test", targetModel: "http-test-model" })
+    });
+    assert.equal(aliasRes.status, 200);
+
+    const delAliasRes = await fetch(`${baseUrl}/api/admin/model-price-aliases/alias-test`, {
+      method: "DELETE", headers: auth
+    });
+    assert.equal(delAliasRes.status, 200);
+    assert.equal((await delAliasRes.json()).deleted, true);
+
+    const recalcRes = await fetch(`${baseUrl}/api/admin/recalculate-costs`, {
+      method: "POST", headers: auth
+    });
+    assert.equal(recalcRes.status, 200);
+    console.log("  testAdminCrudViaHttp passed");
+  } finally { await cleanup(); }
+}
+
+async function testStaticFileServing() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const rootRes = await fetch(`${baseUrl}/`);
+    assert.equal(rootRes.status, 200);
+    assert.ok(rootRes.headers.get("content-type").includes("text/html"));
+
+    const changelogRes = await fetch(`${baseUrl}/CHANGELOG.md`);
+    assert.equal(changelogRes.status, 200);
+    assert.ok(changelogRes.headers.get("content-type").includes("text/markdown"));
+
+    const changelogZhRes = await fetch(`${baseUrl}/CHANGELOG.zh-CN.md`);
+    assert.equal(changelogZhRes.status, 200);
+
+    const notFound = await fetch(`${baseUrl}/api/nonexistent`);
+    assert.equal(notFound.status, 404);
+    console.log("  testStaticFileServing passed");
+  } finally { await cleanup(); }
+}
+
+async function testSnapshotUploadViaHttp() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "snap-http",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const items = [makeSnapshotItem({ workdirHash: "h_snap_http" })];
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      snapshot: {
+        mode: "device_day_provider", day: "2026-05-14", providerId: "codex_local",
+        bucketFingerprint: computeBucketFingerprint(items),
+        rowCount: items.length,
+        totalTokens: items.reduce((s, i) => s + (i.totalTokens || 0), 0)
+      },
+      items
+    };
+    const signature = signPayload(identity.identityPrivateKey, payload);
+    const res = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature })
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.accepted, 1);
+
+    const badSnapRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        snapshot: { ...payload.snapshot, rowCount: 99 },
+        signature: signPayload(identity.identityPrivateKey, { ...payload, snapshot: { ...payload.snapshot, rowCount: 99 } })
+      })
+    });
+    assert.equal(badSnapRes.status, 400);
+    assert.match((await badSnapRes.json()).error, /rowCount/);
+    console.log("  testSnapshotUploadViaHttp passed");
+  } finally { await cleanup(); }
+}
+
+async function testDeviceRegistrationCompatibilityCheck() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const goodRes = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId: newId("d"),
+        nickname: "compat", identityPublicKey: identity.identityPublicKey,
+        os: "test", appVersion: APP_VERSION,
+        client: { clientProtocolVersion: CLIENT_PROTOCOL_VERSION }
+      })
+    });
+    assert.equal(goodRes.status, 200);
+    assert.equal((await goodRes.json()).compatibility.status, "compatible");
+    console.log("  testDeviceRegistrationCompatibilityCheck passed");
+  } finally { await cleanup(); }
+}
+
+// ─── Desktop/web UI structure validation tests ───────────────────────────────
+
+function testDesktopHtmlSections() {
+  const html = fs.readFileSync("src/desktop/index.html", "utf8");
+  for (const section of ["overview", "workdirs", "sources", "settings"]) {
+    assert.match(html, new RegExp(`data-section="${section}"`), `missing data-section="${section}"`);
+  }
+  assert.match(html, /id="wizard-overlay"/, "missing wizard overlay");
+  assert.match(html, /id="onboarding-wizard"/, "missing onboarding wizard");
+  assert.match(html, /id="trend-drawer"/, "missing trend drawer");
+  assert.match(html, /data-section="overview"/);
+  assert.match(html, /data-section="workdirs"/);
+  assert.match(html, /data-section="sources"/);
+  assert.match(html, /data-section="settings"/);
+  console.log("  testDesktopHtmlSections passed");
+}
+
+function testDesktopHtmlSettingsTabs() {
+  const html = fs.readFileSync("src/desktop/index.html", "utf8");
+  for (const tab of ["app", "cloud", "about"]) {
+    assert.match(html, new RegExp(`data-settings-tab="${tab}"`), `missing settings tab ${tab}`);
+  }
+  assert.match(html, /id="apiBaseUrl"/);
+  assert.match(html, /id="launchAtLogin"/);
+  assert.match(html, /id="showRawTokens"/);
+  console.log("  testDesktopHtmlSettingsTabs passed");
+}
+
+function testDesktopHtmlDataI18n() {
+  const html = fs.readFileSync("src/desktop/index.html", "utf8");
+  const i18nAttrs = html.match(/data-i18n="([^"]+)"/g) || [];
+  assert.ok(i18nAttrs.length > 50, `expected many data-i18n attributes, got ${i18nAttrs.length}`);
+  const titleAttrs = html.match(/data-i18n-title="([^"]+)"/g) || [];
+  assert.ok(titleAttrs.length >= 1, "expected data-i18n-title attributes");
+  console.log("  testDesktopHtmlDataI18n passed");
+}
+
+function testWebLeaderboardStructure() {
+  const html = fs.readFileSync("src/web/leaderboard.html", "utf8");
+  assert.match(html, /leaderboard/i);
+  assert.match(html, /period/i);
+  console.log("  testWebLeaderboardStructure passed");
+}
+
+function testWebAdminStructure() {
+  const html = fs.readFileSync("src/web/admin.html", "utf8");
+  assert.match(html, /admin/i);
+  assert.match(html, /usage/i);
+  assert.match(html, /pricing/i);
+  assert.match(html, /quality/i);
+  assert.match(html, /devices/i);
+  console.log("  testWebAdminStructure passed");
+}
+
+function testWebDownloadStructure() {
+  const html = fs.readFileSync("src/web/download.html", "utf8");
+  const js = fs.readFileSync("src/web/download.js", "utf8");
+  assert.match(html, /download/i);
+  assert.match(html, /download-actions/);
+  assert.match(js, /darwin|windows|platform/i);
+  console.log("  testWebDownloadStructure passed");
+}
+
+function testDesktopRendererExports() {
+  const renderer = fs.readFileSync("src/desktop/renderer.js", "utf8");
+  for (const fn of [
+    "boot", "renderToday", "renderWorkdirs", "renderHealth",
+    "renderConfig", "syncNow", "loadHealth", "loadToday"
+  ]) {
+    assert.match(renderer, new RegExp(`(function|const|let|var)\\s+${fn}|${fn}\\s*[:=]`), `missing function ${fn} in renderer.js`);
+  }
+  console.log("  testDesktopRendererExports passed");
+}
+
+function testTauriBridgeExports() {
+  const bridge = fs.readFileSync("src/desktop/tauri-bridge.js", "utf8");
+  assert.match(bridge, /forwardToSidecar|forward_to_sidecar/);
+  assert.match(bridge, /export/);
+  console.log("  testTauriBridgeExports passed");
+}
+
+// ─── Store-level edge case tests ─────────────────────────────────────────────
+
+function testMultiParticipantLeaderboard() {
+  const store = new Store(path.join(tmp, "db-multi-participant.json"));
+  const participants = [];
+  for (let i = 0; i < 5; i++) {
+    const id = generateIdentity();
+    const deviceId = newId("d");
+    store.registerDevice({
+      participantId: id.participantId, deviceId,
+      nickname: `user-${i}`, identityPublicKey: id.identityPublicKey,
+      os: "test", appVersion: APP_VERSION
+    });
+    store.upsertUsageBatch({
+      participantId: id.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{
+        day: localDay(), toolCode: "codex", providerId: "codex_local",
+        workdirHash: `wd_${i}`, workdirDisplayName: `project-${i}`,
+        model: "gpt-5", inputTokens: (i + 1) * 100, outputTokens: 50,
+        cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+        totalTokens: (i + 1) * 100 + 50, sourceQuality: "exact",
+        sourceFingerprint: `sf_multi_${i}`
+      }]
+    });
+    participants.push(id);
+  }
+  const board = store.publicLeaderboard({ range: "today" });
+  assert.equal(board.length, 5);
+  assert.ok(board[0].totalTokens >= board[1].totalTokens, "board should be sorted descending");
+  assert.equal(board[0].rank, 1);
+  assert.equal(board[4].rank, 5);
+  console.log("  testMultiParticipantLeaderboard passed");
+}
+
+function testDeviceManagementStore() {
+  const store = new Store(path.join(tmp, "db-device-mgmt.json"));
+  const identity = generateIdentity();
+  const d1 = newId("d");
+  const d2 = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId: d1,
+    nickname: "dev-user", identityPublicKey: identity.identityPublicKey,
+    os: "macos", appVersion: APP_VERSION, clientAppVersion: "0.6.0",
+    clientPlatform: "darwin-arm64", clientProtocolVersion: 2
+  });
+  store.registerDevice({
+    participantId: identity.participantId, deviceId: d2,
+    nickname: "dev-user", identityPublicKey: identity.identityPublicKey,
+    os: "windows", appVersion: APP_VERSION, clientAppVersion: "0.6.0",
+    clientPlatform: "win32-x64", clientProtocolVersion: 2
+  });
+  const devices = store.adminDevices();
+  const myDevices = devices.filter((d) => d.participantId === identity.participantId);
+  assert.equal(myDevices.length, 2);
+  assert.ok(myDevices.some((d) => d.os === "macos"));
+  assert.ok(myDevices.some((d) => d.os === "windows"));
+  assert.ok(myDevices[0].lastSeenAt);
+  console.log("  testDeviceManagementStore passed");
+}
+
+function testWorkdirAliasUpdate() {
+  const store = new Store(path.join(tmp, "db-workdir-alias.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "wd-alias-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{
+      day: localDay(), toolCode: "codex", providerId: "codex_local",
+      workdirHash: "wd_alias_hash", workdirDisplayName: "original-name",
+      model: "gpt-5", inputTokens: 100, outputTokens: 50,
+      cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+      totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_wd_alias"
+    }]
+  });
+  const workdirs = Object.values(store.db.workdirs).filter((w) => w.participantId === identity.participantId);
+  assert.equal(workdirs.length, 1);
+  assert.equal(workdirs[0].workdirHash, "wd_alias_hash");
+  assert.equal(workdirs[0].displayName, "original-name");
+
+  workdirs[0].alias = "my-alias";
+  workdirs[0].displayName = "my-alias";
+  store.save();
+  const updated = Object.values(store.db.workdirs).find((w) => w.participantId === identity.participantId);
+  assert.equal(updated.alias, "my-alias");
+  assert.equal(updated.displayName, "my-alias");
+  console.log("  testWorkdirAliasUpdate passed");
+}
+
+function testStoreAggregateCacheInvalidation() {
+  const store = new Store(path.join(tmp, "db-cache-invalidation.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "cache-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+  const baseItem = {
+    day: localDay(), toolCode: "codex", providerId: "codex_local",
+    workdirHash: "wd_cache", workdirDisplayName: "cache-project",
+    model: "gpt-5", outputTokens: 50, cacheReadTokens: 0,
+    cacheWriteTokens: 0, reasoningTokens: 0, sourceQuality: "exact",
+    sourceFingerprint: "sf_cache"
+  };
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{ ...baseItem, inputTokens: 100, totalTokens: 150 }]
+  });
+  const board1 = store.publicLeaderboard({ range: "today" });
+  assert.equal(board1[0].totalTokens, 150);
+  assert.ok(Object.keys(store.db.aggregateCache).length >= 1);
+
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date(Date.now() + 1).toISOString(),
+    items: [
+      { ...baseItem, inputTokens: 200, totalTokens: 250, sourceFingerprint: "sf_cache_v2" },
+      { ...baseItem, workdirHash: "wd_cache_2", workdirDisplayName: "cache-project-2", inputTokens: 100, totalTokens: 150, sourceFingerprint: "sf_cache_3" }
+    ]
+  });
+  const board2 = store.publicLeaderboard({ range: "today" });
+  assert.equal(board2[0].totalTokens, 400);
+  console.log("  testStoreAggregateCacheInvalidation passed");
+}
+
+function testStoreBoardSummary() {
+  const store = new Store(path.join(tmp, "db-board-summary.json"));
+  const summary = store.boardSummary();
+  assert.ok(summary.todayTokens === 0 || typeof summary.todayTokens === "number");
+  assert.ok(summary.yesterdayTokens === 0 || typeof summary.yesterdayTokens === "number");
+  assert.ok(typeof summary.participantCount === "number");
+  console.log("  testStoreBoardSummary passed");
+}
+
+function testStoreDeleteModelPrice() {
+  const store = new Store(path.join(tmp, "db-del-price.json"));
+  store.upsertModelPrice({ model: "del-test", inputCostPerMTok: 1, outputCostPerMTok: 2 });
+  assert.ok(store.listModelPrices().custom.some((p) => p.model === "del-test"));
+  const result = store.deleteModelPrice("del-test");
+  assert.equal(result.deleted, true);
+  assert.ok(!store.listModelPrices().custom.some((p) => p.model === "del-test"));
+  const result2 = store.deleteModelPrice("del-test");
+  assert.equal(result2.deleted, false);
+  console.log("  testStoreDeleteModelPrice passed");
+}
+
+function testNormalizeTokenNumberIntegration() {
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-normalize.json"));
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "norm-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{
+      day: localDay(), toolCode: "codex", providerId: "codex_local",
+      workdirHash: "wd_norm", workdirDisplayName: "norm-project",
+      model: "gpt-5", inputTokens: 100.7, outputTokens: 50,
+      cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+      totalTokens: 151, sourceQuality: "exact", sourceFingerprint: "sf_norm"
+    }]
+  });
+  const rows = Object.values(store.db.usageDaily);
+  assert.equal(rows[0].inputTokens, 100.7);
+  assert.equal(rows[0].totalTokens, 151);
+  const pubItem = publicUsageItem(rows[0]);
+  assert.equal(pubItem.inputTokens, 101);
+  assert.equal(pubItem.totalTokens, 151);
+  console.log("  testNormalizeTokenNumberIntegration passed");
+}
+
+// ─── i18n completeness test ──────────────────────────────────────────────────
+
+function testI18nCompleteness() {
+  const i18n = fs.readFileSync("src/shared/i18n.js", "utf8");
+  const zhStart = i18n.indexOf('"zh-CN"');
+  const enStart = i18n.indexOf('"en"');
+  assert.ok(zhStart >= 0, "zh-CN section not found");
+  assert.ok(enStart >= 0, "en section not found");
+  const zhBlock = i18n.slice(zhStart, enStart);
+  const enBlock = i18n.slice(enStart);
+  const keyPattern = /^\s*"([^"]+)":\s*"/gm;
+  const zhKeys = new Set();
+  const enKeys = new Set();
+  let m;
+  while ((m = keyPattern.exec(zhBlock)) !== null) zhKeys.add(m[1]);
+  keyPattern.lastIndex = 0;
+  while ((m = keyPattern.exec(enBlock)) !== null) enKeys.add(m[1]);
+  const missingEn = [...zhKeys].filter((k) => !enKeys.has(k));
+  const missingZh = [...enKeys].filter((k) => !zhKeys.has(k));
+  assert.equal(missingEn.length, 0, `en missing keys: ${missingEn.slice(0, 10).join(", ")}`);
+  assert.equal(missingZh.length, 0, `zh-CN missing keys: ${missingZh.slice(0, 10).join(", ")}`);
+  console.log("  testI18nCompleteness passed");
+}
+
+function testI18nDataAttributesMatchKeys() {
+  const html = fs.readFileSync("src/desktop/index.html", "utf8");
+  const i18n = fs.readFileSync("src/shared/i18n.js", "utf8");
+  const dataI18nKeys = [...new Set((html.match(/data-i18n="([^"]+)"/g) || []).map((m) => m.match(/"([^"]+)"/)[1]))];
+  const dataPlaceholderKeys = [...new Set((html.match(/data-i18n-placeholder="([^"]+)"/g) || []).map((m) => m.match(/"([^"]+)"/)[1]))];
+  const dataTitleKeys = [...new Set((html.match(/data-i18n-title="([^"]+)"/g) || []).map((m) => m.match(/"([^"]+)"/)[1]))];
+  const allUsedKeys = [...dataI18nKeys, ...dataPlaceholderKeys, ...dataTitleKeys];
+  let missing = 0;
+  for (const key of allUsedKeys) {
+    if (!i18n.includes(`"${key}":`)) {
+      console.error(`  missing i18n key: ${key}`);
+      missing++;
+    }
+  }
+  assert.equal(missing, 0, `${missing} i18n keys used in HTML but missing from i18n.js`);
+  console.log("  testI18nDataAttributesMatchKeys passed");
+}
+
+// ─── Run all new tests ───────────────────────────────────────────────────────
+
+// Composition module tests
+testCompositionRatio();
+testCreateEmptyComposition();
+testMergeTokenComposition();
+testDominantComposition();
+testTokenCompositionSummary();
+testTokenCompositionDetails();
+testCostQualityLabel();
+testCompositionFieldCounts();
+
+// Nickname generator tests
+testNicknameGenerator();
+
+// Preset module tests
+testPresetModule();
+
+// Schema extended tests
+testSchemaNormalizeTokenNumber();
+testSchemaDisplayTotalTokens();
+testSchemaPrimaryTokenTotal();
+testSchemaUsageKey();
+testSchemaHourlyUsageKey();
+testSchemaPublicUsageItem();
+testSchemaAssertUsageItem();
+testSchemaSourceQuality();
+testSchemaForbiddenFields();
+
+// HTTP API server-level tests
+await testHealthEndpoint();
+await testDeviceRegistrationEndpoint();
+await testUsageUploadEndpointSignatureVerification();
+await testUsageUploadRejectsUnregistered();
+await testAdminAuthEnforcement();
+await testAdminAuthDisabledWhenNotConfigured();
+await testBoardPublicMode();
+await testBoardAuthenticatedMode();
+await testSelfServiceDeletionReplayProtection();
+await testLeaderboardEndpoint();
+await testBoardParticipantDetailAndTrend();
+await testModelPricesPublicEndpoint();
+await testAdminCrudViaHttp();
+await testStaticFileServing();
+await testSnapshotUploadViaHttp();
+await testDeviceRegistrationCompatibilityCheck();
+
+// Desktop/web UI structure tests
+testDesktopHtmlSections();
+testDesktopHtmlSettingsTabs();
+testDesktopHtmlDataI18n();
+testWebLeaderboardStructure();
+testWebAdminStructure();
+testWebDownloadStructure();
+testDesktopRendererExports();
+testTauriBridgeExports();
+
+// Store-level edge case tests
+testMultiParticipantLeaderboard();
+testDeviceManagementStore();
+testWorkdirAliasUpdate();
+testStoreAggregateCacheInvalidation();
+testStoreBoardSummary();
+testStoreDeleteModelPrice();
+testNormalizeTokenNumberIntegration();
+
+// i18n completeness tests
+testI18nCompleteness();
+testI18nDataAttributesMatchKeys();
+
 console.log("All tests passed");
