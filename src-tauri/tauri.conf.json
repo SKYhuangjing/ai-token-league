@@ -28,7 +28,8 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI5QjdFNkI2RDBGMThGODcKUldTSGovSFF0dWEzdVM4OTJCS21XeS8vbWxncUVGRmdTbHN0YjRrYThhbWlIcVJLbzBIZlVSWlkK",
-      "endpoints": []
+      "endpoints": [],
+      "dangerousInsecureTransportProtocol": true
     }
   },
   "bundle": {
