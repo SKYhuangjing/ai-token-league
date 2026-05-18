@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.4] - 2026-05-18
+
+### Fixed
+
+- [Desktop] Show all 24 hourly labels (HH:00) in overview trend spark axis instead of only every 6th hour.
+- [Desktop] Fixed scan interval (refreshIntervalMinutes) save not taking effect by parsing the input value as a number before sending to the backend.
+
+---
+
 ## [0.6.3-test.1] - 2026-05-17
 
 ### Fixed
