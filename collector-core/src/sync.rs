@@ -1,4 +1,6 @@
-use crate::config::{load_sync_manifest, queue_path, save_sync_manifest, AppConfig, SyncManifest};
+use crate::config::{
+    load_sync_manifest_for, queue_path, save_sync_manifest_for, AppConfig, SyncManifest,
+};
 use crate::crypto::sign_payload;
 use crate::schema::compute_bucket_fingerprint;
 use serde::{Deserialize, Serialize};
@@ -63,11 +65,8 @@ pub async fn sync_usage(
     // Group by bucket (day|hour|providerId)
     let buckets = crate::scanner::group_by_bucket(items);
 
-    // Load sync manifest
-    let mut manifest = load_sync_manifest().unwrap_or_else(|| SyncManifest {
-        version: 1,
-        buckets: HashMap::new(),
-    });
+    // Load sync manifest for this server URL
+    let mut manifest = load_sync_manifest_for(api_base_url);
 
     // Register device before uploading usage. If registration fails, uploading the signed
     // usage facts would fail or become hard to diagnose on the server side.
@@ -165,7 +164,7 @@ pub async fn sync_usage(
                         row_count,
                         total_tokens,
                     );
-                    save_sync_manifest(&manifest);
+                    save_sync_manifest_for(api_base_url, &manifest);
                 } else {
                     rejected += 1;
                     failed_buckets.push(FailedUpload {
@@ -185,7 +184,7 @@ pub async fn sync_usage(
     }
 
     // Save manifest
-    save_sync_manifest(&manifest);
+    save_sync_manifest_for(api_base_url, &manifest);
 
     // Enqueue failed buckets
     let queued = !failed_buckets.is_empty();
@@ -270,7 +269,7 @@ async fn drain_upload_queue(
             Ok(resp) if resp.status().is_success() => {
                 uploaded += 1;
                 update_manifest_from_payload(manifest, &entry.payload);
-                save_sync_manifest(manifest);
+                save_sync_manifest_for(api_base_url, manifest);
             }
             Ok(resp) => {
                 entry.last_error = format!("HTTP {}", resp.status());

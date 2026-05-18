@@ -49,6 +49,10 @@ pub fn manifest_path() -> PathBuf {
     app_dir().join("sync-manifest.json")
 }
 
+fn sync_state_path() -> PathBuf {
+    app_dir().join("sync-state.json")
+}
+
 pub fn ensure_app_dir() {
     let _ = fs::create_dir_all(app_dir());
 }
@@ -704,7 +708,6 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
             config.last_sync_status = None;
             config.last_sync_api_base_url = None;
             config.last_sync_error = None;
-            clear_sync_manifest();
         }
     }
     if let Some(v) = input["language"].as_str() {
@@ -819,7 +822,7 @@ pub fn unignore_auto_source(provider_id: &str, source_id: &str, current: &AppCon
     config
 }
 
-// --- Sync Manifest ---
+// --- Sync Manifest (per-server sync state) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncManifest {
@@ -827,26 +830,80 @@ pub struct SyncManifest {
     pub buckets: HashMap<String, serde_json::Value>,
 }
 
-pub fn load_sync_manifest() -> Option<SyncManifest> {
-    let path = manifest_path();
-    let content = fs::read_to_string(&path).ok()?;
-    let parsed: SyncManifest = serde_json::from_str(&content).ok()?;
-    if parsed.version == 1 {
-        Some(parsed)
-    } else {
-        None
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SyncStateFile {
+    version: u32,
+    #[serde(default)]
+    states: HashMap<String, SyncManifest>,
 }
 
-pub fn save_sync_manifest(manifest: &SyncManifest) {
-    let path = manifest_path();
+fn load_sync_state_file() -> SyncStateFile {
+    let path = sync_state_path();
+    // Migrate from legacy single-manifest file
+    if !path.exists() {
+        let legacy = manifest_path();
+        if legacy.exists() {
+            if let Ok(content) = fs::read_to_string(&legacy) {
+                if let Ok(manifest) = serde_json::from_str::<SyncManifest>(&content) {
+                    if manifest.version == 1 {
+                        let state = SyncStateFile { version: 1, states: HashMap::new() };
+                        // Can't determine URL here; caller must migrate
+                        return state;
+                    }
+                }
+            }
+        }
+        return SyncStateFile::default();
+    }
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return SyncStateFile::default(),
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+fn save_sync_state_file(state: &SyncStateFile) {
+    let path = sync_state_path();
     let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(manifest).unwrap_or_default();
+    let json = serde_json::to_string_pretty(state).unwrap_or_default();
     if fs::write(&tmp, format!("{}\n", json)).is_ok() {
         let _ = fs::rename(&tmp, &path);
     }
 }
 
+pub fn load_sync_manifest_for(api_base_url: &str) -> SyncManifest {
+    let url = normalize_api_base_url(api_base_url);
+    let state = load_sync_state_file();
+    state.states.get(&url).cloned().unwrap_or(SyncManifest {
+        version: 1,
+        buckets: HashMap::new(),
+    })
+}
+
+pub fn save_sync_manifest_for(api_base_url: &str, manifest: &SyncManifest) {
+    let url = normalize_api_base_url(api_base_url);
+    let mut state = load_sync_state_file();
+    state.states.insert(url, manifest.clone());
+    save_sync_state_file(&state);
+}
+
+// Legacy compat: kept for callers that don't have the URL handy
+pub fn load_sync_manifest() -> Option<SyncManifest> {
+    let state = load_sync_state_file();
+    // Return any manifest (for backward compat); callers should migrate to load_sync_manifest_for
+    state.states.values().next().cloned()
+}
+
+pub fn save_sync_manifest(manifest: &SyncManifest) {
+    // Legacy: save to the first URL in state, or discard
+    let mut state = load_sync_state_file();
+    if let Some(url) = state.states.keys().next().cloned() {
+        state.states.insert(url, manifest.clone());
+        save_sync_state_file(&state);
+    }
+}
+
 pub fn clear_sync_manifest() {
     let _ = fs::remove_file(manifest_path());
+    let _ = fs::remove_file(sync_state_path());
 }
