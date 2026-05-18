@@ -681,7 +681,10 @@ async function insertUsageHourlyRows(conn, entries) {
 }
 
 function normalizeRow(row) {
-  return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, value instanceof Date ? value.toISOString() : value]));
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => {
+    if (!(value instanceof Date)) return [key, value];
+    return [key, key === "day" ? value.toISOString().slice(0, 10) : value.toISOString()];
+  }));
 }
 
 function usageFromRow(row) {
