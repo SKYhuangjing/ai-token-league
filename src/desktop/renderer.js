@@ -480,7 +480,7 @@ function settingsPayload() {
   return {
     nickname: $("#nickname")?.value || "anonymous",
     apiBaseUrl: $("#apiBaseUrl")?.value?.trim() || "",
-    refreshIntervalMinutes: $("#refreshIntervalMinutes")?.value || 15,
+    refreshIntervalMinutes: Number($("#refreshIntervalMinutes")?.value) || 15,
     launchAtLogin: $("#launchAtLogin")?.checked ?? false,
     hideDockIcon: $("#hideDockIcon")?.checked ?? false,
     desktopAutoInitialized: false,
@@ -1816,7 +1816,7 @@ function hasPositiveUsage(row) {
 function formatAxisLabel(row, grain) {
   if (grain === "hour") {
     const hour = clampHour(row.hour);
-    return `<span>${hour % 6 === 0 ? formatHourLabel(hour) : ""}</span>`;
+    return `<span>${String(hour).padStart(2, "0")}:00</span>`;
   }
   const start = new Date(row.periodStart + "T00:00:00Z");
   if (grain === "month") {
