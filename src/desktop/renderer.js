@@ -681,6 +681,9 @@ async function resetLocalOnly() {
   $("#reset-local-data").disabled = true;
   setStatusMessage(t("desktop.renderer.resetting"));
   await api.resetLocalData();
+  await boot();
+  $("#reset-local-data").disabled = false;
+  showToast(t("desktop.renderer.resetDone"));
 }
 
 async function resetWithCloud() {
@@ -690,6 +693,9 @@ async function resetWithCloud() {
   setStatusMessage(t("desktop.reset.cloudClearing"));
   try {
     await api.resetWithCloud();
+    await boot();
+    $("#reset-local-data").disabled = false;
+    showToast(t("desktop.renderer.resetDone"));
   } catch (error) {
     $("#reset-local-data").disabled = false;
     setStatusMessage("");
@@ -905,11 +911,12 @@ function apiBaseUrlChanged(previousConfig = {}, nextConfig = {}) {
 }
 
 function setScanState(running, force = false) {
+  const wasRunning = scanRunning;
   scanRunning = running;
   const refreshButton = $("#brand-refresh");
   refreshButton.disabled = running;
   refreshButton.setAttribute("aria-disabled", running ? "true" : "false");
-  if (running) {
+  if (running && !wasRunning) {
     showToast(t("desktop.renderer.scanningLocal"));
   }
   renderWizard();
@@ -1624,9 +1631,7 @@ function renderToday() {
       costEl.innerHTML = `${renderCostAmount(cost)} <span class="cost-note">${escapeHtml(t("common.estimated").toLowerCase())}</span>`;
       costEl.title = costTitle(cost);
     } else {
-      costEl.textContent = rangeItems.length
-        ? t("desktop.overview.rangeRows", { range: rangeLabel(overviewRange), count: rangeItems.length })
-        : t("desktop.renderer.noLocalUsageFound");
+      costEl.textContent = t("desktop.renderer.noLocalUsageFound");
     }
   }
 

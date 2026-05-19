@@ -95,6 +95,72 @@ detect_current_platform() {
   esac
 }
 
+# --- configure MSVC environment on Windows (Git Bash) ---
+configure_msvc_env() {
+  [[ "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* && "$(uname -s)" != CYGWIN* ]] && return 0
+
+  # If MSVC linker is already on PATH and LIB is set, skip
+  local msvc_link
+  msvc_link="$(command -v link.exe 2>/dev/null || true)"
+  if [[ -n "$msvc_link" && -n "${LIB:-}" ]]; then
+    return 0
+  fi
+
+  echo ">>> Configuring MSVC build environment..."
+
+  # Find latest MSVC tools
+  local msvc_base=""
+  local msvc_dir="/c/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC"
+  [[ ! -d "$msvc_dir" ]] && msvc_dir="/c/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC"
+  [[ ! -d "$msvc_dir" ]] && msvc_dir="/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC"
+  [[ ! -d "$msvc_dir" ]] && msvc_dir="/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC"
+  [[ ! -d "$msvc_dir" ]] && msvc_dir="/c/Program Files (x86)/Microsoft Visual Studio/2022/Professional/VC/Tools/MSVC"
+
+  if [[ -d "$msvc_dir" ]]; then
+    msvc_base="$(ls -1d "$msvc_dir"/*/ 2>/dev/null | sort -V | tail -1)"
+    msvc_base="${msvc_base%/}"
+  fi
+
+  if [[ -z "$msvc_base" || ! -f "$msvc_base/bin/Hostx64/x64/link.exe" ]]; then
+    echo "Error: MSVC linker not found. Run scripts/setup-build-env-windows.ps1 first."
+    exit 1
+  fi
+
+  # Find latest Windows SDK
+  local sdk_base=""
+  local sdk_dir="/c/Program Files (x86)/Windows Kits/10/Lib"
+  if [[ -d "$sdk_dir" ]]; then
+    local sdk_ver
+    sdk_ver="$(ls -1 "$sdk_dir" 2>/dev/null | sort -V | tail -1)"
+    if [[ -n "$sdk_ver" && -f "$sdk_dir/$sdk_ver/ucrt/x64/ucrt.lib" ]]; then
+      sdk_base="$sdk_dir/$sdk_ver"
+    fi
+  fi
+
+  if [[ -z "$sdk_base" ]]; then
+    echo "Error: Windows SDK not found. Install it via Visual Studio Installer (Windows 10 SDK)."
+    exit 1
+  fi
+
+  # Convert to Windows-style backslash paths for MSVC tools
+  local msvc_lib="${msvc_base//\//\\}\\lib\\x64"
+  local msvc_atl_lib="${msvc_base//\//\\}\\atlmfc\\lib\\x64"
+  local sdk_ucrt_lib="${sdk_base//\//\\}\\ucrt\\x64"
+  local sdk_um_lib="${sdk_base//\//\\}\\um\\x64"
+  local msvc_include="${msvc_base//\//\\}\\include"
+  local sdk_ucrt_include="${sdk_base//\//\\}/../Include/${sdk_ver}/ucrt"
+  local sdk_shared_include="${sdk_base//\//\\}/../Include/${sdk_ver}/shared"
+  local sdk_um_include="${sdk_base//\//\\}/../Include/${sdk_ver}/um"
+
+  export PATH="$msvc_base/bin/Hostx64/x64:$PATH"
+  export LIB="$msvc_lib;$msvc_atl_lib;$sdk_ucrt_lib;$sdk_um_lib"
+  export INCLUDE="$msvc_include;$sdk_ucrt_include;$sdk_shared_include;$sdk_um_include"
+
+  echo "  MSVC: $msvc_base"
+  echo "  SDK:  $(basename "$sdk_base")"
+}
+configure_msvc_env
+
 # --- check prerequisites ---
 NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
 if [[ "$NODE_VERSION" -lt 22 ]]; then

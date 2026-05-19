@@ -98,18 +98,20 @@ async fn set_background_status(background: &BackgroundState, patch: Value) {
     }
 }
 
-fn apply_launch_at_login(app: &AppHandle, config: &Value) -> Result<(), String> {
+fn apply_launch_at_login(app: &AppHandle, config: &Value) {
     let enabled = config
         .get("launchAtLogin")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let manager = app.autolaunch();
-    if enabled {
-        manager.enable().map_err(|e| e.to_string())?;
+    let result = if enabled {
+        manager.enable()
     } else {
-        manager.disable().map_err(|e| e.to_string())?;
+        manager.disable()
+    };
+    if let Err(e) = result {
+        eprintln!("[autostart] {} failed: {}", if enabled { "enable" } else { "disable" }, e);
     }
-    Ok(())
 }
 
 // ── Sidecar communication ──────────────────────────────────────────
@@ -167,11 +169,7 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
         .unwrap_or_else(|_| ".".to_string());
 
     // Try resource dir first (packaged), then workspace target (dev)
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let resource_dir_path = app.path().resource_dir().unwrap_or_default();
 
     let collector_path = {
         let binary_name = if cfg!(target_os = "windows") {
@@ -180,33 +178,42 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
             "atl-collector"
         };
 
-        // Packaged: resource dir
-        let from_resource = format!("{}/{}", resource_dir, binary_name);
+        // Packaged: resource dir — use PathBuf::join to avoid mixed separators
+        // with the \\?\ prefix that Windows resource_dir() returns.
+        let from_resource = resource_dir_path.join(binary_name);
         // Dev: workspace target/debug
-        let from_debug = format!("{}/target/debug/{}", cwd, binary_name);
+        let from_debug = std::path::PathBuf::from(&cwd).join("target").join("debug").join(binary_name);
         // Dev: workspace target/release
-        let from_release = format!("{}/target/release/{}", cwd, binary_name);
+        let from_release = std::path::PathBuf::from(&cwd).join("target").join("release").join(binary_name);
 
-        if std::path::Path::new(&from_resource).exists() {
-            from_resource
-        } else if std::path::Path::new(&from_debug).exists() {
-            from_debug
-        } else if std::path::Path::new(&from_release).exists() {
-            from_release
+        if from_resource.exists() {
+            from_resource.to_string_lossy().to_string()
+        } else if from_debug.exists() {
+            from_debug.to_string_lossy().to_string()
+        } else if from_release.exists() {
+            from_release.to_string_lossy().to_string()
         } else {
             return Err(format!(
                 "atl-collector binary not found (tried {}, {}, {})",
-                from_resource, from_debug, from_release
+                from_resource.display(),
+                from_debug.display(),
+                from_release.display()
             ));
         }
     };
 
-    let mut child = Command::new(&collector_path)
-        .arg("--sidecar")
-        .env("ATL_RESOURCE_DIR", &resource_dir)
+    let mut cmd = Command::new(&collector_path);
+    cmd.arg("--sidecar")
+        .env("ATL_RESOURCE_DIR", resource_dir_path.to_string_lossy().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn collector ({}): {}", collector_path, e))?;
 
@@ -520,7 +527,7 @@ async fn update_config(
     input: Value,
 ) -> Result<Value, String> {
     let config = call_sidecar(&state, "config:update", input).await?;
-    apply_launch_at_login(&app, &config)?;
+    apply_launch_at_login(&app, &config);
     Ok(config)
 }
 
@@ -1201,7 +1208,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<SidecarState>();
                 if let Ok(config) = call_sidecar(&state, "config:get", json!(null)).await {
-                    let _ = apply_launch_at_login(&handle, &config);
+                    apply_launch_at_login(&handle, &config);
                 }
             });
 

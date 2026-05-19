@@ -47,3 +47,4 @@ src-tauri/binaries/*
 target/
 src-tauri/gen/
 src-tauri/.signing-key
+.claude
