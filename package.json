@@ -21,6 +21,7 @@
     "preset": "node scripts/build-preset.js",
     "release:dry-run": "node scripts/publish-release.js --dry-run",
     "release:upload": "node scripts/publish-release.js",
+    "release:check": "node scripts/check-release-version.js",
     "release": "bash scripts/release.sh",
     "bump": "node scripts/bump-version.js"
   },

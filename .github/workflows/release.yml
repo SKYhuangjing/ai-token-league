@@ -38,14 +38,7 @@ jobs:
           set -euo pipefail
           TAG="$RELEASE_TAG"
           VERSION="${TAG#v}"
-          PACKAGE_VERSION="$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")"
-          TAURI_VERSION="$(node -e "console.log(JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version)")"
-          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          echo "tag=$TAG version=$VERSION package=$PACKAGE_VERSION tauri=$TAURI_VERSION cargo=$CARGO_VERSION"
-          if [[ "$VERSION" != "$PACKAGE_VERSION" || "$VERSION" != "$TAURI_VERSION" || "$VERSION" != "$CARGO_VERSION" ]]; then
-            echo "Version mismatch: tag=$TAG package=$PACKAGE_VERSION tauri=$TAURI_VERSION cargo=$CARGO_VERSION" >&2
-            exit 1
-          fi
+          node scripts/check-release-version.js --tag "$TAG"
           {
             echo "tag=$TAG"
             echo "version=$VERSION"
@@ -57,6 +50,7 @@ jobs:
           node --check src/shared/update.js
           node --check scripts/build-github-tauri-update-json.js
           node --check scripts/build-release-body.js
+          node --check scripts/check-release-version.js
           node --check scripts/prepare-github-release.js
           node --check scripts/upload-github-release-asset.js
       - id: release-body

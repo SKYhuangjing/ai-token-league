@@ -15,7 +15,7 @@
  *
  * What it updates:
  *   - package.json "version" and/or "productBaseline"
- *   - src-tauri/Cargo.toml: version (version mode only)
+ *   - Cargo.toml workspace package version (version mode only)
  *   - src-tauri/tauri.conf.json: version (version mode only)
  *   - README.md + README.en.md: version number + installer filenames (version mode only)
  *   - CLAUDE.md: product baseline + client version + release date
@@ -27,6 +27,7 @@
  *   - tests/ (now uses APP_VERSION constant)
  *   - npm scripts (now auto-read from package.json)
  *   - doc/<baseline>-baseline.md / doc/<baseline>-development-tasks.md (create fresh)
+ *   - package-lock.json / Cargo.lock (run the lockfile sync commands after a version bump)
  */
 
 import fs from "node:fs";
@@ -70,7 +71,7 @@ function parseArgs() {
     process.exit(1);
   }
 
-  if (version && !/^\d+\.\d+\.\d+$/.test(version)) {
+  if (version && !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
     console.error(`Invalid version: ${version} (expected semver, e.g. 0.6.0)`);
     process.exit(1);
   }
@@ -130,13 +131,13 @@ function bump({ version, baseline, date }) {
     changes.push("package.json");
   }
 
-  // 1b. Cargo.toml — update version (Tauri build reads this)
+  // 1b. Cargo.toml — update workspace package version (Tauri build reads this)
   if (versionChanged) {
-    const cargoContent = read("src-tauri/Cargo.toml");
+    const cargoContent = read("Cargo.toml");
     const cargoUpdated = cargoContent.replace(`version = "${oldVersion}"`, `version = "${version}"`);
     if (cargoUpdated !== cargoContent) {
-      write("src-tauri/Cargo.toml", cargoUpdated);
-      changes.push("src-tauri/Cargo.toml");
+      write("Cargo.toml", cargoUpdated);
+      changes.push("Cargo.toml");
     }
   }
 
@@ -168,7 +169,7 @@ function bump({ version, baseline, date }) {
   const newVersion = version || oldVersion;
   const claudeContent = read("CLAUDE.md");
   const claudeUpdated = claudeContent.replace(
-    /- \*\*Product baseline\*\*: `\d+\.\d+` \| \*\*Client version\*\*: `\d+\.\d+\.\d+` \(released (\d{4}-\d{2}-\d{2})\)/,
+    /- \*\*Product baseline\*\*: `\d+\.\d+` \| \*\*Client version\*\*: `\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?` \(released (\d{4}-\d{2}-\d{2})\)/,
     (_match, oldDate) => `- **Product baseline**: \`${newBaseline}\` | **Client version**: \`${newVersion}\` (released ${versionChanged ? date : oldDate})`
   );
   if (claudeUpdated !== claudeContent) {
@@ -179,7 +180,7 @@ function bump({ version, baseline, date }) {
   // 4. AGENTS.md — update product baseline + client version
   const agentsContent = read("AGENTS.md");
   const agentsUpdated = agentsContent.replace(
-    /Current product baseline: `\d+\.\d+`; client version: `\d+\.\d+\.\d+` \(released (\d{4}-\d{2}-\d{2})\)\./,
+    /Current product baseline: `\d+\.\d+`; client version: `\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?` \(released (\d{4}-\d{2}-\d{2})\)\./,
     (_match, oldDate) => `Current product baseline: \`${newBaseline}\`; client version: \`${newVersion}\` (released ${versionChanged ? date : oldDate}).`
   );
   if (agentsUpdated !== agentsContent) {
@@ -225,7 +226,11 @@ function bump({ version, baseline, date }) {
     console.log(`  3. doc/${newBaseline}-development-tasks.md — create task plan`);
   }
   console.log(`  4. npm install --package-lock-only — sync package-lock.json`);
-  console.log(`  5. npm test — verify`);
+  if (versionChanged) {
+    console.log(`  5. cargo update -p ai-token-league --precise ${version} — sync Cargo.lock`);
+    console.log(`  6. npm run release:check -- --tag v${version} — verify release metadata`);
+  }
+  console.log(`  ${versionChanged ? "7" : "5"}. npm test && cargo test --workspace — verify`);
 }
 
 const opts = parseArgs();

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["collector-core", "atl-collector", "src-tauri"]
 
 [workspace.package]
-version = "0.6.3-test.1"
+version = "0.6.4"
 edition = "2021"
 authors = ["Sky"]
 

@@ -260,9 +260,21 @@ GitHub Actions 是官方发布流。触发方式是推送 `v*` tag，tag 版本�
 
 不要把 macOS 上的 Windows/Linux 交叉构建当成正式发布链路；它只能用于开发期验证或排障。
 
+本地打 tag 前必须先跑同一套 release gate：
+
 ```bash
-git tag v0.6.3
-git push github v0.6.3
+npm run release:check -- --tag v0.6.4
+npm test
+cargo test --workspace
+git diff --check
+```
+
+通过后再提交 release-prep 变更，并用 SSH 推送分支和 tag：
+
+```bash
+git tag v0.6.4
+git push git@github.com:SKYhuangjing/ai-token-league.git <branch>
+git push git@github.com:SKYhuangjing/ai-token-league.git v0.6.4
 ```
 
 必需 GitHub Actions secrets：

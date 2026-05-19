@@ -188,6 +188,7 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | `scripts/start-server.sh` | Start backend + public Web with env loading, Node >= 22 check, occupied-port fallback, optional smoke, detach/log/pid support. | `scripts/start-server.sh --env env.local` |
 | `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, Tauri build, and OSS upload. `--upload` automatically switches to all platforms because release metadata requires the complete artifact set. | `scripts/release.sh` or `npm run release` |
 | `scripts/bump-version.js` | Client version and/or product baseline bump across package/docs metadata. | `npm run bump -- <version>` or `npm run bump -- --baseline <major.minor>` |
+| `scripts/check-release-version.js` | Local and CI release gate for tag/version/changelog/lockfile consistency before a `v*` tag is created or published. | `npm run release:check -- --tag v<version>` |
 | `scripts/build-preset.js` | Generate `assets/preset.json` from `PRESET_*` env values or an env file before packaging. | `npm run preset -- --env env.local` |
 | `scripts/publish-release.js` | Build release manifests and upload updater/installer artifacts to OSS; supports dry run. | `node scripts/publish-release.js --env env.local --dry-run` |
 | `scripts/prepare-github-release.js` | GitHub Actions helper: create or reuse one draft release, delete stale duplicate drafts, clear old assets, and output the canonical `release_id`. | Called by `.github/workflows/release.yml` |
@@ -226,18 +227,45 @@ Client-only bumps must not create or rename product baseline documents. Baseline
 
 The script updates only the files that match the selected mode:
 
-- Client version mode: `package.json`, `README.md`, `README.en.md`, `CLAUDE.md`, `AGENTS.md`.
+- Client version mode: `package.json`, root `Cargo.toml`, `src-tauri/tauri.conf.json`, `README.md`, `README.en.md`, `CLAUDE.md`, `AGENTS.md`.
 - Product baseline mode: `package.json`, `CLAUDE.md`, `AGENTS.md`, `doc/roadmap.md`.
 
-### Step 2: Manual steps (script output lists these)
+### Step 2: Manual steps and local release gate
 
 1. For client releases, write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new client version. Tag public-download-page items with `[Desktop]`, `[Web]`, or `[Desktop, Web]` (e.g. `- [Desktop] Source toggle controls now use a switch-style UI`). The public download page latest-updates block renders only tagged items; untagged items (internal API, scripts, migrations, tooling, documentation) remain in the changelog but are not shown in that block.
 2. For product baseline changes, create `doc/<baseline>-baseline.md` from current product state.
 3. For product baseline changes, create `doc/<baseline>-development-tasks.md` with task plan.
 4. Run `npm install --package-lock-only` if `package.json` version changed.
-5. Run `npm test` to verify.
+5. Run `cargo update -p ai-token-league --precise <new-version>` if root `Cargo.toml` version changed.
+6. Run `npm run release:check -- --tag v<new-version>`, `npm test`, and `cargo test --workspace`.
 
-### Step 3: Build and publish
+### Step 3: Tag protocol for agents
+
+When the user asks to "打 tag", "推 tag", "发版 tag", or "push a release tag", do not create the tag directly. Run this checklist first:
+
+1. Confirm the target tag is `v<package.version>` or run `npm run bump -- <new-version>` to make it so.
+2. Ensure `package-lock.json`, root `Cargo.toml`, `Cargo.lock`, `src-tauri/tauri.conf.json`, `CHANGELOG.md`, and `CHANGELOG.zh-CN.md` are updated for that exact version.
+3. Run:
+
+```bash
+npm run release:check -- --tag v<new-version>
+npm test
+cargo test --workspace
+git diff --check
+```
+
+4. Commit the release-prep changes before creating the tag.
+5. Create the tag on the verified commit, then push the branch and tag through SSH:
+
+```bash
+git tag v<new-version>
+git push git@github.com:SKYhuangjing/ai-token-league.git <branch>
+git push git@github.com:SKYhuangjing/ai-token-league.git v<new-version>
+```
+
+If any gate fails, fix the release metadata first. Do not move or force-push an existing release tag unless the user explicitly asks for a retag.
+
+### Step 4: Build and publish
 
 ```bash
 scripts/release.sh        # interactive: guides through platform, env, upload
@@ -253,7 +281,7 @@ node scripts/publish-release.js --env env.local             # upload to OSS
 
 ### Design rules
 
-- Version is managed in `package.json` and `src-tauri/Cargo.toml`; `cargo tauri build` reads both automatically.
+- Version is managed in `package.json`, root `Cargo.toml`, and `src-tauri/tauri.conf.json`; `cargo tauri build` reads the workspace package version from root `Cargo.toml`.
 - Tests use `APP_VERSION` constant from `src/shared/version.js`, not hardcoded strings.
 - Product baseline tests validate `PRODUCT_BASELINE` format only; they must not require it to match `APP_VERSION` major/minor.
 - Documentation filenames use product baseline, not client semver.

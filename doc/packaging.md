@@ -126,6 +126,7 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<optional password>
 Before tagging, verify the release line locally:
 
 ```bash
+npm run release:check -- --tag v0.6.4
 npm test
 cargo test --workspace
 node --check scripts/prepare-github-release.js
@@ -133,11 +134,12 @@ node --check scripts/upload-github-release-asset.js
 node --check scripts/build-github-tauri-update-json.js
 ```
 
-Release by pushing a `v*` tag that matches `package.json`, root `Cargo.toml`, and `src-tauri/tauri.conf.json`:
+Release by pushing a `v*` tag that matches `package.json`, `package-lock.json`, root `Cargo.toml`, `Cargo.lock`, `src-tauri/tauri.conf.json`, and both changelog files:
 
 ```bash
-git tag v0.6.3
-git push github v0.6.3
+git tag v0.6.4
+git push git@github.com:SKYhuangjing/ai-token-league.git <branch>
+git push git@github.com:SKYhuangjing/ai-token-league.git v0.6.4
 ```
 
 The workflow builds macOS arm64, macOS Intel, Windows x64, and Linux x64; uploads installers plus signed updater packages; generates a merged `latest.json`; verifies the expected release assets; then publishes the GitHub Release.
