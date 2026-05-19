@@ -13,11 +13,21 @@ This document is the operational checklist for rebuilding desktop distribution a
 
 Official full-platform release builds must run on matching operating systems. Do not treat macOS-hosted Windows or Linux cross-builds as the formal release path; those are only acceptable for developer diagnostics.
 
+For local or self-hosted build machines, initialize the host with the matching idempotent setup script before running `scripts/release.sh`:
+
+| Host | Setup command | Build command |
+| --- | --- | --- |
+| macOS | `scripts/setup-build-env-macos.sh` | `scripts/release.sh --platform current --env env.local --yes` |
+| Windows | `powershell -ExecutionPolicy Bypass -File scripts/setup-build-env-windows.ps1` | `bash scripts/release.sh --platform win --env env.local --yes` |
+| Ubuntu | `scripts/setup-build-env-linux.sh` | `scripts/release.sh --platform linux --env env.local --yes` |
+
+The setup scripts can be rerun. They check existing Node, Rust, platform toolchain, and npm dependencies first, then install only missing pieces where possible.
+
 | Target | Required build host | Required setup |
 | --- | --- | --- |
 | macOS arm64 | GitHub Actions `macos-latest` or local macOS | Node.js 22, Rust stable, Xcode Command Line Tools, `rustup target add aarch64-apple-darwin` |
 | macOS Intel | GitHub Actions `macos-latest` or local macOS | Node.js 22, Rust stable, Xcode Command Line Tools, `rustup target add x86_64-apple-darwin` |
-| Windows x64 | GitHub Actions `windows-latest` or Windows build host | Node.js 22, Rust stable MSVC toolchain, Visual Studio Build Tools, `@tauri-apps/cli-win32-x64-msvc` |
+| Windows x64 | GitHub Actions `windows-latest` or Windows build host | Node.js 22, Git Bash, Rust stable MSVC toolchain, Visual Studio Build Tools, `@tauri-apps/cli-win32-x64-msvc` |
 | Linux x64 | GitHub Actions `ubuntu-22.04` or Ubuntu build host | Node.js 22, Rust stable, `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`, `@tauri-apps/cli-linux-x64-gnu` |
 
 Updater artifacts must be signed in the build environment:

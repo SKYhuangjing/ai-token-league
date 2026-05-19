@@ -402,7 +402,10 @@ async fn rebuild_tray_menu_coalesced(app: &AppHandle) {
 
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Use template tray icon on macOS (adapts to dark/light menu bar)
-    let default_icon = app.default_window_icon().cloned().unwrap();
+    let Some(default_icon) = app.default_window_icon().cloned() else {
+        eprintln!("[tray] default window icon not available; skipping tray setup");
+        return Ok(());
+    };
     let icon = if cfg!(target_os = "macos") {
         app.path()
             .resolve(

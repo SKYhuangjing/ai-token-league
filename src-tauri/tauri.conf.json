@@ -46,6 +46,12 @@
     "resources": {
       "binaries/": "",
       "icons/tray-iconTemplate.png": "icons/tray-iconTemplate.png"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
     }
   }
 }

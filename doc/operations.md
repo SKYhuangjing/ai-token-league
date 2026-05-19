@@ -255,10 +255,18 @@ GitHub Actions 是官方发布流。触发方式是推送 `v*` tag，tag 版本�
 | 目标平台 | GitHub runner | 关键依赖 |
 | --- | --- | --- |
 | macOS arm64 / Intel | `macos-latest` | Node.js 22、Rust stable、Xcode Command Line Tools、`aarch64-apple-darwin` / `x86_64-apple-darwin` targets |
-| Windows x64 | `windows-latest` | Node.js 22、Rust stable MSVC、Visual Studio Build Tools、`@tauri-apps/cli-win32-x64-msvc` |
+| Windows x64 | `windows-latest` | Node.js 22、Git Bash、Rust stable MSVC、Visual Studio Build Tools、`@tauri-apps/cli-win32-x64-msvc` |
 | Linux x64 | `ubuntu-22.04` | Node.js 22、Rust stable、`libwebkit2gtk-4.1-dev`、`libappindicator3-dev`、`librsvg2-dev`、`patchelf`、`@tauri-apps/cli-linux-x64-gnu` |
 
 不要把 macOS 上的 Windows/Linux 交叉构建当成正式发布链路；它只能用于开发期验证或排障。
+
+自建构建机先执行对应初始化脚本。脚本可重复执行：已存在的 Node、Rust、平台工具链和 npm 依赖会先检测，缺失时再安装。
+
+| 构建机 | 初始化命令 | 本机构建命令 |
+| --- | --- | --- |
+| macOS | `scripts/setup-build-env-macos.sh` | `scripts/release.sh --platform current --env env.local --yes` |
+| Windows | `powershell -ExecutionPolicy Bypass -File scripts/setup-build-env-windows.ps1` | `bash scripts/release.sh --platform win --env env.local --yes` |
+| Ubuntu | `scripts/setup-build-env-linux.sh` | `scripts/release.sh --platform linux --env env.local --yes` |
 
 本地打 tag 前必须先跑同一套 release gate：
 

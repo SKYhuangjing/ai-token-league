@@ -7,11 +7,13 @@ const source = process.argv[2] || "assets/app-icon-source.png";
 const assetsDir = path.resolve("assets");
 const webDir = path.resolve("src/web");
 const desktopDir = path.resolve("src/desktop");
+const tauriIconsDir = path.resolve("src-tauri", "icons");
 const iconsetDir = path.join(os.tmpdir(), `ai-token-league-iconset-${Date.now()}`, "app-icon.iconset");
 
 fs.mkdirSync(assetsDir, { recursive: true });
 fs.mkdirSync(webDir, { recursive: true });
 fs.mkdirSync(desktopDir, { recursive: true });
+fs.mkdirSync(tauriIconsDir, { recursive: true });
 fs.mkdirSync(iconsetDir, { recursive: true });
 
 const sourcePath = path.resolve(source);
@@ -43,6 +45,8 @@ const icoImages = icoSizes.map((size) => {
   return { size, bytes: fs.readFileSync(file) };
 });
 fs.writeFileSync(path.join(assetsDir, "app-icon.ico"), encodeIco(icoImages));
+
+execFileSync("npx", ["tauri", "icon", sourcePath, "--output", tauriIconsDir], { stdio: "inherit" });
 
 fs.rmSync(path.dirname(iconsetDir), { recursive: true, force: true });
 
