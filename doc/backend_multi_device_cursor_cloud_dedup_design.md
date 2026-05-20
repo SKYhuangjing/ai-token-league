@@ -14,6 +14,8 @@
 |---|---|
 | 同一用户多设备 Cursor 同账号 | 同一 `participantId + day + hour + model + Cursor账号` 只保留一份用量 |
 | 同一用户多设备本地 provider | Codex / Claude Code 不去重，按设备累加 |
+| 第二台设备加入已有身份 | `participantId` / identity key 相同，`deviceId` 保持新设备自己的值 |
+| 恢复原设备 | 用户明确选择恢复模式后，才允许恢复备份中的 `deviceId` 和本地同步状态 |
 | 云端 reset 后本地仍标记已上传 | 客户端能发现服务端缺 bucket，并重新上传真实 hourly snapshot |
 
 ### 方案判断
@@ -26,12 +28,13 @@
 | 不考虑 daily 合并 | 当前版本可接受，前提是版本边界明确为 hourly-only；legacy daily 只能作为兼容路径，不作为本次主链路 |
 | 用云端 reset 替代历史 repair | 可接受，但必须同步解决本地 manifest 失真，否则 reset 后客户端会 no-op |
 | 只在服务端写入时 dedup | 不完整；还需要客户端账号身份稳定化和 reset 后 sync-state 核对 |
+| 用导入配置做多设备入口 | 只有在导入时按用户意图区分“加入已有身份”和“恢复原设备”才成立；默认整份恢复会覆盖 `deviceId`，会破坏多设备语义 |
 
 ### 本次做 / 不做
 
 | 类型 | 内容 |
 |---|---|
-| 本次做 | `Connect Cursor` 浏览器授权、Cursor token refresh / reauth 状态、Cursor 账号身份稳定化、hourly 写入跨设备去重、daily derived 只来自去重后的 hourly、云端 reset 后的 sync-state 核对 |
+| 本次做 | `Connect Cursor` 浏览器授权、Cursor token refresh / reauth 状态、Cursor 账号身份稳定化、多设备身份引导与导入配置选择、hourly 写入跨设备去重、daily derived 只来自去重后的 hourly、云端 reset 后的 sync-state 核对 |
 | 本次不做 | 不新增 daily snapshot 合并主链路；不再把手动 `Add Cursor Token` 作为主入口；不把 Cursor token、cookie、原始 auth 响应上传服务端 |
 | 不放宽 | 排行榜仍按 `totalTokens`；服务端仍不得接收 prompt、response、源码、真实路径、Cursor session token、identity private key |
 | 必须复用 | `POST /api/usage/daily-batch`、hourly snapshot、`usage_hourly`、`usage_daily` derived serving table、`sync-manifest.json` |
@@ -47,6 +50,7 @@
 - Cursor 配置当前以本地 token / cookie 输入为主，用户需要手工复制敏感材料，体验和安全边界都不理想。
 - 当前 Cursor token 没有自动刷新：手动 token 只保存 token/accountName，扫描失败时会跳过 Cursor source，UI 不一定显示账号已失效。
 - `sync-manifest.json` 只记录本地认为已成功上传的 bucket fingerprint；如果云端数据被 reset，本地 manifest 不会自动失效。
+- 配置导入 / 本地备份恢复如果直接写入备份中的 `deviceId`，会把第二台电脑伪装成第一台电脑；这只适合设备迁移，不适合多设备加入。
 
 ### 根因
 
@@ -174,6 +178,53 @@ sequenceDiagram
 | runtime log | 不打印 token、完整邮箱、原始响应；只打印 account hash 和状态 |
 | 本地 reset | 清理授权账号、旧 token、sync manifest、upload queue |
 | backup / restore | backup 若包含账号配置，必须 redacted；restore 不恢复真实 token |
+
+### 多设备身份引导与导入配置
+
+多设备验收不能把“加入同一排行榜身份”和“恢复一台旧设备”混成同一个导入动作。前者要求共享 `participantId` / identity key，但保留每台机器独立的 `deviceId`；后者才允许恢复备份里的 `deviceId` 和本地同步状态。
+
+用户意图选择：
+
+| 入口 | 选项 | 默认 / 推荐 | 行为 |
+|---|---|---|---|
+| 初次引导 / onboarding | 创建新身份 | 新用户默认 | 生成新的 `participantId`、identity key 和 `deviceId` |
+| 初次引导 / onboarding | 加入已有排行榜身份 | 已有导出 identity / 配置时推荐 | 导入 identity，保留或生成本机 `deviceId`，不恢复 Cursor token / sync manifest / upload queue |
+| 导入配置 | 加入已有排行榜身份 | 默认 | 从配置文件中导入身份和低风险偏好，但保留当前 `deviceId`；清理本机 sync manifest / upload queue |
+| 导入配置 | 恢复原设备 | 高级 / 需确认 | 恢复配置文件中的 `deviceId` 和本地状态；UI 必须提示这会替代原设备身份，不用于多设备加入 |
+| 本地备份恢复 | 恢复原设备 | 固定语义 | 作为灾备 / 换机入口，保留完整本地状态；不得作为多设备推荐路径 |
+
+字段策略：
+
+| 字段 / 文件 | 加入已有排行榜身份 | 恢复原设备 |
+|---|---|---|
+| `participantId` | 从导入文件覆盖 | 从导入文件覆盖 |
+| `identityPublicKey` / `identityPrivateKey` | 从导入文件覆盖 | 从导入文件覆盖 |
+| `nickname` | 可从导入文件覆盖，用户可改 | 从导入文件覆盖 |
+| `deviceId` | 保留当前值；若当前没有配置则新生成 | 从导入文件恢复 |
+| `apiBaseUrl` / language / display 偏好 / provider 开关 | 可导入 | 可导入 |
+| `cursorDashboardUsage.accounts[]` | 不恢复真实 token；要求本机重新 `Connect Cursor` | 不恢复真实 token；要求本机重新 `Connect Cursor` |
+| `sync-manifest.json` / `sync-state.json` | 不恢复；必要时清理，避免 no-op | 可恢复或由备份恢复 |
+| `upload-queue.json` / `usage-cache.json` | 不恢复 | 可恢复 |
+| 本地路径 / provider roots | 默认不导入跨机路径；用户手动选择 | 可恢复，但应提示路径可能失效 |
+
+导入配置的最小 API 语义：
+
+```text
+importConfig(file, mode)
+
+mode = "join_existing_participant" | "restore_device"
+```
+
+`join_existing_participant` 是普通多设备默认值；`restore_device` 是灾备 / 换机高级路径。UI 不直接问“是否覆盖 deviceId”，而是问“你想加入已有身份，还是恢复原设备”，避免用户选择底层字段时误判。
+
+验收口径：
+
+| 场景 | 必验结果 |
+|---|---|
+| 第二台设备选择加入已有排行榜身份 | 导入后 `participantId` 相同，`deviceId` 不同；register 后服务端出现两个 device |
+| 第二台设备重新 Connect Cursor | Cursor 同账号 hourly 用量不翻倍，本地 Codex / Claude 仍按两台设备累加 |
+| 第二台设备误选恢复原设备 | UI 有明确风险提示；确认后 `deviceId` 与备份一致，行为按设备迁移处理 |
+| 导入配置包含 Cursor token | join 模式和 restore 模式都不写入真实 token；需要重新授权 |
 
 废弃来源边界：
 
@@ -381,6 +432,9 @@ POST /api/usage/sync-state
 
 | 覆盖组 | 验证入口 | 必验证据 |
 |---|---|---|
+| 多设备引导加入已有身份 | Desktop / CLI import case | `participantId` 相同、`deviceId` 不同；服务端 register 后有两个 device |
+| 导入配置 join 模式 | Config import unit / desktop command case | 不覆盖当前 `deviceId`，不恢复 sync manifest / queue / Cursor token |
+| 导入配置 restore 模式 | Config import unit / desktop command case | 用户确认后恢复备份 `deviceId`；风险提示可见 |
 | Cursor 同账号多设备 | Store / HTTP API case | `usage_hourly` 同 natural key 只剩 1 行，leaderboard 不翻倍 |
 | Cursor 不同账号 | Store / HTTP API case | 不同 `cursorAccountHash` 都保留 |
 | 本地 provider 多设备 | Store / HTTP API case | Codex / Claude 同 day/hour/model 均累加 |
@@ -434,6 +488,8 @@ POST /api/usage/sync-state
 - [x] 明确 Cursor 主入口改为浏览器授权，不再要求普通用户手动 Add Cursor Token。
 - [x] 明确 Cursor token refresh 和 reauth 状态闭环。
 - [x] 明确本地凭据存储、诊断导出、reset、backup 边界。
+- [x] 明确多设备 onboarding / 导入配置必须区分加入已有身份与恢复原设备。
+- [x] 明确加入已有身份保留本机 `deviceId`，恢复原设备才覆盖 `deviceId`。
 - [x] 明确本版本废弃 Cursor 本机检测、历史 auto source 和 legacy 手动 token 扫描链路。
 - [x] 明确 cloud dedup 删除范围和 sync-state 比对口径。
 - [x] 明确 Cursor 邮箱只作为 hash 输入，不上传 token/cookie/auth raw。

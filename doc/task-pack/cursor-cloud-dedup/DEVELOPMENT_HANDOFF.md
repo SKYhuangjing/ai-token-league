@@ -17,7 +17,10 @@
 | T04_cursor_refresh_health | refresh and reauth tests plus health state evidence | **done** — refresh_token(), proactive/reactive refresh, health states |
 | T05_server_hourly_dedup | Store / HTTP / MySQL reload test output | **done** — 5 new tests passing |
 | T06_sync_state_reset | sync-state and reset behavior evidence | **done** — compareSyncState + 2 new tests passing |
-| T07_ui_verification_release | UI screenshot or CLI output, privacy grep, release checklist | **done** — privacy grep clean, release checklist in external_actions.md |
+| T07_ui_verification_release | UI screenshot or CLI output, privacy grep, release checklist | reopened — prior privacy/release evidence must be rerun after T08/T09/T10 |
+| T08_multi_device_onboarding | onboarding create/join UI evidence and i18n check | pending |
+| T09_config_import_modes | join/restore import mode tests and before/after config samples | pending |
+| T10_backup_restore_device_semantics | restore warning evidence and backup/restore redaction proof | pending |
 
 ## Failure Routing
 

@@ -4,6 +4,7 @@
 
 - 将 Cursor 云端用量从“手动 Add Cursor Token + 设备级计数”升级为“Connect Cursor 浏览器授权 + 本地 token refresh + 服务端 cloud hourly 去重”。
 - 同一 `participantId` 多设备安装时，Codex / Claude Code 本地日志继续按设备累加；Cursor Dashboard Usage 同一账号跨设备只计一次。
+- 多设备加入时，客户端必须共享 `participantId` / identity key，但保留每台机器独立的 `deviceId`；只有恢复原设备时才允许恢复备份中的 `deviceId`。
 - 云端 reset 后，本地 `sync-manifest.json` 不能继续导致 no-op，必须通过 sync-state 或清 manifest 触发重传。
 
 ## 不改什么
@@ -32,8 +33,14 @@
 - 影响：Cursor dedup 删除其他设备 usage row 后，不导致被删设备反复重传。
 - 验收口径：A 设备 usage 被 B 设备覆盖后，A 的 sync bucket 仍 matched。
 
+### D4: 多设备导入语义
+
+- 决策：引导和导入配置按用户意图区分 `join_existing_participant` 与 `restore_device`，不让普通用户直接判断是否覆盖 `deviceId`。
+- 影响：第二台设备通过 join 模式加入同一排行榜身份；灾备/换机才走 restore 模式。
+- 验收口径：join 后 `participantId` 相同且 `deviceId` 不同；restore 后 `deviceId` 与备份一致且风险提示可见。
+
 ## 通过标准
 
 - 设计文档锚点完整，task-pack 无模板占位内容。
 - 所有任务卡均有独立 scope、owned files、验收与证据要求。
-- 验证矩阵覆盖 Connect Cursor、refresh、cloud dedup、sync-state、reset、privacy、MySQL reload。
+- 验证矩阵覆盖 Connect Cursor、refresh、cloud dedup、sync-state、reset、多设备导入语义、backup restore guardrail、privacy、MySQL reload。
