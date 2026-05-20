@@ -378,11 +378,21 @@
                     <small data-i18n="desktop.wizard.joinExistingDesc">Import config from another device. This device keeps its own device ID.</small>
                   </button>
                 </div>
+                <div id="wizard-import-actions" class="wizard-import-actions" hidden>
+                  <button id="wizard-import-join" type="button" class="outline-button wizard-import-action">
+                    <span class="icon" style="--icon: url('./icons/file-down.svg')" aria-hidden="true"></span>
+                    <span data-i18n="desktop.wizard.importJoinAction">Import and join identity</span>
+                  </button>
+                  <button id="wizard-import-restore" type="button" class="outline-button wizard-import-action">
+                    <span class="icon" style="--icon: url('./icons/refresh-cw.svg')" aria-hidden="true"></span>
+                    <span data-i18n="desktop.wizard.restoreDeviceAction">Restore original device</span>
+                  </button>
+                </div>
                 <div class="nickname-container">
                   <label class="form-label" for="wizard-nickname" data-i18n="desktop.account.nickname">Nickname</label>
                   <input class="form-input" id="wizard-nickname" />
                 </div>
-                <div class="nickname-container">
+                <div class="nickname-container" hidden>
                   <label class="form-label" for="wizard-participant-id" data-i18n="desktop.wizard.participantId">Participant ID</label>
                   <input class="form-input" id="wizard-participant-id" readonly />
                 </div>

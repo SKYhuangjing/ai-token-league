@@ -169,13 +169,10 @@ document.querySelectorAll("[data-sync-now]").forEach((button) => button.addEvent
 $("#wizard-skip").addEventListener("click", (e) => { e.preventDefault(); run(skipWizard); });
 $("#wizard-next-0").addEventListener("click", () => wizardGo(1));
 $("#wizard-back-1").addEventListener("click", () => wizardGo(0));
-$("#wizard-create-identity").addEventListener("click", () => {
-  $("#wizard-create-identity")?.classList.add("active");
-  $("#wizard-create-identity")?.setAttribute("aria-pressed", "true");
-  $("#wizard-import")?.classList.remove("active");
-  $("#wizard-import")?.setAttribute("aria-pressed", "false");
-});
-$("#wizard-import").addEventListener("click", () => run(wizardImportProfile));
+$("#wizard-create-identity").addEventListener("click", () => setWizardIdentityMode("create"));
+$("#wizard-import").addEventListener("click", () => setWizardIdentityMode("import"));
+$("#wizard-import-join")?.addEventListener("click", () => run(() => wizardImportProfile("join_existing_participant")));
+$("#wizard-import-restore")?.addEventListener("click", () => run(() => wizardImportProfile("restore_device")));
 $("#wizard-next-1").addEventListener("click", () => wizardGo(2));
 $("#wizard-back-2").addEventListener("click", () => wizardGo(1));
 $("#wizard-start").addEventListener("click", () => run(finishWizard));
@@ -613,6 +610,16 @@ let wizardStep = 0;
 let wizardDetectedSources = [];
 let wizardSyncMode = "cloud";
 
+function setWizardIdentityMode(mode) {
+  const importMode = mode === "import";
+  $("#wizard-create-identity")?.classList.toggle("active", !importMode);
+  $("#wizard-create-identity")?.setAttribute("aria-pressed", importMode ? "false" : "true");
+  $("#wizard-import")?.classList.toggle("active", importMode);
+  $("#wizard-import")?.setAttribute("aria-pressed", importMode ? "true" : "false");
+  const importActions = $("#wizard-import-actions");
+  if (importActions) importActions.hidden = !importMode;
+}
+
 function setWizardSyncMode(mode) {
   wizardSyncMode = mode === "local" ? "local" : "cloud";
   document.querySelectorAll("[data-wizard-sync-mode]").forEach((button) => {
@@ -651,6 +658,7 @@ async function renderWizard() {
     overlay.dataset.initialized = "1";
     wizardStep = 0;
     wizardGo(0);
+    setWizardIdentityMode("create");
     if (latestConfig?.participantId) {
       $("#wizard-participant-id").value = latestConfig.participantId;
     }
@@ -680,7 +688,7 @@ async function renderWizardSources() {
       ? (item.roots?.length ? t("desktop.renderer.accountSources", { count: item.roots.length }) : t("desktop.renderer.requiresToken"))
       : (detected ? (item.roots?.length === 1 ? t("desktop.renderer.foundOne") : t("desktop.renderer.found", { count: item.roots?.length || 0 })) : t("desktop.renderer.notFound"));
     return `<article class="wizard-source-card ${detected ? "detected" : ""}">
-      <div class="wizard-source-icon" aria-hidden="true">${sourceName(item.providerId).slice(0, 1)}</div>
+      <div class="wizard-source-icon" aria-hidden="true"><img src="${sourceIconPath(item.providerId)}" alt="" /></div>
       <div class="wizard-source-main">
         <div class="wizard-source-title-row">
           <strong>${escapeHtml(sourceName(item.providerId))}</strong>
@@ -720,13 +728,10 @@ function renderWizardSummary() {
   if (participantEl) participantEl.textContent = latestConfig?.participantId || $("#wizard-participant-id")?.value || "-";
 }
 
-async function wizardImportProfile() {
-  $("#wizard-create-identity")?.classList.remove("active");
-  $("#wizard-create-identity")?.setAttribute("aria-pressed", "false");
-  $("#wizard-import")?.classList.add("active");
-  $("#wizard-import")?.setAttribute("aria-pressed", "true");
+async function wizardImportProfile(mode = "join_existing_participant") {
+  setWizardIdentityMode("import");
   const previousConfig = latestConfig;
-  const config = await api.importConfig("join_existing_participant");
+  const config = await api.importConfig(mode);
   if (!config?.canceled) {
     latestConfig = config;
     renderConfig(config);
@@ -734,7 +739,9 @@ async function wizardImportProfile() {
     const joinStatus = $("#wizard-join-status");
     if (joinStatus) {
       joinStatus.hidden = false;
-      joinStatus.textContent = t("desktop.wizard.joinSuccess") + " " + t("desktop.wizard.joinConnectCursor");
+      joinStatus.textContent = mode === "restore_device"
+        ? t("desktop.renderer.configRestoredDevice")
+        : t("desktop.wizard.joinSuccess") + " " + t("desktop.wizard.joinConnectCursor");
     }
     await loadToday(true);
     if (apiBaseUrlChanged(previousConfig, config)) {
@@ -743,6 +750,13 @@ async function wizardImportProfile() {
       await loadBackgroundStatus();
     }
   }
+}
+
+function sourceIconPath(providerId) {
+  if (providerId === "codex_local") return "./icons/file-text.svg";
+  if (providerId === "claude_code_local") return "./icons/folder-code.svg";
+  if (providerId === "cursor_dashboard_usage") return "./icons/database.svg";
+  return "./icons/file-text.svg";
 }
 
 async function skipWizard() {

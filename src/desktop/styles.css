@@ -1564,7 +1564,7 @@ label {
   color: var(--muted);
   padding: 2px 7px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -1626,7 +1626,7 @@ label {
   display: flex;
   flex-direction: column;
   width: min(720px, 100%);
-  height: min(480px, 88vh);
+  height: min(500px, 90vh);
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 12px;
@@ -1738,27 +1738,51 @@ label {
 .identity-choice-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 8px;
   margin: 0 0 10px;
 }
 .wizard .identity-choice-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
-  min-height: 82px;
+  gap: 4px;
+  min-height: 62px;
   border-color: var(--line);
   background: rgba(255, 255, 255, 0.44);
-  padding: 10px 12px;
+  padding: 8px 10px;
   box-shadow: none;
 }
-.wizard .identity-choice-card:hover { border-color: var(--line-strong); background: var(--paper-2); box-shadow: none; transform: none; }
-.wizard .identity-choice-card.active { border-color: var(--teal); background: linear-gradient(180deg, rgba(5, 143, 126, 0.08), rgba(255, 255, 255, 0.9)); box-shadow: inset 0 0 0 0.5px var(--teal); }
+.wizard .identity-choice-card:hover { border-color: var(--line-strong); background: var(--paper-2); color: var(--ink); box-shadow: none; transform: none; }
+.wizard .identity-choice-card:hover small { color: var(--muted); }
+.wizard .identity-choice-card.active { border-color: var(--teal); background: linear-gradient(180deg, rgba(5, 143, 126, 0.06), #fff); box-shadow: inset 0 0 0 0.5px var(--teal); }
 .wizard .identity-choice-card.active { color: var(--ink); }
-.wizard .identity-choice-card strong { font-size: 14.5px; font-weight: 800; line-height: 1.2; }
+.wizard .identity-choice-card strong { font-size: 15px; font-weight: 900; line-height: 1.18; }
 .wizard .identity-choice-card small {
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 700;
   line-height: 1.3;
+}
+
+.wizard-import-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.wizard-import-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.wizard-import-action .icon {
+  width: 15px;
+  height: 15px;
 }
 
 .nickname-container {
@@ -1773,7 +1797,7 @@ label {
   margin: 0 0 10px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -1785,7 +1809,8 @@ label {
   border-radius: 6px;
   background: var(--paper-2);
   padding: 0 10px;
-  font-size: 13.5px;
+  font-size: 15px;
+  font-weight: 750;
   outline: none;
 }
 .form-input:focus { border-color: var(--teal); background: #fff; }
@@ -1806,13 +1831,13 @@ label {
   border-radius: 999px;
   color: var(--teal);
   padding: 1px 5px;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 900;
 }
 .seal-text {
   color: var(--teal);
-  font-size: 11.5px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 800;
   line-height: 1.35;
 }
 
@@ -1894,21 +1919,26 @@ label {
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-height: 54px;
+  gap: 4px;
+  min-height: 62px;
   font: inherit;
   text-align: left;
   transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
-.sync-mode-card:hover { border-color: var(--line-strong); background: var(--paper-2); }
+.sync-mode-card:hover {
+  border-color: var(--line-strong);
+  background: var(--paper-2);
+  color: var(--ink);
+}
+.sync-mode-card:hover p { color: var(--muted); }
 .sync-mode-card.active {
   border-color: var(--teal);
   background: linear-gradient(180deg, rgba(5, 143, 126, 0.06), #fff);
   color: var(--ink);
   box-shadow: inset 0 0 0 0.5px var(--teal);
 }
-.sync-mode-card strong { font-size: 13px; font-weight: 900; }
-.sync-mode-card p { margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
+.sync-mode-card strong { font-size: 15px; font-weight: 900; }
+.sync-mode-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.3; }
 
 .cloud-url-container {
   display: flex;
@@ -1949,7 +1979,7 @@ label {
 
 .ticket-header span {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 900;
   letter-spacing: 0;
 }
@@ -2006,7 +2036,7 @@ label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13.5px;
+  font-size: 14.5px;
   font-weight: 900;
 }
 
@@ -2023,7 +2053,7 @@ label {
   background: var(--paper-2);
   padding: 1px 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 900;
 }
 
@@ -2075,7 +2105,7 @@ label {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 800;
 }
 
@@ -2336,9 +2366,9 @@ label {
   position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
-  min-height: 72px;
+  min-height: 76px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.4);
@@ -2372,6 +2402,13 @@ label {
   font-size: 14px;
   font-weight: 900;
 }
+
+.wizard-source-icon img {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
 .wizard-source-card:has(.source-switch.is-on) .wizard-source-icon {
   border-color: var(--teal);
   background: #fff;
@@ -2388,7 +2425,7 @@ label {
 .wizard-source-card strong {
   display: block;
   min-width: 0;
-  font-size: 15px;
+  font-size: 16.5px;
   line-height: 1.1;
 }
 
@@ -2401,7 +2438,7 @@ label {
   background: rgba(245, 239, 227, 0.66);
   color: var(--muted);
   padding: 2px 7px;
-  font: 800 10px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 800 10.5px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
 }
 
@@ -2414,36 +2451,8 @@ label {
 .wizard-source-card p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13.5px;
   line-height: 1.3;
-}
-
-.wizard-source-card .source-switch {
-  width: 44px;
-  height: 24px;
-  background: var(--paper);
-}
-
-.wizard-source-card .source-switch::before {
-  top: 2px;
-  right: auto;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--line-strong);
-  background: var(--paper-2);
-}
-
-.wizard-source-card .source-switch.is-on { background: var(--teal); }
-
-.wizard-source-card .source-switch.is-on::before {
-  left: 22px;
-  background: #fff;
-}
-
-.wizard-source-card .source-switch.is-off::before {
-  left: 2px;
-  background: var(--paper-2);
 }
 
 /* ─── Language Switcher ─── */
