@@ -84,6 +84,24 @@ function showToast(message) {
 }
 
 let appConfirmResolver = null;
+let importModeResolver = null;
+
+function chooseImportMode() {
+  const modal = $("#import-mode-modal");
+  if (!modal) return Promise.resolve(null);
+  if (importModeResolver) importModeResolver(null);
+  modal.hidden = false;
+  return new Promise((resolve) => { importModeResolver = resolve; });
+}
+
+function closeImportModeModal(mode) {
+  const modal = $("#import-mode-modal");
+  if (modal) modal.hidden = true;
+  if (!importModeResolver) return;
+  const resolve = importModeResolver;
+  importModeResolver = null;
+  resolve(mode);
+}
 
 function confirmDialog(message, { alertOnly = false } = {}) {
   const modal = $("#app-confirm-modal");
@@ -151,6 +169,12 @@ document.querySelectorAll("[data-sync-now]").forEach((button) => button.addEvent
 $("#wizard-skip").addEventListener("click", (e) => { e.preventDefault(); run(skipWizard); });
 $("#wizard-next-0").addEventListener("click", () => wizardGo(1));
 $("#wizard-back-1").addEventListener("click", () => wizardGo(0));
+$("#wizard-create-identity").addEventListener("click", () => {
+  $("#wizard-create-identity")?.classList.add("active");
+  $("#wizard-create-identity")?.setAttribute("aria-pressed", "true");
+  $("#wizard-import")?.classList.remove("active");
+  $("#wizard-import")?.setAttribute("aria-pressed", "false");
+});
 $("#wizard-import").addEventListener("click", () => run(wizardImportProfile));
 $("#wizard-next-1").addEventListener("click", () => wizardGo(2));
 $("#wizard-back-2").addEventListener("click", () => wizardGo(1));
@@ -180,6 +204,12 @@ document.addEventListener("click", (event) => {
   }
 });
 $("#save-cursor-token").addEventListener("click", () => run(addCursorToken));
+$("#import-mode-join").addEventListener("click", () => closeImportModeModal("join_existing_participant"));
+$("#import-mode-restore").addEventListener("click", () => closeImportModeModal("restore_device"));
+$("#import-mode-cancel").addEventListener("click", () => closeImportModeModal(null));
+$("#import-mode-modal").addEventListener("click", (event) => {
+  if (event.target.id === "import-mode-modal") closeImportModeModal(null);
+});
 $("#cursor-token-modal").addEventListener("click", (event) => {
   if (event.target.id === "cursor-token-modal" || event.target.closest("#cancel-cursor-token")) closeCursorTokenModal();
 });
@@ -561,10 +591,15 @@ $("#import").addEventListener("click", async () => run(async () => {
 }));
 
 async function importProfile() {
+  const mode = await chooseImportMode();
+  if (!mode) return;
   const previousConfig = latestConfig;
-  const config = await api.importConfig();
+  const config = await api.importConfig(mode);
   if (!config?.canceled) {
     renderConfig(config);
+    setStatusMessage(mode === "restore_device"
+      ? t("desktop.renderer.configRestoredDevice")
+      : t("desktop.renderer.configJoinedParticipant"));
     await loadToday(true);
     if (apiBaseUrlChanged(previousConfig, config)) {
       await refreshCloudDependentState();
@@ -659,12 +694,21 @@ function renderWizardSummary() {
 }
 
 async function wizardImportProfile() {
+  $("#wizard-create-identity")?.classList.remove("active");
+  $("#wizard-create-identity")?.setAttribute("aria-pressed", "false");
+  $("#wizard-import")?.classList.add("active");
+  $("#wizard-import")?.setAttribute("aria-pressed", "true");
   const previousConfig = latestConfig;
-  const config = await api.importConfig();
+  const config = await api.importConfig("join_existing_participant");
   if (!config?.canceled) {
     latestConfig = config;
     renderConfig(config);
     renderWizard();
+    const joinStatus = $("#wizard-join-status");
+    if (joinStatus) {
+      joinStatus.hidden = false;
+      joinStatus.textContent = t("desktop.wizard.joinSuccess") + " " + t("desktop.wizard.joinConnectCursor");
+    }
     await loadToday(true);
     if (apiBaseUrlChanged(previousConfig, config)) {
       await refreshCloudDependentState();
@@ -1507,20 +1551,25 @@ async function restoreLocalBackup() {
       return;
     }
     const summary = picked.summary || {};
-    const ok = await confirmDialog(t("desktop.renderer.confirmRestoreBackup", {
+    const confirmText = t("desktop.renderer.confirmRestoreBackup", {
       date: summary.createdAt ? formatDateTime(summary.createdAt) : "-",
       files: summary.fileCount || 0,
       size: formatBytes(summary.totalBytes || 0)
-    }));
+    }) + "\n\n" + t("desktop.wizard.restoreDeviceWarning");
+    const ok = await confirmDialog(confirmText);
     if (!ok) {
       setBackupMessage(t("desktop.renderer.backupCanceled"), "");
       return;
     }
     setBackupMessage(t("desktop.renderer.restoringBackup"), "");
     const result = await api.restoreLocalBackupFile(picked.filePath);
-    setBackupMessage(t("desktop.renderer.backupRestored", { count: result.restored || 0 }), "ok");
-    $("#backup-message").title = result.snapshotPath || "";
     latestConfig = await api.getConfig();
+    const restoredDeviceId = result.restoredDeviceId || result.deviceId || latestConfig?.deviceId || "";
+    const deviceIdLabel = restoredDeviceId
+      ? ` (${t("desktop.renderer.restoredDeviceLabel", { deviceId: `${restoredDeviceId.slice(0, 12)}...` })})`
+      : "";
+    setBackupMessage(t("desktop.renderer.backupRestored", { count: result.restored || 0 }) + deviceIdLabel, "ok");
+    $("#backup-message").title = result.snapshotPath || "";
     renderConfig(latestConfig);
     await loadToday(true);
     await loadBackgroundStatus();

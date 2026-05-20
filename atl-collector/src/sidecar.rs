@@ -224,9 +224,17 @@ async fn handle_command(
             Ok(config::export_config(&cfg))
         }
         Command::ConfigImportApply => {
-            let imported = request.args;
-            let c = config::import_config(imported)?;
-            Ok(sanitize_config_value(&c))
+            let mode = request.args.get("__importMode").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let mut imported = request.args;
+            if let Some(obj) = imported.as_object_mut() {
+                obj.remove("__importMode");
+            }
+            let (c, summary) = config::import_config_with_summary(imported, mode.as_deref())?;
+            let mut value = sanitize_config_value(&c);
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("importResult".to_string(), summary);
+            }
+            Ok(value)
         }
         Command::DiagnosticsExportPrepare => {
             let cfg = config::ensure_desktop_config();
@@ -1350,6 +1358,9 @@ fn source_fingerprint(items: &[serde_json::Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn test_config() -> config::AppConfig {
         config::AppConfig {
@@ -1386,6 +1397,14 @@ mod tests {
             last_sync_api_base_url: None,
             last_sync_error: None,
         }
+    }
+
+    fn temp_home() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("atl-sidecar-test-{}", suffix))
     }
 
     #[test]
@@ -1512,5 +1531,65 @@ mod tests {
             source_cache_from_snapshot(Some(&source_index_cache))["fingerprint-c"].len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn config_import_apply_returns_sanitized_join_summary() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+
+        config::init_config(serde_json::json!({}), true);
+        fs::write(config::queue_path(), "[]\n").unwrap();
+        fs::write(config::usage_cache_path(), "{}\n").unwrap();
+        fs::write(config::manifest_path(), "{}\n").unwrap();
+
+        let request = SidecarRequest {
+            id: "test".to_string(),
+            command: "config:import:apply".to_string(),
+            args: serde_json::json!({
+                "__importMode": "join_existing_participant",
+                "participantId": "p-imported",
+                "nickname": "imported",
+                "identityPublicKey": "pub-imported",
+                "identityPrivateKey": "priv-imported",
+                "deviceId": "d-imported",
+                "cursorDashboardUsage": {
+                    "accounts": [{
+                        "accessToken": "secret-at",
+                        "refreshToken": "secret-rt",
+                        "authId": "auth1"
+                    }]
+                }
+            }),
+        };
+        let mut runtime = SidecarRuntime::default();
+        let result = handle_command(request, &mut runtime).await.unwrap();
+        let content = serde_json::to_string(&result).unwrap();
+
+        assert_eq!(result["participantId"].as_str(), Some("p-imported"));
+        assert_eq!(
+            result["importResult"]["mode"].as_str(),
+            Some("join_existing_participant")
+        );
+        assert_eq!(
+            result["importResult"]["newDeviceId"].as_str(),
+            result["deviceId"].as_str()
+        );
+        assert!(!content.contains("identityPrivateKey"));
+        assert!(!content.contains("priv-imported"));
+        assert!(!content.contains("secret-at"));
+        assert!(!content.contains("secret-rt"));
+        assert!(!config::queue_path().exists());
+        assert!(!config::usage_cache_path().exists());
+        assert!(!config::manifest_path().exists());
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(v) = previous_home {
+            std::env::set_var("HOME", v);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 }

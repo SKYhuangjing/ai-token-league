@@ -382,7 +382,19 @@
 
         <div class="wizard-step" data-wizard-step="1">
           <p class="eyebrow" data-i18n="desktop.wizard.identityEyebrow">Identity</p>
-          <h2 data-i18n="desktop.wizard.identity">Your identity</h2>
+          <h2 id="wizard-identity-title" data-i18n="desktop.wizard.identity">Your identity</h2>
+          <div class="identity-choice-grid" role="radiogroup" aria-labelledby="wizard-identity-title">
+            <button id="wizard-create-identity" type="button" class="identity-choice-card active" aria-pressed="true">
+              <span class="choice-kicker" data-i18n="desktop.wizard.createNewKicker">New participant</span>
+              <strong data-i18n="desktop.wizard.createNewIdentity">Create new identity</strong>
+              <small data-i18n="desktop.wizard.createNewIdentityDesc">Start a new leaderboard participant for this device.</small>
+            </button>
+            <button id="wizard-import" type="button" class="identity-choice-card" aria-pressed="false">
+              <span class="choice-kicker" data-i18n="desktop.wizard.joinExistingKicker">Second device</span>
+              <strong data-i18n="desktop.wizard.joinExisting">Join existing leaderboard identity</strong>
+              <small data-i18n="desktop.wizard.joinExistingDesc">Import config from another device. This device keeps its own device ID.</small>
+            </button>
+          </div>
           <div class="form-grid">
             <label>
               <span data-i18n="desktop.account.nickname">Nickname</span>
@@ -395,9 +407,9 @@
           </div>
           <div class="wizard-actions">
             <button id="wizard-back-1" type="button" data-i18n="desktop.wizard.back">Back</button>
-            <button id="wizard-import" type="button" data-i18n="desktop.wizard.importExisting">Import existing config</button>
             <button id="wizard-next-1" type="button" data-i18n="desktop.wizard.next">Next</button>
           </div>
+          <p id="wizard-join-status" class="wizard-join-status" hidden></p>
         </div>
 
         <div class="wizard-step" data-wizard-step="2">
@@ -501,6 +513,28 @@
           <button id="reset-cancel" type="button" data-i18n="cancel">Cancel</button>
           <button id="reset-local-only" type="button" data-i18n="desktop.reset.localOnly">Local only</button>
           <button id="reset-with-cloud" type="button" class="danger-button" data-i18n="desktop.reset.localAndCloud">Local + Cloud</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="import-mode-modal" class="modal-backdrop" hidden>
+      <section class="modal-panel import-mode-panel" role="dialog" aria-modal="true">
+        <div class="section-title import-mode-title">
+          <h3 data-i18n="desktop.importMode.title">Import Config</h3>
+          <button id="import-mode-cancel" type="button" class="modal-close-button" aria-label="Cancel" data-i18n-aria-label="cancel" data-i18n-title="cancel">&times;</button>
+        </div>
+        <p class="import-mode-copy" data-i18n="desktop.importMode.question">Choose the intent before selecting a config file.</p>
+        <div class="import-mode-grid">
+          <button id="import-mode-join" type="button" class="import-mode-card recommended">
+            <span class="choice-kicker" data-i18n="desktop.importMode.joinKicker">Recommended for second devices</span>
+            <strong data-i18n="desktop.importMode.join">Join existing leaderboard identity</strong>
+            <small data-i18n="desktop.importMode.joinDesc">Import identity and preferences. This device keeps its own device ID and sync state.</small>
+          </button>
+          <button id="import-mode-restore" type="button" class="import-mode-card">
+            <span class="choice-kicker" data-i18n="desktop.importMode.restoreKicker">Recovery only</span>
+            <strong data-i18n="desktop.importMode.restore">Restore original device</strong>
+            <small data-i18n="desktop.importMode.restoreDesc">Full restore including device ID. Use this only to recover the original device.</small>
+          </button>
         </div>
       </section>
     </div>

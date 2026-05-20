@@ -235,6 +235,14 @@ const translations = {
     "desktop.account.saveSettings": "保存设置",
     "desktop.account.exportConfig": "导出配置",
     "desktop.account.importConfig": "导入配置",
+    "desktop.importMode.title": "导入配置",
+    "desktop.importMode.question": "请先选择导入意图，再选择配置文件。",
+    "desktop.importMode.joinKicker": "第二台设备推荐",
+    "desktop.importMode.join": "加入已有排行榜身份",
+    "desktop.importMode.joinDesc": "导入身份和偏好设置。本机保留独立的设备标识和同步状态。",
+    "desktop.importMode.restoreKicker": "仅用于恢复",
+    "desktop.importMode.restore": "恢复原设备",
+    "desktop.importMode.restoreDesc": "完整恢复包括设备标识。仅用于恢复原来的设备。",
 
     // 桌面端 - 来源设置
     "desktop.sources.addCodex": "添加 Codex 位置",
@@ -362,6 +370,15 @@ const translations = {
     "desktop.wizard.identity": "您的身份",
     "desktop.wizard.participantId": "参与者 ID",
     "desktop.wizard.importExisting": "导入现有配置",
+    "desktop.wizard.createNewKicker": "新参与者",
+    "desktop.wizard.createNewIdentity": "创建新身份",
+    "desktop.wizard.createNewIdentityDesc": "为这台设备创建新的排行榜参与者。",
+    "desktop.wizard.joinExistingKicker": "第二台设备",
+    "desktop.wizard.joinExisting": "加入已有排行榜身份",
+    "desktop.wizard.joinExistingDesc": "从另一台设备导入配置，加入同一排行榜身份。本机将保留独立的设备标识。",
+    "desktop.wizard.joinSuccess": "已成功加入排行榜身份",
+    "desktop.wizard.joinConnectCursor": "请在此设备上连接 Cursor 以开始采集数据。",
+    "desktop.wizard.restoreDeviceWarning": "备份恢复仅用于恢复原设备数据，不适用于添加第二台设备。如需在第二台设备加入，请使用「加入已有排行榜身份」功能。",
     "desktop.wizard.dataSources": "数据来源",
     "desktop.wizard.cloud": "云端连接（可选）",
     "desktop.wizard.withCloud": "使用云端",
@@ -394,6 +411,8 @@ const translations = {
     "desktop.renderer.savingSettings": "保存设置...",
     "desktop.renderer.exportCanceled": "导出已取消",
     "desktop.renderer.configExported": "配置已导出",
+    "desktop.renderer.configJoinedParticipant": "已加入已有排行榜身份。本机设备标识已保留，请在此设备上连接 Cursor。",
+    "desktop.renderer.configRestoredDevice": "已按恢复原设备模式导入配置。",
     "desktop.renderer.found": "已发现 · {count} 个位置",
     "desktop.renderer.foundOne": "已发现 · 1 个位置",
     "desktop.renderer.notFound": "在此设备上未找到",
@@ -425,9 +444,10 @@ const translations = {
     "desktop.renderer.preparingBackup": "准备本机备份中...",
     "desktop.renderer.backupCanceled": "备份操作已取消",
     "desktop.renderer.backupExported": "本机备份已完成，当前有 {count} 份",
-    "desktop.renderer.confirmRestoreBackup": "恢复这份备份？\n\n创建时间: {date}\n文件数: {files}\n大小: {size}\n\n恢复会覆盖当前配置、缓存、上传队列和同步状态。当前文件会先保存为恢复快照。",
+    "desktop.renderer.confirmRestoreBackup": "恢复这份备份？\n\n创建时间: {date}\n文件数: {files}\n大小: {size}\n\n注意：备份恢复仅用于恢复原设备数据。\n恢复会覆盖当前配置、缓存、上传队列和同步状态。当前文件会先保存为恢复快照。",
     "desktop.renderer.restoringBackup": "正在恢复本机备份...",
     "desktop.renderer.backupRestored": "已恢复 {count} 个本机数据文件",
+    "desktop.renderer.restoredDeviceLabel": "设备: {deviceId}",
     "desktop.renderer.backupFolderSaved": "备份文件夹已保存",
     "desktop.renderer.backupSettingsSaved": "备份设置已保存",
     "desktop.renderer.backupFolderMissing": "请先选择备份文件夹",
@@ -910,6 +930,14 @@ const translations = {
     "desktop.account.nickname": "Nickname",
     "desktop.account.saveSettings": "Save settings",
     "desktop.account.exportConfig": "Export config",
+    "desktop.importMode.title": "Import Config",
+    "desktop.importMode.question": "Choose the intent before selecting a config file.",
+    "desktop.importMode.joinKicker": "Recommended for second devices",
+    "desktop.importMode.join": "Join existing leaderboard identity",
+    "desktop.importMode.joinDesc": "Import identity and preferences. This device keeps its own device ID and sync state.",
+    "desktop.importMode.restoreKicker": "Recovery only",
+    "desktop.importMode.restore": "Restore original device",
+    "desktop.importMode.restoreDesc": "Full restore including device ID. Use this only to recover the original device.",
     "desktop.account.importConfig": "Import config",
 
     // Desktop - Sources Settings
@@ -1036,6 +1064,15 @@ const translations = {
     "desktop.wizard.identity": "Your identity",
     "desktop.wizard.participantId": "Participant ID",
     "desktop.wizard.importExisting": "Import existing config",
+    "desktop.wizard.createNewKicker": "New participant",
+    "desktop.wizard.createNewIdentity": "Create new identity",
+    "desktop.wizard.createNewIdentityDesc": "Start a new leaderboard participant for this device.",
+    "desktop.wizard.joinExistingKicker": "Second device",
+    "desktop.wizard.joinExisting": "Join existing leaderboard identity",
+    "desktop.wizard.joinExistingDesc": "Import config from another device to join the same leaderboard identity. This device keeps its own device ID.",
+    "desktop.wizard.joinSuccess": "Successfully joined leaderboard identity",
+    "desktop.wizard.joinConnectCursor": "Connect Cursor on this device to start collecting data.",
+    "desktop.wizard.restoreDeviceWarning": "Backup restore is for recovering the original device only, not for adding a second device. To join from a second device, use the \"Join existing leaderboard identity\" option.",
     "desktop.wizard.dataSources": "Data sources",
     "desktop.wizard.cloud": "Cloud connection (optional)",
     "desktop.wizard.withCloud": "With cloud",
@@ -1068,6 +1105,8 @@ const translations = {
     "desktop.renderer.savingSettings": "Saving settings...",
     "desktop.renderer.exportCanceled": "Export canceled",
     "desktop.renderer.configExported": "Config exported",
+    "desktop.renderer.configJoinedParticipant": "Joined existing leaderboard identity. This device ID was preserved; connect Cursor on this device.",
+    "desktop.renderer.configRestoredDevice": "Config imported in original-device restore mode.",
     "desktop.renderer.found": "Found · {count} locations",
     "desktop.renderer.foundOne": "Found · 1 location",
     "desktop.renderer.notFound": "Not found on this machine",
@@ -1099,9 +1138,10 @@ const translations = {
     "desktop.renderer.preparingBackup": "Preparing local backup...",
     "desktop.renderer.backupCanceled": "Backup action canceled",
     "desktop.renderer.backupExported": "Local backup complete. {count} backups available.",
-    "desktop.renderer.confirmRestoreBackup": "Restore this backup?\n\nCreated: {date}\nFiles: {files}\nSize: {size}\n\nRestore replaces the current config, cache, upload queue, and sync state. Current files are snapshotted first.",
+    "desktop.renderer.confirmRestoreBackup": "Restore this backup?\n\nCreated: {date}\nFiles: {files}\nSize: {size}\n\nNote: Backup restore is for recovering the original device only.\nRestore replaces the current config, cache, upload queue, and sync state. Current files are snapshotted first.",
     "desktop.renderer.restoringBackup": "Restoring local backup...",
     "desktop.renderer.backupRestored": "Restored {count} local data files",
+    "desktop.renderer.restoredDeviceLabel": "device: {deviceId}",
     "desktop.renderer.backupFolderSaved": "Backup folder saved",
     "desktop.renderer.backupSettingsSaved": "Backup settings saved",
     "desktop.renderer.backupFolderMissing": "Choose a backup folder first",
@@ -1471,6 +1511,13 @@ export function updatePageTranslations() {
     const key = el.dataset.i18nTitle;
     if (key) {
       el.title = t(key);
+    }
+  });
+
+  document.querySelectorAll("[data-i18n-aria-label]").forEach((el) => {
+    const key = el.dataset.i18nAriaLabel;
+    if (key) {
+      el.setAttribute("aria-label", t(key));
     }
   });
 }

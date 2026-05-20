@@ -49,7 +49,7 @@
     revealRuntimeLogDirectory: () => invoke("reveal_runtime_log_directory"),
     exportLocalBackup:   () => invoke("export_local_backup_dialog"),
     importIdentity:      () => invoke("import_identity_dialog"),
-    importConfig:        () => invoke("import_config_dialog"),
+    importConfig:        (mode) => invoke("import_config_dialog", { mode: mode || null }),
     restoreLocalBackup:  () => invoke("restore_local_backup_dialog"),
     localBackupStatus:   fwd("local-backup:status"),
     createLocalBackup:   fwd("local-backup:create"),

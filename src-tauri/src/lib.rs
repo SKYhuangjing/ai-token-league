@@ -702,6 +702,7 @@ async fn import_identity_dialog(
 async fn import_config_dialog(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    mode: Option<String>,
 ) -> Result<Value, String> {
     use tauri_plugin_dialog::DialogExt;
     let file_path = app
@@ -714,7 +715,12 @@ async fn import_config_dialog(
         Some(path) => {
             let p = path.into_path().map_err(|e| e.to_string())?;
             let content = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-            let config: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let mut config: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            if let Some(m) = mode {
+                if let Some(obj) = config.as_object_mut() {
+                    obj.insert("__importMode".to_string(), serde_json::json!(m));
+                }
+            }
             call_sidecar(&state, "config:import:apply", config).await
         }
         None => Ok(json!({"canceled": true})),

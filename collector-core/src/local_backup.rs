@@ -56,6 +56,35 @@ fn sha256_hex(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn remove_cursor_credentials_from_config(mut value: Value) -> Value {
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "cursorDashboardUsage".to_string(),
+            serde_json::to_value(config::CursorDashboardUsageConfig::default())
+                .unwrap_or_else(|_| json!({})),
+        );
+        if let Some(ignored) = obj
+            .get_mut("providerIgnoredAutoSources")
+            .and_then(|v| v.as_object_mut())
+        {
+            ignored.remove("cursor_dashboard_usage");
+        }
+    }
+    value
+}
+
+fn sanitize_backup_entry_content(key: &str, content: &str) -> Result<String, String> {
+    if key != "config" {
+        return Ok(content.to_string());
+    }
+    let value: Value = serde_json::from_str(content)
+        .map_err(|e| format!("Cannot sanitize config backup: {}", e))?;
+    let sanitized = remove_cursor_credentials_from_config(value);
+    serde_json::to_string_pretty(&sanitized)
+        .map(|content| format!("{}\n", content))
+        .map_err(|e| e.to_string())
+}
+
 pub fn export_local_backup() -> Result<Value, String> {
     let mut entries = Vec::new();
     let mut missing = Vec::new();
@@ -71,6 +100,7 @@ pub fn export_local_backup() -> Result<Value, String> {
             let _: Value = serde_json::from_str(&content)
                 .map_err(|e| format!("Cannot back up invalid JSON file {}: {}", item.key, e))?;
         }
+        let content = sanitize_backup_entry_content(item.key, &content)?;
         entries.push(json!({
             "key": item.key,
             "content": content,
@@ -86,7 +116,7 @@ pub fn export_local_backup() -> Result<Value, String> {
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "scope": "client-local-data",
-        "warning": "Sensitive local backup. Contains identity private key and local tokens if configured. Do not share this file.",
+        "warning": "Sensitive local backup. Contains identity private key and local data. Cursor credentials are not included and must be reconnected after restore.",
         "entries": entries,
         "missing": missing
     }))
@@ -252,7 +282,8 @@ pub fn restore_local_backup(backup: Value) -> Result<Value, String> {
                 let _: Value = serde_json::from_str(content)
                     .map_err(|e| format!("Invalid backup entry {} JSON: {}", item.key, e))?;
             }
-            write_atomic(&item.path, content)?;
+            let content_to_write = sanitize_backup_entry_content(item.key, content)?;
+            write_atomic(&item.path, &content_to_write)?;
             restored += 1;
         } else if item.path.exists() {
             fs::remove_file(&item.path)
@@ -260,10 +291,24 @@ pub fn restore_local_backup(backup: Value) -> Result<Value, String> {
         }
     }
 
-    Ok(json!({
+    let restored_device_id = backup["entries"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|e| e["key"] == "config"))
+        .and_then(|entry| entry["content"].as_str())
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .and_then(|v| v["deviceId"].as_str().map(|s| s.to_string()));
+
+    let mut result = json!({
+        "restoreMode": "restore_device",
         "restored": restored,
         "snapshotPath": restore_snapshot_dir.to_string_lossy()
-    }))
+    });
+    if let Some(device_id) = restored_device_id {
+        result["restoredDeviceId"] = json!(device_id.clone());
+        result["deviceId"] = json!(device_id);
+    }
+
+    Ok(result)
 }
 
 fn validate_backup(backup: &Value) -> Result<(), String> {
@@ -474,6 +519,71 @@ mod tests {
         let queue_content = fs::read_to_string(config::queue_path()).unwrap();
         assert!(config_content.contains("\"p1\""));
         assert_eq!(queue_content, "[]\n");
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[test]
+    fn backup_and_restore_strip_cursor_credentials() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+
+        config::ensure_app_dir();
+        fs::write(
+            config::config_path(),
+            serde_json::to_string_pretty(&json!({
+                "participantId": "p1",
+                "identityPublicKey": "pub",
+                "identityPrivateKey": "secret",
+                "deviceId": "d-backup",
+                "cursorDashboardUsage": {
+                    "workosSessionToken": "legacy-secret",
+                    "accounts": [{
+                        "accessToken": "secret-at",
+                        "refreshToken": "secret-rt",
+                        "authId": "auth1",
+                        "email": "user@example.com"
+                    }]
+                },
+                "providerIgnoredAutoSources": {
+                    "cursor_dashboard_usage": ["legacy-source"]
+                }
+            }))
+            .unwrap()
+                + "\n",
+        )
+        .unwrap();
+
+        let backup = export_local_backup().unwrap();
+        let config_entry = backup["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["key"] == "config")
+            .unwrap();
+        let backup_config = config_entry["content"].as_str().unwrap();
+        assert!(!backup_config.contains("secret-at"));
+        assert!(!backup_config.contains("secret-rt"));
+        assert!(!backup_config.contains("legacy-secret"));
+        assert!(!backup_config.contains("cursor_dashboard_usage"));
+
+        fs::write(config::config_path(), "{}\n").unwrap();
+        let restored = restore_local_backup(backup).unwrap();
+        assert_eq!(restored["restoreMode"].as_str(), Some("restore_device"));
+        assert_eq!(restored["deviceId"].as_str(), Some("d-backup"));
+        assert_eq!(restored["restoredDeviceId"].as_str(), Some("d-backup"));
+        let restored_config = fs::read_to_string(config::config_path()).unwrap();
+        assert!(!restored_config.contains("secret-at"));
+        assert!(!restored_config.contains("secret-rt"));
+        assert!(!restored_config.contains("legacy-secret"));
+        assert!(restored_config.contains("\"accounts\": []"));
 
         let _ = fs::remove_dir_all(&home);
         if let Some(value) = previous_home {
