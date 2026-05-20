@@ -108,7 +108,7 @@ async fn handle_command(
         }
         Command::AppVersion => Ok(version::client_metadata()),
         Command::ConfigGet => {
-            let c = config::ensure_desktop_config();
+            let c = ensure_config_with_api_connection().await;
             Ok(sanitize_config_value(&c))
         }
         Command::ConfigInit => {
@@ -613,6 +613,36 @@ async fn prepare_config_input(
             obj.insert("lastSyncError".to_string(), serde_json::json!(""));
         }
     }
+    next
+}
+
+async fn ensure_config_with_api_connection() -> config::AppConfig {
+    let current = config::ensure_desktop_config();
+    let normalized = config::normalize_api_base_url(&current.api_base_url);
+    if normalized.is_empty()
+        || current
+            .api_connection
+            .get("checkedAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .len()
+            > 0
+    {
+        return current;
+    }
+
+    let api_connection = check_api_connection(&normalized)
+        .await
+        .unwrap_or_else(|error| serde_json::json!({
+            "ok": false,
+            "status": "unreachable",
+            "apiBaseUrl": normalized,
+            "checkedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "message": error
+        }));
+    let mut next = current;
+    next.api_connection = api_connection;
+    config::save_config(&next);
     next
 }
 
