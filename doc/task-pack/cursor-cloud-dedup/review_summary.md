@@ -16,9 +16,9 @@
 
 ### D1: 私有 Cursor deep login 协议
 
-- 决策：先实测 `api2.cursor.sh/auth/poll` 与 `api2.cursor.sh/oauth/token`，确认 request/response 后再实现正式登录和 refresh。
-- 影响：未确认前不能把字段猜测写入生产代码。
-- 验收口径：有 sanitized 实测记录，证明 pending、success、expired、refresh success、shouldLogout 分支。
+- 决策：实测已确认。`auth/poll` 返回 camelCase (`accessToken`, `refreshToken`, `authId`)，不含 email；`oauth/token` 返回 snake_case (`access_token`, `id_token`, `shouldLogout`)，不返回新 `refresh_token`；邮箱通过 `cursor.com/api/auth/me` (Cookie auth) 获取。
+- 影响：实现时需处理两套命名约定；poll 成功后需额外调 `/api/auth/me` 获取 email。
+- 验收口径：✅ T01 evidence 已产出 sanitized 实测记录。
 
 ### D2: Cursor 账号身份
 

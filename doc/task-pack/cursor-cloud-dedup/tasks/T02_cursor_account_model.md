@@ -10,7 +10,7 @@
 
 ## Goal
 
-- 定义并实现本地 `cursorDashboardUsage.accounts[]` 授权账号模型，兼容 legacy `workosSessionTokens`，并固定 auto-detect 与 Connect Cursor 的优先级。
+- 定义并实现本地 `cursorDashboardUsage.accounts[]` 授权账号模型，并废弃 legacy `workosSessionTokens` 与本机 auto-detect Cursor 账号作为扫描来源。
 
 ## Primary Executor
 
@@ -21,7 +21,7 @@
 - 扩展 `collector-core/src/config.rs` Cursor account config。
 - 让 diagnostics、backup/reset、import/export、runtime log 对 token 字段 redacted。
 - 统一 Cursor cloud identity：email hash 优先，`authId` / user id hash fallback。
-- auto-detect 同账号与授权账号合并，授权 token 优先。
+- `Connect Cursor` 授权账号是本版本唯一 Cursor 扫描来源。
 
 ## Out of Scope
 
@@ -46,7 +46,7 @@
 
 - `本地持久化字段`
 - `本地存储和清理边界`
-- `auto-detect 关系`
+- `废弃来源边界`
 - `Cursor 账号身份`
 
 ## Independent Execution
@@ -56,15 +56,17 @@
 
 ## Implementation Requirements
 
-- Add account record fields: `accessToken`, `refreshToken`, `authId`, `email`, `accountHash`, `accessTokenExpiresAt`, `lastRefreshAt`, `authStatus`, `addedAt`.
-- Keep legacy `workosSessionTokens` readable as fallback.
+- Add account record fields: `accessToken`, `refreshToken`, `authId`, `email`, `accountHash`, `accessTokenExpiresAt`, `lastRefreshAt`, `authStatus`, `addedAt`. All camelCase (matching `auth/poll` response).
+- Add account-level `ignored`; ignored accounts keep refresh / reauth state but do not produce scan/upload usage.
+- Clear legacy `workosSessionToken(s)` and `providerIgnoredAutoSources.cursor_dashboard_usage` on config save/load.
+- Account model must store `sub` (from JWT `sub`, e.g. `auth0|user_xxx`) for constructing `WorkosCursorSessionToken` cookie to call `cursor.com/api/auth/me`.
 - Ensure all serialization surfaces used by diagnostics/export/log redact token fields.
 - Ensure local reset clears authorized accounts and legacy token material.
 - Deduplicate account sources by stable account hash, not display name.
 
 ## Comment Requirements
 
-- Add short comments only around redaction and legacy fallback rules if needed.
+- Add short comments only around redaction and deprecated-source cleanup rules if needed.
 
 ## Subagent Verification
 

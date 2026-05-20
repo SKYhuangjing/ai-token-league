@@ -43,6 +43,24 @@ fn sanitize_config(config: &AppConfig) -> Value {
                     }
                 }
             }
+            if let Some(accounts) = cursor
+                .get_mut("accounts")
+                .and_then(|v| v.as_array_mut())
+            {
+                for account in accounts {
+                    if let Some(acc) = account.as_object_mut() {
+                        acc.insert("accessToken".to_string(), json!("[redacted]"));
+                        acc.insert("refreshToken".to_string(), json!("[redacted]"));
+                        if let Some(email) = acc.get("email").and_then(|v| v.as_str()) {
+                            let at_idx = email.find('@').unwrap_or(email.len());
+                            if at_idx > 0 {
+                                let masked = format!("{}***{}", &email[..1], &email[at_idx..]);
+                                acc.insert("email".to_string(), json!(masked));
+                            }
+                        }
+                    }
+                }
+            }
         }
         if let Some(provider_roots) = obj.get_mut("providerRoots") {
             *provider_roots = json!("[path-redacted]");

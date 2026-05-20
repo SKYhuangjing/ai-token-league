@@ -90,11 +90,41 @@ pub struct CursorTokenRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CursorAccount {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub auth_id: String,
+    #[serde(default)]
+    pub sub: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub account_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token_expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_refresh_at: Option<String>,
+    #[serde(default = "default_auth_status")]
+    pub auth_status: String,
+    #[serde(default)]
+    pub ignored: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added_at: Option<String>,
+}
+
+fn default_auth_status() -> String {
+    "active".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CursorDashboardUsageConfig {
     #[serde(default)]
     pub workos_session_token: String,
     #[serde(default)]
     pub workos_session_tokens: Vec<CursorTokenRecord>,
+    #[serde(default)]
+    pub accounts: Vec<CursorAccount>,
 }
 
 impl Default for CursorDashboardUsageConfig {
@@ -102,6 +132,7 @@ impl Default for CursorDashboardUsageConfig {
         Self {
             workos_session_token: String::new(),
             workos_session_tokens: vec![],
+            accounts: vec![],
         }
     }
 }
@@ -297,12 +328,18 @@ pub fn load_build_preset() -> serde_json::Value {
 
 pub fn ensure_desktop_config() -> AppConfig {
     if let Some(mut current) = load_config() {
+        let cleaned_deprecated_cursor_sources = cleanup_deprecated_cursor_sources(&mut current);
         if !current.desktop_auto_initialized {
+            if cleaned_deprecated_cursor_sources {
+                save_config(&current);
+            }
             return current;
         }
         if current.nickname.trim().is_empty() || current.nickname == "anonymous" {
             current.nickname = generated_nickname();
             current.nickname_auto_generated = true;
+            save_config(&current);
+        } else if cleaned_deprecated_cursor_sources {
             save_config(&current);
         }
         return current;
@@ -330,6 +367,7 @@ pub fn save_config(config: &AppConfig) {
     let mut fixed = config.clone();
     fixed.auto_refresh_enabled = DEFAULT_AUTO_REFRESH_ENABLED;
     fixed.silent_update_mode = DEFAULT_SILENT_UPDATE_MODE.to_string();
+    cleanup_deprecated_cursor_sources(&mut fixed);
     let json = serde_json::to_string_pretty(&fixed).unwrap_or_default();
     let _ = fs::write(config_path(), format!("{}\n", json));
 }
@@ -628,6 +666,55 @@ pub fn remove_cursor_token(input: serde_json::Value, current: &AppConfig) -> App
     config
 }
 
+pub fn upsert_cursor_account(account: CursorAccount, current: &AppConfig) -> AppConfig {
+    let mut config = current.clone();
+    let email_key = normalize_cursor_account_key(&account.email);
+    let hash_key = account.account_hash.trim().to_string();
+    let auth_key = account.auth_id.trim().to_string();
+
+    config.cursor_dashboard_usage.accounts.retain(|existing| {
+        let same_email = !email_key.is_empty()
+            && normalize_cursor_account_key(&existing.email) == email_key;
+        let same_hash = !hash_key.is_empty() && existing.account_hash.trim() == hash_key;
+        let same_auth = !auth_key.is_empty() && existing.auth_id.trim() == auth_key;
+        !(same_email || same_hash || same_auth)
+    });
+    config.cursor_dashboard_usage.accounts.push(account);
+
+    cleanup_deprecated_cursor_sources(&mut config);
+
+    config
+        .provider_enabled
+        .insert("cursor_dashboard_usage".to_string(), true);
+    config.updated_at = Some(now_iso());
+    save_config(&config);
+    config
+}
+
+pub fn normalize_cursor_account_key(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn cleanup_deprecated_cursor_sources(config: &mut AppConfig) -> bool {
+    let mut changed = false;
+    if !config.cursor_dashboard_usage.workos_session_token.is_empty() {
+        config.cursor_dashboard_usage.workos_session_token = String::new();
+        changed = true;
+    }
+    if !config.cursor_dashboard_usage.workos_session_tokens.is_empty() {
+        config.cursor_dashboard_usage.workos_session_tokens.clear();
+        changed = true;
+    }
+    if config
+        .provider_ignored_auto_sources
+        .remove("cursor_dashboard_usage")
+        .is_some()
+    {
+        changed = true;
+    }
+    changed
+}
+
 pub fn reset_local_data() {
     let _ = fs::remove_file(config_path());
     let _ = fs::remove_file(queue_path());
@@ -797,6 +884,12 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
 
 pub fn ignore_auto_source(provider_id: &str, source_id: &str, current: &AppConfig) -> AppConfig {
     let mut config = current.clone();
+    if provider_id == "cursor_dashboard_usage" {
+        set_cursor_account_ignored(&mut config, source_id, true);
+        config.updated_at = Some(now_iso());
+        save_config(&config);
+        return config;
+    }
     let list = config
         .provider_ignored_auto_sources
         .entry(provider_id.to_string())
@@ -811,6 +904,12 @@ pub fn ignore_auto_source(provider_id: &str, source_id: &str, current: &AppConfi
 
 pub fn unignore_auto_source(provider_id: &str, source_id: &str, current: &AppConfig) -> AppConfig {
     let mut config = current.clone();
+    if provider_id == "cursor_dashboard_usage" {
+        set_cursor_account_ignored(&mut config, source_id, false);
+        config.updated_at = Some(now_iso());
+        save_config(&config);
+        return config;
+    }
     if let Some(list) = config.provider_ignored_auto_sources.get_mut(provider_id) {
         list.retain(|id| id != source_id);
         if list.is_empty() {
@@ -820,6 +919,22 @@ pub fn unignore_auto_source(provider_id: &str, source_id: &str, current: &AppCon
     config.updated_at = Some(now_iso());
     save_config(&config);
     config
+}
+
+fn set_cursor_account_ignored(config: &mut AppConfig, source_id: &str, ignored: bool) {
+    let source_key = normalize_cursor_account_key(source_id);
+    for (index, account) in config.cursor_dashboard_usage.accounts.iter_mut().enumerate() {
+        let index_id = format!("account:{}", index);
+        let same_index = source_id == index_id;
+        let same_hash = !account.account_hash.trim().is_empty() && account.account_hash == source_id;
+        let same_auth = !account.auth_id.trim().is_empty() && account.auth_id == source_id;
+        let same_email = !source_key.is_empty()
+            && !account.email.trim().is_empty()
+            && normalize_cursor_account_key(&account.email) == source_key;
+        if same_index || same_hash || same_auth || same_email {
+            account.ignored = ignored;
+        }
+    }
 }
 
 // --- Sync Manifest (per-server sync state) ---

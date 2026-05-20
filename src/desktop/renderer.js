@@ -15,6 +15,10 @@ const api = window.tokenLeague;
 const $ = (selector) => document.querySelector(selector);
 const AUTO_BACKUP_DAILY_START = { hour: 0, minute: 0 };
 
+document.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+});
+
 function logRuntimeEvent(event, data = {}, level = "info") {
   if (!api?.logEvent) return;
   api.logEvent({ source: "renderer", event, level, data }).catch(() => {});
@@ -79,6 +83,33 @@ function showToast(message) {
   showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
 }
 
+let appConfirmResolver = null;
+
+function confirmDialog(message, { alertOnly = false } = {}) {
+  const modal = $("#app-confirm-modal");
+  const messageEl = $("#app-confirm-message");
+  const okButton = $("#app-confirm-ok");
+  const cancelButton = $("#app-confirm-cancel");
+  if (!modal || !messageEl || !okButton || !cancelButton) return Promise.resolve(false);
+  if (appConfirmResolver) appConfirmResolver(false);
+  messageEl.textContent = message || "";
+  cancelButton.hidden = alertOnly;
+  modal.hidden = false;
+  okButton.focus();
+  return new Promise((resolve) => {
+    appConfirmResolver = resolve;
+  });
+}
+
+function closeConfirmDialog(result) {
+  const modal = $("#app-confirm-modal");
+  if (modal) modal.hidden = true;
+  if (!appConfirmResolver) return;
+  const resolve = appConfirmResolver;
+  appConfirmResolver = null;
+  resolve(Boolean(result));
+}
+
 function setStatusMessage(message) {
   const el = document.querySelector("#sync-state");
   if (el) el.textContent = message;
@@ -138,21 +169,37 @@ document.addEventListener("click", (event) => {
   if (btn) run(() => addProviderRoot("claude_code_local"));
 });
 document.addEventListener("click", (event) => {
+  const btn = event.target.closest("#connect-cursor");
+  if (btn) run(connectCursor);
+});
+document.addEventListener("click", (event) => {
   const btn = event.target.closest("#add-cursor-token");
-  if (btn) openCursorTokenModal();
+  if (btn) {
+    event.preventDefault();
+    if (event.altKey) openCursorTokenModal();
+  }
 });
 $("#save-cursor-token").addEventListener("click", () => run(addCursorToken));
 $("#cursor-token-modal").addEventListener("click", (event) => {
   if (event.target.id === "cursor-token-modal" || event.target.closest("#cancel-cursor-token")) closeCursorTokenModal();
 });
+$("#cursor-connect-modal").addEventListener("click", (event) => {
+  if (event.target.closest("#cancel-cursor-connect")) run(cancelCursorConnect);
+});
 $("#reset-confirm-modal").addEventListener("click", (event) => {
   if (event.target.id === "reset-confirm-modal" || event.target.closest("#reset-cancel")) closeResetConfirmModal();
+});
+$("#app-confirm-modal").addEventListener("click", (event) => {
+  if (event.target.id === "app-confirm-modal" || event.target.closest("#app-confirm-cancel")) closeConfirmDialog(false);
+  if (event.target.closest("#app-confirm-ok")) closeConfirmDialog(true);
 });
 $("#reset-local-only").addEventListener("click", () => run(resetLocalOnly));
 $("#reset-with-cloud").addEventListener("click", () => run(resetWithCloud));
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#cursor-token-modal").hidden) closeCursorTokenModal();
+  if (event.key === "Escape" && !$("#cursor-connect-modal").hidden) run(cancelCursorConnect);
   if (event.key === "Escape" && !$("#reset-confirm-modal").hidden) closeResetConfirmModal();
+  if (event.key === "Escape" && !$("#app-confirm-modal").hidden) closeConfirmDialog(false);
   if (event.key === "Escape" && !$("#trend-drawer").hidden) closeTrendDrawer();
 });
 $("#close-trend-drawer").addEventListener("click", closeTrendDrawer);
@@ -361,7 +408,7 @@ document.addEventListener("click", async (e) => {
   const rootPath = btn.dataset.removeRoot;
   const providerId = btn.dataset.providerId;
   if (!rootPath || !providerId) return;
-  if (!confirm(t("desktop.sources.removeConfirm"))) return;
+  if (!(await confirmDialog(t("desktop.sources.removeConfirm")))) return;
   try {
     latestConfig = await api.removeProviderRoot(providerId, rootPath);
     renderConfig(latestConfig);
@@ -373,11 +420,27 @@ document.addEventListener("click", async (e) => {
 });
 
 document.addEventListener("click", async (e) => {
+  const accountBtn = e.target.closest("[data-disconnect-cursor-account]");
+  if (accountBtn) {
+    const accountIndex = accountBtn.dataset.disconnectCursorAccount;
+    if (accountIndex === undefined) return;
+    if (!(await confirmDialog(t("desktop.sources.removeConfirm")))) return;
+    try {
+      latestConfig = await api.disconnectCursor(Number(accountIndex));
+      renderConfig(latestConfig);
+      setSaveMessage(t("desktop.sources.sourceRemoved"), "ok");
+      await loadHealth();
+      await loadToday(true);
+    } catch (err) {
+      setSaveMessage(err.message || t("desktop.renderer.failedToRemove"), "error");
+    }
+    return;
+  }
   const btn = e.target.closest("[data-remove-cursor-token]");
   if (!btn) return;
   const tokenValue = btn.dataset.removeCursorToken;
   if (!tokenValue) return;
-  if (!confirm(t("desktop.sources.removeConfirm"))) return;
+  if (!(await confirmDialog(t("desktop.sources.removeConfirm")))) return;
   try {
     latestConfig = await api.removeCursorToken(tokenValue);
     renderConfig(latestConfig);
@@ -395,7 +458,7 @@ document.addEventListener("click", async (e) => {
   const sourceId = btn.dataset.ignoreSource;
   const providerId = btn.dataset.providerId;
   if (!sourceId || !providerId) return;
-  if (!confirm(t("desktop.sources.ignoreConfirm"))) return;
+  if (!(await confirmDialog(t("desktop.sources.ignoreConfirm")))) return;
   try {
     latestConfig = await api.ignoreAutoSource(providerId, sourceId);
     renderConfig(latestConfig);
@@ -655,7 +718,7 @@ async function finishWizard() {
 }
 
 async function resetLocalData() {
-  const ok = window.confirm(t("desktop.renderer.confirmReset"));
+  const ok = await confirmDialog(t("desktop.renderer.confirmReset"));
   if (!ok) return;
   $("#reset-local-data").disabled = true;
   setStatusMessage(t("desktop.renderer.resetting"));
@@ -1083,13 +1146,13 @@ async function loadHealth() {
 }
 
 async function syncNow() {
-  if (isApiBaseUrlDirty() && !window.confirm(t("desktop.sync.unsavedApiBaseUrl"))) return;
+  if (isApiBaseUrlDirty() && !(await confirmDialog(t("desktop.sync.unsavedApiBaseUrl")))) return;
   const buttons = document.querySelectorAll("[data-sync-now]");
   buttons.forEach((button) => {
     button.disabled = true;
   });
   try {
-    if (!confirmSyncUpload()) {
+    if (!(await confirmSyncUpload())) {
       setStatusMessage(t("desktop.renderer.syncCanceled"));
       return;
     }
@@ -1106,16 +1169,16 @@ async function syncNow() {
   }
 }
 
-function confirmSyncUpload() {
+async function confirmSyncUpload() {
   const config = latestConfig || {};
   const apiBaseUrl = normalizeApiBaseUrl(config.apiBaseUrl || config.apiConnection?.apiBaseUrl || "");
   if (!apiBaseUrl) {
-    window.alert(t("desktop.renderer.configureCloudFirst"));
+    await confirmDialog(t("desktop.renderer.configureCloudFirst"), { alertOnly: true });
     return false;
   }
   const rows = allUsage.length || latestUsage.length || 0;
   const scannedAt = latestScanAt ? formatDateTime(latestScanAt) : "-";
-  return window.confirm(t("desktop.renderer.confirmUpload", { url: apiBaseUrl, rows, scannedAt }));
+  return confirmDialog(t("desktop.renderer.confirmUpload", { url: apiBaseUrl, rows, scannedAt }));
 }
 
 async function addProviderRoot(providerId) {
@@ -1149,6 +1212,73 @@ async function addCursorToken() {
   setSaveMessage(t("desktop.renderer.cursorTokenAdded"), "ok");
   await loadHealth();
   await loadToday(true);
+}
+
+async function connectCursor() {
+  if (!api.startCursorConnect || !api.pollCursorConnect) {
+    setSaveMessage(t("desktop.cursorConnect.unavailable"), "error");
+    return;
+  }
+  const modal = $("#cursor-connect-modal");
+  const status = $("#cursor-connect-status");
+  status.textContent = t("desktop.cursorConnect.opening");
+  modal.hidden = false;
+  let result;
+  try {
+    result = await api.startCursorConnect();
+  } catch (err) {
+    modal.hidden = true;
+    setSaveMessage(err.message || t("desktop.cursorConnect.failed"), "error");
+    return;
+  }
+  if (result?.loginUrl) {
+    if (api.openUrl) {
+      await api.openUrl(result.loginUrl);
+    } else {
+      window.open(result.loginUrl, "_blank", "noopener,noreferrer");
+    }
+  }
+  status.textContent = t("desktop.cursorConnect.waiting");
+  const expiresAt = Date.now() + Number(result?.expiresIn || 300) * 1000;
+  while (!modal.hidden && Date.now() < expiresAt) {
+    await delay(2000);
+    try {
+      const config = await api.pollCursorConnect();
+      latestConfig = config;
+      renderConfig(config);
+      modal.hidden = true;
+      setSaveMessage(t("desktop.cursorConnect.connected"), "ok");
+      await loadHealth();
+      await loadToday(true);
+      return;
+    } catch (err) {
+      const message = err?.message || String(err || "");
+      if (message.includes("pending")) {
+        status.textContent = t("desktop.cursorConnect.waiting");
+        continue;
+      }
+      modal.hidden = true;
+      setSaveMessage(message.includes("expired") ? t("desktop.cursorConnect.expired") : message, "error");
+      return;
+    }
+  }
+  await cancelCursorConnect();
+  setSaveMessage(t("desktop.cursorConnect.expired"), "error");
+}
+
+async function cancelCursorConnect() {
+  $("#cursor-connect-modal").hidden = true;
+  if (api.cancelCursorConnect) {
+    try {
+      await api.cancelCursorConnect();
+    } catch {
+      // Cancel is best-effort; the pending login expires server-side in five minutes.
+    }
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function openCursorTokenModal() {
@@ -1202,7 +1332,7 @@ function setUpdateCardBusy(isBusy) {
 
 async function checkUpdate({ automatic = false } = {}) {
   if (isApiBaseUrlDirty()) {
-    if (automatic || !window.confirm(t("desktop.sync.unsavedApiBaseUrl"))) return;
+    if (automatic || !(await confirmDialog(t("desktop.sync.unsavedApiBaseUrl")))) return;
   }
   const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "");
   if (!apiBaseUrl) {
@@ -1376,7 +1506,7 @@ async function restoreLocalBackup() {
       return;
     }
     const summary = picked.summary || {};
-    const ok = confirm(t("desktop.renderer.confirmRestoreBackup", {
+    const ok = await confirmDialog(t("desktop.renderer.confirmRestoreBackup", {
       date: summary.createdAt ? formatDateTime(summary.createdAt) : "-",
       files: summary.fileCount || 0,
       size: formatBytes(summary.totalBytes || 0)
@@ -1565,25 +1695,24 @@ function updateMessage(state = {}) {
 
 
 function renderCursorTokenSummary(cursorConfig = {}) {
-  const tokens = cursorConfig?.workosSessionTokens || [];
-  const legacy = cursorConfig?.workosSessionToken ? [{ accountName: t("common.legacyToken") }] : [];
-  const accounts = [...tokens, ...legacy].map((item) => item.accountName || "Cursor").filter(Boolean);
+  const connected = cursorConfig?.accounts || [];
+  const accounts = connected.map((item) => item.email || item.accountHash || "Cursor").filter(Boolean);
   const summary = accounts.length
     ? (accounts.length === 1 ? t("desktop.renderer.cursorTokensConfiguredOne") : t("desktop.renderer.cursorTokensConfiguredPlural", { count: accounts.length }))
     : t("desktop.renderer.noCursorTokenAuto");
-  let html = `<p class="cursor-token-note">${escapeHtml(summary)}</p>`;
-  if (tokens.length) {
-    html += `<ul class="root-list">${tokens.map((item, idx) => {
-      const name = escapeHtml(item.accountName || "Cursor");
-      return `<li><span class="root-path">${name}</span><button class="source-action-btn delete" type="button" data-remove-cursor-token="${idx}" title="${t("desktop.sources.removeTitle")}">${t("desktop.sources.deleteBtn")}</button></li>`;
-    }).join("")}</ul>`;
-  }
+  const html = `<p class="cursor-token-note">${escapeHtml(summary)}</p>`;
   const target = $("#cursor-token-summary");
   if (target) {
     target.hidden = true;
     target.innerHTML = html;
   }
   return html;
+}
+
+function cursorAuthStatusLabel(status) {
+  if (status === "refresh_failed") return t("desktop.cursorAuth.refreshFailed");
+  if (status === "reauth_required") return t("desktop.cursorAuth.reauthRequired");
+  return t("desktop.cursorAuth.active");
 }
 
 function cursorDetectedAccounts() {
@@ -1970,10 +2099,10 @@ function renderHealth() {
       const enabled = sourceEnabled(item);
       const sources = item.sources || [];
       const autoSources = sources.filter(s => s.kind === "auto" && !s.ignored);
-      const manualSources = sources.filter(s => s.kind === "manual");
+      const manualSources = sources.filter(s => s.kind === "manual" && !s.ignored);
       const ignoredSources = sources.filter(s => s.ignored);
       const addBtn = item.providerId === "cursor_dashboard_usage"
-        ? `<button class="outline-button" id="add-cursor-token" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCursor")}</button>`
+        ? `<button class="outline-button" id="connect-cursor" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCursor")}</button>`
         : item.providerId === "codex_local"
           ? `<button class="outline-button" id="add-codex-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCodex")}</button>`
           : `<button class="outline-button" id="add-claude-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addClaude")}</button>`;
@@ -2151,23 +2280,57 @@ function renderSourceRows(autoSources, manualSources, ignoredSources, providerId
     const label = escapeHtml(source.label);
     const id = escapeHtml(source.id);
     if (providerId === "cursor_dashboard_usage" && source.tokenIndex !== undefined) {
-      html += `<div class="source-row"><span class="badge">${t("desktop.sources.kindManual")}</span><span class="path" title="${label}">${label}</span><button class="outline-button" style="padding:2px 8px;font-size:11px;" type="button" data-remove-cursor-token="${source.tokenIndex}">${t("desktop.sources.removeBtn")}</button></div>`;
+      html += sourceRowHtml({
+        badge: t("desktop.sources.kindManual"),
+        label,
+        actions: `<button class="outline-button" type="button" data-remove-cursor-token="${source.tokenIndex}">${t("desktop.sources.removeBtn")}</button>`
+      });
+    } else if (providerId === "cursor_dashboard_usage" && source.accountIndex !== undefined) {
+      const status = escapeHtml(cursorAuthStatusLabel(source.authStatus || "active"));
+      html += sourceRowHtml({
+        badge: status,
+        label,
+        actions: `<button class="outline-button" type="button" data-ignore-source="${id}" data-provider-id="${escapeHtml(providerId)}">${t("desktop.sources.ignore")}</button><button class="outline-button" type="button" data-disconnect-cursor-account="${source.accountIndex}">${t("desktop.sources.removeBtn")}</button>`
+      });
     } else {
-      html += `<div class="source-row"><span class="badge">${t("desktop.sources.kindManual")}</span><span class="path" title="${label}">${label}</span><button class="outline-button" style="padding:2px 8px;font-size:11px;" type="button" data-remove-root="${id}" data-provider-id="${escapeHtml(providerId)}">${t("desktop.sources.removeBtn")}</button></div>`;
+      html += sourceRowHtml({
+        badge: t("desktop.sources.kindManual"),
+        label,
+        actions: `<button class="outline-button" type="button" data-remove-root="${id}" data-provider-id="${escapeHtml(providerId)}">${t("desktop.sources.removeBtn")}</button>`
+      });
     }
   }
   for (const source of autoSources) {
     const label = escapeHtml(source.label);
     const id = escapeHtml(source.id);
-    html += `<div class="source-row"><span class="badge ok">${t("desktop.sources.kindAuto")}</span><span class="path" title="${label}">${label}</span><button class="outline-button" style="padding:2px 8px;font-size:11px;" type="button" data-ignore-source="${id}" data-provider-id="${escapeHtml(providerId)}">${t("desktop.sources.ignore")}</button></div>`;
+    html += sourceRowHtml({
+      badge: t("desktop.sources.kindAuto"),
+      badgeClass: "ok",
+      label,
+      actions: `<button class="outline-button" type="button" data-ignore-source="${id}" data-provider-id="${escapeHtml(providerId)}">${t("desktop.sources.ignore")}</button>`
+    });
   }
   if (ignoredSources.length) {
     for (const source of ignoredSources) {
-      html += `<div class="source-row" style="opacity:0.6;"><span class="badge">${t("desktop.sources.kindIgnored")}</span><span class="path" title="${escapeHtml(source.label || "")}">${source.label ? escapeHtml(source.label) : ""}</span><button class="outline-button" style="padding:2px 8px;font-size:11px;" type="button" data-unignore-source="${escapeHtml(source.id)}" data-provider-id="${escapeHtml(providerId)}">${t("desktop.sources.unignore")}</button></div>`;
+      const accountRemove = providerId === "cursor_dashboard_usage" && source.accountIndex !== undefined
+        ? `<button class="outline-button" type="button" data-disconnect-cursor-account="${source.accountIndex}">${t("desktop.sources.removeBtn")}</button>`
+        : "";
+      html += sourceRowHtml({
+        badge: t("desktop.sources.kindIgnored"),
+        label: escapeHtml(source.label || ""),
+        muted: true,
+        actions: `<button class="outline-button" type="button" data-unignore-source="${escapeHtml(source.id)}" data-provider-id="${escapeHtml(providerId)}">${t("desktop.sources.unignore")}</button>${accountRemove}`
+      });
     }
   }
   html += '</div>';
   return html;
+}
+
+function sourceRowHtml({ badge, badgeClass = "", label, actions, muted = false }) {
+  const mutedClass = muted ? " source-row-muted" : "";
+  const badgeClasses = ["badge", badgeClass].filter(Boolean).join(" ");
+  return `<div class="source-row${mutedClass}"><div class="source-row-main"><span class="${badgeClasses}">${badge}</span><span class="path" title="${label}">${label}</span></div><div class="source-row-actions">${actions}</div></div>`;
 }
 
 function groupBy(items, key) {

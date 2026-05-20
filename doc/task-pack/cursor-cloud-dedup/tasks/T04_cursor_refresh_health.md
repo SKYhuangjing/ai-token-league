@@ -18,7 +18,7 @@
 
 ## Scope
 
-- Use verified `oauth/token` refresh protocol.
+- Use verified `oauth/token` refresh protocol (snake_case request/response: `grant_type`, `client_id`, `refresh_token` → `access_token`, `id_token`, `shouldLogout`).
 - Refresh before scan when token is near expiry.
 - On usage 401/403, refresh once and retry usage once.
 - Mark `refresh_failed` vs `reauth_required` correctly.
@@ -57,9 +57,8 @@
 
 ## Implementation Requirements
 
-- Parse JWT `exp` for `accessTokenExpiresAt`; fallback TTL 55 minutes.
-- If refresh response omits new refresh token, retain old refresh token.
-- If response includes new refresh token, atomically replace.
+- Parse JWT `exp` for `accessTokenExpiresAt`; JWT `exp` is ~60 days out but server may invalidate earlier, so still rely on 401/403 reactive refresh as primary expiry detection.
+- Refresh response does **not** return a new `refresh_token` (confirmed by T01); always retain the original `refreshToken` from poll.
 - Implement per-account single-flight refresh.
 - Never retry usage more than once after refresh.
 - Emit sanitized health: account hash/masked email, authStatus, lastError code.

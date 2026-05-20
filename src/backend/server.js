@@ -208,6 +208,21 @@ async function handleApi(req, res) {
     }
     return sendJson(res, 200, { ...(await store.upsertUsageBatch(payload)), compatibility });
   }
+  if (req.method === "POST" && req.url === "/api/usage/sync-state") {
+    const body = await readBody(req);
+    const participant = store.getParticipant(body.participantId);
+    if (!participant) return sendJson(res, 404, { error: "participant is not registered" });
+    const payload = {
+      participantId: body.participantId,
+      deviceId: body.deviceId,
+      clientGeneratedAt: body.clientGeneratedAt,
+      buckets: body.buckets
+    };
+    if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
+      return sendJson(res, 401, { error: "invalid signature" });
+    }
+    return sendJson(res, 200, store.compareSyncState(payload));
+  }
   if (req.method === "POST" && req.url === "/api/admin/recalculate-costs") {
     return sendJson(res, 200, await store.recalculateCosts());
   }

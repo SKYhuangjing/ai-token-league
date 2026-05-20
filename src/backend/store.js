@@ -3,7 +3,7 @@ import path from "node:path";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { compositionRatio, costQualityLabel, dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, priceToPublic } from "../shared/pricing.js";
-import { STORAGE_SCHEMA_VERSION, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, computeBucketFingerprint, displayTotalTokens, hourlyUsageKey, usageKey } from "../shared/schema.js";
+import { STORAGE_SCHEMA_VERSION, CLOUD_PROVIDER_IDS, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, cloudNaturalKey, computeBucketFingerprint, displayTotalTokens, hourlyUsageKey, usageKey } from "../shared/schema.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 import { currentBusinessDay } from "./day-context.js";
@@ -104,7 +104,9 @@ export class Store {
       workdirs: 0,
       usageDaily: 0,
       uploadBatches: 0,
-      usageSyncBuckets: 0
+      usageSyncBuckets: 0,
+      usageHourly: 0,
+      usageSyncBucketsHourly: 0
     };
     delete this.db.participants[participantId];
     for (const [id, row] of Object.entries(this.db.devices || {})) {
@@ -135,6 +137,18 @@ export class Store {
       if (row.participantId === participantId) {
         delete this.db.usageSyncBuckets[key];
         removed.usageSyncBuckets += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.usageHourly || {})) {
+      if (row.participantId === participantId) {
+        delete this.db.usageHourly[key];
+        removed.usageHourly += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.usageSyncBucketsHourly || {})) {
+      if (row.participantId === participantId) {
+        delete this.db.usageSyncBucketsHourly[key];
+        removed.usageSyncBucketsHourly += 1;
       }
     }
     this.invalidateAggregateCache();
@@ -429,6 +443,12 @@ export class Store {
       }
     }
 
+    // Cloud provider cross-device dedup: remove other-device rows with same natural key
+    let cloudDedupDeleted = 0;
+    if (CLOUD_PROVIDER_IDS.has(snapshot.providerId)) {
+      cloudDedupDeleted = this.dedupCloudHourlyRows(input.items || [], input.participantId, input.deviceId);
+    }
+
     // Delete stale hourly rows for this bucket
     this.deleteHourlyBucketUsageRows(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId, [...incomingHourlyKeys]);
 
@@ -462,61 +482,62 @@ export class Store {
     const hourlyRows = Object.entries(this.db.usageHourly).filter(
       ([, row]) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId
     );
-    if (!hourlyRows.length) return;
-
-    // Group by (toolCode, workdirHash, model) and sum tokens
-    const groups = {};
-    for (const [, row] of hourlyRows) {
-      const gKey = [row.toolCode, row.workdirHash, row.model].join("|");
-      if (!groups[gKey]) {
-        groups[gKey] = { first: row, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
-      }
-      const g = groups[gKey];
-      g.count++;
-      g.inputTokens += Number(row.inputTokens || 0);
-      g.outputTokens += Number(row.outputTokens || 0);
-      g.cacheReadTokens += Number(row.cacheReadTokens || 0);
-      g.cacheWriteTokens += Number(row.cacheWriteTokens || 0);
-      g.reasoningTokens += Number(row.reasoningTokens || 0);
-      g.totalTokens += Number(row.totalTokens || 0);
-      g.estimatedCostUsd += Number(row.estimatedCostUsd || 0);
-    }
-
-    // Write derived daily rows, marking them as hourly-derived
     const derivedKeys = new Set();
-    for (const [, g] of Object.entries(groups)) {
-      const r = g.first;
-      const dKey = usageKey(r, participantId, deviceId);
-      derivedKeys.add(dKey);
-      this.db.usageDaily[dKey] = {
-        day,
-        participantId,
-        deviceId,
-        toolCode: r.toolCode,
-        providerId,
-        workdirId: r.workdirId,
-        workdirHash: r.workdirHash,
-        workdirDisplayName: r.workdirDisplayName,
-        model: r.model,
-        inputTokens: g.inputTokens,
-        outputTokens: g.outputTokens,
-        cacheReadTokens: g.cacheReadTokens,
-        cacheWriteTokens: g.cacheWriteTokens,
-        reasoningTokens: g.reasoningTokens,
-        totalTokens: g.totalTokens,
-        estimatedCostUsd: g.estimatedCostUsd || null,
-        costQuality: r.costQuality || "",
-        pricingVersion: r.pricingVersion || "",
-        pricingModel: r.pricingModel || "",
-        pricingSource: r.pricingSource || "",
-        sourceQuality: r.sourceQuality || "unknown",
-        rawSourceRef: r.rawSourceRef || "",
-        providerVersion: r.providerVersion || "",
-        parserVersion: r.parserVersion || "",
-        sourceFingerprint: r.sourceFingerprint || "",
-        uploadedAt: now,
-        hourlyDerived: true
-      };
+
+    if (hourlyRows.length) {
+      // Group by (toolCode, workdirHash, model) and sum tokens
+      const groups = {};
+      for (const [, row] of hourlyRows) {
+        const gKey = [row.toolCode, row.workdirHash, row.model].join("|");
+        if (!groups[gKey]) {
+          groups[gKey] = { first: row, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
+        }
+        const g = groups[gKey];
+        g.count++;
+        g.inputTokens += Number(row.inputTokens || 0);
+        g.outputTokens += Number(row.outputTokens || 0);
+        g.cacheReadTokens += Number(row.cacheReadTokens || 0);
+        g.cacheWriteTokens += Number(row.cacheWriteTokens || 0);
+        g.reasoningTokens += Number(row.reasoningTokens || 0);
+        g.totalTokens += Number(row.totalTokens || 0);
+        g.estimatedCostUsd += Number(row.estimatedCostUsd || 0);
+      }
+
+      // Write derived daily rows, marking them as hourly-derived
+      for (const [, g] of Object.entries(groups)) {
+        const r = g.first;
+        const dKey = usageKey(r, participantId, deviceId);
+        derivedKeys.add(dKey);
+        this.db.usageDaily[dKey] = {
+          day,
+          participantId,
+          deviceId,
+          toolCode: r.toolCode,
+          providerId,
+          workdirId: r.workdirId,
+          workdirHash: r.workdirHash,
+          workdirDisplayName: r.workdirDisplayName,
+          model: r.model,
+          inputTokens: g.inputTokens,
+          outputTokens: g.outputTokens,
+          cacheReadTokens: g.cacheReadTokens,
+          cacheWriteTokens: g.cacheWriteTokens,
+          reasoningTokens: g.reasoningTokens,
+          totalTokens: g.totalTokens,
+          estimatedCostUsd: g.estimatedCostUsd || null,
+          costQuality: r.costQuality || "",
+          pricingVersion: r.pricingVersion || "",
+          pricingModel: r.pricingModel || "",
+          pricingSource: r.pricingSource || "",
+          sourceQuality: r.sourceQuality || "unknown",
+          rawSourceRef: r.rawSourceRef || "",
+          providerVersion: r.providerVersion || "",
+          parserVersion: r.parserVersion || "",
+          sourceFingerprint: r.sourceFingerprint || "",
+          uploadedAt: now,
+          hourlyDerived: true
+        };
+      }
     }
 
     // Delete any non-derived daily rows for this bucket that are no longer valid
@@ -598,6 +619,36 @@ export class Store {
     };
   }
 
+  /// Compare local sync-state bucket list against server sync buckets.
+  /// Returns { missing, different, matched } for hourly buckets within a 35-day window.
+  compareSyncState({ participantId, deviceId, buckets }) {
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000);
+    const cutoffDay = utcDateToDay(cutoff);
+
+    const missing = [];
+    const different = [];
+    const matched = [];
+
+    for (const bucket of buckets || []) {
+      if (bucket.day < cutoffDay) continue;
+
+      const serverBucket = this.getHourlyBucketSync(
+        participantId, deviceId, bucket.day, bucket.hour, bucket.providerId
+      );
+
+      if (!serverBucket) {
+        missing.push(bucket);
+      } else if (serverBucket.bucketFingerprint !== bucket.fingerprint) {
+        different.push({ ...bucket, serverFingerprint: serverBucket.bucketFingerprint });
+      } else {
+        matched.push(bucket);
+      }
+    }
+
+    return { missing, different, matched };
+  }
+
   deleteHourlyBucketUsageRows(participantId, deviceId, day, hour, providerId, incomingUsageKeys) {
     const keySet = new Set(incomingUsageKeys);
     for (const [key, row] of Object.entries(this.db.usageHourly)) {
@@ -612,6 +663,34 @@ export class Store {
         delete this.db.usageHourly[key];
       }
     }
+  }
+
+  dedupCloudHourlyRows(items, participantId, currentDeviceId) {
+    const incomingKeys = new Set(items.map(item => cloudNaturalKey(item, participantId)));
+    const affectedDeviceDays = new Set();
+    let deleted = 0;
+    for (const [key, row] of Object.entries(this.db.usageHourly)) {
+      if (
+        row.participantId !== participantId ||
+        row.deviceId === currentDeviceId ||
+        !CLOUD_PROVIDER_IDS.has(row.providerId)
+      ) continue;
+      const naturalKey = [
+        row.day, row.hour, row.participantId,
+        row.toolCode, row.providerId, row.workdirHash, row.model
+      ].join("|");
+      if (incomingKeys.has(naturalKey)) {
+        affectedDeviceDays.add(`${row.deviceId}|${row.day}|${row.providerId}`);
+        delete this.db.usageHourly[key];
+        deleted++;
+      }
+    }
+    // Re-derive daily for affected device+day combos
+    for (const combo of affectedDeviceDays) {
+      const [deviceId, day, providerId] = combo.split("|");
+      this.deriveDailyFromHourly(participantId, deviceId, day, providerId);
+    }
+    return deleted;
   }
 
   migrateLegacyUsageRows() {

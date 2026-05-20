@@ -80,12 +80,19 @@ pub async fn run() -> Result<(), String> {
     Ok(())
 }
 
+struct PendingCursorConnect {
+    uuid: String,
+    code_verifier: String,
+    expires_at: i64,
+}
+
 #[derive(Default)]
 struct SidecarRuntime {
     source_cache: HashMap<String, Vec<serde_json::Value>>,
     last_scan_status: Option<serde_json::Value>,
     next_scan_task_id: u64,
     tray_estimated_cost_usd: Option<f64>,
+    pending_cursor_connect: Option<PendingCursorConnect>,
 }
 
 async fn handle_command(
@@ -271,6 +278,117 @@ async fn handle_command(
             let next = config::remove_cursor_token(request.args, &current);
             Ok(sanitize_config_value(&next))
         }
+        Command::CursorConnectStart => {
+            let uuid = collector_core::provider::cursor_auth::generate_uuid();
+            let code_verifier = collector_core::provider::cursor_auth::generate_code_verifier();
+            let challenge = collector_core::provider::cursor_auth::compute_challenge(&code_verifier);
+            let login_url = format!(
+                "https://cursor.com/loginDeepControl?uuid={}&challenge={}&mode=login",
+                uuid, challenge
+            );
+            let expires_at = chrono::Utc::now().timestamp() + 300;
+            runtime.pending_cursor_connect = Some(PendingCursorConnect {
+                uuid,
+                code_verifier,
+                expires_at,
+            });
+            Ok(serde_json::json!({"loginUrl": login_url, "expiresIn": 300}))
+        }
+        Command::CursorConnectPoll => {
+            let pending = runtime.pending_cursor_connect.take();
+            match pending {
+                None => Err("no pending connect".to_string()),
+                Some(p) => {
+                    if chrono::Utc::now().timestamp() > p.expires_at {
+                        return Err("expired".to_string());
+                    }
+                    let result = collector_core::provider::cursor_auth::poll_auth(
+                        &p.uuid,
+                        &p.code_verifier,
+                    )
+                    .await;
+                    match result {
+                        Ok(auth_result) => {
+                            // Extract sub from accessToken JWT
+                            let (sub, exp) =
+                                collector_core::provider::cursor_auth::extract_jwt_claims(
+                                    &auth_result.access_token,
+                                );
+                            // Fetch email from cursor.com/api/auth/me
+                            let sub_for_cookie = sub.clone().unwrap_or_default();
+                            let account_info = if !sub_for_cookie.is_empty() {
+                                collector_core::provider::cursor_auth::fetch_account_info(
+                                    &auth_result.access_token,
+                                    &sub_for_cookie,
+                                )
+                                .await
+                                .ok()
+                            } else {
+                                None
+                            };
+                            let email = account_info
+                                .as_ref()
+                                .map(|i| i.email.clone())
+                                .unwrap_or_default();
+                            let auth_id = auth_result.auth_id.clone();
+                            let now = chrono::Utc::now().to_rfc3339();
+                            // Save account to config
+                            let current = config::ensure_desktop_config();
+                            let participant_id = &current.participant_id;
+                            let account_hash = if !email.is_empty() {
+                                collector_core::provider::cursor_auth::compute_account_hash(
+                                    &email,
+                                    participant_id,
+                                )
+                            } else {
+                                collector_core::crypto::sha256_hex(&format!(
+                                    "cursor-dashboard:{}:{}",
+                                    &auth_id, participant_id
+                                ))
+                            };
+                            let account = config::CursorAccount {
+                                access_token: auth_result.access_token,
+                                refresh_token: auth_result.refresh_token,
+                                auth_id,
+                                sub: sub.unwrap_or_default(),
+                                email,
+                                account_hash,
+                                access_token_expires_at: exp,
+                                last_refresh_at: Some(now),
+                                auth_status: "active".to_string(),
+                                ignored: false,
+                                added_at: Some(chrono::Utc::now().to_rfc3339()),
+                            };
+                            let next = config::upsert_cursor_account(account, &current);
+                            Ok(sanitize_config_value(&next))
+                        }
+                        Err(e) => {
+                            // Put pending back if still pending (404)
+                            if e.contains("pending") || e.contains("404") {
+                                runtime.pending_cursor_connect = Some(p);
+                                Err("pending".to_string())
+                            } else {
+                                Err(e)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Command::CursorConnectCancel => {
+            runtime.pending_cursor_connect = None;
+            Ok(serde_json::json!({"cancelled": true}))
+        }
+        Command::CursorDisconnect => {
+            let index = request.args["index"].as_u64().unwrap_or(0) as usize;
+            let current = config::ensure_desktop_config();
+            let mut next = current;
+            if index < next.cursor_dashboard_usage.accounts.len() {
+                next.cursor_dashboard_usage.accounts.remove(index);
+                config::save_config(&next);
+            }
+            Ok(sanitize_config_value(&next))
+        }
         Command::ConfigIgnoreAutoSource => {
             let provider_id = request.args["providerId"]
                 .as_str()
@@ -418,6 +536,24 @@ fn sanitize_config_value(config: &config::AppConfig) -> serde_json::Value {
                         } else {
                             token_obj
                                 .insert("token".to_string(), serde_json::json!("[configured]"));
+                        }
+                    }
+                }
+            }
+            if let Some(accounts) = cursor
+                .get_mut("accounts")
+                .and_then(|v| v.as_array_mut())
+            {
+                for account in accounts {
+                    if let Some(acc) = account.as_object_mut() {
+                        acc.insert("accessToken".to_string(), serde_json::json!("[configured]"));
+                        acc.insert("refreshToken".to_string(), serde_json::json!("[configured]"));
+                        if let Some(email) = acc.get("email").and_then(|v| v.as_str()) {
+                            let at_idx = email.find('@').unwrap_or(email.len());
+                            if at_idx > 0 {
+                                let masked = format!("{}***{}", &email[..1], &email[at_idx..]);
+                                acc.insert("email".to_string(), serde_json::json!(masked));
+                            }
                         }
                     }
                 }

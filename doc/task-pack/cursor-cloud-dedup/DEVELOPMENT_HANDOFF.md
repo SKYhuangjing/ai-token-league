@@ -11,13 +11,13 @@
 
 | Task | Required Evidence | Status |
 |---|---|---|
-| T01_protocol_probe | sanitized Cursor deep login / refresh protocol probe | pending |
-| T02_cursor_account_model | config tests and sanitized local storage sample | pending |
-| T03_connect_cursor_auth | mocked connect flow tests | pending |
-| T04_cursor_refresh_health | refresh and reauth tests plus health state evidence | pending |
-| T05_server_hourly_dedup | Store / HTTP / MySQL reload test output | pending |
-| T06_sync_state_reset | sync-state and reset behavior evidence | pending |
-| T07_ui_verification_release | UI screenshot or CLI output, privacy grep, release checklist | pending |
+| T01_protocol_probe | sanitized Cursor deep login / refresh protocol probe | **done** — see evidence/protocol_probe.md |
+| T02_cursor_account_model | config tests and sanitized local storage sample | **done** — CursorAccount struct, redaction in diagnostics+sidecar |
+| T03_connect_cursor_auth | mocked connect flow tests | **done** — sidecar commands, PKCE + poll + /api/auth/me |
+| T04_cursor_refresh_health | refresh and reauth tests plus health state evidence | **done** — refresh_token(), proactive/reactive refresh, health states |
+| T05_server_hourly_dedup | Store / HTTP / MySQL reload test output | **done** — 5 new tests passing |
+| T06_sync_state_reset | sync-state and reset behavior evidence | **done** — compareSyncState + 2 new tests passing |
+| T07_ui_verification_release | UI screenshot or CLI output, privacy grep, release checklist | **done** — privacy grep clean, release checklist in external_actions.md |
 
 ## Failure Routing
 

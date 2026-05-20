@@ -21,9 +21,10 @@
 - Add sidecar commands for start/complete/cancel Cursor connect.
 - Generate `uuid`, `codeVerifier`, `challenge`.
 - Open `https://cursor.com/loginDeepControl?...`.
-- Poll `api2.cursor.sh/auth/poll` using verified protocol from T01.
+- Poll `api2.cursor.sh/auth/poll` using verified protocol from T01 (camelCase response: `accessToken`, `refreshToken`, `authId`).
+- After poll success, call `cursor.com/api/auth/me` with `WorkosCursorSessionToken` cookie to get email. Cookie format: `encodeURIComponent(jwtSub + "::" + accessToken)` where `jwtSub` is the `sub` field from accessToken JWT.
 - Store account via model from T02.
-- Keep manual token entry as advanced fallback only.
+- Do not expose manual token as a product entry; Cursor collection proceeds through OAuth accounts only.
 
 ## Out of Scope
 
@@ -48,7 +49,7 @@
 ## Source Design Anchors
 
 - `Cursor 浏览器授权登录`
-- `实现前置实测`
+- `Cursor 账号身份`
 - `本地状态`
 - `本地持久化字段`
 
@@ -60,7 +61,7 @@
 ## Implementation Requirements
 
 - Rename primary UI action from `Add Cursor Token` to `Connect Cursor`.
-- Keep advanced manual token fallback hidden or secondary.
+- Hide manual token entry from the normal product surface.
 - Pending login state expires after 5 minutes.
 - Poll interval defaults to 2 seconds and handles pending/success/expired/cancel.
 - No token appears in renderer-visible HTML, logs, or upload payload.

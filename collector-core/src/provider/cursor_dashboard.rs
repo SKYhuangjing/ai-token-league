@@ -1,10 +1,9 @@
 use crate::config::AppConfig;
 use crate::crypto::sha256_hex;
-use crate::provider::common::*;
+use crate::provider::cursor_auth;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::Datelike;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 pub const PROVIDER_ID: &str = "cursor_dashboard_usage";
 pub const TOOL_CODE: &str = "cursor";
@@ -19,6 +18,113 @@ impl CursorDashboardProvider {
     pub fn tool_code(&self) -> &str {
         TOOL_CODE
     }
+
+    /// Proactively refresh authorized accounts whose tokens are near expiry.
+    /// Returns updated config if any refresh occurred.
+    pub async fn refresh_accounts_if_needed(&self, config: &AppConfig) -> AppConfig {
+        let mut updated = config.clone();
+        let mut changed = false;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        for account in &mut updated.cursor_dashboard_usage.accounts {
+            if !cursor_auth::token_needs_refresh(account) {
+                continue;
+            }
+            if account.refresh_token.is_empty() {
+                continue;
+            }
+            match cursor_auth::refresh_token(&account.refresh_token).await {
+                Ok(result) => {
+                    account.access_token = result.access_token;
+                    account.last_refresh_at = Some(now.clone());
+                    account.auth_status = "active".to_string();
+                    // Extract exp from new JWT
+                    let (_, exp) = cursor_auth::extract_jwt_claims(&account.access_token);
+                    account.access_token_expires_at = exp;
+                    changed = true;
+                }
+                Err(e) if e == "shouldLogout" => {
+                    account.auth_status = "reauth_required".to_string();
+                    changed = true;
+                }
+                Err(_) => {
+                    account.auth_status = "refresh_failed".to_string();
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            crate::config::save_config(&updated);
+        }
+        updated
+    }
+
+    /// Reactive refresh: called when a usage request returns 401/403.
+    /// Refreshes once, retries the fetch, and updates config.
+    pub async fn fetch_with_reactive_refresh(
+        &self,
+        cookie: &str,
+        account_index: usize,
+        config: &mut AppConfig,
+    ) -> Result<Vec<Value>, String> {
+        // First attempt
+        match self.fetch_usage(cookie).await {
+            Ok(events) => Ok(events),
+            Err(e) if e.contains("401") || e.contains("403") => {
+                // Try refresh once
+                let refresh_token = {
+                    let accounts = &config.cursor_dashboard_usage.accounts;
+                    match accounts.get(account_index) {
+                        Some(acc) if !acc.refresh_token.is_empty() => acc.refresh_token.clone(),
+                        _ => {
+                            if let Some(acc) = config.cursor_dashboard_usage.accounts.get_mut(account_index) {
+                                acc.auth_status = "reauth_required".to_string();
+                            }
+                            crate::config::save_config(config);
+                            return Err(e);
+                        }
+                    }
+                };
+                match cursor_auth::refresh_token(&refresh_token).await {
+                    Ok(result) => {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let new_access_token;
+                        let new_cookie;
+                        {
+                            let account = &mut config.cursor_dashboard_usage.accounts[account_index];
+                            account.access_token = result.access_token.clone();
+                            new_access_token = result.access_token;
+                            account.last_refresh_at = Some(now);
+                            account.auth_status = "active".to_string();
+                            let (_, exp) = cursor_auth::extract_jwt_claims(&new_access_token);
+                            account.access_token_expires_at = exp;
+                            new_cookie = if !account.sub.is_empty() {
+                                let raw = format!("{}::{}", account.sub, &account.access_token);
+                                format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
+                            } else {
+                                cursor_token_to_cookie(&account.access_token)
+                            };
+                        }
+                        crate::config::save_config(config);
+                        self.fetch_usage(&new_cookie).await
+                    }
+                    Err(refresh_err) => {
+                        if let Some(account) = config.cursor_dashboard_usage.accounts.get_mut(account_index) {
+                            account.auth_status = if refresh_err == "shouldLogout" {
+                                "reauth_required".to_string()
+                            } else {
+                                "refresh_failed".to_string()
+                            };
+                        }
+                        crate::config::save_config(config);
+                        Err(refresh_err)
+                    }
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
     pub fn version(&self) -> &str {
         VERSION
     }
@@ -27,39 +133,41 @@ impl CursorDashboardProvider {
         config.provider_enabled.get(PROVIDER_ID) == Some(&true)
     }
 
-    /// Discover Cursor auth sources from config, local installation, and cockpit accounts.
+    /// Discover Cursor auth sources from authorized accounts only.
+    ///
+    /// Legacy local token detection is intentionally not part of the 0.7 Cursor
+    /// source model. OAuth accounts are the only supported refreshable source.
     pub fn discover_sources(&self, config: &AppConfig) -> Vec<CursorSource> {
         let mut sources = Vec::new();
 
-        // Configured tokens
-        for record in &config.cursor_dashboard_usage.workos_session_tokens {
-            if !record.token.is_empty() {
-                let cookie = cursor_token_to_cookie(&record.token);
-                let account_name = if !record.account_name.is_empty() {
-                    record.account_name.clone()
-                } else {
-                    cursor_account_name_from_token(&record.token)
-                };
-                sources.push(CursorSource {
-                    cookie,
-                    account_name: account_name.clone(),
-                    source_name: "config".to_string(),
-                    name_score: source_name_score(&account_name),
-                });
+        for account in &config.cursor_dashboard_usage.accounts {
+            if account.ignored {
+                continue;
             }
+            if account.access_token.is_empty() {
+                continue;
+            }
+            let cookie = if !account.sub.is_empty() {
+                let raw = format!("{}::{}", account.sub, account.access_token);
+                format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
+            } else {
+                cursor_token_to_cookie(&account.access_token)
+            };
+            let account_name = if !account.email.is_empty() {
+                account.email.clone()
+            } else if !account.account_hash.is_empty() {
+                account.account_hash.clone()
+            } else {
+                account.auth_id.clone()
+            };
+            sources.push(CursorSource {
+                cookie,
+                account_name: account_name.clone(),
+                source_name: "authorized".to_string(),
+            });
         }
 
-        // Local Cursor installation
-        if let Ok(local_sources) = discover_local_cursor_sources() {
-            sources.extend(local_sources);
-        }
-
-        // Antigravity cockpit accounts
-        if let Ok(cockpit_sources) = discover_cockpit_accounts() {
-            sources.extend(cockpit_sources);
-        }
-
-        dedupe_sources(sources)
+        sources
     }
 
     /// Fetch usage events from Cursor dashboard API.
@@ -230,7 +338,7 @@ fn token_field(usage: &Value, aliases: &[&str]) -> i64 {
     0
 }
 
-fn cursor_token_to_cookie(value: &str) -> String {
+pub fn cursor_token_to_cookie(value: &str) -> String {
     let decoded = urlencoding::decode(value)
         .map(|s| s.to_string())
         .unwrap_or_else(|_| value.to_string());
@@ -255,10 +363,6 @@ fn cursor_token_to_cookie(value: &str) -> String {
     format!("WorkosCursorSessionToken={}", urlencoding::encode(&decoded))
 }
 
-fn cursor_account_name_from_token(token: &str) -> String {
-    token.split("::").next().unwrap_or("Cursor").to_string()
-}
-
 fn cursor_user_id_from_token(token: &str) -> Option<String> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
@@ -272,226 +376,11 @@ fn cursor_user_id_from_token(token: &str) -> Option<String> {
     re.find(sub).map(|m| m.as_str().to_string())
 }
 
-fn source_name_score(name: &str) -> i32 {
-    if name.contains('@') {
-        3
-    } else if !name.is_empty() && !name.starts_with("user_") && name != "Cursor" {
-        2
-    } else if !name.is_empty() {
-        1
-    } else {
-        0
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct CursorSource {
     pub cookie: String,
     pub account_name: String,
     pub source_name: String,
-    pub name_score: i32,
-}
-
-fn dedupe_sources(sources: Vec<CursorSource>) -> Vec<CursorSource> {
-    // Dedupe by cookie, keep higher score
-    let mut by_cookie: HashMap<String, CursorSource> = HashMap::new();
-    for s in sources {
-        match by_cookie.get_mut(&s.cookie) {
-            Some(existing) => {
-                if s.name_score > existing.name_score {
-                    *existing = s;
-                }
-            }
-            None => {
-                by_cookie.insert(s.cookie.clone(), s);
-            }
-        }
-    }
-
-    // Dedupe by account name (lowercased), keep higher score
-    let mut by_account: HashMap<String, CursorSource> = HashMap::new();
-    for s in by_cookie.into_values() {
-        let key = s.account_name.to_lowercase();
-        match by_account.get_mut(&key) {
-            Some(existing) => {
-                if s.name_score > existing.name_score {
-                    *existing = s;
-                }
-            }
-            None => {
-                by_account.insert(key, s);
-            }
-        }
-    }
-
-    by_account.into_values().collect()
-}
-
-/// Read Cursor auth token from local SQLite state DB.
-fn read_token_from_cursor_sqlite() -> Option<(String, String)> {
-    let home = dirs::home_dir()?;
-    let db_path = if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
-    } else if cfg!(target_os = "windows") {
-        home.join("AppData/Roaming/Cursor/User/globalStorage/state.vscdb")
-    } else {
-        home.join(".config/Cursor/User/globalStorage/state.vscdb")
-    };
-
-    if !db_path.exists() {
-        return None;
-    }
-
-    let conn =
-        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .ok()?;
-
-    let token: String = conn
-        .query_row(
-            "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'",
-            [],
-            |row| row.get(0),
-        )
-        .ok()?;
-
-    let email: String = conn
-        .query_row(
-            "SELECT value FROM ItemTable WHERE key IN ('cursorAuth/cachedEmail','cursorAuth/email') LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or_default();
-
-    Some((token, email))
-}
-
-fn discover_local_cursor_sources() -> Result<Vec<CursorSource>, String> {
-    let mut sources = Vec::new();
-
-    // SQLite
-    if let Some((token, email)) = read_token_from_cursor_sqlite() {
-        let user_id = cursor_user_id_from_token(&token);
-        let account_name = if !email.is_empty() {
-            email
-        } else {
-            user_id.clone().unwrap_or_default()
-        };
-        let cookie_val = if let Some(uid) = user_id {
-            format!("{}::{}", uid, token)
-        } else {
-            token
-        };
-        let cookie = cursor_token_to_cookie(&cookie_val);
-        sources.push(CursorSource {
-            cookie,
-            account_name,
-            source_name: "local_cursor_sqlite".to_string(),
-            name_score: 2,
-        });
-    }
-
-    // JSON config files
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return Ok(sources),
-    };
-
-    let config_paths: Vec<std::path::PathBuf> = if cfg!(target_os = "macos") {
-        vec![
-            home.join("Library/Application Support/Cursor/User/globalStorage/storage.json"),
-            home.join(".cursor/config.json"),
-            home.join("Library/Application Support/Cursor/config.json"),
-        ]
-    } else if cfg!(target_os = "windows") {
-        vec![
-            home.join("AppData/Roaming/Cursor/User/globalStorage/storage.json"),
-            home.join(".cursor/config.json"),
-            home.join("AppData/Roaming/Cursor/config.json"),
-        ]
-    } else {
-        vec![
-            home.join(".config/Cursor/User/globalStorage/storage.json"),
-            home.join(".cursor/config.json"),
-            home.join(".config/Cursor/config.json"),
-        ]
-    };
-
-    for path in config_paths {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(obj) = serde_json::from_str::<Value>(&content) {
-                let token_keys = [
-                    "cursorAuth/accessToken",
-                    "accessToken",
-                    "sessionToken",
-                    "WorkosCursorSessionToken",
-                ];
-                for key in &token_keys {
-                    let token = deep_find_string(&obj, &[*key]);
-                    if !token.is_empty() {
-                        {
-                            let cookie = cursor_token_to_cookie(&token);
-                            let account_name = cursor_account_name_from_token(&token);
-                            sources.push(CursorSource {
-                                cookie,
-                                account_name,
-                                source_name: "local_cursor_config".to_string(),
-                                name_score: 1,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(sources)
-}
-
-fn discover_cockpit_accounts() -> Result<Vec<CursorSource>, String> {
-    let home = dirs::home_dir().ok_or("no home dir")?;
-    let accounts_dir = home.join(".antigravity_cockpit/cursor_accounts");
-    if !accounts_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let mut sources = Vec::new();
-    let entries = std::fs::read_dir(&accounts_dir).map_err(|e| e.to_string())?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().map(|e| e == "json").unwrap_or(false) {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(account) = serde_json::from_str::<Value>(&content) {
-                    let access_token = account["access_token"].as_str().unwrap_or("").to_string();
-                    if access_token.is_empty() {
-                        continue;
-                    }
-                    let user_id = account["id"]
-                        .as_str()
-                        .or_else(|| account["auth_id"].as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let email = account["email"]
-                        .as_str()
-                        .or_else(|| account["cachedEmail"].as_str())
-                        .unwrap_or(&user_id)
-                        .to_string();
-
-                    let cookie_val = format!("{}::{}", user_id, access_token);
-                    let cookie = cursor_token_to_cookie(&cookie_val);
-
-                    sources.push(CursorSource {
-                        cookie,
-                        account_name: email,
-                        source_name: "cockpit".to_string(),
-                        name_score: 3,
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(sources)
 }
 
 #[cfg(test)]
@@ -512,23 +401,6 @@ mod tests {
         // Already has WorkosCursorSessionToken prefix
         let result = cursor_token_to_cookie("WorkosCursorSessionToken=abc123");
         assert_eq!(result, "WorkosCursorSessionToken=abc123");
-    }
-
-    #[test]
-    fn test_cursor_account_name_from_token() {
-        assert_eq!(
-            cursor_account_name_from_token("user_123::token_value"),
-            "user_123"
-        );
-    }
-
-    #[test]
-    fn test_source_name_score() {
-        assert_eq!(source_name_score("user@example.com"), 3);
-        assert_eq!(source_name_score("user_123"), 1);
-        assert_eq!(source_name_score("Cursor"), 1);
-        assert_eq!(source_name_score(""), 0);
-        assert_eq!(source_name_score("myaccount"), 2);
     }
 
     #[test]

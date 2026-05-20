@@ -255,7 +255,9 @@ function testDeleteParticipantDataAllowsResync() {
     workdirs: 1,
     usageDaily: 1,
     uploadBatches: 1,
-    usageSyncBuckets: 0
+    usageSyncBuckets: 0,
+    usageHourly: 0,
+    usageSyncBucketsHourly: 0
   });
   assert.equal(store.getParticipant(identity.participantId), null);
   assert.equal(Object.values(store.db.devices).some((row) => row.participantId === identity.participantId), false);
@@ -308,7 +310,9 @@ async function testParticipantDataDeleteMissingIsNoop() {
       workdirs: 0,
       usageDaily: 0,
       uploadBatches: 0,
-      usageSyncBuckets: 0
+      usageSyncBuckets: 0,
+      usageHourly: 0,
+      usageSyncBucketsHourly: 0
     });
   } finally {
     if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -2549,10 +2553,12 @@ function testDesktopRendererExports() {
   const renderer = fs.readFileSync("src/desktop/renderer.js", "utf8");
   for (const fn of [
     "boot", "renderToday", "renderWorkdirs", "renderHealth",
-    "renderConfig", "syncNow", "loadHealth", "loadToday"
+    "renderConfig", "syncNow", "loadHealth", "loadToday", "connectCursor"
   ]) {
     assert.match(renderer, new RegExp(`(function|const|let|var)\\s+${fn}|${fn}\\s*[:=]`), `missing function ${fn} in renderer.js`);
   }
+  assert.match(renderer, /cursorAuthStatusLabel/);
+  assert.match(renderer, /data-disconnect-cursor-account/);
   console.log("  testDesktopRendererExports passed");
 }
 
@@ -2560,6 +2566,9 @@ function testTauriBridgeExports() {
   const bridge = fs.readFileSync("src/desktop/tauri-bridge.js", "utf8");
   assert.match(bridge, /forwardToSidecar|forward_to_sidecar/);
   assert.match(bridge, /export/);
+  assert.match(bridge, /cursor:connect:start/);
+  assert.match(bridge, /cursor:connect:poll/);
+  assert.match(bridge, /cursor:connect:cancel/);
   console.log("  testTauriBridgeExports passed");
 }
 
@@ -2854,8 +2863,262 @@ testStoreBoardSummary();
 testStoreDeleteModelPrice();
 testNormalizeTokenNumberIntegration();
 
+// ── Cloud provider dedup tests ──
+
+function testCursorSameAccountDedupAcrossDevices() {
+  const tmp = path.join(os.tmpdir(), `test-cloud-dedup-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_dedup", didA = "d_cursor_a", didB = "d_cursor_b";
+  const workdirHash = "cursor_acct_hash_abc";
+  const day = "2026-05-14", hour = 10, providerId = "cursor_dashboard_usage";
+
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_dedup", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_dedup", os: "test", appVersion: "0.1.0" });
+
+  // Device A uploads Cursor usage first
+  const uploadA = makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didA, { providerId, day, hour });
+  store.upsertUsageBatch(uploadA);
+  assert.equal(Object.keys(store.db.usageHourly).length, 1);
+
+  // Device B uploads same Cursor account same hour — should dedup A's row
+  const uploadB = makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didB, { providerId, day, hour });
+  store.upsertUsageBatch(uploadB);
+
+  const hourlyRows = Object.values(store.db.usageHourly);
+  assert.equal(hourlyRows.length, 1, "same Cursor account across devices should keep only 1 hourly row");
+  assert.equal(hourlyRows[0].deviceId, didB, "should keep the latest device's row");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testCursorSameAccountDedupAcrossDevices passed");
+}
+
+function testCursorDifferentAccountsNoDedup() {
+  const tmp = path.join(os.tmpdir(), `test-cloud-nodedup-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_dedup2", didA = "d_a2", didB = "d_b2";
+  const hash1 = "cursor_acct_hash_acc1";
+  const hash2 = "cursor_acct_hash_acc2";
+  const day = "2026-05-14", hour = 11, providerId = "cursor_dashboard_usage";
+
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_nodedup", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_nodedup", os: "test", appVersion: "0.1.0" });
+
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: hash1, inputTokens: 200, outputTokens: 100, totalTokens: 300, providerId, model: "gpt-5" })
+  ], pid, didA, { providerId, day, hour }));
+
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: hash2, inputTokens: 50, outputTokens: 25, totalTokens: 75, providerId, model: "gpt-5" })
+  ], pid, didB, { providerId, day, hour }));
+
+  assert.equal(Object.keys(store.db.usageHourly).length, 2, "different Cursor accounts should both be kept");
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testCursorDifferentAccountsNoDedup passed");
+}
+
+function testLocalProviderNoDedup() {
+  const tmp = path.join(os.tmpdir(), `test-local-nodedup-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_local", didA = "d_la", didB = "d_lb";
+  const workdirHash = "local_workdir_same";
+  const day = "2026-05-14", hour = 12, providerId = "codex_local";
+
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_local", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_local", os: "test", appVersion: "0.1.0" });
+
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "codex-1" })
+  ], pid, didA, { providerId, day, hour }));
+
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 80, outputTokens: 40, totalTokens: 120, providerId, model: "codex-1" })
+  ], pid, didB, { providerId, day, hour }));
+
+  assert.equal(Object.keys(store.db.usageHourly).length, 2, "local providers from different devices should accumulate, not dedup");
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testLocalProviderNoDedup passed");
+}
+
+function testCursorDedupSyncBucketPreserved() {
+  const tmp = path.join(os.tmpdir(), `test-sync-bucket-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_sync", didA = "d_sa", didB = "d_sb";
+  const workdirHash = "cursor_sync_hash";
+  const day = "2026-05-14", hour = 13, providerId = "cursor_dashboard_usage";
+
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_sync", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_sync", os: "test", appVersion: "0.1.0" });
+
+  // Device A uploads
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didA, { providerId, day, hour }));
+
+  // A's sync bucket should exist
+  const bucketA = store.getHourlyBucketSync(pid, didA, day, hour, providerId);
+  assert.ok(bucketA, "device A should have a sync bucket after upload");
+
+  // Device B overwrites via dedup
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didB, { providerId, day, hour }));
+
+  // A's sync bucket should still be there (dedup removes usage rows, not sync buckets)
+  const bucketAAfter = store.getHourlyBucketSync(pid, didA, day, hour, providerId);
+  assert.ok(bucketAAfter, "device A sync bucket must survive cloud dedup");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testCursorDedupSyncBucketPreserved passed");
+}
+
+function testCursorDedupDailyDerivedCorrectly() {
+  const tmp = path.join(os.tmpdir(), `test-daily-derived-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_daily", didA = "d_da", didB = "d_db";
+  const workdirHash = "cursor_daily_hash";
+  const day = "2026-05-14", providerId = "cursor_dashboard_usage";
+
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_daily", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_daily", os: "test", appVersion: "0.1.0" });
+
+  // Device A uploads hour 10
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didA, { providerId, day, hour: 10 }));
+
+  // Device B uploads hour 10 (same natural key — dedup A's row) + hour 11
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didB, { providerId, day, hour: 10 }));
+
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 200, outputTokens: 100, totalTokens: 300, providerId, model: "gpt-5" })
+  ], pid, didB, { providerId, day, hour: 11 }));
+
+  // After dedup: only B's rows remain. B has hour 10 + hour 11.
+  // Daily for B should be 150 + 300 = 450.
+  const dailyRows = Object.values(store.db.usageDaily);
+  const bDaily = dailyRows.find(r => r.deviceId === didB && r.hourlyDerived);
+  assert.ok(bDaily, "device B should have a derived daily row");
+  assert.equal(bDaily.totalTokens, 450, "daily total should be sum of B's hours after dedup removed A's row");
+
+  // A should have no daily rows (its hourly was deduped away)
+  const aDaily = dailyRows.find(r => r.deviceId === didA && r.hourlyDerived);
+  assert.ok(!aDaily, "device A should have no hourly-derived daily after dedup");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testCursorDedupDailyDerivedCorrectly passed");
+}
+
+function testSyncStateReturnsMissingAndMatched() {
+  const tmp = path.join(os.tmpdir(), `test-sync-state-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_ss", did = "d_ss";
+  const day = "2026-05-14", providerId = "codex_local";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "SS", identityPublicKey: "pk_ss", os: "test", appVersion: "0.1.0" });
+
+  // Upload a snapshot to create a sync bucket
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", totalTokens: 100, providerId, day, hour: 10 })
+  ], pid, did, { providerId, day, hour: 10 }));
+
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [
+      { day, hour: 10, providerId, fingerprint: store.getHourlyBucketSync(pid, did, day, 10, providerId).bucketFingerprint },
+      { day, hour: 11, providerId, fingerprint: "nonexistent_fp" }
+    ]
+  });
+
+  assert.equal(result.matched.length, 1, "hour 10 should match");
+  assert.equal(result.missing.length, 1, "hour 11 should be missing");
+  assert.equal(result.different.length, 0, "no different buckets");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSyncStateReturnsMissingAndMatched passed");
+}
+
+function testSyncStateAfterResetDetectsMissing() {
+  const tmp = path.join(os.tmpdir(), `test-sync-reset-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_ssr", did = "d_ssr";
+  const day = "2026-05-14", providerId = "cursor_dashboard_usage";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "SSR", identityPublicKey: "pk_ssr", os: "test", appVersion: "0.1.0" });
+
+  // Upload then simulate cloud reset by deleting sync buckets
+  const fp = "some_fingerprint";
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", totalTokens: 100, providerId, day, hour: 10 })
+  ], pid, did, { providerId, day, hour: 10 }));
+
+  // Verify bucket exists
+  assert.ok(store.getHourlyBucketSync(pid, did, day, 10, providerId));
+
+  // Simulate cloud reset: wipe usage + sync buckets
+  store.db.usageHourly = {};
+  store.db.usageSyncBucketsHourly = {};
+  store.db.usageDaily = {};
+  store.save();
+
+  // Load fresh store to simulate server restart
+  const store2 = new Store(tmp);
+
+  const result = store2.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day, hour: 10, providerId, fingerprint: fp }]
+  });
+
+  assert.equal(result.missing.length, 1, "after reset, bucket should be missing");
+  assert.equal(result.matched.length, 0);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSyncStateAfterResetDetectsMissing passed");
+}
+
+function testDeleteParticipantDataClearsHourlySyncState() {
+  const tmp = path.join(os.tmpdir(), `test-reset-hourly-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_reset_hourly", did = "d_reset_hourly";
+  const day = "2026-05-14", hour = 10, providerId = "cursor_dashboard_usage";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "Reset", identityPublicKey: "pk_reset", os: "test", appVersion: "0.1.0" });
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "cursor_reset_hash", totalTokens: 100, providerId, day, hour })
+  ], pid, did, { providerId, day, hour }));
+
+  assert.ok(Object.values(store.db.usageHourly).some(row => row.participantId === pid));
+  assert.ok(Object.values(store.db.usageSyncBucketsHourly).some(row => row.participantId === pid));
+
+  const result = store.deleteParticipantData(pid);
+  assert.equal(result.removed.usageHourly, 1);
+  assert.equal(result.removed.usageSyncBucketsHourly, 1);
+  assert.equal(Object.values(store.db.usageHourly).some(row => row.participantId === pid), false);
+  assert.equal(Object.values(store.db.usageSyncBucketsHourly).some(row => row.participantId === pid), false);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testDeleteParticipantDataClearsHourlySyncState passed");
+}
+
 // i18n completeness tests
 testI18nCompleteness();
 testI18nDataAttributesMatchKeys();
+
+// Cloud provider dedup tests
+testCursorSameAccountDedupAcrossDevices();
+testCursorDifferentAccountsNoDedup();
+testLocalProviderNoDedup();
+testCursorDedupSyncBucketPreserved();
+testCursorDedupDailyDerivedCorrectly();
+
+// Sync-state tests
+testSyncStateReturnsMissingAndMatched();
+testSyncStateAfterResetDetectsMissing();
+testDeleteParticipantDataClearsHourlySyncState();
 
 console.log("All tests passed");

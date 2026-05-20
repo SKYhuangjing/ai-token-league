@@ -70,6 +70,10 @@
     // ── Cursor tokens ───────────────────────────────────────────
     addCursorToken:      fwd("cursor:add-token"),
     removeCursorToken:   fwd("cursor:remove-token"),
+    startCursorConnect:  fwd("cursor:connect:start"),
+    pollCursorConnect:   fwd("cursor:connect:poll"),
+    cancelCursorConnect: fwd("cursor:connect:cancel"),
+    disconnectCursor:    (index) => invoke("forward_to_sidecar", { command: "cursor:disconnect", args: { index } }),
 
     // ── Auto-source ignore ──────────────────────────────────────
     ignoreAutoSource:    fwd("config:ignore-auto-source"),
@@ -107,6 +111,7 @@
     // ── Reset ───────────────────────────────────────────────────
     resetLocalData:      fwd("app:reset-local-data"),
     resetWithCloud:      fwd("app:reset-with-cloud"),
+    openUrl:             (url) => invoke("open_url", { url }),
 
     // ── Tray ────────────────────────────────────────────────────
     rebuildTrayMenu:     () => invoke("rebuild_tray_menu_command"),

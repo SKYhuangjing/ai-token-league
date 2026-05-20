@@ -837,14 +837,34 @@ button:disabled {
 }
 
 .source-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 8px;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   background: var(--paper);
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 13px;
+  min-width: 0;
+}
+
+.source-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.source-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.source-row-muted .source-row-main {
+  opacity: 0.6;
 }
 
 .source-row .path {
@@ -857,6 +877,7 @@ button:disabled {
 .source-row .outline-button {
   padding: 2px 8px;
   font-size: 11px;
+  flex: 0 0 auto;
 }
 
 .source-row .badge {
@@ -1447,6 +1468,13 @@ label {
 
 .modal-panel textarea { min-height: 150px; resize: vertical; }
 .modal-actions { justify-content: flex-end; }
+
+.app-confirm-panel { max-width: 460px; }
+.app-confirm-message {
+  margin: 0 0 18px;
+  color: var(--ink);
+  white-space: pre-line;
+}
 
 .mandatory-update-panel { max-width: 480px; text-align: center; }
 .enforcement-info { display: flex; gap: 24px; justify-content: center; margin: 16px 0; }

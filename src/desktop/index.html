@@ -478,6 +478,18 @@
       </section>
     </div>
 
+    <div id="cursor-connect-modal" class="modal-backdrop" hidden>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="cursor-connect-title">
+        <div class="section-title">
+          <h3 id="cursor-connect-title" data-i18n="desktop.cursorConnect.title">Connect Cursor</h3>
+        </div>
+        <p id="cursor-connect-status" class="muted" aria-live="polite" data-i18n="desktop.cursorConnect.waiting">Waiting for browser confirmation...</p>
+        <div class="actions modal-actions">
+          <button id="cancel-cursor-connect" type="button" data-i18n="cancel">Cancel</button>
+        </div>
+      </section>
+    </div>
+
     <div id="reset-confirm-modal" class="modal-backdrop" hidden>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="reset-confirm-title">
         <div class="section-title">
@@ -489,6 +501,19 @@
           <button id="reset-cancel" type="button" data-i18n="cancel">Cancel</button>
           <button id="reset-local-only" type="button" data-i18n="desktop.reset.localOnly">Local only</button>
           <button id="reset-with-cloud" type="button" class="danger-button" data-i18n="desktop.reset.localAndCloud">Local + Cloud</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="app-confirm-modal" class="modal-backdrop" hidden>
+      <section class="modal-panel app-confirm-panel" role="dialog" aria-modal="true" aria-labelledby="app-confirm-title">
+        <div class="section-title">
+          <h3 id="app-confirm-title" data-i18n="confirm">Confirm</h3>
+        </div>
+        <p id="app-confirm-message" class="app-confirm-message"></p>
+        <div class="actions modal-actions">
+          <button id="app-confirm-cancel" type="button" data-i18n="cancel">Cancel</button>
+          <button id="app-confirm-ok" type="button" class="primary-pill" data-i18n="confirm">Confirm</button>
         </div>
       </section>
     </div>

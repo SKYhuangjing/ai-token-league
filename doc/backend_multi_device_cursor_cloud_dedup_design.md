@@ -126,8 +126,10 @@ sequenceDiagram
   B->>CW: user login / confirm
   CW->>CW: bind uuid + challenge to web account
   D->>API: GET /auth/poll?uuid&verifier=code_verifier
-  API-->>D: 404 pending / 200 token payload
-  D->>D: save accessToken + refreshToken locally
+  API-->>D: 404 pending / 200 token payload (camelCase)
+  D->>CW: GET /api/auth/me (Cookie: WorkosCursorSessionToken)
+  CW-->>D: email, sub, name, ...
+  D->>D: save accessToken + refreshToken + email locally
 ```
 
 本地状态：
@@ -144,11 +146,11 @@ sequenceDiagram
 
 实现前置实测：
 
-| 接口 | 必须确认 | 未确认时处理 |
+| 接口 | 实测结果 | 状态 |
 |---|---|---|
-| `GET https://api2.cursor.sh/auth/poll?uuid=<uuid>&verifier=<codeVerifier>` | pending 状态码、成功字段名、失败字段名、过期行为 | 停止实现，仅保留文档待确认 |
-| `POST https://api2.cursor.sh/oauth/token` | payload 形状、`client_id`、是否 JSON、是否返回新 `refresh_token`、`shouldLogout` 语义 | 停止 refresh 实现，不允许用猜测字段落代码 |
-| 账号信息接口 | poll 响应是否含 `email`；若不含，哪个接口可稳定取得邮箱 | 未确认时只能使用 `authId` hash，不展示邮箱 |
+| `GET https://api2.cursor.sh/auth/poll?uuid=<uuid>&verifier=<codeVerifier>` | pending=404/plain, success=200/JSON, camelCase: `accessToken`, `refreshToken`, `authId`, `challenge`, `uuid`; **无 email** | ✅ 已确认 (T01) |
+| `POST https://api2.cursor.sh/oauth/token` | snake_case payload/response: `access_token`, `id_token`, `shouldLogout`; **不返回新 `refresh_token`** | ✅ 已确认 (T01) |
+| `GET https://cursor.com/api/auth/me` (Cookie: WorkosCursorSessionToken) | 返回 `email`, `email_verified`, `name`, `sub`, `id` 等 | ✅ 已确认 (T01) |
 
 本地持久化字段：
 
@@ -161,36 +163,37 @@ sequenceDiagram
 | `accessTokenExpiresAt` | 从 JWT `exp` 解析；缺失时按 `lastRefreshAt` + 默认 TTL 保守处理 |
 | `lastRefreshAt` | 最近一次 refresh 成功时间 |
 | `authStatus` | `active` / `refresh_failed` / `reauth_required` |
+| `ignored` | 账号级采集开关；为 `true` 时继续 refresh / reauth 状态维护，但不扫描、不上传该账号用量 |
 
 本地存储和清理边界：
 
 | 对象 | 规则 |
 |---|---|
-| 配置结构 | 新增 `cursorDashboardUsage.accounts[]` 承载授权账号；旧 `workosSessionTokens` 只作为 legacy fallback |
+| 配置结构 | `cursorDashboardUsage.accounts[]` 是本版本唯一 Cursor 账号来源；旧 `workosSessionToken(s)` 只在加载/保存时清理，不再作为扫描来源 |
 | 诊断导出 | 只导出账号数、masked email、`authStatus`、`lastRefreshAt`；不得导出 token 字段 |
 | runtime log | 不打印 token、完整邮箱、原始响应；只打印 account hash 和状态 |
-| 本地 reset | 清理授权账号、legacy token、sync manifest、upload queue |
+| 本地 reset | 清理授权账号、旧 token、sync manifest、upload queue |
 | backup / restore | backup 若包含账号配置，必须 redacted；restore 不恢复真实 token |
 
-auto-detect 关系：
+废弃来源边界：
 
 | 来源 | 规则 |
 |---|---|
 | `Connect Cursor` 授权账号 | 主配置来源，拥有 refresh / reauth 生命周期 |
-| Cursor 本机 `state.vscdb` 自动检测 | 辅助来源，只用于发现本机 Cursor 登录态；不覆盖授权账号 token 链 |
-| auto-detect 与授权账号同账号 | 合并为一个 account/workdirHash；优先使用授权账号 token |
-| auto-detect token 失效 | 不进入 `reauth_required`；仅显示本机 Cursor 登录态不可用 |
-| legacy 手动 token | 高级 fallback；不参与自动 refresh，失效后提示改用 `Connect Cursor` |
+| 被忽略的授权账号 | 继续保留并刷新 token；health 显示为已忽略；不生成扫描 source，不上报用量 |
+| Cursor 本机 `state.vscdb` / JSON 自动检测 | 本版本废弃；不参与扫描、health source 展示、去重身份或 refresh 状态 |
+| Antigravity cockpit / 历史 auto source | 本版本废弃；`providerIgnoredAutoSources.cursor_dashboard_usage` 在配置保存时清理 |
+| legacy 手动 token | 不作为产品入口；旧 `workosSessionToken(s)` 在配置保存时清理，不参与扫描 |
 
 ### Cursor 账号身份
 
-浏览器授权成功后，客户端用本地 token 调用 Cursor 账号接口获取登录邮箱。优先使用能返回邮箱的账号接口；如果 `api2.cursor.sh/auth/poll` 响应已包含 email，可直接使用该值，否则再调用 Cursor Web 账号接口。
+浏览器授权成功后，客户端用 poll 返回的 `accessToken` 构造 `WorkosCursorSessionToken` cookie，调用 `cursor.com/api/auth/me` 获取登录邮箱。`auth/poll` 响应和 JWT payload 中均不含 email，必须通过此接口获取。
 
 处理规则：
 
 | 字段 | 规则 |
 |---|---|
-| 登录邮箱 | 从响应中提取，trim + lowercase；只作为 hash 输入 |
+| 登录邮箱 | 从 `cursor.com/api/auth/me` 响应的 `email` 字段提取，trim + lowercase；只作为 hash 输入 |
 | `cursorAccountHash` | `sha256("cursor-dashboard:" + normalizedEmail + ":" + participantId)` |
 | `workdirCandidate` | `virtual:cursor-dashboard:<cursorAccountHash>` 或等价稳定虚拟 key |
 | `workdirDisplayName` | 可继续显示 `Cursor · <email>`；若后续收紧隐私，可改为 `Cursor · <masked email>` |
@@ -211,7 +214,7 @@ Connect Cursor 必须同时交付 refresh 闭环，否则 token 失效后会漏�
 | refresh 失败 | 标记账号 `reauth_required`，本轮不再继续请求 Cursor usage |
 | 用户点击重新连接 | 重新走 `Connect Cursor`，成功后替换该账号 token 链 |
 
-刷新接口候选：
+刷新接口（已确认）：
 
 ```http
 POST https://api2.cursor.sh/oauth/token
@@ -220,11 +223,11 @@ Content-Type: application/json
 {
   "grant_type": "refresh_token",
   "client_id": "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB",
-  "refresh_token": "<local refresh token>"
+  "refresh_token": "<local refreshToken from poll>"
 }
 ```
 
-成功响应候选：
+成功响应（snake_case，与 poll 的 camelCase 不同）：
 
 ```json
 {
@@ -234,7 +237,9 @@ Content-Type: application/json
 }
 ```
 
-失效响应候选：
+注意：响应**不包含 `refresh_token`**，即没有 rotation，必须保留 poll 阶段获得的原始 `refreshToken`。
+
+失效响应：
 
 ```json
 {
@@ -249,7 +254,7 @@ Content-Type: application/json
 | 约束 | 说明 |
 |---|---|
 | 私有接口 | `api2.cursor.sh/oauth/token` 属于非公开协议，必须保留 `Connect Cursor` reauth fallback |
-| refresh token rotation | 如果响应返回新的 `refresh_token`，必须原子替换本地旧值；如果没有返回，保留旧值 |
+| refresh token rotation | 响应不返回新 `refresh_token`（已确认），保留 poll 阶段获得的原始 `refreshToken` 即可 |
 | 并发控制 | 同一 Cursor account 同时只允许一个 refresh；其他 scan 等待结果 |
 | 重试上限 | 同一请求最多 `refresh + retry usage` 一次，避免 401 循环 |
 | 状态回写 | refresh 成功后更新 `accessToken`、`accessTokenExpiresAt`、`lastRefreshAt`、`authStatus=active` |
@@ -380,10 +385,11 @@ POST /api/usage/sync-state
 | Cursor 不同账号 | Store / HTTP API case | 不同 `cursorAccountHash` 都保留 |
 | 本地 provider 多设备 | Store / HTTP API case | Codex / Claude 同 day/hour/model 均累加 |
 | Cursor dedup 与 sync bucket | HTTP API case | A 设备 usage 被 B 设备同账号覆盖后，A 的 hourly sync bucket 保留，不触发反复重传 |
-| auto-detect 与 Connect Cursor 同账号 | mocked scan case | 只生成一个 Cursor account/workdirHash，优先使用授权账号 token |
+| 废弃 Cursor 本机检测 | mocked scan / health case | 旧 token、历史 ignored auto source、本机检测数据不再生成 Cursor 扫描 source 或 health 行 |
 | 云端 reset 后重传 | API + 本地 sync manifest case | reset 后 sync-state 返回 missing，本地清 manifest 并重新上传 |
 | 浏览器授权登录 | Desktop command / mocked HTTP case | 生成 `uuid/challenge`，轮询 pending/成功/过期/取消分支正确 |
 | token refresh 成功 | mocked HTTP case | scan 前过期 token 调用 `/oauth/token`，更新本地 token 后继续 usage 请求；未返回新 refresh token 时保留旧值 |
+| 忽略 Cursor 授权账号 | mocked scan / health case | 账号继续显示和 refresh，但不生成 usage item / upload payload |
 | reactive refresh 成功 | mocked HTTP case | usage 401 后 refresh 成功并重试一次，最终不进入失败态 |
 | token refresh 失败 | mocked HTTP case | `shouldLogout=true` 或 401/403 后账号进入 `reauth_required`，UI 显示重新连接 |
 | 隐私边界 | payload / diagnostics grep | 不出现 access token、refresh token、Cookie、Workos token、原始 auth 响应、真实路径 |
@@ -409,16 +415,16 @@ POST /api/usage/sync-state
 
 ### 待确认项
 
-| 问题 | 默认建议 |
-|---|---|
-| Cursor deep login 私有接口稳定性 | 保留手动 token / cookie 作为高级 fallback，但 UI 主入口改为 `Connect Cursor` |
-| `api2.cursor.sh/auth/poll` 响应字段名 | 实测确认 `access_token`、`refresh_token`、`auth_id`、`email`；实现时做窄字段解析，不保存完整响应 |
-| `api2.cursor.sh/oauth/token` refresh 协议 | 实测确认 JSON payload、`client_id`、`shouldLogout`、是否返回新 `refresh_token` |
-| access token 过期时间 | 优先解析 JWT `exp`；如果无法解析，按 55 分钟保守 TTL 并依赖 401/403 reactive refresh |
-| `/api/auth/me` 响应字段名 | 仅在 poll 响应不含 email 时调用；实现时做窄字段解析，不保存完整响应 |
-| 邮箱是否允许展示 | 当前沿用 `Cursor · <email>`；如果要收紧隐私，displayName 改 masked email，hash 不变 |
-| legacy daily 客户端是否仍活跃 | 如果仍允许同步 Cursor daily，需要补最小 daily cloud dedup 或版本门禁 |
-| sync-state 核对窗口 | 默认最近 35 天，覆盖 Cursor 当前月 usage 拉取范围和跨月边界 |
+| 问题 | 默认建议 | 状态 |
+|---|---|---|
+| Cursor deep login 私有接口稳定性 | 保留手动 token / cookie 作为高级 fallback，但 UI 主入口改为 `Connect Cursor` | 开放 |
+| `api2.cursor.sh/auth/poll` 响应字段名 | camelCase: `accessToken`, `refreshToken`, `authId`, `challenge`, `uuid`；**无 email** | ✅ T01 已确认 |
+| `api2.cursor.sh/oauth/token` refresh 协议 | snake_case payload/response: `access_token`, `id_token`, `shouldLogout`; **不返回新 `refresh_token`** | ✅ T01 已确认 |
+| access token 过期时间 | JWT `exp` 距 issuance ~60 天；仍应依赖 401/403 reactive refresh 作为主要失效检测 | ✅ T01 已确认 |
+| `/api/auth/me` 响应字段名 | `GET cursor.com/api/auth/me`，Cookie: `WorkosCursorSessionToken=<url_encoded(jwtSub::accessToken)>`；返回 `email`, `email_verified`, `name`, `sub`, `id` | ✅ T01 已确认 |
+| 邮箱是否允许展示 | 当前沿用 `Cursor · <email>`；如果要收紧隐私，displayName 改 masked email，hash 不变 | 开放 |
+| legacy daily 客户端是否仍活跃 | 如果仍允许同步 Cursor daily，需要补最小 daily cloud dedup 或版本门禁 | 开放 |
+| sync-state 核对窗口 | 默认最近 35 天，覆盖 Cursor 当前月 usage 拉取范围和跨月边界 | 开放 |
 
 ## 输出检查清单
 
@@ -428,7 +434,7 @@ POST /api/usage/sync-state
 - [x] 明确 Cursor 主入口改为浏览器授权，不再要求普通用户手动 Add Cursor Token。
 - [x] 明确 Cursor token refresh 和 reauth 状态闭环。
 - [x] 明确本地凭据存储、诊断导出、reset、backup 边界。
-- [x] 明确 auto-detect、legacy token 与 Connect Cursor 的优先级。
+- [x] 明确本版本废弃 Cursor 本机检测、历史 auto source 和 legacy 手动 token 扫描链路。
 - [x] 明确 cloud dedup 删除范围和 sync-state 比对口径。
 - [x] 明确 Cursor 邮箱只作为 hash 输入，不上传 token/cookie/auth raw。
 - [x] 明确本地 provider 多设备累加不变。

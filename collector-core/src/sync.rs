@@ -76,6 +76,8 @@ pub async fn sync_usage(
     // Drain upload queue
     let queue_uploaded = drain_upload_queue(&client, &mut manifest, api_base_url).await;
 
+    reconcile_sync_state(&client, config, api_base_url, &mut manifest, &buckets).await;
+
     // Upload dirty buckets
     let mut accepted = 0;
     let mut rejected = 0;
@@ -204,6 +206,92 @@ pub async fn sync_usage(
         queue_pending,
         queue_uploaded,
     })
+}
+
+async fn reconcile_sync_state(
+    client: &reqwest::Client,
+    config: &AppConfig,
+    api_base_url: &str,
+    manifest: &mut SyncManifest,
+    buckets: &[(String, Value)],
+) {
+    let local_buckets = build_sync_state_buckets(manifest, buckets);
+    if local_buckets.is_empty() {
+        return;
+    }
+    let client_generated_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let payload = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "buckets": local_buckets,
+    });
+    let signature = sign_payload(&config.identity_private_key, &payload);
+    let body = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "buckets": payload["buckets"],
+        "signature": signature,
+    });
+
+    let Ok(resp) = client
+        .post(format!(
+            "{}/api/usage/sync-state",
+            api_base_url.trim_end_matches('/')
+        ))
+        .json(&body)
+        .send()
+        .await
+    else {
+        return;
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let Ok(response_body) = resp.json::<Value>().await else {
+        return;
+    };
+    if apply_sync_state_response(manifest, &response_body) {
+        save_sync_manifest_for(api_base_url, manifest);
+    }
+}
+
+fn build_sync_state_buckets(manifest: &SyncManifest, buckets: &[(String, Value)]) -> Vec<Value> {
+    buckets
+        .iter()
+        .filter_map(|(bucket_key, bucket)| {
+            let existing = manifest.buckets.get(bucket_key)?;
+            let fingerprint = existing.get("fingerprint")?.as_str()?;
+            Some(json!({
+                "day": bucket["day"].as_str().unwrap_or(""),
+                "hour": bucket.get("hour").and_then(|v| v.as_i64()).unwrap_or(0),
+                "providerId": bucket["providerId"].as_str().unwrap_or(""),
+                "fingerprint": fingerprint,
+            }))
+        })
+        .collect()
+}
+
+fn apply_sync_state_response(manifest: &mut SyncManifest, response: &Value) -> bool {
+    let mut changed = false;
+    for key in ["missing", "different"] {
+        let Some(items) = response.get(key).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for item in items {
+            let day = item["day"].as_str().unwrap_or("");
+            let hour = item.get("hour").and_then(|v| v.as_i64()).unwrap_or(0);
+            let provider_id = item["providerId"].as_str().unwrap_or("");
+            if day.is_empty() || provider_id.is_empty() {
+                continue;
+            }
+            let bucket_key = format!("{}|{}|{}", day, hour, provider_id);
+            changed |= manifest.buckets.remove(&bucket_key).is_some();
+        }
+    }
+    changed
 }
 
 pub async fn register_device(
@@ -603,6 +691,39 @@ mod tests {
         assert_eq!(row["fingerprint"], "fp1");
         assert_eq!(row["rowCount"], 1);
         assert_eq!(row["totalTokens"], 42);
+    }
+
+    #[test]
+    fn sync_state_response_invalidates_missing_and_different_buckets() {
+        let mut manifest = SyncManifest {
+            version: 1,
+            buckets: HashMap::from([
+                (
+                    "2026-05-16|8|codex_local".to_string(),
+                    json!({"fingerprint": "fp1"}),
+                ),
+                (
+                    "2026-05-16|9|cursor_dashboard_usage".to_string(),
+                    json!({"fingerprint": "fp2"}),
+                ),
+                (
+                    "2026-05-16|10|claude_code_local".to_string(),
+                    json!({"fingerprint": "fp3"}),
+                ),
+            ]),
+        };
+        let changed = apply_sync_state_response(
+            &mut manifest,
+            &json!({
+                "missing": [{"day": "2026-05-16", "hour": 8, "providerId": "codex_local"}],
+                "different": [{"day": "2026-05-16", "hour": 9, "providerId": "cursor_dashboard_usage"}],
+                "matched": [{"day": "2026-05-16", "hour": 10, "providerId": "claude_code_local"}],
+            }),
+        );
+        assert!(changed);
+        assert!(!manifest.buckets.contains_key("2026-05-16|8|codex_local"));
+        assert!(!manifest.buckets.contains_key("2026-05-16|9|cursor_dashboard_usage"));
+        assert!(manifest.buckets.contains_key("2026-05-16|10|claude_code_local"));
     }
 
     #[test]

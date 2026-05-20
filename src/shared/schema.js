@@ -81,6 +81,21 @@ export function hourlyUsageKey(item, participantId, deviceId) {
   ].join("|");
 }
 
+export const CLOUD_PROVIDER_IDS = new Set(["cursor_dashboard_usage"]);
+
+export function cloudNaturalKey(item, participantId) {
+  const hour = item.hour != null ? item.hour : 0;
+  return [
+    item.day,
+    hour,
+    participantId,
+    item.toolCode,
+    item.providerId,
+    item.workdirHash,
+    item.model
+  ].join("|");
+}
+
 export function publicUsageItem(item) {
   const inputTokens = normalizeTokenNumber(item.inputTokens);
   const outputTokens = normalizeTokenNumber(item.outputTokens);

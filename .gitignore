@@ -47,4 +47,6 @@ src-tauri/binaries/*
 target/
 src-tauri/gen/
 src-tauri/.signing-key
+.tmp-cursor-probe.js
+.tmp-cursor-tokens.json
 .claude

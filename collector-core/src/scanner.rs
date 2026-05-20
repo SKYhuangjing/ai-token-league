@@ -2,7 +2,7 @@ use crate::config::AppConfig;
 use crate::crypto::sha256_hex;
 use crate::provider::claude_code_local::ClaudeCodeLocalProvider;
 use crate::provider::codex_local::CodexProvider;
-use crate::provider::cursor_dashboard::CursorDashboardProvider;
+use crate::provider::cursor_dashboard::{cursor_token_to_cookie, CursorDashboardProvider};
 use crate::schema::{compute_bucket_fingerprint, public_usage_item};
 use crate::workdir::workdir_from_candidate;
 use serde_json::{json, Value};
@@ -24,15 +24,54 @@ pub async fn scan_usage_async(
 
     let cursor = CursorDashboardProvider;
     if cursor.is_enabled(config) {
+        // Proactive refresh for authorized accounts
+        let mut config = cursor.refresh_accounts_if_needed(config).await;
+
         let mut cursor_items = Vec::new();
-        let sources = cursor.discover_sources(config);
+        let sources = cursor.discover_sources(&config);
+
+        // Build a map from cookie to account index for reactive refresh
+        let account_cookies: Vec<(String, usize)> = config
+            .cursor_dashboard_usage
+            .accounts
+            .iter()
+            .enumerate()
+            .map(|(i, acc)| {
+                let cookie = if !acc.sub.is_empty() {
+                    let raw = format!("{}::{}", acc.sub, acc.access_token);
+                    format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
+                } else {
+                    cursor_token_to_cookie(&acc.access_token)
+                };
+                (cookie, i)
+            })
+            .collect();
+
         for source in &sources {
-            if let Ok(events) = cursor.fetch_usage(&source.cookie).await {
+            let fetch_result = if source.source_name == "authorized" {
+                // Find account index for reactive refresh support
+                let idx = account_cookies
+                    .iter()
+                    .find(|(c, _)| c == &source.cookie)
+                    .map(|(_, i)| *i);
+                match idx {
+                    Some(idx) => {
+                        cursor
+                            .fetch_with_reactive_refresh(&source.cookie, idx, &mut config)
+                            .await
+                    }
+                    None => cursor.fetch_usage(&source.cookie).await,
+                }
+            } else {
+                cursor.fetch_usage(&source.cookie).await
+            };
+
+            if let Ok(events) = fetch_result {
                 cursor_items.extend(
                     cursor
                         .parse_events(&events, &source.account_name)
                         .into_iter()
-                        .map(|event| finalize_event(event, config)),
+                        .map(|event| finalize_event(event, &config)),
                 );
             }
         }
@@ -44,7 +83,7 @@ pub async fn scan_usage_async(
         result.health.push(cursor_provider_health(
             cursor.id(),
             cursor.tool_code(),
-            config,
+            &config,
             &sources,
         ));
     } else {
@@ -209,64 +248,31 @@ fn cursor_provider_health(
     config: &AppConfig,
     detected_sources: &[crate::provider::cursor_dashboard::CursorSource],
 ) -> Value {
-    let ignored = config
-        .provider_ignored_auto_sources
-        .get(provider_id)
-        .cloned()
-        .unwrap_or_default();
     let mut sources = Vec::new();
 
-    for (index, record) in config
-        .cursor_dashboard_usage
-        .workos_session_tokens
-        .iter()
-        .enumerate()
-    {
-        let label = if record.account_name.trim().is_empty() {
-            format!("Cursor {}", index + 1)
+    for (index, account) in config.cursor_dashboard_usage.accounts.iter().enumerate() {
+        let label = if !account.email.trim().is_empty() {
+            account.email.clone()
+        } else if !account.account_hash.trim().is_empty() {
+            format!("Cursor {}", &account.account_hash[..account.account_hash.len().min(8)])
         } else {
-            record.account_name.clone()
+            format!("Cursor {}", index + 1)
+        };
+        let id = if !account.account_hash.trim().is_empty() {
+            account.account_hash.clone()
+        } else if !account.auth_id.trim().is_empty() {
+            account.auth_id.clone()
+        } else {
+            format!("account:{}", index)
         };
         sources.push(json!({
             "kind": "manual",
-            "id": label,
+            "id": id,
             "label": label,
-            "tokenIndex": index,
-            "ignored": false
-        }));
-    }
-
-    for source in detected_sources {
-        let id = source.account_name.clone();
-        let is_configured = source.source_name == "config"
-            || config
-                .cursor_dashboard_usage
-                .workos_session_tokens
-                .iter()
-                .any(|record| !record.account_name.is_empty() && record.account_name == id);
-        if is_configured {
-            continue;
-        }
-        sources.push(json!({
-            "kind": "auto",
-            "id": id,
-            "label": source.account_name,
-            "ignored": ignored.contains(&source.account_name)
-        }));
-    }
-
-    for id in ignored {
-        if sources
-            .iter()
-            .any(|source| source.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
-        {
-            continue;
-        }
-        sources.push(json!({
-            "kind": "auto",
-            "id": id,
-            "label": id,
-            "ignored": true
+            "accountIndex": index,
+            "authStatus": account.auth_status,
+            "lastRefreshAt": account.last_refresh_at,
+            "ignored": account.ignored
         }));
     }
 
@@ -673,6 +679,115 @@ mod tests {
         assert!(sources.iter().any(|source| {
             source["ignored"].as_bool() == Some(true)
                 && source["id"].as_str() == Some("/tmp/atl-ignored-codex")
+        }));
+    }
+
+    #[test]
+    fn cursor_provider_health_includes_connected_account_status() {
+        let mut cfg = test_config();
+        cfg.provider_enabled
+            .insert("cursor_dashboard_usage".to_string(), true);
+        cfg.cursor_dashboard_usage.accounts.push(config::CursorAccount {
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            auth_id: "auth_id".to_string(),
+            sub: "auth0|user".to_string(),
+            email: "user@example.com".to_string(),
+            account_hash: "hash123456".to_string(),
+            access_token_expires_at: None,
+            last_refresh_at: Some("2026-05-20T00:00:00Z".to_string()),
+            auth_status: "reauth_required".to_string(),
+            ignored: false,
+            added_at: None,
+        });
+        cfg.cursor_dashboard_usage.workos_session_tokens.push(config::CursorTokenRecord {
+            token: "legacy-token".to_string(),
+            account_name: "USER@example.com".to_string(),
+            added_at: None,
+        });
+        cfg.provider_ignored_auto_sources.insert(
+            "cursor_dashboard_usage".to_string(),
+            vec!["user@example.com".to_string()],
+        );
+
+        let health = provider_health(&cfg);
+        let cursor = health
+            .iter()
+            .find(|item| item["providerId"].as_str() == Some("cursor_dashboard_usage"))
+            .unwrap();
+        let sources = cursor["sources"].as_array().unwrap();
+
+        assert!(sources.iter().any(|source| {
+            source["accountIndex"].as_u64() == Some(0)
+                && source["authStatus"].as_str() == Some("reauth_required")
+                && source["label"].as_str() == Some("user@example.com")
+        }));
+        assert!(!sources
+            .iter()
+            .any(|source| source.get("tokenIndex").and_then(|v| v.as_u64()).is_some()));
+        assert!(!sources
+            .iter()
+            .any(|source| source["ignored"].as_bool() == Some(true)
+                && source["id"].as_str() == Some("user@example.com")));
+    }
+
+    #[test]
+    fn cursor_provider_health_ignores_legacy_only_sources() {
+        let mut cfg = test_config();
+        cfg.provider_enabled
+            .insert("cursor_dashboard_usage".to_string(), true);
+        cfg.cursor_dashboard_usage.workos_session_tokens.push(config::CursorTokenRecord {
+            token: "legacy-token".to_string(),
+            account_name: "legacy@example.com".to_string(),
+            added_at: None,
+        });
+        cfg.provider_ignored_auto_sources.insert(
+            "cursor_dashboard_usage".to_string(),
+            vec!["legacy@example.com".to_string()],
+        );
+
+        let health = provider_health(&cfg);
+        let cursor = health
+            .iter()
+            .find(|item| item["providerId"].as_str() == Some("cursor_dashboard_usage"))
+            .unwrap();
+
+        assert_eq!(cursor["detected"].as_bool(), Some(false));
+        assert_eq!(cursor["scannedFiles"].as_u64(), Some(0));
+        assert!(cursor["sources"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cursor_provider_health_marks_ignored_oauth_account_without_detecting_it() {
+        let mut cfg = test_config();
+        cfg.provider_enabled
+            .insert("cursor_dashboard_usage".to_string(), true);
+        cfg.cursor_dashboard_usage.accounts.push(config::CursorAccount {
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            auth_id: "auth_id".to_string(),
+            sub: "auth0|user".to_string(),
+            email: "ignored@example.com".to_string(),
+            account_hash: "hash_ignored".to_string(),
+            access_token_expires_at: None,
+            last_refresh_at: Some("2026-05-20T00:00:00Z".to_string()),
+            auth_status: "active".to_string(),
+            ignored: true,
+            added_at: None,
+        });
+
+        let health = provider_health(&cfg);
+        let cursor = health
+            .iter()
+            .find(|item| item["providerId"].as_str() == Some("cursor_dashboard_usage"))
+            .unwrap();
+        let sources = cursor["sources"].as_array().unwrap();
+
+        assert_eq!(cursor["detected"].as_bool(), Some(false));
+        assert!(sources.iter().any(|source| {
+            source["accountIndex"].as_u64() == Some(0)
+                && source["ignored"].as_bool() == Some(true)
+                && source["label"].as_str() == Some("ignored@example.com")
         }));
     }
 }
