@@ -750,6 +750,7 @@ async function resetLocalOnly() {
 }
 
 async function resetWithCloud() {
+  closeResetConfirmModal();
   const errorEl = $("#reset-confirm-error");
   errorEl.textContent = "";
   $("#reset-local-data").disabled = true;
@@ -1760,7 +1761,8 @@ function renderToday() {
       costEl.innerHTML = `${renderCostAmount(cost)} <span class="cost-note">${escapeHtml(t("common.estimated").toLowerCase())}</span>`;
       costEl.title = costTitle(cost);
     } else {
-      costEl.textContent = t("desktop.renderer.noLocalUsageFound");
+      costEl.textContent = "";
+      costEl.title = "";
     }
   }
 
