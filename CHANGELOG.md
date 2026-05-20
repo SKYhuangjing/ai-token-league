@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.5] - 2026-05-20
+
+### Added
+
+- [Desktop] Redesigned the desktop onboarding wizard into a 3-step flow (Welcome → Import → Ready) with inline privacy highlights, identity/import mode selection, and streamlined setup actions.
+- [Desktop] Added multi-device config import modes: full replacement (identity + all settings) or identity-only import, so secondary devices can join the same account without overwriting local preferences.
+- [Desktop] Added per-server sync state so switching API base URLs preserves independent sync progress for each server.
+- [Desktop] Added Cursor OAuth ignore support so users can skip Cursor account detection when not using Cursor.
+- Added `POST /api/usage/sync-state` endpoint for comparing local bucket fingerprints against server state to detect missing or diverged uploads.
+- Added cloud provider cross-device deduplication: Cursor dashboard hourly rows from other devices with the same natural key are replaced on upload, preventing duplicate counts from multi-device setups.
+- Added `scripts/setup-build-env-macos.sh`, `scripts/setup-build-env-windows.ps1`, and `scripts/setup-build-env-linux.sh` for idempotent build host setup.
+- Added `scripts/check-release-version.js` gate for local and CI release tag/version/changelog/lockfile consistency.
+
+### Changed
+
+- [Desktop] Refined row layouts and polish across Sources, Workdirs, and Settings panels.
+- Cloud reset now also clears hourly usage and hourly sync bucket data for complete participant cleanup.
+- Hourly-to-daily derivation now handles the case where no hourly rows exist for a given bucket.
+- MySQL DATE columns in `normalizeRow` are now formatted as `YYYY-MM-DD` strings for consistent cross-store behavior.
+
+### Fixed
+
+- [Desktop] Fixed Windows desktop startup crashes, sidecar console output, and reset UX behavior.
+- [Desktop] Fixed cloud status not being rechecked after reading config, causing stale offline state after server changes.
+- [Desktop] Fixed reset modal not closing after a successful cloud reset.
+- [Desktop] Fixed misleading empty estimated cost message being shown in some UI states.
+
+---
+
 ## [0.6.4] - 2026-05-18
 
 ### Fixed

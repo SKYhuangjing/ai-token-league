@@ -6,6 +6,35 @@
 
 ---
 
+## [0.6.5] - 2026-05-20
+
+### 新增
+
+- [Desktop] 重设计桌面端引导向导为 3 步流程（欢迎 → 导入 → 就绪），内嵌隐私要点、身份/导入模式选择和简化的操作入口。
+- [Desktop] 新增多设备配置导入模式：完整替换（身份 + 全部设置）或仅导入身份，使副设备可加入同一账号而不覆盖本地偏好。
+- [Desktop] 新增按服务器的同步状态，切换 API 地址时保留各服务器独立的同步进度。
+- [Desktop] 新增 Cursor OAuth 忽略支持，不使用 Cursor 的用户可跳过 Cursor 账号检测。
+- 新增 `POST /api/usage/sync-state` 端点，比对本地 bucket 指纹与服务端状态，检测缺失或分歧的上传。
+- 新增云端来源多设备去重：上传时来自其他设备的相同自然键 Cursor dashboard 小时行会被替换，防止多设备场景下的重复计数。
+- 新增 `scripts/setup-build-env-macos.sh`、`scripts/setup-build-env-windows.ps1` 和 `scripts/setup-build-env-linux.sh`，用于构建环境一键初始化。
+- 新增 `scripts/check-release-version.js` 发布门禁，检查本地和 CI 的 tag/version/changelog/lockfile 一致性。
+
+### 变更
+
+- [Desktop] 优化 Sources、Workdirs 和 Settings 面板的行布局与视觉细节。
+- 云端重置现在同时清理小时维度 usage 和小时同步 bucket 数据，确保参与者数据完整清除。
+- 小时→日汇总推导现在正确处理无小时行的情况。
+- MySQL `normalizeRow` 中 DATE 列统一格式化为 `YYYY-MM-DD` 字符串，保证跨存储行为一致。
+
+### 修复
+
+- [Desktop] 修复 Windows 桌面端启动崩溃、sidecar 控制台输出和重置 UX 行为。
+- [Desktop] 修复读取配置后未重新检查云端状态，导致服务器变更后仍显示过期的离线状态。
+- [Desktop] 修复云端重置成功后重置弹窗未关闭的问题。
+- [Desktop] 修复某些 UI 状态下显示误导性的空估算成本信息。
+
+---
+
 ## [0.6.4] - 2026-05-18
 
 ### 修复
