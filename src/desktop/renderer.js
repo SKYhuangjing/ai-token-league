@@ -178,12 +178,12 @@ $("#wizard-create-identity").addEventListener("click", () => {
 $("#wizard-import").addEventListener("click", () => run(wizardImportProfile));
 $("#wizard-next-1").addEventListener("click", () => wizardGo(2));
 $("#wizard-back-2").addEventListener("click", () => wizardGo(1));
-$("#wizard-next-2").addEventListener("click", () => wizardGo(3));
-$("#wizard-back-3").addEventListener("click", () => wizardGo(2));
-$("#wizard-skip-cloud").addEventListener("click", () => { $("#wizard-api-base-url").value = ""; wizardGo(4); });
-$("#wizard-next-3").addEventListener("click", () => wizardGo(4));
-$("#wizard-back-4").addEventListener("click", () => wizardGo(3));
 $("#wizard-start").addEventListener("click", () => run(finishWizard));
+document.querySelectorAll("[data-wizard-sync-mode]").forEach((button) => {
+  button.addEventListener("click", () => setWizardSyncMode(button.dataset.wizardSyncMode || "cloud"));
+});
+$("#wizard-api-base-url")?.addEventListener("input", renderWizardSummary);
+$("#wizard-nickname")?.addEventListener("input", renderWizardSummary);
 document.addEventListener("click", (event) => {
   const btn = event.target.closest("#add-codex-root");
   if (btn) run(() => addProviderRoot("codex_local"));
@@ -611,17 +611,31 @@ async function importProfile() {
 
 let wizardStep = 0;
 let wizardDetectedSources = [];
+let wizardSyncMode = "cloud";
+
+function setWizardSyncMode(mode) {
+  wizardSyncMode = mode === "local" ? "local" : "cloud";
+  document.querySelectorAll("[data-wizard-sync-mode]").forEach((button) => {
+    const active = button.dataset.wizardSyncMode === wizardSyncMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  const apiBaseUrlContainer = $(".cloud-url-container");
+  if (apiBaseUrlContainer) apiBaseUrlContainer.classList.toggle("open", wizardSyncMode === "cloud");
+  renderWizardSummary();
+}
 
 function wizardGo(step) {
   wizardStep = step;
   document.querySelectorAll(".wizard-step").forEach((el) => el.classList.toggle("active", Number(el.dataset.wizardStep) === step));
+  document.querySelectorAll(".wizard-actions").forEach((el) => el.classList.toggle("active", Number(el.dataset.wizardActions) === step));
   document.querySelectorAll(".wizard-step-dot").forEach((el) => {
     const dotStep = Number(el.dataset.wizardStepDot);
     el.classList.toggle("active", dotStep === step);
     el.classList.toggle("done", dotStep < step);
   });
-  if (step === 2) renderWizardSources();
-  if (step === 4) renderWizardSummary();
+  if (step === 1) renderWizardSources();
+  if (step === 2) renderWizardSummary();
 }
 
 async function renderWizard() {
@@ -644,6 +658,7 @@ async function renderWizard() {
       $("#wizard-nickname").value = latestConfig.nickname;
     }
     $("#wizard-api-base-url").value = latestConfig?.apiBaseUrl || "";
+    setWizardSyncMode("cloud");
     try {
       wizardDetectedSources = await api.providerHealth();
     } catch {
@@ -665,10 +680,13 @@ async function renderWizardSources() {
       ? (item.roots?.length ? t("desktop.renderer.accountSources", { count: item.roots.length }) : t("desktop.renderer.requiresToken"))
       : (detected ? (item.roots?.length === 1 ? t("desktop.renderer.foundOne") : t("desktop.renderer.found", { count: item.roots?.length || 0 })) : t("desktop.renderer.notFound"));
     return `<article class="wizard-source-card ${detected ? "detected" : ""}">
-      <div>
-        <strong>${sourceName(item.providerId)}</strong>
-        <small>${summary}</small>
-        <p>${sourceDescription(item.providerId)}</p>
+      <div class="wizard-source-icon" aria-hidden="true">${sourceName(item.providerId).slice(0, 1)}</div>
+      <div class="wizard-source-main">
+        <div class="wizard-source-title-row">
+          <strong>${escapeHtml(sourceName(item.providerId))}</strong>
+          <span class="wizard-source-status">${escapeHtml(summary)}</span>
+        </div>
+        <p>${escapeHtml(sourceDescription(item.providerId))}</p>
       </div>
       ${sourceSwitchButton(enabled, `data-wizard-toggle-source="${escapeHtml(item.providerId)}"`)}
     </article>`;
@@ -683,14 +701,23 @@ async function renderWizardSources() {
 
 function renderWizardSummary() {
   const nickname = $("#wizard-nickname").value.trim() || "anonymous";
-  const apiBaseUrl = $("#wizard-api-base-url").value.trim();
+  const apiBaseUrl = wizardSyncMode === "local" ? "" : $("#wizard-api-base-url").value.trim();
   const enabledSources = [];
   document.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {
     if (button.getAttribute("aria-pressed") === "true") enabledSources.push(sourceName(button.dataset.wizardToggleSource));
   });
   $("#wizard-summary-nickname").textContent = nickname;
-  $("#wizard-summary-sources").textContent = enabledSources.length ? enabledSources.join(", ") : t("desktop.renderer.none");
+  const sourcesEl = $("#wizard-summary-sources");
+  if (sourcesEl) {
+    sourcesEl.innerHTML = enabledSources.length
+      ? enabledSources.map((source) => `<span class="ticket-tag">${escapeHtml(source)}</span>`).join("")
+      : `<span class="ticket-tag">${escapeHtml(t("desktop.renderer.none"))}</span>`;
+  }
+  const syncModeEl = $("#wizard-summary-sync-mode");
+  if (syncModeEl) syncModeEl.textContent = apiBaseUrl ? t("desktop.wizard.ticketCloud") : t("desktop.wizard.ticketLocal");
   $("#wizard-summary-cloud").textContent = apiBaseUrl || t("desktop.renderer.localOnly");
+  const participantEl = $("#wizard-summary-participant-id");
+  if (participantEl) participantEl.textContent = latestConfig?.participantId || $("#wizard-participant-id")?.value || "-";
 }
 
 async function wizardImportProfile() {
@@ -736,7 +763,7 @@ async function skipWizard() {
 
 async function finishWizard() {
   const nickname = $("#wizard-nickname").value.trim() || "anonymous";
-  const apiBaseUrl = $("#wizard-api-base-url").value.trim();
+  const apiBaseUrl = wizardSyncMode === "local" ? "" : $("#wizard-api-base-url").value.trim();
   const previousConfig = latestConfig;
   const providerEnabled = {};
   document.querySelectorAll("[data-wizard-toggle-source]").forEach((button) => {

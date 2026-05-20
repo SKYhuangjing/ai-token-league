@@ -357,116 +357,116 @@
           <span class="wizard-step-dot active" data-wizard-step-dot="0">1</span>
           <span class="wizard-step-dot" data-wizard-step-dot="1">2</span>
           <span class="wizard-step-dot" data-wizard-step-dot="2">3</span>
-          <span class="wizard-step-dot" data-wizard-step-dot="3">4</span>
-          <span class="wizard-step-dot" data-wizard-step-dot="4">5</span>
         </div>
         <a href="#" id="wizard-skip" class="wizard-skip" data-i18n="desktop.wizard.skipSetup">Skip setup</a>
 
-        <div class="wizard-step active" data-wizard-step="0">
-          <p class="eyebrow" data-i18n="desktop.wizard.welcomeEyebrow">Welcome</p>
-          <h2 data-i18n="desktop.wizard.welcome">Welcome to AI Token League</h2>
-          <div class="privacy-callout">
-            <h3 data-i18n="desktop.wizard.privacyTitle">Your data stays private</h3>
-            <ul>
-              <li data-i18n="desktop.wizard.privacy1">Prompts and assistant responses are never collected.</li>
-              <li data-i18n="desktop.wizard.privacy2">Source code and file content are never collected.</li>
-              <li data-i18n="desktop.wizard.privacy3">Real file paths are replaced with SHA-256 hashes.</li>
-              <li data-i18n="desktop.wizard.privacy4">Cursor session tokens stay on your computer.</li>
-              <li data-i18n="desktop.wizard.privacy5">Your identity private key never leaves your machine.</li>
-            </ul>
+        <div class="wizard-body">
+          <div class="wizard-step active" data-wizard-step="0">
+            <h2 data-i18n="desktop.wizard.welcome">Welcome to AI Token League</h2>
+            <div class="wizard-intro-grid">
+              <div class="wizard-identity-panel">
+                <h3 id="wizard-identity-title" data-i18n="desktop.wizard.identity">Your identity</h3>
+                <div class="identity-choice-grid" role="radiogroup" aria-labelledby="wizard-identity-title">
+                  <button id="wizard-create-identity" type="button" class="identity-choice-card active" aria-pressed="true">
+                    <span class="choice-badge" data-i18n="desktop.wizard.createNewKicker">New participant</span>
+                    <strong data-i18n="desktop.wizard.createNewIdentity">Create new identity</strong>
+                    <small data-i18n="desktop.wizard.createNewIdentityDesc">Start a new leaderboard participant for this device.</small>
+                  </button>
+                  <button id="wizard-import" type="button" class="identity-choice-card" aria-pressed="false">
+                    <span class="choice-badge" data-i18n="desktop.wizard.joinExistingKicker">Second device</span>
+                    <strong data-i18n="desktop.wizard.joinExisting">Join existing leaderboard identity</strong>
+                    <small data-i18n="desktop.wizard.joinExistingDesc">Import config from another device. This device keeps its own device ID.</small>
+                  </button>
+                </div>
+                <div class="nickname-container">
+                  <label class="form-label" for="wizard-nickname" data-i18n="desktop.account.nickname">Nickname</label>
+                  <input class="form-input" id="wizard-nickname" />
+                </div>
+                <div class="nickname-container">
+                  <label class="form-label" for="wizard-participant-id" data-i18n="desktop.wizard.participantId">Participant ID</label>
+                  <input class="form-input" id="wizard-participant-id" readonly />
+                </div>
+                <p id="wizard-join-status" class="wizard-join-status" hidden></p>
+              </div>
+              <div class="security-seal">
+                <span class="seal-icon" aria-hidden="true">LOCK</span>
+                <div class="seal-text" data-i18n="desktop.wizard.privacySeal">Local-first guarantee: prompts, assistant replies, and source code are never collected. Real paths are hashed with SHA-256.</div>
+              </div>
+            </div>
           </div>
-          <div class="wizard-actions">
+
+          <div class="wizard-step" data-wizard-step="1">
+            <h2 data-i18n="desktop.wizard.dataSources">Data sources</h2>
+            <p class="wizard-step-desc" data-i18n="desktop.wizard.sourcesDesc">Select local sources to scan for token usage. Daily counts will sync anonymously.</p>
+            <div id="wizard-source-list" class="source-grid"></div>
+          </div>
+
+          <div class="wizard-step" data-wizard-step="2">
+            <h2 data-i18n="desktop.wizard.finishSummary">Finish & Summary</h2>
+            <div class="step2-layout">
+              <div class="cloud-settings-pane">
+                <div class="form-label" data-i18n="desktop.wizard.syncMode">Sync mode</div>
+                <div class="sync-mode-selector">
+                  <button class="sync-mode-card active" type="button" data-wizard-sync-mode="cloud" aria-pressed="true">
+                    <strong data-i18n="desktop.wizard.withCloud">With cloud</strong>
+                    <p data-i18n="desktop.wizard.withCloudDesc">Upload to the public leaderboard, check for updates, and fetch model pricing.</p>
+                  </button>
+                  <button class="sync-mode-card" type="button" data-wizard-sync-mode="local" aria-pressed="false">
+                    <strong data-i18n="desktop.wizard.localOnly">Local only</strong>
+                    <p data-i18n="desktop.wizard.localOnlyDesc">All data stays on this device. You can still view your local usage.</p>
+                  </button>
+                </div>
+                <div class="cloud-url-container open">
+                  <label class="form-label" for="wizard-api-base-url" data-i18n="desktop.cloud.apiBaseUrl">API base URL</label>
+                  <input class="form-input" id="wizard-api-base-url" placeholder="https://your-api.example" />
+                </div>
+              </div>
+              <div class="boarding-pass">
+                <div class="ticket-header">
+                  <span data-i18n="desktop.wizard.boardingPass">AI LEAGUE BOARDING PASS</span>
+                  <span class="status-dot" aria-hidden="true"></span>
+                </div>
+                <div class="ticket-body">
+                  <div class="ticket-field">
+                    <span data-i18n="desktop.account.nickname">Nickname</span>
+                    <strong id="wizard-summary-nickname"></strong>
+                  </div>
+                  <div class="ticket-field">
+                    <span data-i18n="desktop.wizard.ticketSync">Sync Mode</span>
+                    <strong id="wizard-summary-sync-mode"></strong>
+                  </div>
+                  <div class="ticket-field">
+                    <span data-i18n="desktop.wizard.ticketServer">Server</span>
+                    <strong id="wizard-summary-cloud" data-i18n="desktop.wizard.localOnly">Local only</strong>
+                  </div>
+                  <div class="ticket-field">
+                    <span data-i18n="desktop.wizard.dataSources">Sources</span>
+                    <div id="wizard-summary-sources" class="ticket-sources-tags">-</div>
+                  </div>
+                </div>
+                <div class="ticket-perforation"></div>
+                <div class="ticket-footer">
+                  <div class="ticket-serial-info">
+                    <span data-i18n="desktop.wizard.participantId">Participant ID</span>
+                    <div class="ticket-id-badge" id="wizard-summary-participant-id"></div>
+                  </div>
+                  <div class="ticket-barcode" aria-hidden="true">||| || | |||| | || ||| | |||</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-footer">
+          <div class="wizard-actions active" data-wizard-actions="0">
             <button id="wizard-next-0" type="button" data-i18n="desktop.wizard.next">Next</button>
           </div>
-        </div>
-
-        <div class="wizard-step" data-wizard-step="1">
-          <p class="eyebrow" data-i18n="desktop.wizard.identityEyebrow">Identity</p>
-          <h2 id="wizard-identity-title" data-i18n="desktop.wizard.identity">Your identity</h2>
-          <div class="identity-choice-grid" role="radiogroup" aria-labelledby="wizard-identity-title">
-            <button id="wizard-create-identity" type="button" class="identity-choice-card active" aria-pressed="true">
-              <span class="choice-kicker" data-i18n="desktop.wizard.createNewKicker">New participant</span>
-              <strong data-i18n="desktop.wizard.createNewIdentity">Create new identity</strong>
-              <small data-i18n="desktop.wizard.createNewIdentityDesc">Start a new leaderboard participant for this device.</small>
-            </button>
-            <button id="wizard-import" type="button" class="identity-choice-card" aria-pressed="false">
-              <span class="choice-kicker" data-i18n="desktop.wizard.joinExistingKicker">Second device</span>
-              <strong data-i18n="desktop.wizard.joinExisting">Join existing leaderboard identity</strong>
-              <small data-i18n="desktop.wizard.joinExistingDesc">Import config from another device. This device keeps its own device ID.</small>
-            </button>
-          </div>
-          <div class="form-grid">
-            <label>
-              <span data-i18n="desktop.account.nickname">Nickname</span>
-              <input id="wizard-nickname" />
-            </label>
-            <label>
-              <span data-i18n="desktop.wizard.participantId">Participant ID</span>
-              <input id="wizard-participant-id" readonly />
-            </label>
-          </div>
-          <div class="wizard-actions">
-            <button id="wizard-back-1" type="button" data-i18n="desktop.wizard.back">Back</button>
+          <div class="wizard-actions" data-wizard-actions="1">
+            <button id="wizard-back-1" class="wizard-back" type="button" data-i18n="desktop.wizard.back">Back</button>
             <button id="wizard-next-1" type="button" data-i18n="desktop.wizard.next">Next</button>
           </div>
-          <p id="wizard-join-status" class="wizard-join-status" hidden></p>
-        </div>
-
-        <div class="wizard-step" data-wizard-step="2">
-          <p class="eyebrow" data-i18n="desktop.wizard.sourcesEyebrow">Sources</p>
-          <h2 data-i18n="desktop.wizard.dataSources">Data sources</h2>
-          <div id="wizard-source-list" class="source-grid"></div>
-          <div class="wizard-actions">
-            <button id="wizard-back-2" type="button" data-i18n="desktop.wizard.back">Back</button>
-            <button id="wizard-next-2" type="button" data-i18n="desktop.wizard.next">Next</button>
-          </div>
-        </div>
-
-        <div class="wizard-step" data-wizard-step="3">
-          <p class="eyebrow" data-i18n="desktop.wizard.cloudEyebrow">Cloud</p>
-          <h2 data-i18n="desktop.wizard.cloud">Cloud connection (optional)</h2>
-          <div class="form-grid">
-            <label>
-              <span data-i18n="desktop.cloud.apiBaseUrl">API base URL</span>
-              <input id="wizard-api-base-url" placeholder="https://your-api.example" />
-            </label>
-          </div>
-          <div class="cloud-explain">
-            <article>
-              <strong data-i18n="desktop.wizard.withCloud">With cloud</strong>
-              <p data-i18n="desktop.wizard.withCloudDesc">Upload to the public leaderboard, check for updates, and fetch model pricing.</p>
-            </article>
-            <article>
-              <strong data-i18n="desktop.wizard.localOnly">Local only</strong>
-              <p data-i18n="desktop.wizard.localOnlyDesc">All data stays on this device. You can still view your local usage.</p>
-            </article>
-          </div>
-          <div class="wizard-actions">
-            <button id="wizard-back-3" type="button" data-i18n="desktop.wizard.back">Back</button>
-            <button id="wizard-skip-cloud" type="button" data-i18n="desktop.wizard.skipCloud">Skip cloud</button>
-            <button id="wizard-next-3" type="button" data-i18n="desktop.wizard.next">Next</button>
-          </div>
-        </div>
-
-        <div class="wizard-step" data-wizard-step="4">
-          <p class="eyebrow" data-i18n="desktop.wizard.readyEyebrow">Ready</p>
-          <h2 data-i18n="desktop.wizard.ready">You're ready</h2>
-          <div class="wizard-summary">
-            <div class="summary-tile">
-              <span data-i18n="desktop.account.nickname">Nickname</span>
-              <strong id="wizard-summary-nickname"></strong>
-            </div>
-            <div class="summary-tile">
-              <span data-i18n="desktop.wizard.dataSources">Sources</span>
-              <strong id="wizard-summary-sources">-</strong>
-            </div>
-            <div class="summary-tile">
-              <span data-i18n="desktop.wizard.cloudEyebrow">Cloud</span>
-              <strong id="wizard-summary-cloud" data-i18n="desktop.wizard.localOnly">Local only</strong>
-            </div>
-          </div>
-          <div class="wizard-actions">
-            <button id="wizard-back-4" type="button" data-i18n="desktop.wizard.back">Back</button>
+          <div class="wizard-actions" data-wizard-actions="2">
+            <button id="wizard-back-2" class="wizard-back" type="button" data-i18n="desktop.wizard.back">Back</button>
             <button id="wizard-start" type="button" data-i18n="desktop.wizard.startTracking">Start tracking</button>
           </div>
         </div>
