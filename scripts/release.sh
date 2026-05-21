@@ -506,6 +506,8 @@ collect_win_artifacts() {
   nsis=$(find "$nsis_dir" -name "*setup*.exe" 2>/dev/null | head -1)
   if [[ -n "$nsis" ]]; then
     cp "$nsis" dist/
+    local nsis_sig="${nsis}.sig"
+    [[ -f "$nsis_sig" ]] && cp "$nsis_sig" dist/
   fi
 
   # MSI installer
@@ -513,15 +515,8 @@ collect_win_artifacts() {
   msi=$(find "$msi_dir" -name "*.msi" 2>/dev/null | head -1)
   if [[ -n "$msi" ]]; then
     cp "$msi" dist/
-  fi
-
-  # Updater NSIS zip
-  local nsis_zip
-  nsis_zip=$(find "$nsis_dir" -name "*.nsis.zip" 2>/dev/null | head -1)
-  if [[ -n "$nsis_zip" ]]; then
-    cp "$nsis_zip" dist/
-    local sig="${nsis_zip}.sig"
-    [[ -f "$sig" ]] && cp "$sig" dist/
+    local msi_sig="${msi}.sig"
+    [[ -f "$msi_sig" ]] && cp "$msi_sig" dist/
   fi
 }
 
@@ -590,7 +585,7 @@ rm -f src-tauri/binaries/atl-collector src-tauri/binaries/atl-collector.exe
 if [[ "$UPLOAD" == "yes" ]]; then
   echo ">>> Uploading to OSS..."
   if [[ "$PLATFORM" == "all" ]]; then
-    node scripts/publish-release.js --env "$ENV_FILE"
+    node scripts/publish-release.js --env "$ENV_FILE" --full
   else
     node scripts/publish-release.js --env "$ENV_FILE" --part
     echo "  Uploaded platform part metadata. Run finalize after all build hosts finish:"
@@ -612,7 +607,7 @@ echo ""
 echo "=== Release Complete ==="
 echo ""
 echo "Artifacts:"
-ls -lh dist/*.dmg dist/*.app.tar.gz dist/*.app.tar.gz.sig dist/*.exe dist/*.msi dist/*.nsis.zip dist/*.AppImage dist/*.AppImage.tar.gz dist/*.AppImage.tar.gz.sig dist/*.deb 2>/dev/null || true
+ls -lh dist/*.dmg dist/*.app.tar.gz dist/*.app.tar.gz.sig dist/*.exe dist/*.exe.sig dist/*.msi dist/*.msi.sig dist/*.AppImage dist/*.AppImage.tar.gz dist/*.AppImage.tar.gz.sig dist/*.deb 2>/dev/null || true
 for d in dist/*.app; do [[ -d "$d" ]] && echo "  $(basename "$d")  ($(du -sh "$d" | cut -f1))"; done
 echo ""
 echo "Done."

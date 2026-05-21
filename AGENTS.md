@@ -163,8 +163,8 @@ npx tauri build --target x86_64-pc-windows-msvc # Windows
 Manual release dry run and publish:
 
 ```bash
-node scripts/publish-release.js --env env.local --dry-run
-node scripts/publish-release.js --env env.local
+node scripts/publish-release.js --env env.local --dry-run --full
+node scripts/publish-release.js --env env.local --full
 ```
 
 Generated artifacts:
@@ -279,8 +279,8 @@ Or manually:
 
 ```bash
 scripts/release.sh --platform all --env env.local --yes     # clean build: zip + installer artifacts
-node scripts/publish-release.js --env env.local --dry-run   # verify manifest
-node scripts/publish-release.js --env env.local             # upload to OSS
+node scripts/publish-release.js --env env.local --dry-run --full # verify manifest
+node scripts/publish-release.js --env env.local --full           # upload complete local dist to OSS
 node scripts/publish-release.js --env env.local --finalize  # merge uploaded platform parts
 ```
 

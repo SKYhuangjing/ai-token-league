@@ -20,8 +20,8 @@
     "icons": "node scripts/generate-icons.js && node scripts/generate-tray-icons.js",
     "icons:tray": "node scripts/generate-tray-icons.js",
     "preset": "node scripts/build-preset.js",
-    "release:dry-run": "node scripts/publish-release.js --dry-run",
-    "release:upload": "node scripts/publish-release.js",
+    "release:dry-run": "node scripts/publish-release.js --dry-run --full",
+    "release:upload": "node scripts/publish-release.js --full",
     "release:check": "node scripts/check-release-version.js",
     "release": "bash scripts/release.sh",
     "bump": "node scripts/bump-version.js"

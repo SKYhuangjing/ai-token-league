@@ -228,7 +228,7 @@ The server runtime must not receive OSS write credentials. Keep `RELEASE_OSS_ACC
 Release resource configuration is read from env. `scripts/publish-release.js` requires an explicit `--env` flag or `RELEASE_*` environment variables; it does not default to `env.local`.
 
 ```bash
-node scripts/publish-release.js --env env.local --dry-run
+node scripts/publish-release.js --env env.local --dry-run --full
 ```
 
 Expected behavior:
@@ -243,7 +243,7 @@ Expected behavior:
 Publish a complete local `dist/` only from a trusted release environment:
 
 ```bash
-node scripts/publish-release.js --env env.local
+node scripts/publish-release.js --env env.local --full
 ```
 
 To rebuild and upload from split self-hosted builders:

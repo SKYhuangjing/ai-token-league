@@ -18,6 +18,7 @@ const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
 const publishPart = args.has("--part");
 const finalize = args.has("--finalize");
+const fullPublish = args.has("--full");
 const allowMissingInstallers = args.has("--allow-missing-installers");
 const allowMissingPlatforms = args.has("--allow-missing-platforms") || allowMissingInstallers;
 const version = argValue("version") || APP_VERSION;
@@ -39,13 +40,17 @@ const secrets = releaseSecretsFromEnv();
 if (!dryRun && (!secrets.accessKeyId || !secrets.accessKeySecret || secrets.accessKeyId === "change-me")) {
   throw new Error("missing release OSS credentials (use --env FILE or set RELEASE_* env vars)");
 }
-if (publishPart && finalize) throw new Error("use either --part or --finalize, not both");
+const modes = [publishPart, finalize, fullPublish].filter(Boolean).length;
+if (modes > 1) throw new Error("use only one publish mode: --part, --finalize, or --full");
+if (!modes) {
+  throw new Error("missing publish mode: use --part for a platform build, --finalize to merge uploaded parts, or --full when dist/ contains every required platform");
+}
 
 // Tauri updater platforms
 const UPDATER_PLATFORMS = {
   "darwin-aarch64": { updaterExt: "app.tar.gz", installerExt: "dmg", label: "macOS arm64" },
   "darwin-x64":     { updaterExt: "app.tar.gz", installerExt: "dmg", label: "macOS Intel" },
-  "windows-x86_64": { updaterExt: "nsis.zip",   installerExt: "exe", label: "Windows x64" },
+  "windows-x86_64": { updaterExt: "exe",        installerExt: "exe", label: "Windows x64", updaterPattern: "setup" },
   "linux-x86_64":   { updaterExt: "appimage.tar.gz", installerExt: "AppImage", label: "Linux x64" }
 };
 
@@ -107,7 +112,7 @@ function scanDistArtifacts() {
 
   for (const [releasePlatform, tauriPlatform] of Object.entries(PLATFORM_TO_UPDATER)) {
     const info = UPDATER_PLATFORMS[tauriPlatform];
-    const updaterFileName = findArtifactFile(info.updaterExt, releasePlatform, tauriPlatform);
+    const updaterFileName = findArtifactFile(info.updaterExt, releasePlatform, tauriPlatform, info.updaterPattern);
     if (updaterFileName) {
       const file = path.join(distDir, updaterFileName);
       const sigFile = `${file}.sig`;
@@ -116,6 +121,7 @@ function scanDistArtifacts() {
         tauriPlatform,
         file,
         fileName: updaterFileName,
+        ext: info.updaterExt,
         size: fs.statSync(file).size,
         sha256: sha256File(file),
         signature: fs.existsSync(sigFile) ? fs.readFileSync(sigFile, "utf8").trim() : "",
@@ -126,22 +132,37 @@ function scanDistArtifacts() {
       missing.push(`${distDir}/*.${info.updaterExt} (${info.label})`);
     }
 
-    const installerFileName = findArtifactFile(info.installerExt, releasePlatform, tauriPlatform);
-    if (installerFileName) {
-      const file = path.join(distDir, installerFileName);
+    // On Windows the updater artifact IS the installer — skip duplicate scan
+    if (info.updaterExt === info.installerExt && updaterFileName) {
       installerArtifacts.push({
         platform: releasePlatform,
         tauriPlatform,
-        file,
-        fileName: installerFileName,
+        file: path.join(distDir, updaterFileName),
+        fileName: updaterFileName,
         ext: info.installerExt,
-        size: fs.statSync(file).size,
-        sha256: sha256File(file),
-        key: releaseKey(version, installerFileName),
-        url: releaseUrl(version, installerFileName)
+        size: fs.statSync(path.join(distDir, updaterFileName)).size,
+        sha256: sha256File(path.join(distDir, updaterFileName)),
+        key: releaseKey(version, updaterFileName),
+        url: releaseUrl(version, updaterFileName)
       });
-    } else if (config.requiredPlatforms.includes(releasePlatform)) {
-      missing.push(`${distDir}/*.${info.installerExt} (${info.label})`);
+    } else {
+      const installerFileName = findArtifactFile(info.installerExt, releasePlatform, tauriPlatform);
+      if (installerFileName) {
+        const file = path.join(distDir, installerFileName);
+        installerArtifacts.push({
+          platform: releasePlatform,
+          tauriPlatform,
+          file,
+          fileName: installerFileName,
+          ext: info.installerExt,
+          size: fs.statSync(file).size,
+          sha256: sha256File(file),
+          key: releaseKey(version, installerFileName),
+          url: releaseUrl(version, installerFileName)
+        });
+      } else if (config.requiredPlatforms.includes(releasePlatform)) {
+        missing.push(`${distDir}/*.${info.installerExt} (${info.label})`);
+      }
     }
   }
 
@@ -152,8 +173,9 @@ function scanDistArtifacts() {
   return { updaterArtifacts, installerArtifacts };
 }
 
-function findArtifactFile(ext, releasePlatform, tauriPlatform) {
-  const files = fs.readdirSync(distDir).filter((f) => f.endsWith(`.${ext}`));
+function findArtifactFile(ext, releasePlatform, tauriPlatform, pattern) {
+  let files = fs.readdirSync(distDir).filter((f) => f.endsWith(`.${ext}`));
+  if (pattern) files = files.filter((f) => f.includes(pattern));
   return files.find((fileName) => matchesPlatformFile(fileName, ext, releasePlatform, tauriPlatform));
 }
 
@@ -253,8 +275,7 @@ function buildGlobalMetadata({ updaterArtifacts, installerArtifacts }) {
     if (!installerArtifacts.find((artifact) => artifact.platform === platform)) throw new Error(`missing installer artifact for ${platform}`);
   }
   const checksumLines = [
-    ...updaterArtifacts.map((a) => `${a.sha256}  ${a.fileName}`),
-    ...installerArtifacts.map((a) => `${a.sha256}  ${a.fileName}`)
+    ...dedupeArtifactsByKey([...updaterArtifacts, ...installerArtifacts]).map((a) => `${a.sha256}  ${a.fileName}`)
   ];
   const checksums = `${checksumLines.join("\n")}\n`;
   const installerMeta = { version, generatedAt: new Date().toISOString(), platforms: {} };
@@ -279,13 +300,29 @@ function buildGlobalMetadata({ updaterArtifacts, installerArtifacts }) {
 }
 
 function artifactUploadItems(updaterArtifacts, installerArtifacts) {
-  return [
-    ...updaterArtifacts.map((a) => ({ key: a.key, file: a.file, size: a.size, contentType: "application/gzip" })),
+  return dedupeUploadItems([
+    ...updaterArtifacts.map((a) => ({ key: a.key, file: a.file, size: a.size, contentType: a.ext === "exe" ? "application/octet-stream" : "application/gzip" })),
     ...installerArtifacts.map((a) => ({
       key: a.key, file: a.file, size: a.size,
       contentType: a.ext === "dmg" ? "application/x-apple-diskimage" : "application/octet-stream"
     }))
-  ];
+  ]);
+}
+
+function dedupeArtifactsByKey(artifacts) {
+  const byKey = new Map();
+  for (const artifact of artifacts) {
+    if (!byKey.has(artifact.key)) byKey.set(artifact.key, artifact);
+  }
+  return [...byKey.values()];
+}
+
+function dedupeUploadItems(items) {
+  const byKey = new Map();
+  for (const item of items) {
+    if (!byKey.has(item.key)) byKey.set(item.key, item);
+  }
+  return [...byKey.values()];
 }
 
 function jsonUploadItems({ checksums, installerMeta, tauriUpdate, manifest }) {

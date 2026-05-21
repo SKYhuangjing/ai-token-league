@@ -220,7 +220,7 @@ npm run desktop
 - 打包/发布：`scripts/release.sh`
 - 版本或产品基线更新：`npm run bump -- <version>` 或 `npm run bump -- --baseline <major.minor>`
 - 预置配置生成：`npm run preset -- --env env.local`
-- 发布 manifest dry run：`node scripts/publish-release.js --env env.local --dry-run`
+- 发布 manifest dry run：`node scripts/publish-release.js --env env.local --dry-run --full`
 
 `npm start`、`npm run package:*`、`npm run release:*` 是底层命令，适合定向验证或排障；日常服务启动和完整发布优先使用上面的脚本入口。
 
@@ -248,7 +248,7 @@ scripts/release.sh --platform all --yes
 发布 dry run：
 
 ```bash
-node scripts/publish-release.js --env env.local --dry-run
+node scripts/publish-release.js --env env.local --dry-run --full
 ```
 
 完整发布：

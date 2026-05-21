@@ -220,7 +220,7 @@ Project scripts are the preferred entrypoints for service and release workflows:
 - Build/release: `scripts/release.sh`
 - Bump client version or product baseline: `npm run bump -- <version>` or `npm run bump -- --baseline <major.minor>`
 - Generate build preset: `npm run preset -- --env env.local`
-- Release manifest dry run: `node scripts/publish-release.js --env env.local --dry-run`
+- Release manifest dry run: `node scripts/publish-release.js --env env.local --dry-run --full`
 
 `npm start`, `npm run package:*`, and `npm run release:*` are low-level commands for targeted verification or debugging. Prefer the script entrypoints for normal service startup and full release work.
 
@@ -248,7 +248,7 @@ scripts/release.sh --platform all --yes
 Release dry run:
 
 ```bash
-node scripts/publish-release.js --env env.local --dry-run
+node scripts/publish-release.js --env env.local --dry-run --full
 ```
 
 Full release:
