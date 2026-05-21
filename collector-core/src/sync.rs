@@ -21,6 +21,9 @@ pub struct SyncResult {
     pub queued: bool,
     pub queue_pending: usize,
     pub queue_uploaded: usize,
+    pub queue_attempted: usize,
+    pub queue_failed: usize,
+    pub new_failed_bucket_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -56,6 +59,13 @@ struct FailedUpload {
     error: String,
 }
 
+#[derive(Debug, Default)]
+struct QueueDrainStats {
+    attempted: usize,
+    uploaded: usize,
+    failed: usize,
+}
+
 /// Sync dirty buckets to the server.
 pub async fn sync_usage(
     config: &AppConfig,
@@ -74,7 +84,7 @@ pub async fn sync_usage(
     register_device(&client, config, api_base_url).await?;
 
     // Drain upload queue
-    let queue_uploaded = drain_upload_queue(&client, &mut manifest, api_base_url).await;
+    let queue_drain = drain_upload_queue(&client, &mut manifest, api_base_url).await;
 
     reconcile_sync_state(&client, config, api_base_url, &mut manifest, &buckets).await;
 
@@ -168,18 +178,34 @@ pub async fn sync_usage(
                     );
                     save_sync_manifest_for(api_base_url, &manifest);
                 } else {
+                    let status = resp.status();
                     rejected += 1;
+                    append_upload_failure_event(
+                        "usage_upload_failed",
+                        &body,
+                        format!("HTTP {}", status),
+                        Some(status.as_u16()),
+                        0,
+                    );
                     failed_buckets.push(FailedUpload {
                         payload: body,
-                        error: format!("HTTP {}", resp.status()),
+                        error: format!("HTTP {}", status),
                     });
                 }
             }
             Err(error) => {
+                let error_text = error.to_string();
                 rejected += 1;
+                append_upload_failure_event(
+                    "usage_upload_failed",
+                    &body,
+                    error_text.clone(),
+                    None,
+                    0,
+                );
                 failed_buckets.push(FailedUpload {
                     payload: body,
-                    error: error.to_string(),
+                    error: error_text,
                 });
             }
         }
@@ -195,6 +221,28 @@ pub async fn sync_usage(
     }
 
     let queue_pending = count_pending_queue();
+    crate::observability::append_runtime_event(
+        "sync",
+        "usage_sync_summary",
+        if rejected > 0 || queue_drain.failed > 0 {
+            "warn"
+        } else {
+            "info"
+        },
+        json!({
+            "accepted": accepted,
+            "rejected": rejected,
+            "bucketCount": buckets.len(),
+            "uploadedBucketCount": uploaded,
+            "noopBucketCount": noop,
+            "queued": queued,
+            "queuePending": queue_pending,
+            "queueAttempted": queue_drain.attempted,
+            "queueUploaded": queue_drain.uploaded,
+            "queueFailed": queue_drain.failed,
+            "newFailedBucketCount": failed_buckets.len()
+        }),
+    );
 
     Ok(SyncResult {
         accepted,
@@ -204,7 +252,10 @@ pub async fn sync_usage(
         noop_bucket_count: noop,
         queued,
         queue_pending,
-        queue_uploaded,
+        queue_uploaded: queue_drain.uploaded,
+        queue_attempted: queue_drain.attempted,
+        queue_failed: queue_drain.failed,
+        new_failed_bucket_count: failed_buckets.len(),
     })
 }
 
@@ -329,12 +380,14 @@ async fn drain_upload_queue(
     client: &reqwest::Client,
     manifest: &mut SyncManifest,
     api_base_url: &str,
-) -> usize {
+) -> QueueDrainStats {
     let mut queue = read_upload_queue();
     if queue.items.is_empty() {
-        return 0;
+        return QueueDrainStats::default();
     }
+    let initial_pending = queue.items.len();
     let mut uploaded = 0usize;
+    let mut failed = 0usize;
     let mut remaining = Vec::new();
     let mut attempted = 0usize;
     for mut entry in queue.items.drain(..) {
@@ -360,20 +413,55 @@ async fn drain_upload_queue(
                 save_sync_manifest_for(api_base_url, manifest);
             }
             Ok(resp) => {
-                entry.last_error = format!("HTTP {}", resp.status());
+                let status = resp.status();
+                failed += 1;
+                entry.last_error = format!("HTTP {}", status);
                 entry.next_attempt_at = next_retry_at(entry.attempts);
+                append_upload_failure_event(
+                    "usage_queue_retry_failed",
+                    &entry.payload,
+                    entry.last_error.clone(),
+                    Some(status.as_u16()),
+                    entry.attempts,
+                );
                 remaining.push(entry);
             }
             Err(error) => {
+                failed += 1;
                 entry.last_error = error.to_string();
                 entry.next_attempt_at = next_retry_at(entry.attempts);
+                append_upload_failure_event(
+                    "usage_queue_retry_failed",
+                    &entry.payload,
+                    entry.last_error.clone(),
+                    None,
+                    entry.attempts,
+                );
                 remaining.push(entry);
             }
         }
     }
     queue.items = remaining;
+    let remaining_count = queue.items.len();
     write_upload_queue(&queue);
-    uploaded
+    crate::observability::append_runtime_event(
+        "sync",
+        "usage_queue_drain",
+        if failed > 0 { "warn" } else { "info" },
+        json!({
+            "initialPending": initial_pending,
+            "attempted": attempted,
+            "uploaded": uploaded,
+            "failed": failed,
+            "remaining": remaining_count,
+            "maxAttemptedPerRun": MAX_QUEUE_DRAIN_PER_RUN
+        }),
+    );
+    QueueDrainStats {
+        attempted,
+        uploaded,
+        failed,
+    }
 }
 
 fn enqueue_failed_buckets(buckets: &[FailedUpload]) {
@@ -412,6 +500,54 @@ fn enqueue_failed_buckets(buckets: &[FailedUpload]) {
         });
     }
     write_upload_queue(&queue);
+}
+
+fn append_upload_failure_event(
+    event: &str,
+    payload: &Value,
+    error: String,
+    http_status: Option<u16>,
+    retry_attempt: u32,
+) {
+    let snapshot = &payload["snapshot"];
+    crate::observability::append_runtime_event(
+        "sync",
+        event,
+        "warn",
+        json!({
+            "participantId": payload["participantId"].as_str().unwrap_or(""),
+            "deviceId": payload["deviceId"].as_str().unwrap_or(""),
+            "clientGeneratedAt": payload["clientGeneratedAt"].as_str().unwrap_or(""),
+            "snapshot": {
+                "mode": snapshot["mode"].as_str().unwrap_or(""),
+                "day": snapshot["day"].as_str().unwrap_or(""),
+                "hour": snapshot.get("hour").and_then(|v| v.as_i64()),
+                "providerId": snapshot["providerId"].as_str().unwrap_or(""),
+                "bucketFingerprint": snapshot["bucketFingerprint"].as_str().unwrap_or(""),
+                "rowCount": snapshot["rowCount"].as_i64().unwrap_or(0),
+                "totalTokens": snapshot["totalTokens"].as_i64().unwrap_or(0)
+            },
+            "queueKey": queue_key_for_payload(payload),
+            "httpStatus": http_status,
+            "retryAttempt": retry_attempt,
+            "errorKind": upload_error_kind(&error, http_status),
+            "error": truncate_error(&error)
+        }),
+    );
+}
+
+fn upload_error_kind(error: &str, http_status: Option<u16>) -> String {
+    if let Some(status) = http_status {
+        return format!("http_{}", status);
+    }
+    if error.to_lowercase().contains("timeout") {
+        return "timeout".to_string();
+    }
+    "transport_error".to_string()
+}
+
+fn truncate_error(error: &str) -> String {
+    error.chars().take(500).collect()
 }
 
 fn queue_key_for_payload(payload: &Value) -> String {
@@ -722,8 +858,12 @@ mod tests {
         );
         assert!(changed);
         assert!(!manifest.buckets.contains_key("2026-05-16|8|codex_local"));
-        assert!(!manifest.buckets.contains_key("2026-05-16|9|cursor_dashboard_usage"));
-        assert!(manifest.buckets.contains_key("2026-05-16|10|claude_code_local"));
+        assert!(!manifest
+            .buckets
+            .contains_key("2026-05-16|9|cursor_dashboard_usage"));
+        assert!(manifest
+            .buckets
+            .contains_key("2026-05-16|10|claude_code_local"));
     }
 
     #[test]

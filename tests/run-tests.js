@@ -5,6 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Store } from "../src/backend/store.js";
+import { MySqlStore } from "../src/backend/mysql-store.js";
 import { generateIdentity, newId, signPayload, hmacSha256Hex } from "../src/shared/crypto.js";
 import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
 import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber } from "../src/shared/schema.js";
@@ -859,6 +860,79 @@ function testHourlySnapshotDerivesDailyAndProtectsFromLegacy() {
 
   if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
   console.log("  testHourlySnapshotDerivesDailyAndProtectsFromLegacy passed");
+}
+
+async function testMysqlHourlySnapshotUsesIncrementalSync() {
+  const store = new MySqlStore({});
+  const pid = "p_mysql_hourly", did = "d_mysql_hourly";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-hourly", identityPublicKey: "pk_mysql_hourly", os: "test", appVersion: "0.1.0"
+  });
+
+  let fullSyncCalled = false;
+  let incrementalCalled = false;
+  store.syncAllTables = async () => {
+    fullSyncCalled = true;
+  };
+  store.incrementalHourlyBucketSync = async (_input, result) => {
+    incrementalCalled = true;
+    assert.equal(result.noOp, undefined);
+    assert.equal(result.accepted, 1);
+    assert.equal(result.incomingKeys.length, 1);
+  };
+
+  await store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "mysql_hourly_h1", inputTokens: 5, outputTokens: 7, totalTokens: 12 })
+  ], pid, did, { day: "2026-05-14", hour: 10, providerId: "codex_local" }));
+
+  assert.equal(incrementalCalled, true, "hourly snapshots should use incremental MySQL sync");
+  assert.equal(fullSyncCalled, false, "hourly snapshots must not trigger full-table MySQL sync");
+  console.log("  testMysqlHourlySnapshotUsesIncrementalSync passed");
+}
+
+async function testMysqlHourlyIncrementalSyncScopesDeletes() {
+  const store = new MySqlStore({});
+  const pid = "p_mysql_scope", did = "d_mysql_scope";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-scope", identityPublicKey: "pk_mysql_scope", os: "test", appVersion: "0.1.0"
+  });
+  const payload = makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "mysql_scope_h1", inputTokens: 10, outputTokens: 5, totalTokens: 15 })
+  ], pid, did, { day: "2026-05-14", hour: 11, providerId: "codex_local" });
+  const result = Store.prototype.upsertUsageBatch.call(store, payload);
+  const queries = [];
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async query(sql, params = []) {
+      queries.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
+      return [[], []];
+    }
+  };
+  store.pool = { getConnection: async () => conn };
+
+  await store.incrementalHourlyBucketSync(payload, result);
+
+  const statements = queries.map((q) => q.sql);
+  assert.equal(statements.includes("DELETE FROM usage_daily"), false, "incremental hourly sync must not wipe usage_daily");
+  assert.equal(statements.includes("DELETE FROM usage_hourly"), false, "incremental hourly sync must not wipe usage_hourly");
+  assert.ok(
+    statements.some((sql) => sql.startsWith("DELETE FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND hour = ? AND providerId = ?")),
+    "hourly cleanup should be scoped to one participant/device/day/hour/provider bucket"
+  );
+  assert.ok(
+    statements.some((sql) => sql.startsWith("DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?")),
+    "daily serving cleanup should be scoped to the affected participant/device/day/provider"
+  );
+  assert.ok(
+    statements.some((sql) => sql.startsWith("REPLACE INTO usage_sync_buckets_hourly")),
+    "hourly bucket metadata should be updated"
+  );
+  console.log("  testMysqlHourlyIncrementalSyncScopesDeletes passed");
 }
 
 function testBucketMetadataSchema() {
@@ -2097,6 +2171,14 @@ async function testUsageUploadEndpointSignatureVerification() {
     assert.equal(invalidSigRes.status, 401);
     assert.equal((await invalidSigRes.json()).error, "invalid signature");
 
+    const nullSnapshotRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, snapshot: null, signature: "invalid-signature" })
+    });
+    assert.equal(nullSnapshotRes.status, 401);
+    assert.equal((await nullSnapshotRes.json()).error, "invalid signature");
+
     const noSigRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -3108,6 +3190,10 @@ function testDeleteParticipantDataClearsHourlySyncState() {
 // i18n completeness tests
 testI18nCompleteness();
 testI18nDataAttributesMatchKeys();
+
+// MySQL incremental sync tests
+await testMysqlHourlySnapshotUsesIncrementalSync();
+await testMysqlHourlyIncrementalSyncScopesDeletes();
 
 // Cloud provider dedup tests
 testCursorSameAccountDedupAcrossDevices();

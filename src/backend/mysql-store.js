@@ -4,7 +4,7 @@ import mysql from "mysql2/promise";
 import { Store } from "./store.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { localDay } from "../shared/date.js";
-import { displayTotalTokens } from "../shared/schema.js";
+import { CLOUD_PROVIDER_IDS, displayTotalTokens } from "../shared/schema.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 const MIGRATION_002_PATH = path.resolve("migrations/002_usage_hourly.sql");
@@ -159,7 +159,13 @@ export class MySqlStore extends Store {
   async upsertUsageBatch(input) {
     if (input.snapshot?.mode === "device_day_hour_provider") {
       const result = Store.prototype.upsertUsageBatch.call(this, input);
-      if (!result.noOp) await this.syncAllTables();
+      if (result.noOp) return result;
+      try {
+        await this.incrementalHourlyBucketSync(input, result);
+      } catch (error) {
+        await this.load();
+        throw error;
+      }
       return result;
     }
     if (input.snapshot) return this.upsertSnapshotBatch(input);
@@ -261,6 +267,108 @@ export class MySqlStore extends Store {
         );
       }
     });
+  }
+
+  async incrementalHourlyBucketSync(input, result) {
+    const snapshot = input.snapshot;
+    const bucketKey = this.hourlyBucketSyncKey(input.participantId, input.deviceId, snapshot.day, snapshot.hour, snapshot.providerId);
+    await withTransaction(this.pool, async (conn) => {
+      const now = new Date().toISOString();
+      await conn.query(
+        `INSERT IGNORE INTO usage_sync_buckets_hourly
+          (bucketKey, participantId, deviceId, day, hour, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [bucketKey, input.participantId, input.deviceId, snapshot.day, snapshot.hour, snapshot.providerId, "hourly", "__lock__", 0, 0, input.clientGeneratedAt || "", now, now]
+      );
+      await conn.query("SELECT bucketKey FROM usage_sync_buckets_hourly WHERE bucketKey = ? FOR UPDATE", [bucketKey]);
+
+      const participant = this.db.participants[input.participantId];
+      if (participant) await replaceParticipants(conn, [participant]);
+      const device = this.db.devices[input.deviceId];
+      if (device) await replaceDevices(conn, [device]);
+
+      const affectedDailyScopes = await this.deleteCloudDuplicateHourlyRows(conn, input);
+      affectedDailyScopes.add([input.deviceId, snapshot.day, snapshot.providerId].join("|"));
+
+      await this.syncHourlyScope(conn, input.participantId, input.deviceId, snapshot.day, snapshot.hour, snapshot.providerId);
+
+      for (const scope of affectedDailyScopes) {
+        const [deviceId, day, providerId] = scope.split("|");
+        await this.syncDailyScope(conn, input.participantId, deviceId, day, providerId);
+      }
+
+      const meta = this.getHourlyBucketSync(input.participantId, input.deviceId, snapshot.day, snapshot.hour, snapshot.providerId);
+      if (meta) {
+        await conn.query(
+          `REPLACE INTO usage_sync_buckets_hourly
+            (bucketKey, participantId, deviceId, day, hour, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [bucketKey, meta.participantId, meta.deviceId, meta.day, meta.hour ?? 0, meta.providerId, meta.granularity || "hourly", meta.bucketFingerprint, meta.rowCount, meta.totalTokens, meta.clientGeneratedAt, meta.syncedAt, meta.updatedAt]
+        );
+      }
+    });
+  }
+
+  async deleteCloudDuplicateHourlyRows(conn, input) {
+    const snapshot = input.snapshot;
+    const affectedDailyScopes = new Set();
+    if (!CLOUD_PROVIDER_IDS.has(snapshot.providerId) || !(input.items || []).length) return affectedDailyScopes;
+
+    const conditions = [];
+    const params = [input.participantId, input.deviceId, snapshot.providerId];
+    for (const item of input.items || []) {
+      conditions.push("(day = ? AND hour = ? AND toolCode = ? AND workdirHash = ? AND model = ?)");
+      params.push(item.day, item.hour ?? snapshot.hour ?? 0, item.toolCode, item.workdirHash, item.model);
+    }
+    const where = conditions.join(" OR ");
+    const [rows] = await conn.query(
+      `SELECT DISTINCT deviceId, day, providerId
+       FROM usage_hourly
+       WHERE participantId = ? AND deviceId <> ? AND providerId = ? AND (${where})`,
+      params
+    );
+    for (const row of rows || []) {
+      affectedDailyScopes.add([row.deviceId, toDayString(row.day), row.providerId].join("|"));
+    }
+    if ((rows || []).length) {
+      await conn.query(
+        `DELETE FROM usage_hourly
+         WHERE participantId = ? AND deviceId <> ? AND providerId = ? AND (${where})`,
+        params
+      );
+    }
+    return affectedDailyScopes;
+  }
+
+  async syncHourlyScope(conn, participantId, deviceId, day, hour, providerId) {
+    const hourlyEntries = Object.entries(this.db.usageHourly || {}).filter(
+      ([, row]) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.hour === hour && row.providerId === providerId
+    );
+    await this.syncWorkdirsForUsageEntries(conn, hourlyEntries);
+    await conn.query(
+      "DELETE FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND hour = ? AND providerId = ?",
+      [participantId, deviceId, day, hour, providerId]
+    );
+    await insertUsageHourlyRows(conn, hourlyEntries);
+  }
+
+  async syncDailyScope(conn, participantId, deviceId, day, providerId) {
+    const dailyEntries = Object.entries(this.db.usageDaily || {}).filter(
+      ([, row]) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId
+    );
+    await this.syncWorkdirsForUsageEntries(conn, dailyEntries);
+    await conn.query(
+      "DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?",
+      [participantId, deviceId, day, providerId]
+    );
+    await insertUsageRows(conn, dailyEntries);
+  }
+
+  async syncWorkdirsForUsageEntries(conn, entries) {
+    const workdirEntries = [...new Set(entries.map(([, row]) => row.workdirId))]
+      .map((id) => this.db.workdirs[id])
+      .filter(Boolean);
+    if (workdirEntries.length) await replaceWorkdirs(conn, workdirEntries);
   }
 
   async recalculateCosts() {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Store } from "./store.js";
 import { MySqlStore } from "./mysql-store.js";
-import { verifyPayload, sha256Hex } from "../shared/crypto.js";
+import { verifyPayload, sha256Hex, newId } from "../shared/crypto.js";
 import { assertSnapshot } from "../shared/schema.js";
 import { SERVER_PROTOCOL_VERSION, SERVER_VERSION, SUPPORTED_CLIENT_PROTOCOL, compatibilityResult } from "../shared/version.js";
 import {
@@ -34,6 +34,8 @@ const BOARD_ANONYMIZATION_SALT = process.env.BOARD_ANONYMIZATION_SALT || "";
 const BOARD_ANONYMIZATION_SALT_PATH = process.env.BOARD_ANONYMIZATION_SALT_PATH || "data/board-anonymization-salt.key";
 const BOARD_ANONYMIZATION_NAMES_PATH = process.env.BOARD_ANONYMIZATION_NAMES_PATH || "assets/anonymizer-names.json";
 const MIN_CLIENT_ENFORCE = String(process.env.MIN_CLIENT_ENFORCE || "").toLowerCase() === "true";
+const USAGE_UPLOAD_SUCCESS_LOG = String(process.env.USAGE_UPLOAD_SUCCESS_LOG || "").toLowerCase() === "true";
+const SLOW_USAGE_UPLOAD_LOG_MS = Number(process.env.SLOW_USAGE_UPLOAD_LOG_MS || 1000);
 
 if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
   console.error("FATAL: BOARD_SECURITY_LEVEL=authenticated requires PUBLIC_BOARD_AUTH_USERNAME to be set");
@@ -74,6 +76,46 @@ function transformBoardItem(item) {
 
 function withBusinessDay(body = {}) {
   return { businessDay: currentBusinessDay(), ...body };
+}
+
+function logServerEvent(event, level, data = {}) {
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    source: "backend",
+    event,
+    ...data
+  };
+  const line = JSON.stringify(entry);
+  if (level === "error") console.error(line);
+  else if (level === "warn") console.warn(line);
+  else console.log(line);
+}
+
+function snapshotLogSummary(snapshot = {}, items = []) {
+  const safeSnapshot = snapshot && typeof snapshot === "object" ? snapshot : {};
+  const safeItems = Array.isArray(items) ? items : [];
+  return {
+    mode: safeSnapshot.mode || "legacy",
+    day: safeSnapshot.day || "",
+    hour: safeSnapshot.hour ?? null,
+    providerId: safeSnapshot.providerId || "",
+    bucketFingerprint: safeSnapshot.bucketFingerprint || "",
+    rowCount: Number.isInteger(safeSnapshot.rowCount) ? safeSnapshot.rowCount : safeItems.length,
+    totalTokens: Number.isFinite(safeSnapshot.totalTokens) ? safeSnapshot.totalTokens : null
+  };
+}
+
+function mysqlWriteMode(snapshot, result) {
+  if (result?.noOp) return "noop";
+  if (store.dbType !== "mysql") return "json";
+  if (snapshot?.mode === "device_day_hour_provider") return "incrementalHourly";
+  if (snapshot?.mode === "device_day_provider") return "incrementalDaily";
+  return "fullSync";
+}
+
+function shouldLogUsageUploadSuccess(result, writeMode, durationMs) {
+  return USAGE_UPLOAD_SUCCESS_LOG || writeMode === "fullSync" || (result?.rejected || 0) > 0 || durationMs >= SLOW_USAGE_UPLOAD_LOG_MS;
 }
 
 function transformBoardDetail(detail) {
@@ -183,11 +225,38 @@ async function handleApi(req, res) {
     return sendJson(res, 200, { ...result, compatibility });
   }
   if (req.method === "POST" && req.url === "/api/usage/daily-batch") {
+    const requestId = newId("req");
+    const started = Date.now();
     const body = await readBody(req);
+    const baseLog = {
+      requestId,
+      participantId: body.participantId || "",
+      deviceId: body.deviceId || "",
+      clientGeneratedAt: body.clientGeneratedAt || "",
+      dbType: store.dbType || "json",
+      snapshot: snapshotLogSummary(body.snapshot, body.items || [])
+    };
     const compatibility = serverCompatibility(body.client || body);
-    if (!compatibility.compatible) return sendJson(res, 426, { error: compatibility.status, compatibility });
+    if (!compatibility.compatible) {
+      logServerEvent("usage_upload_rejected", "warn", {
+        ...baseLog,
+        status: 426,
+        errorKind: "incompatible_client",
+        error: compatibility.status,
+        durationMs: Date.now() - started
+      });
+      return sendJson(res, 426, { error: compatibility.status, compatibility });
+    }
     const participant = store.getParticipant(body.participantId);
-    if (!participant) return sendJson(res, 404, { error: "participant is not registered" });
+    if (!participant) {
+      logServerEvent("usage_upload_rejected", "warn", {
+        ...baseLog,
+        status: 404,
+        errorKind: "participant_not_registered",
+        durationMs: Date.now() - started
+      });
+      return sendJson(res, 404, { error: "participant is not registered" });
+    }
     const payload = {
       participantId: body.participantId,
       deviceId: body.deviceId,
@@ -197,16 +266,56 @@ async function handleApi(req, res) {
       items: body.items
     };
     if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
+      logServerEvent("usage_upload_rejected", "warn", {
+        ...baseLog,
+        status: 401,
+        errorKind: "invalid_signature",
+        durationMs: Date.now() - started
+      });
       return sendJson(res, 401, { error: "invalid signature" });
     }
     if (body.snapshot) {
       try {
         assertSnapshot(body.snapshot, body.items, body.participantId, body.deviceId);
       } catch (e) {
+        logServerEvent("usage_upload_rejected", "warn", {
+          ...baseLog,
+          status: 400,
+          errorKind: "invalid_snapshot",
+          error: e.message,
+          durationMs: Date.now() - started
+        });
         return sendJson(res, 400, { error: e.message });
       }
     }
-    return sendJson(res, 200, { ...(await store.upsertUsageBatch(payload)), compatibility });
+    try {
+      const result = await store.upsertUsageBatch(payload);
+      const durationMs = Date.now() - started;
+      const writeMode = mysqlWriteMode(body.snapshot, result);
+      if (shouldLogUsageUploadSuccess(result, writeMode, durationMs)) {
+        logServerEvent("usage_upload_processed", writeMode === "fullSync" ? "warn" : "info", {
+          ...baseLog,
+          status: 200,
+          accepted: result.accepted || 0,
+          rejected: result.rejected || 0,
+          duplicate: Boolean(result.duplicate),
+          noOp: Boolean(result.noOp),
+          mysqlWriteMode: writeMode,
+          durationMs
+        });
+      }
+      return sendJson(res, 200, { ...result, compatibility });
+    } catch (error) {
+      logServerEvent("usage_upload_error", "error", {
+        ...baseLog,
+        status: 500,
+        errorKind: "store_write_failed",
+        error: error.message,
+        mysqlWriteMode: mysqlWriteMode(body.snapshot, null),
+        durationMs: Date.now() - started
+      });
+      throw error;
+    }
   }
   if (req.method === "POST" && req.url === "/api/usage/sync-state") {
     const body = await readBody(req);

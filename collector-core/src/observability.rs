@@ -152,7 +152,11 @@ pub fn summarize_command_result(command: &str, result: &Result<Value, String>) -
                 "accepted": value.get("accepted").and_then(|v| v.as_u64()).unwrap_or(0),
                 "rejected": value.get("rejected").and_then(|v| v.as_u64()).unwrap_or(0),
                 "bucketCount": value.get("bucketCount").and_then(|v| v.as_u64()).unwrap_or(0),
-                "queuePending": value.get("queuePending").and_then(|v| v.as_u64()).unwrap_or(0)
+                "queuePending": value.get("queuePending").and_then(|v| v.as_u64()).unwrap_or(0),
+                "queueAttempted": value.get("queueAttempted").and_then(|v| v.as_u64()).unwrap_or(0),
+                "queueUploaded": value.get("queueUploaded").and_then(|v| v.as_u64()).unwrap_or(0),
+                "queueFailed": value.get("queueFailed").and_then(|v| v.as_u64()).unwrap_or(0),
+                "newFailedBucketCount": value.get("newFailedBucketCount").and_then(|v| v.as_u64()).unwrap_or(0)
             }),
             "providers:health" => json!({
                 "providerCount": value.as_array().map(|v| v.len()).unwrap_or(0)
