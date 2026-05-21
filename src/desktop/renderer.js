@@ -7,6 +7,8 @@ import { initI18n, setLang, t, getCurrentLang, createLangSwitcher, bindLangSwitc
 // 初始化多语言
 const currentLang = initI18n();
 
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
 function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
 }
@@ -64,6 +66,7 @@ let latestIdentityBusinessDay = "";
 let latestClientInfo = null;
 let lastIdentityCheckLocalDay = localDay();
 let identityRefreshTimer = null;
+let updateCheckTimer = null;
 let runtimeEventHandlersRegistered = false;
 let overviewRange = "today";
 let workdirsRange = "today";
@@ -878,6 +881,7 @@ async function boot() {
     startIdentityRefreshTimer();
     const backgroundLoad = loadBackgroundStatus({ config });
     startBackgroundStatusTimer();
+    startUpdateCheckTimer();
     const systemLoad = loadSystemStatus();
     const backupLoad = loadBackupStatus();
     const diagnosticsLoad = loadDiagnosticsStatus();
@@ -1156,6 +1160,13 @@ function startBackgroundStatusTimer() {
   backgroundStatusTimer = setInterval(() => {
     loadBackgroundStatus().catch((error) => console.error(error));
   }, 60 * 1000);
+}
+
+function startUpdateCheckTimer() {
+  if (updateCheckTimer) return;
+  updateCheckTimer = setInterval(() => {
+    if (shouldCheckUpdateOnCloudOpen()) checkUpdate({ automatic: true }).catch(() => {});
+  }, UPDATE_CHECK_INTERVAL_MS);
 }
 
 function applyUsageScanStatus(status, { force = false } = {}) {
@@ -1477,7 +1488,7 @@ async function checkUpdate({ automatic = false } = {}) {
     latestConfig = await api.getConfig();
     renderCloudStatus(latestConfig);
     if (hasUpdateAvailable(latestUpdateState)) {
-      await downloadUpdate({ restart: true });
+      await downloadUpdate({ restart: false });
     }
   } catch (error) {
     const msg = error.message?.includes("fetch failed")
@@ -1782,11 +1793,14 @@ function renderUpdateStatusText({ client = latestClientInfo || {}, server = {}, 
   const localVersion = client.clientAppVersion || "";
   const latestVersion = update?.latestVersion
     || latestUpdateState?.readyPackage?.latestVersion
+    || server.latestClientVersion
     || (allowServerLatest ? server.latestClientVersion : "")
     || "";
+  const intervalHours = UPDATE_CHECK_INTERVAL_MS / (60 * 60 * 1000);
   const parts = [
     localVersion ? t("desktop.renderer.localVersion", { version: localVersion }) : t("desktop.renderer.localVersionDash"),
-    latestVersion ? t("desktop.renderer.latest", { version: latestVersion }) : t("desktop.renderer.latestDash")
+    latestVersion ? t("desktop.renderer.latest", { version: latestVersion }) : t("desktop.renderer.latestDash"),
+    t("desktop.renderer.autoCheckInterval", { hours: intervalHours })
   ];
   if (statusText) parts.push(statusText);
   setTextIfPresent("#update-status-text", parts.join(" · "));
@@ -2376,7 +2390,7 @@ async function loadBackgroundStatus({ config = latestConfig, refreshConfig = fal
 
 function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   const parts = [];
-  if (updateCheck?.status) parts.push(updateCheck.status.replaceAll("_", " "));
+  if (updateCheck?.status && updateCheck.status !== "idle") parts.push(updateCheck.status.replaceAll("_", " "));
   if (updateCheck?.downloadProgress) parts.push(`${updateCheck.downloadProgress.percent}%`);
   if (updateCheck?.lastResult?.latestVersion && updateCheck?.status === "downloaded") {
     parts.push(t("desktop.renderer.ready", { version: updateCheck.lastResult.latestVersion }));
@@ -2384,7 +2398,7 @@ function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
   if (updateCheck?.nextCheckAt) parts.push(t("desktop.renderer.next", { time: formatTime(updateCheck.nextCheckAt) }));
   if (updateCheck?.lastError) parts.push(t("desktop.renderer.error", { error: updateCheck.lastError }));
   const statusText = parts.join(" · ");
-  renderUpdateStatusText({ update: updateCheck?.update || updateCheck?.lastResult || null, statusText });
+  renderUpdateStatusText({ server: config?.apiConnection || latestConfig?.apiConnection || {}, update: updateCheck?.update || updateCheck?.lastResult || null, statusText });
   const badge = $("#update-badge");
   if (badge) {
     const ready = hasReadyUpdatePackage(updateCheck);
