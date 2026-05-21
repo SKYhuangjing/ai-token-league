@@ -88,7 +88,6 @@ struct PendingCursorConnect {
 
 #[derive(Default)]
 struct SidecarRuntime {
-    source_cache: HashMap<String, Vec<serde_json::Value>>,
     last_scan_status: Option<serde_json::Value>,
     next_scan_task_id: u64,
     tray_estimated_cost_usd: Option<f64>,
@@ -152,14 +151,14 @@ async fn handle_command(
         Command::UsageScan => {
             let cfg = config::ensure_desktop_config();
             let force = request.args["force"].as_bool().unwrap_or(false);
-            usage_snapshot(&cfg, runtime, force).await
+            usage_snapshot(&cfg, force).await
         }
         Command::UsageSync => {
             let cfg = config::ensure_desktop_config();
             if cfg.api_base_url.is_empty() {
                 return Err("API base URL not configured".to_string());
             }
-            let snapshot = usage_snapshot(&cfg, runtime, false).await?;
+            let snapshot = usage_snapshot(&cfg, false).await?;
             sync_snapshot(&cfg, &snapshot).await
         }
         Command::ProvidersHealth => {
@@ -224,7 +223,11 @@ async fn handle_command(
             Ok(config::export_config(&cfg))
         }
         Command::ConfigImportApply => {
-            let mode = request.args.get("__importMode").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let mode = request
+                .args
+                .get("__importMode")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let mut imported = request.args;
             if let Some(obj) = imported.as_object_mut() {
                 obj.remove("__importMode");
@@ -289,7 +292,8 @@ async fn handle_command(
         Command::CursorConnectStart => {
             let uuid = collector_core::provider::cursor_auth::generate_uuid();
             let code_verifier = collector_core::provider::cursor_auth::generate_code_verifier();
-            let challenge = collector_core::provider::cursor_auth::compute_challenge(&code_verifier);
+            let challenge =
+                collector_core::provider::cursor_auth::compute_challenge(&code_verifier);
             let login_url = format!(
                 "https://cursor.com/loginDeepControl?uuid={}&challenge={}&mode=login",
                 uuid, challenge
@@ -310,11 +314,9 @@ async fn handle_command(
                     if chrono::Utc::now().timestamp() > p.expires_at {
                         return Err("expired".to_string());
                     }
-                    let result = collector_core::provider::cursor_auth::poll_auth(
-                        &p.uuid,
-                        &p.code_verifier,
-                    )
-                    .await;
+                    let result =
+                        collector_core::provider::cursor_auth::poll_auth(&p.uuid, &p.code_verifier)
+                            .await;
                     match result {
                         Ok(auth_result) => {
                             // Extract sub from accessToken JWT
@@ -486,7 +488,7 @@ async fn handle_command(
             let task_id = runtime.next_scan_task_id;
             let started_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let snapshot = usage_snapshot(&cfg, runtime, force).await?;
+            let snapshot = usage_snapshot(&cfg, force).await?;
             let finished_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let status = serde_json::json!({
@@ -548,14 +550,14 @@ fn sanitize_config_value(config: &config::AppConfig) -> serde_json::Value {
                     }
                 }
             }
-            if let Some(accounts) = cursor
-                .get_mut("accounts")
-                .and_then(|v| v.as_array_mut())
-            {
+            if let Some(accounts) = cursor.get_mut("accounts").and_then(|v| v.as_array_mut()) {
                 for account in accounts {
                     if let Some(acc) = account.as_object_mut() {
                         acc.insert("accessToken".to_string(), serde_json::json!("[configured]"));
-                        acc.insert("refreshToken".to_string(), serde_json::json!("[configured]"));
+                        acc.insert(
+                            "refreshToken".to_string(),
+                            serde_json::json!("[configured]"),
+                        );
                         if let Some(email) = acc.get("email").and_then(|v| v.as_str()) {
                             let at_idx = email.find('@').unwrap_or(email.len());
                             if at_idx > 0 {
@@ -654,21 +656,14 @@ async fn ensure_config_with_api_connection() -> config::AppConfig {
     next
 }
 
-async fn usage_snapshot(
-    cfg: &config::AppConfig,
-    runtime: &mut SidecarRuntime,
-    force: bool,
-) -> Result<serde_json::Value, String> {
+async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_json::Value, String> {
     if !force {
         if let Some(cached) = read_usage_cache().filter(is_fresh_usage_cache) {
             return Ok(public_usage_snapshot(cached, true));
         }
     }
-    if runtime.source_cache.is_empty() {
-        runtime.source_cache = read_source_index_cache();
-    }
-    let result = scanner::scan_usage_async(cfg, &mut runtime.source_cache).await;
-    runtime.source_cache = result.source_index.clone();
+    let source_cache = read_source_index_cache();
+    let result = scanner::scan_usage_async(cfg, source_cache).await;
     let snapshot = build_usage_snapshot(result.items, result.health, false);
     write_source_index_cache(&result.source_index, &snapshot)?;
     write_usage_cache(&snapshot)?;

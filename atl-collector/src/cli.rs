@@ -42,7 +42,7 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
         crate::Commands::Scan { .. } => {
             let cfg = config::load_config().ok_or("Not initialized")?;
             let cache = std::collections::HashMap::new();
-            let result = scanner::scan_usage_async(&cfg, &cache).await;
+            let result = scanner::scan_usage_async(&cfg, cache).await;
             println!("Scanned {} items", result.items.len());
             for item in &result.items {
                 println!(
@@ -63,7 +63,7 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
                 config::clear_sync_manifest();
             }
             let cache = std::collections::HashMap::new();
-            let result = scanner::scan_usage_async(&cfg, &cache).await;
+            let result = scanner::scan_usage_async(&cfg, cache).await;
             let sync_result =
                 collector_core::sync::sync_usage(&cfg, &result.items, &cfg.api_base_url).await?;
             println!(

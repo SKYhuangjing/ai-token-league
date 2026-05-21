@@ -18,7 +18,7 @@ pub struct ScanResult {
 /// Async scan: local providers plus Cursor dashboard usage when enabled.
 pub async fn scan_usage_async(
     config: &AppConfig,
-    cache_items: &HashMap<String, Vec<Value>>,
+    cache_items: HashMap<String, Vec<Value>>,
 ) -> ScanResult {
     let mut result = scan_usage(config, cache_items);
 
@@ -100,8 +100,7 @@ pub async fn scan_usage_async(
 }
 
 /// Main scan: iterate all providers, collect usage items, aggregate.
-pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>) -> ScanResult {
-    let mut all_items: Vec<Value> = Vec::new();
+pub fn scan_usage(config: &AppConfig, mut cache_items: HashMap<String, Vec<Value>>) -> ScanResult {
     let mut health = Vec::new();
     let mut source_index: HashMap<String, Vec<Value>> = HashMap::new();
 
@@ -112,10 +111,10 @@ pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>)
         let source_meta =
             crate::provider::common::source_metadata(file, codex.id(), codex.version());
         let items = if let Some(cached) = cache_items
-            .get(&source_meta.source_fingerprint)
+            .remove(&source_meta.source_fingerprint)
             .filter(|items| cached_items_have_hour(items))
         {
-            cached.clone()
+            cached
         } else {
             let events = codex.parse_usage(file);
             events
@@ -123,8 +122,7 @@ pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>)
                 .map(|event| finalize_event(event, config))
                 .collect::<Vec<_>>()
         };
-        source_index.insert(source_meta.source_fingerprint, items.clone());
-        all_items.extend(items);
+        source_index.insert(source_meta.source_fingerprint, items);
     }
     health.push(local_provider_health(
         codex.id(),
@@ -143,10 +141,10 @@ pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>)
         let source_meta =
             crate::provider::common::source_metadata(file, claude.id(), claude.version());
         let items = if let Some(cached) = cache_items
-            .get(&source_meta.source_fingerprint)
+            .remove(&source_meta.source_fingerprint)
             .filter(|items| cached_items_have_hour(items))
         {
-            cached.clone()
+            cached
         } else {
             let events = claude.parse_usage(file);
             events
@@ -154,8 +152,7 @@ pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>)
                 .map(|event| finalize_event(event, config))
                 .collect::<Vec<_>>()
         };
-        source_index.insert(source_meta.source_fingerprint, items.clone());
-        all_items.extend(items);
+        source_index.insert(source_meta.source_fingerprint, items);
     }
     health.push(local_provider_health(
         claude.id(),
@@ -167,8 +164,10 @@ pub fn scan_usage(config: &AppConfig, cache_items: &HashMap<String, Vec<Value>>)
         true,
     ));
 
+    drop(cache_items);
+
     // Aggregate
-    let aggregated = aggregate_items(&all_items);
+    let aggregated = aggregate_item_refs(source_index.values().flat_map(|items| items.iter()));
 
     ScanResult {
         items: aggregated,
@@ -254,7 +253,10 @@ fn cursor_provider_health(
         let label = if !account.email.trim().is_empty() {
             account.email.clone()
         } else if !account.account_hash.trim().is_empty() {
-            format!("Cursor {}", &account.account_hash[..account.account_hash.len().min(8)])
+            format!(
+                "Cursor {}",
+                &account.account_hash[..account.account_hash.len().min(8)]
+            )
         } else {
             format!("Cursor {}", index + 1)
         };
@@ -347,6 +349,10 @@ fn shorten_path(value: &str) -> String {
 
 /// Group items by day|hour|toolCode|providerId|workdirHash|model, sum tokens.
 fn aggregate_items(items: &[Value]) -> Vec<Value> {
+    aggregate_item_refs(items.iter())
+}
+
+fn aggregate_item_refs<'a>(items: impl IntoIterator<Item = &'a Value>) -> Vec<Value> {
     let mut groups: HashMap<String, Vec<&Value>> = HashMap::new();
     for item in items {
         let hour = item
@@ -687,24 +693,28 @@ mod tests {
         let mut cfg = test_config();
         cfg.provider_enabled
             .insert("cursor_dashboard_usage".to_string(), true);
-        cfg.cursor_dashboard_usage.accounts.push(config::CursorAccount {
-            access_token: "access".to_string(),
-            refresh_token: "refresh".to_string(),
-            auth_id: "auth_id".to_string(),
-            sub: "auth0|user".to_string(),
-            email: "user@example.com".to_string(),
-            account_hash: "hash123456".to_string(),
-            access_token_expires_at: None,
-            last_refresh_at: Some("2026-05-20T00:00:00Z".to_string()),
-            auth_status: "reauth_required".to_string(),
-            ignored: false,
-            added_at: None,
-        });
-        cfg.cursor_dashboard_usage.workos_session_tokens.push(config::CursorTokenRecord {
-            token: "legacy-token".to_string(),
-            account_name: "USER@example.com".to_string(),
-            added_at: None,
-        });
+        cfg.cursor_dashboard_usage
+            .accounts
+            .push(config::CursorAccount {
+                access_token: "access".to_string(),
+                refresh_token: "refresh".to_string(),
+                auth_id: "auth_id".to_string(),
+                sub: "auth0|user".to_string(),
+                email: "user@example.com".to_string(),
+                account_hash: "hash123456".to_string(),
+                access_token_expires_at: None,
+                last_refresh_at: Some("2026-05-20T00:00:00Z".to_string()),
+                auth_status: "reauth_required".to_string(),
+                ignored: false,
+                added_at: None,
+            });
+        cfg.cursor_dashboard_usage
+            .workos_session_tokens
+            .push(config::CursorTokenRecord {
+                token: "legacy-token".to_string(),
+                account_name: "USER@example.com".to_string(),
+                added_at: None,
+            });
         cfg.provider_ignored_auto_sources.insert(
             "cursor_dashboard_usage".to_string(),
             vec!["user@example.com".to_string()],
@@ -736,11 +746,13 @@ mod tests {
         let mut cfg = test_config();
         cfg.provider_enabled
             .insert("cursor_dashboard_usage".to_string(), true);
-        cfg.cursor_dashboard_usage.workos_session_tokens.push(config::CursorTokenRecord {
-            token: "legacy-token".to_string(),
-            account_name: "legacy@example.com".to_string(),
-            added_at: None,
-        });
+        cfg.cursor_dashboard_usage
+            .workos_session_tokens
+            .push(config::CursorTokenRecord {
+                token: "legacy-token".to_string(),
+                account_name: "legacy@example.com".to_string(),
+                added_at: None,
+            });
         cfg.provider_ignored_auto_sources.insert(
             "cursor_dashboard_usage".to_string(),
             vec!["legacy@example.com".to_string()],
@@ -762,19 +774,21 @@ mod tests {
         let mut cfg = test_config();
         cfg.provider_enabled
             .insert("cursor_dashboard_usage".to_string(), true);
-        cfg.cursor_dashboard_usage.accounts.push(config::CursorAccount {
-            access_token: "access".to_string(),
-            refresh_token: "refresh".to_string(),
-            auth_id: "auth_id".to_string(),
-            sub: "auth0|user".to_string(),
-            email: "ignored@example.com".to_string(),
-            account_hash: "hash_ignored".to_string(),
-            access_token_expires_at: None,
-            last_refresh_at: Some("2026-05-20T00:00:00Z".to_string()),
-            auth_status: "active".to_string(),
-            ignored: true,
-            added_at: None,
-        });
+        cfg.cursor_dashboard_usage
+            .accounts
+            .push(config::CursorAccount {
+                access_token: "access".to_string(),
+                refresh_token: "refresh".to_string(),
+                auth_id: "auth_id".to_string(),
+                sub: "auth0|user".to_string(),
+                email: "ignored@example.com".to_string(),
+                account_hash: "hash_ignored".to_string(),
+                access_token_expires_at: None,
+                last_refresh_at: Some("2026-05-20T00:00:00Z".to_string()),
+                auth_status: "active".to_string(),
+                ignored: true,
+                added_at: None,
+            });
 
         let health = provider_health(&cfg);
         let cursor = health
