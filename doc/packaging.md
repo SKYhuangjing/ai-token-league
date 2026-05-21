@@ -193,28 +193,32 @@ Self-hosted distribution keeps the same client/server API shape, but does not us
 There are two supported ways to produce self-hosted assets:
 
 - Reuse the GitHub Actions release assets, then mirror them to OSS/CDN and publish the static metadata.
-- Run separate trusted build hosts for macOS, Windows, and Ubuntu, collect all platform artifacts into one release `dist/`, then run `scripts/publish-release.js`.
+- Run separate trusted build hosts for macOS, Windows, and Ubuntu, upload per-platform release parts, then finalize the merged metadata.
 
-Use `scripts/release.sh --platform all --env <env-file> --upload --yes` when the host is OSS-compatible and `env-file` contains `RELEASE_OSS_*` credentials. Use `node scripts/publish-release.js --env <env-file> --dry-run` before the real upload.
+Use `scripts/release.sh --platform all --env <env-file> --upload --yes` only when one host has all platform artifacts. For split self-hosted builders, run each platform with `--upload`; the script uploads only that platform's artifacts and part metadata. After all required build hosts finish, run `node scripts/publish-release.js --env <env-file> --finalize` once from a trusted release environment.
 
 The static host must expose:
 
 ```text
-<public-base>/releases/tauri-update.json
-<public-base>/releases/latest.json
-<public-base>/releases/installer.json
-<public-base>/releases/<version>/installer.json
-<public-base>/releases/checksums.txt
-<public-base>/releases/<version>/<installer-and-updater-assets>
+<public-base>/tauri-releases/tauri-update.json
+<public-base>/tauri-releases/latest.json
+<public-base>/tauri-releases/installer.json
+<public-base>/tauri-releases/<version>/installer.json
+<public-base>/tauri-releases/<version>/checksums.txt
+<public-base>/tauri-releases/<version>/parts/<platform>.json
+<public-base>/tauri-releases/<version>/<installer-and-updater-assets>
 ```
 
 Configure the app server to distribute from self-hosted metadata:
 
 ```text
 RELEASE_SOURCE=static
-RELEASE_TAURI_UPDATE_URL=https://example.com/releases/tauri-update.json
-RELEASE_INSTALLER_URL=https://example.com/releases/installer.json
+RELEASE_RELEASE_PATH=tauri-releases
+RELEASE_TAURI_UPDATE_URL=https://example.com/tauri-releases/tauri-update.json
+RELEASE_INSTALLER_URL=https://example.com/tauri-releases/installer.json
 RELEASE_PUBLIC_BASE_URL=https://example.com
+# Optional when the self-hosted channel does not publish Linux:
+RELEASE_REQUIRED_PLATFORMS=darwin-arm64,darwin-x64,win32-x64
 ```
 
 The server runtime must not receive OSS write credentials. Keep `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_SECRET` only in the trusted release environment that runs the upload.
@@ -236,17 +240,18 @@ Expected behavior:
 - `installer.json` is generated for the download page.
 - `latest.json` is generated for backward compatibility.
 
-Publish only from a trusted release environment:
+Publish a complete local `dist/` only from a trusted release environment:
 
 ```bash
 node scripts/publish-release.js --env env.local
 ```
 
-To rebuild and upload separately:
+To rebuild and upload from split self-hosted builders:
 
 ```bash
-scripts/release.sh --platform all --env env.local --yes  # clean build
-node scripts/publish-release.js --env env.local  # upload with progress bar
+scripts/release.sh --platform mac-all --env env.local --upload --yes
+scripts/release.sh --platform win --env env.local --upload --yes
+node scripts/publish-release.js --env env.local --finalize
 ```
 
 The upload script reads `RELEASE_OSS_ACCESS_KEY_ID` and `RELEASE_OSS_ACCESS_KEY_SECRET` from env. These values must not be committed or exposed through app-server responses.

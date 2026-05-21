@@ -14,6 +14,7 @@ import {
   buildInstallerMetadataFromGithubRelease,
   buildTauriUpdateJson,
   githubReleaseApiUrl,
+  releaseConfigFromEnv,
   releaseDistributionFromEnv,
   releasePublicConfig,
   updatePreflightState,
@@ -1118,6 +1119,20 @@ async function testVersionCompatibilityAndManifest() {
   assert.equal(githubRelease.source, "github");
   assert.equal(githubRelease.githubRepository, "SKYhuangjing/ai-token-league");
   assert.equal(githubRelease.githubTag, "v0.6.3");
+  const staticRelease = releaseDistributionFromEnv({
+    RELEASE_SOURCE: "static",
+    RELEASE_PUBLIC_BASE_URL: "https://cdn.example/ai-token-league"
+  });
+  assert.equal(staticRelease.releasePath, "tauri-releases");
+  assert.equal(staticRelease.tauriUpdateUrl, "https://cdn.example/ai-token-league/tauri-releases/tauri-update.json");
+  assert.equal(staticRelease.installerUrl, "https://cdn.example/ai-token-league/tauri-releases/installer.json");
+  const ossRelease = releaseConfigFromEnv({
+    RELEASE_PUBLIC_BASE_URL: "https://cdn.example/ai-token-league",
+    RELEASE_RELEASE_PATH: "desktop-updates",
+    RELEASE_REQUIRED_PLATFORMS: "darwin-arm64,win32-x64"
+  });
+  assert.equal(ossRelease.manifestPath, "desktop-updates/latest.json");
+  assert.deepEqual(ossRelease.requiredPlatforms, ["darwin-arm64", "win32-x64"]);
   assert.equal(githubReleaseApiUrl({
     repository: "SKYhuangjing/ai-token-league",
     tag: "v0.6.3"
@@ -1172,6 +1187,12 @@ async function testVersionCompatibilityAndManifest() {
       "darwin-x64": installerMetadata.platforms["darwin-x64"]
     }
   }, { publicBaseUrl: "https://cdn.example" }), /installer (win32-x64|linux-x64) missing/);
+  assert.equal(Object.keys(validateInstallerMetadata({
+    platforms: {
+      "darwin-arm64": installerMetadata.platforms["darwin-arm64"],
+      "win32-x64": installerMetadata.platforms["win32-x64"]
+    }
+  }, { publicBaseUrl: "https://cdn.example", requiredPlatforms: ["darwin-arm64", "win32-x64"] })).length, 2);
   assert.throws(() => validateInstallerMetadata({
     platforms: {
       ...installerMetadata.platforms,

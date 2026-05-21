@@ -16,7 +16,10 @@ import { APP_VERSION } from "../src/shared/version.js";
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
+const publishPart = args.has("--part");
+const finalize = args.has("--finalize");
 const allowMissingInstallers = args.has("--allow-missing-installers");
+const allowMissingPlatforms = args.has("--allow-missing-platforms") || allowMissingInstallers;
 const version = argValue("version") || APP_VERSION;
 const distDir = path.resolve(argValue("dist") || "dist");
 const uploadDispatcher = new Agent({
@@ -36,6 +39,7 @@ const secrets = releaseSecretsFromEnv();
 if (!dryRun && (!secrets.accessKeyId || !secrets.accessKeySecret || secrets.accessKeyId === "change-me")) {
   throw new Error("missing release OSS credentials (use --env FILE or set RELEASE_* env vars)");
 }
+if (publishPart && finalize) throw new Error("use either --part or --finalize, not both");
 
 // Tauri updater platforms
 const UPDATER_PLATFORMS = {
@@ -53,156 +57,12 @@ const PLATFORM_TO_UPDATER = {
   "linux-x64": "linux-x86_64"
 };
 
-// Scan dist/ for updater artifacts (.app.tar.gz, .nsis.zip)
-const updaterArtifacts = [];
-for (const [tauriPlatform, info] of Object.entries(UPDATER_PLATFORMS)) {
-  const pattern = info.updaterExt === "app.tar.gz"
-    ? (tauriPlatform === "darwin-aarch64" ? "*darwin-arm64.app.tar.gz" : "*darwin-x64.app.tar.gz")
-    : "*.nsis.zip";
-  const files = fs.readdirSync(distDir).filter((f) => f.endsWith(`.${info.updaterExt}`));
-  // Match files that contain the expected platform hint
-  const matched = files.find((f) => {
-    if (info.updaterExt === "app.tar.gz") {
-      return tauriPlatform === "darwin-aarch64"
-        ? f.includes("arm64") || f.includes("aarch64")
-        : f.includes("x64") || f.includes("intel");
-    }
-    if (info.updaterExt === "appimage.tar.gz") {
-      return f.includes("amd64") || f.includes("x86_64");
-    }
-    return true; // Windows nsis.zip
-  });
-  if (!matched) continue;
-  const file = path.join(distDir, matched);
-  const sigFile = `${file}.sig`;
-  const signature = fs.existsSync(sigFile) ? fs.readFileSync(sigFile, "utf8").trim() : "";
-  updaterArtifacts.push({
-    platform: tauriPlatform,
-    file,
-    fileName: matched,
-    size: fs.statSync(file).size,
-    sha256: sha256File(file),
-    signature,
-    key: joinKey(config.prefix, "releases", version, matched),
-    url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(matched)}`
-  });
-}
-
-// Scan dist/ for installer artifacts (.dmg, .exe)
-const installerArtifacts = [];
-const missingInstallerFiles = [];
-for (const [releasePlatform, tauriPlatform] of Object.entries(PLATFORM_TO_UPDATER)) {
-  const info = UPDATER_PLATFORMS[tauriPlatform];
-  const files = fs.readdirSync(distDir).filter((f) => f.endsWith(`.${info.installerExt}`));
-  const matched = files.find((f) => {
-    if (info.installerExt === "dmg") {
-      return tauriPlatform === "darwin-aarch64"
-        ? f.includes("aarch64") || f.includes("arm64")
-        : f.includes("x64") || f.includes("intel");
-    }
-    if (info.installerExt === "AppImage") {
-      return f.includes("amd64") || f.includes("x86_64");
-    }
-    return true;
-  });
-  if (!matched) {
-    missingInstallerFiles.push(`${distDir}/*.${info.installerExt} (${info.label})`);
-    continue;
-  }
-  const file = path.join(distDir, matched);
-  installerArtifacts.push({
-    platform: releasePlatform,
-    tauriPlatform,
-    file,
-    fileName: matched,
-    ext: info.installerExt,
-    size: fs.statSync(file).size,
-    sha256: sha256File(file),
-    key: joinKey(config.prefix, "releases", version, matched),
-    url: `${config.publicBaseUrl}/releases/${version}/${encodeURIComponent(matched)}`
-  });
-}
-if (missingInstallerFiles.length && !allowMissingInstallers) {
-  throw new Error(`missing installer artifacts:\n${missingInstallerFiles.map((f) => `- ${f}`).join("\n")}`);
-}
-for (const f of missingInstallerFiles) {
-  console.warn(`installer artifact not found (skipping): ${f}`);
-}
-
-// Build checksums.txt
-const checksumLines = [
-  ...updaterArtifacts.map((a) => `${a.sha256}  ${a.fileName}`),
-  ...installerArtifacts.map((a) => `${a.sha256}  ${a.fileName}`)
-];
-const checksums = checksumLines.join("\n") + "\n";
-const checksumsKey = joinKey(config.prefix, "releases", version, "checksums.txt");
-const expectedArtifactCount = Object.keys(UPDATER_PLATFORMS).length * 2;
-const actualArtifactCount = updaterArtifacts.length + installerArtifacts.length;
-if (actualArtifactCount > 0 && actualArtifactCount < expectedArtifactCount) {
-  console.warn(`Warning: partial build — ${actualArtifactCount}/${expectedArtifactCount} artifacts (use --allow-missing-installers to suppress)`);
-}
-
-// Build installer.json for download page
-const installerMeta = { version, generatedAt: new Date().toISOString(), platforms: {} };
-for (const ia of installerArtifacts) {
-  installerMeta.platforms[ia.platform] = {
-    url: ia.url, fileName: ia.fileName, sha256: ia.sha256, size: ia.size, ext: ia.ext
-  };
-}
-const installerJsonText = `${JSON.stringify(installerMeta, null, 2)}\n`;
-const installerJsonKey = joinKey(config.prefix, "releases", "installer.json");
-const installerJsonVersionKey = joinKey(config.prefix, "releases", version, "installer.json");
-
-// Build tauri-update.json for Tauri updater plugin
-const tauriUpdate = buildTauriUpdateJson({
-  version,
-  publicBaseUrl: config.publicBaseUrl,
-  artifacts: updaterArtifacts
-});
-const tauriUpdateText = `${JSON.stringify(tauriUpdate, null, 2)}\n`;
-const tauriUpdateKey = joinKey(config.prefix, "releases", "tauri-update.json");
-const tauriUpdateVersionKey = joinKey(config.prefix, "releases", version, "tauri-update.json");
-
-// Build latest.json manifest (kept for backward compatibility)
-const manifestArtifacts = updaterArtifacts.map((a) => {
-  const releasePlatform = Object.entries(PLATFORM_TO_UPDATER).find(([, tp]) => tp === a.platform)?.[0] || a.platform;
-  return { ...a, platform: releasePlatform };
-});
-let manifest;
-try {
-  manifest = buildReleaseManifest({
-    version,
-    publicBaseUrl: config.publicBaseUrl,
-    manifestPath: config.manifestPath,
-    artifacts: manifestArtifacts,
-    installerArtifacts
-  });
-} catch {
-  manifest = null;
-}
-const manifestText = manifest ? `${JSON.stringify(manifest, null, 2)}\n` : "";
-const manifestKey = joinKey(config.prefix, config.manifestPath);
-const manifestVersionKey = joinKey(config.prefix, "releases", version, "latest.json");
-
-const plan = [
-  ...updaterArtifacts.map((a) => ({ key: a.key, file: a.file, size: a.size, contentType: "application/gzip" })),
-  ...installerArtifacts.map((a) => ({
-    key: a.key, file: a.file, size: a.size,
-    contentType: a.ext === "dmg" ? "application/x-apple-diskimage" : "application/octet-stream"
-  })),
-  { key: checksumsKey, body: checksums, size: Buffer.byteLength(checksums), contentType: "text/plain; charset=utf-8" },
-  ...(manifestText ? [
-    { key: manifestKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" },
-    { key: manifestVersionKey, body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" }
-  ] : []),
-  { key: installerJsonKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
-  { key: installerJsonVersionKey, body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
-  { key: tauriUpdateKey, body: tauriUpdateText, size: Buffer.byteLength(tauriUpdateText), contentType: "application/json; charset=utf-8" },
-  { key: tauriUpdateVersionKey, body: tauriUpdateText, size: Buffer.byteLength(tauriUpdateText), contentType: "application/json; charset=utf-8", last: true }
-];
+const plan = finalize
+  ? await buildFinalizePlan()
+  : buildPublishPlan(scanDistArtifacts());
 
 if (dryRun) {
-  console.log(JSON.stringify({ dryRun: true, version, uploads: plan.map(({ key, last }) => ({ key, last: Boolean(last) })), installerMeta, tauriUpdate }, null, 2));
+  console.log(JSON.stringify({ dryRun: true, mode: finalize ? "finalize" : publishPart ? "part" : "full", version, releasePath: config.releasePath, requiredPlatforms: config.requiredPlatforms, uploads: plan.map(({ key, last }) => ({ key, last: Boolean(last) })) }, null, 2));
   process.exit(0);
 }
 
@@ -238,6 +98,224 @@ for (const item of lastItems) {
 }
 process.stderr.write("\n");
 console.log(`published ${progress.done} artifacts (${formatBytes(totalBytes)}) in ${((Date.now() - progress.startTime) / 1000).toFixed(1)}s`);
+
+function scanDistArtifacts() {
+  if (!fs.existsSync(distDir)) throw new Error(`dist directory not found: ${distDir}`);
+  const updaterArtifacts = [];
+  const installerArtifacts = [];
+  const missing = [];
+
+  for (const [releasePlatform, tauriPlatform] of Object.entries(PLATFORM_TO_UPDATER)) {
+    const info = UPDATER_PLATFORMS[tauriPlatform];
+    const updaterFileName = findArtifactFile(info.updaterExt, releasePlatform, tauriPlatform);
+    if (updaterFileName) {
+      const file = path.join(distDir, updaterFileName);
+      const sigFile = `${file}.sig`;
+      updaterArtifacts.push({
+        platform: releasePlatform,
+        tauriPlatform,
+        file,
+        fileName: updaterFileName,
+        size: fs.statSync(file).size,
+        sha256: sha256File(file),
+        signature: fs.existsSync(sigFile) ? fs.readFileSync(sigFile, "utf8").trim() : "",
+        key: releaseKey(version, updaterFileName),
+        url: releaseUrl(version, updaterFileName)
+      });
+    } else if (config.requiredPlatforms.includes(releasePlatform)) {
+      missing.push(`${distDir}/*.${info.updaterExt} (${info.label})`);
+    }
+
+    const installerFileName = findArtifactFile(info.installerExt, releasePlatform, tauriPlatform);
+    if (installerFileName) {
+      const file = path.join(distDir, installerFileName);
+      installerArtifacts.push({
+        platform: releasePlatform,
+        tauriPlatform,
+        file,
+        fileName: installerFileName,
+        ext: info.installerExt,
+        size: fs.statSync(file).size,
+        sha256: sha256File(file),
+        key: releaseKey(version, installerFileName),
+        url: releaseUrl(version, installerFileName)
+      });
+    } else if (config.requiredPlatforms.includes(releasePlatform)) {
+      missing.push(`${distDir}/*.${info.installerExt} (${info.label})`);
+    }
+  }
+
+  if (!publishPart && missing.length && !allowMissingPlatforms) {
+    throw new Error(`missing release artifacts:\n${missing.map((f) => `- ${f}`).join("\n")}`);
+  }
+  for (const item of missing) console.warn(`release artifact not found (skipping): ${item}`);
+  return { updaterArtifacts, installerArtifacts };
+}
+
+function findArtifactFile(ext, releasePlatform, tauriPlatform) {
+  const files = fs.readdirSync(distDir).filter((f) => f.endsWith(`.${ext}`));
+  return files.find((fileName) => matchesPlatformFile(fileName, ext, releasePlatform, tauriPlatform));
+}
+
+function matchesPlatformFile(fileName, ext, releasePlatform, tauriPlatform) {
+  if (ext === "dmg" || ext === "app.tar.gz") {
+    return tauriPlatform === "darwin-aarch64"
+      ? /(?:arm64|aarch64)/i.test(fileName)
+      : /(?:x64|x86_64|intel)/i.test(fileName);
+  }
+  if (ext === "AppImage" || ext === "appimage.tar.gz") return /(?:amd64|x86_64|linux)/i.test(fileName);
+  if (releasePlatform === "win32-x64") return /(?:x64|x86_64|windows|win32|setup|nsis)/i.test(fileName);
+  return true;
+}
+
+function buildPublishPlan({ updaterArtifacts, installerArtifacts }) {
+  if (publishPart) return buildPartPlan({ updaterArtifacts, installerArtifacts });
+  const global = buildGlobalMetadata({ updaterArtifacts, installerArtifacts });
+  return [
+    ...artifactUploadItems(updaterArtifacts, installerArtifacts),
+    ...global
+  ];
+}
+
+function buildPartPlan({ updaterArtifacts, installerArtifacts }) {
+  const platforms = new Set([...updaterArtifacts, ...installerArtifacts].map((artifact) => artifact.platform));
+  if (!platforms.size) throw new Error(`no release artifacts found in ${distDir}`);
+  const items = artifactUploadItems(updaterArtifacts, installerArtifacts);
+  let partCount = 0;
+  for (const platform of platforms) {
+    const updaterArtifact = publicArtifact(updaterArtifacts.find((artifact) => artifact.platform === platform));
+    const installerArtifact = publicArtifact(installerArtifacts.find((artifact) => artifact.platform === platform));
+    if (!updaterArtifact?.signature || !installerArtifact) {
+      const missing = [
+        !updaterArtifact ? "updater artifact" : "",
+        updaterArtifact && !updaterArtifact.signature ? "updater signature" : "",
+        !installerArtifact ? "installer artifact" : ""
+      ].filter(Boolean).join(", ");
+      console.warn(`release part not written for ${platform}: missing ${missing}`);
+      continue;
+    }
+    const part = {
+      schemaVersion: 1,
+      version,
+      releasePath: config.releasePath,
+      generatedAt: new Date().toISOString(),
+      platform,
+      updaterArtifact,
+      installerArtifact
+    };
+    const body = `${JSON.stringify(part, null, 2)}\n`;
+    items.push({
+      key: joinKey(config.prefix, config.releasePath, version, "parts", `${platform}.json`),
+      body,
+      size: Buffer.byteLength(body),
+      contentType: "application/json; charset=utf-8"
+    });
+    partCount += 1;
+  }
+  if (!partCount) throw new Error(`no complete release parts found in ${distDir}`);
+  return items;
+}
+
+async function buildFinalizePlan() {
+  const parts = [];
+  for (const platform of config.requiredPlatforms) {
+    const partUrl = `${config.publicBaseUrl}/${config.releasePath}/${version}/parts/${platform}.json`;
+    const response = await fetch(partUrl, { cache: "no-store" });
+    if (!response.ok) throw new Error(`release part missing for ${platform}: ${response.status} ${partUrl}`);
+    const part = await response.json();
+    validatePart(part, platform);
+    parts.push(part);
+  }
+  const updaterArtifacts = parts.map((part) => part.updaterArtifact);
+  const installerArtifacts = parts.map((part) => part.installerArtifact);
+  return buildGlobalMetadata({ updaterArtifacts, installerArtifacts });
+}
+
+function validatePart(part, platform) {
+  if (!part || typeof part !== "object") throw new Error(`release part ${platform} must be an object`);
+  if (part.version !== version) throw new Error(`release part ${platform} version mismatch: ${part.version}`);
+  if (part.platform !== platform) throw new Error(`release part ${platform} platform mismatch: ${part.platform}`);
+  if (part.releasePath && part.releasePath !== config.releasePath) throw new Error(`release part ${platform} path mismatch: ${part.releasePath}`);
+  for (const key of ["updaterArtifact", "installerArtifact"]) {
+    const artifact = part[key];
+    if (!artifact || typeof artifact !== "object") throw new Error(`release part ${platform} missing ${key}`);
+    if (artifact.platform !== platform) throw new Error(`release part ${platform} ${key} platform mismatch`);
+    if (!artifact.url || !artifact.url.startsWith(`${config.publicBaseUrl}/${config.releasePath}/`)) throw new Error(`release part ${platform} ${key} url is outside release path`);
+    if (!/^[a-f0-9]{64}$/i.test(String(artifact.sha256 || ""))) throw new Error(`release part ${platform} ${key} missing checksum`);
+  }
+  if (!part.updaterArtifact.signature) throw new Error(`release part ${platform} updaterArtifact missing signature`);
+}
+
+function buildGlobalMetadata({ updaterArtifacts, installerArtifacts }) {
+  const required = new Set(config.requiredPlatforms);
+  for (const platform of required) {
+    if (!updaterArtifacts.find((artifact) => artifact.platform === platform)) throw new Error(`missing updater artifact for ${platform}`);
+    if (!installerArtifacts.find((artifact) => artifact.platform === platform)) throw new Error(`missing installer artifact for ${platform}`);
+  }
+  const checksumLines = [
+    ...updaterArtifacts.map((a) => `${a.sha256}  ${a.fileName}`),
+    ...installerArtifacts.map((a) => `${a.sha256}  ${a.fileName}`)
+  ];
+  const checksums = `${checksumLines.join("\n")}\n`;
+  const installerMeta = { version, generatedAt: new Date().toISOString(), platforms: {} };
+  for (const ia of installerArtifacts) {
+    installerMeta.platforms[ia.platform] = {
+      url: ia.url, fileName: ia.fileName, sha256: ia.sha256, size: ia.size, ext: ia.ext
+    };
+  }
+  const tauriUpdate = buildTauriUpdateJson({
+    version,
+    publicBaseUrl: config.publicBaseUrl,
+    artifacts: updaterArtifacts
+  });
+  const manifest = buildReleaseManifest({
+    version,
+    publicBaseUrl: config.publicBaseUrl,
+    manifestPath: config.manifestPath,
+    artifacts: updaterArtifacts,
+    installerArtifacts
+  });
+  return jsonUploadItems({ checksums, installerMeta, tauriUpdate, manifest });
+}
+
+function artifactUploadItems(updaterArtifacts, installerArtifacts) {
+  return [
+    ...updaterArtifacts.map((a) => ({ key: a.key, file: a.file, size: a.size, contentType: "application/gzip" })),
+    ...installerArtifacts.map((a) => ({
+      key: a.key, file: a.file, size: a.size,
+      contentType: a.ext === "dmg" ? "application/x-apple-diskimage" : "application/octet-stream"
+    }))
+  ];
+}
+
+function jsonUploadItems({ checksums, installerMeta, tauriUpdate, manifest }) {
+  const installerJsonText = `${JSON.stringify(installerMeta, null, 2)}\n`;
+  const tauriUpdateText = `${JSON.stringify(tauriUpdate, null, 2)}\n`;
+  const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+  return [
+    { key: joinKey(config.prefix, config.releasePath, version, "checksums.txt"), body: checksums, size: Buffer.byteLength(checksums), contentType: "text/plain; charset=utf-8" },
+    { key: joinKey(config.prefix, config.manifestPath), body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" },
+    { key: joinKey(config.prefix, config.releasePath, version, "latest.json"), body: manifestText, size: Buffer.byteLength(manifestText), contentType: "application/json; charset=utf-8" },
+    { key: joinKey(config.prefix, config.releasePath, "installer.json"), body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
+    { key: joinKey(config.prefix, config.releasePath, version, "installer.json"), body: installerJsonText, size: Buffer.byteLength(installerJsonText), contentType: "application/json; charset=utf-8" },
+    { key: joinKey(config.prefix, config.releasePath, "tauri-update.json"), body: tauriUpdateText, size: Buffer.byteLength(tauriUpdateText), contentType: "application/json; charset=utf-8" },
+    { key: joinKey(config.prefix, config.releasePath, version, "tauri-update.json"), body: tauriUpdateText, size: Buffer.byteLength(tauriUpdateText), contentType: "application/json; charset=utf-8", last: true }
+  ];
+}
+
+function publicArtifact(artifact) {
+  if (!artifact) return null;
+  const { platform, tauriPlatform, fileName, ext, size, sha256, signature, url } = artifact;
+  return { platform, tauriPlatform, fileName, ext, size, sha256, signature, url };
+}
+
+function releaseKey(releaseVersion, fileName) {
+  return joinKey(config.prefix, config.releasePath, releaseVersion, fileName);
+}
+
+function releaseUrl(releaseVersion, fileName) {
+  return `${config.publicBaseUrl}/${config.releasePath}/${releaseVersion}/${encodeURIComponent(fileName)}`;
+}
 
 async function putObjectWithRetry(item, progress) {
   const attempts = Number(process.env.RELEASE_UPLOAD_ATTEMPTS || 3);

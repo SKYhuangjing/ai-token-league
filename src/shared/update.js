@@ -3,34 +3,43 @@ import fs from "node:fs";
 import path from "node:path";
 import { APP_VERSION, CLIENT_PROTOCOL_VERSION, SUPPORTED_CLIENT_PROTOCOL, clientPlatform, compareSemver } from "./version.js";
 
+export const DEFAULT_RELEASE_PATH = "tauri-releases";
+export const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64", "linux-x64"];
+
 export function releaseConfigFromEnv(env = process.env) {
   const publicBaseUrl = trimSlash(env.RELEASE_PUBLIC_BASE_URL || "");
-  const manifestPath = trimStartSlash(env.RELEASE_MANIFEST_PATH || "releases/latest.json");
+  const releasePath = releasePathFromEnv(env);
+  const manifestPath = trimStartSlash(env.RELEASE_MANIFEST_PATH || `${releasePath}/latest.json`);
   return {
     endpoint: String(env.RELEASE_OSS_ENDPOINT || "").trim(),
     bucket: String(env.RELEASE_OSS_BUCKET || "").trim(),
     prefix: trimSlash(env.RELEASE_OSS_PREFIX || ""),
     publicBaseUrl,
+    releasePath,
     manifestPath,
-    manifestUrl: publicBaseUrl ? `${publicBaseUrl}/${manifestPath}` : ""
+    manifestUrl: publicBaseUrl ? `${publicBaseUrl}/${manifestPath}` : "",
+    requiredPlatforms: releasePlatformsFromEnv(env)
   };
 }
 
 export function releaseDistributionFromEnv(env = process.env) {
   const publicBaseUrl = trimSlash(env.RELEASE_PUBLIC_BASE_URL || "");
+  const releasePath = releasePathFromEnv(env);
   const source = String(env.RELEASE_SOURCE || (env.RELEASE_GITHUB_REPOSITORY ? "github" : "static")).trim().toLowerCase();
   const githubRepository = String(env.RELEASE_GITHUB_REPOSITORY || env.GITHUB_RELEASE_REPOSITORY || "SKYhuangjing/ai-token-league").trim();
   const githubApiBaseUrl = trimSlash(env.RELEASE_GITHUB_API_BASE_URL || "https://api.github.com");
   const githubTag = String(env.RELEASE_GITHUB_TAG || "").trim();
-  const tauriUpdatePath = trimStartSlash(env.RELEASE_TAURI_UPDATE_PATH || "releases/tauri-update.json");
-  const installerPath = trimStartSlash(env.RELEASE_INSTALLER_PATH || "releases/installer.json");
+  const tauriUpdatePath = trimStartSlash(env.RELEASE_TAURI_UPDATE_PATH || `${releasePath}/tauri-update.json`);
+  const installerPath = trimStartSlash(env.RELEASE_INSTALLER_PATH || `${releasePath}/installer.json`);
   return {
     source,
     publicBaseUrl,
+    releasePath,
     githubRepository,
     githubApiBaseUrl,
     githubTag,
     githubToken: String(env.RELEASE_GITHUB_TOKEN || env.GITHUB_TOKEN || "").trim(),
+    requiredPlatforms: releasePlatformsFromEnv(env),
     tauriUpdatePath,
     installerPath,
     tauriUpdateUrl: env.RELEASE_TAURI_UPDATE_URL
@@ -40,6 +49,20 @@ export function releaseDistributionFromEnv(env = process.env) {
       ? String(env.RELEASE_INSTALLER_URL).trim()
       : publicBaseUrl ? `${publicBaseUrl}/${installerPath}` : ""
   };
+}
+
+export function releasePathFromEnv(env = process.env) {
+  return trimStartSlash(env.RELEASE_RELEASE_PATH || DEFAULT_RELEASE_PATH);
+}
+
+export function releasePlatformsFromEnv(env = process.env) {
+  const raw = String(env.RELEASE_REQUIRED_PLATFORMS || "").trim();
+  if (!raw) return [...RELEASE_PLATFORMS];
+  const platforms = raw.split(",").map((value) => value.trim()).filter(Boolean);
+  for (const platform of platforms) {
+    if (!RELEASE_PLATFORMS.includes(platform)) throw new Error(`unsupported release platform: ${platform}`);
+  }
+  return [...new Set(platforms)];
 }
 
 export function releasePublicConfig({ release = {}, latestClientVersion = APP_VERSION, compatibility = null } = {}) {
@@ -97,7 +120,7 @@ export function validateReleaseConfig(config, { requireOss = false } = {}) {
   return config;
 }
 
-export function validateInstallerMetadata(metadata, { publicBaseUrl = "" } = {}) {
+export function validateInstallerMetadata(metadata, { publicBaseUrl = "", requiredPlatforms = RELEASE_PLATFORMS } = {}) {
   if (!metadata || typeof metadata !== "object") throw new Error("installer metadata must be an object");
   if (!metadata.platforms || typeof metadata.platforms !== "object") throw new Error("installer metadata missing platforms");
   const platformRequirements = {
@@ -107,7 +130,9 @@ export function validateInstallerMetadata(metadata, { publicBaseUrl = "" } = {})
     "linux-x64": "AppImage"
   };
   const normalized = {};
-  for (const [platform, expectedExt] of Object.entries(platformRequirements)) {
+  for (const platform of requiredPlatforms) {
+    const expectedExt = platformRequirements[platform];
+    if (!expectedExt) throw new Error(`unsupported installer platform: ${platform}`);
     const artifact = metadata.platforms[platform];
     if (!artifact || typeof artifact !== "object") throw new Error(`installer ${platform} missing`);
     const url = String(artifact.url || "").trim();
@@ -164,8 +189,6 @@ export async function verifyFileChecksum(file, expectedSha256) {
   }
   return { ok: true, sha256: actual };
 }
-
-export const RELEASE_PLATFORMS = ["darwin-arm64", "darwin-x64", "win32-x64", "linux-x64"];
 
 const TAURI_PLATFORM_MAP = {
   "darwin-arm64": "darwin-aarch64",

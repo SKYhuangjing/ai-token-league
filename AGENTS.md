@@ -186,14 +186,14 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | Script | Primary use | Preferred command |
 | --- | --- | --- |
 | `scripts/start-server.sh` | Start backend + public Web with env loading, Node >= 22 check, occupied-port fallback, optional smoke, detach/log/pid support. | `scripts/start-server.sh --env env.local` |
-| `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, Tauri build, and OSS upload. `--upload` automatically switches to all platforms because release metadata requires the complete artifact set. | `scripts/release.sh` or `npm run release` |
+| `scripts/release.sh` | Interactive or non-interactive release builder: optional version bump, preset generation, Tauri build, and OSS upload. Single-platform `--upload` writes platform part metadata; final merged self-hosted metadata is written by `publish-release.js --finalize`. | `scripts/release.sh` or `npm run release` |
 | `scripts/setup-build-env-macos.sh` | Idempotently initialize a macOS build host with Xcode Command Line Tools, Homebrew-managed Node, Rust stable, macOS Rust targets, and npm dependencies. | `scripts/setup-build-env-macos.sh` |
 | `scripts/setup-build-env-windows.ps1` | Idempotently initialize a Windows build host with Node, Git Bash, Rust stable MSVC, Visual Studio C++ Build Tools, Windows Tauri CLI native package, and npm dependencies. | `powershell -ExecutionPolicy Bypass -File scripts/setup-build-env-windows.ps1` |
 | `scripts/setup-build-env-linux.sh` | Idempotently initialize an Ubuntu build host with Node 22, Rust stable, Linux Tauri system dependencies, Linux Tauri CLI native package, and npm dependencies. | `scripts/setup-build-env-linux.sh` |
 | `scripts/bump-version.js` | Client version and/or product baseline bump across package/docs metadata. | `npm run bump -- <version>` or `npm run bump -- --baseline <major.minor>` |
 | `scripts/check-release-version.js` | Local and CI release gate for tag/version/changelog/lockfile consistency before a `v*` tag is created or published. | `npm run release:check -- --tag v<version>` |
 | `scripts/build-preset.js` | Generate `assets/preset.json` from `PRESET_*` env values or an env file before packaging. | `npm run preset -- --env env.local` |
-| `scripts/publish-release.js` | Build release manifests and upload updater/installer artifacts to OSS; supports dry run. | `node scripts/publish-release.js --env env.local --dry-run` |
+| `scripts/publish-release.js` | Build release manifests and upload updater/installer artifacts to OSS; supports dry run, platform parts, and self-hosted finalize. | `node scripts/publish-release.js --env env.local --dry-run` |
 | `scripts/prepare-github-release.js` | GitHub Actions helper: create or reuse one draft release, delete stale duplicate drafts, clear old assets, and output the canonical `release_id`. | Called by `.github/workflows/release.yml` |
 | `scripts/upload-github-release-asset.js` | GitHub Actions helper: upload a generated release asset such as `latest.json` by `release_id`, with optional clobber. | Called by `.github/workflows/release.yml` |
 | `scripts/patch-dmg-readme.js` | Add `assets/mac-install-readme.txt` into generated macOS DMGs; normally called by installer npm scripts. | `node scripts/patch-dmg-readme.js` |
@@ -281,6 +281,7 @@ Or manually:
 scripts/release.sh --platform all --env env.local --yes     # clean build: zip + installer artifacts
 node scripts/publish-release.js --env env.local --dry-run   # verify manifest
 node scripts/publish-release.js --env env.local             # upload to OSS
+node scripts/publish-release.js --env env.local --finalize  # merge uploaded platform parts
 ```
 
 ### Design rules

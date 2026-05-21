@@ -23,9 +23,9 @@ Without flags, runs in interactive mode with prompts.
 
 Options:
   --version VER     Version to release (default: current from package.json)
-  --platform PLAT   Platform: current | mac-arm64 | mac-intel | mac-all | win | all (default: all)
+  --platform PLAT   Platform: current | mac-arm64 | mac-intel | mac-all | win | linux | all (default: all)
   --env FILE        Env file for presets and upload credentials
-  --upload          Upload artifacts to OSS after build; builds all platforms
+  --upload          Upload artifacts to OSS after build. Single-platform builds publish platform parts; all-platform builds publish final metadata.
   --yes             Skip confirmation prompt
   -h, --help        Show this help message
 
@@ -35,6 +35,7 @@ Examples:
   $(basename "$0") --platform mac-arm64 --yes           # quick mac-arm64 build
   $(basename "$0") --version 0.6.0 --upload --yes      # bump + build + upload
   $(basename "$0") --env env.prod --upload              # full release with env
+  node scripts/publish-release.js --env env.prod --finalize  # merge uploaded platform parts
 EOF
   exit 0
 }
@@ -256,11 +257,6 @@ if [[ "$UPLOAD" == "yes" && -z "$ENV_FILE" ]]; then
   echo "  Error: upload requires an env file with OSS credentials"
   exit 1
 fi
-if [[ "$UPLOAD" == "yes" && "$PLATFORM" != "all" ]]; then
-  echo "  Upload publishes the full release set; switching platform to all."
-  PLATFORM="all"
-  PLATFORM_LABEL="All platforms"
-fi
 echo "  Upload: $UPLOAD"
 
 # --- step 5: confirm ---
@@ -375,9 +371,9 @@ prepare_collector_binary() {
 
 # Tauri build
 # Cross-compilation notes:
-#   - macOS arm64 (native): full build with app + dmg + updater
-#   - macOS Intel (cross): app + updater only (--bundles app skips DMG)
-#   - Windows: must be built natively on Windows (ring/cross-deps don't cross-compile)
+#   - macOS targets are built with the full bundle set first so Apple Silicon hosts can produce Intel DMGs.
+#   - If cross-target DMG packaging fails but the .app exists, retry app-only to keep updater artifacts available.
+#   - Windows must be built natively on Windows (ring/cross-deps don't cross-compile).
 run_tauri_build() {
   local native_arch
   native_arch="$(uname -m)"
@@ -392,8 +388,17 @@ run_tauri_build() {
       echo ">>> Building $arch_label (native)..."
       npx tauri build --target "$rust_target" || exit_code=$?
     else
-      echo ">>> Building $arch_label (cross, app + updater only)..."
-      npx tauri build --target "$rust_target" --bundles app || exit_code=$?
+      echo ">>> Building $arch_label (cross, full bundle)..."
+      npx tauri build --target "$rust_target" || exit_code=$?
+      if [[ $exit_code -ne 0 ]]; then
+        local bundle_dir
+        bundle_dir="$(resolve_bundle_dir "$rust_target")"
+        if [[ -d "$bundle_dir/macos/AI Token League.app" ]]; then
+          echo "  Warning: full cross bundle failed for $arch_label; retrying app-only so updater artifacts remain available."
+          exit_code=0
+          npx tauri build --target "$rust_target" --bundles app || exit_code=$?
+        fi
+      fi
     fi
     # Signing fails without TAURI_SIGNING_PRIVATE_KEY but artifacts are still generated.
     # Only treat as fatal if the .app bundle itself wasn't created.
@@ -584,7 +589,13 @@ rm -f src-tauri/binaries/atl-collector src-tauri/binaries/atl-collector.exe
 # upload
 if [[ "$UPLOAD" == "yes" ]]; then
   echo ">>> Uploading to OSS..."
-  node scripts/publish-release.js --env "$ENV_FILE"
+  if [[ "$PLATFORM" == "all" ]]; then
+    node scripts/publish-release.js --env "$ENV_FILE"
+  else
+    node scripts/publish-release.js --env "$ENV_FILE" --part
+    echo "  Uploaded platform part metadata. Run finalize after all build hosts finish:"
+    echo "  node scripts/publish-release.js --env \"$ENV_FILE\" --finalize"
+  fi
 fi
 
 # Clean up Tauri build targets to save disk space

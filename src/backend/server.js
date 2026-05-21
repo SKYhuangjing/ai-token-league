@@ -642,18 +642,18 @@ async function installerMetadataFromReleaseSource(release) {
   if (release.source === "github") {
     const meta = await fetchGithubRelease(release);
     const installerMeta = buildInstallerMetadataFromGithubRelease(meta);
-    return validateInstallerMetadata(installerMeta);
+    return validateInstallerMetadata(installerMeta, { requiredPlatforms: release.requiredPlatforms });
   }
   if (release.source === "static" || release.source === "self-hosted" || release.source === "self_hosted") {
     if (!release.installerUrl) return null;
     const meta = await fetchReleaseJson(release.installerUrl);
-    return validateInstallerMetadata(meta, { publicBaseUrl: release.publicBaseUrl });
+    return validateInstallerMetadata(meta, { publicBaseUrl: release.publicBaseUrl, requiredPlatforms: release.requiredPlatforms });
   }
   const config = releaseConfigFromEnv();
   validateReleaseConfig(config);
-  const installerUrl = `${config.publicBaseUrl}/releases/installer.json`;
+  const installerUrl = `${config.publicBaseUrl}/${config.releasePath}/installer.json`;
   const meta = await fetchReleaseJson(installerUrl);
-  return validateInstallerMetadata(meta, { publicBaseUrl: config.publicBaseUrl });
+  return validateInstallerMetadata(meta, { publicBaseUrl: config.publicBaseUrl, requiredPlatforms: config.requiredPlatforms });
 }
 
 async function fetchGithubRelease(release) {
