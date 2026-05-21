@@ -16,6 +16,7 @@
     "collector:sync": "cargo run -p atl-collector -- sync",
     "test": "node tests/run-tests.js",
     "smoke": "node tests/run-tests.js && node src/backend/server.js --smoke",
+    "verify:ccusage": "node scripts/verify-ccusage.mjs",
     "icons": "node scripts/generate-icons.js && node scripts/generate-tray-icons.js",
     "icons:tray": "node scripts/generate-tray-icons.js",
     "preset": "node scripts/build-preset.js",
