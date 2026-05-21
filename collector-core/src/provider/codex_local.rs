@@ -38,13 +38,17 @@ impl CodexProvider {
         let mut roots = Vec::new();
 
         if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            if Path::new(&codex_home).exists() {
-                roots.push(codex_home);
+            let sessions = Path::new(&codex_home).join("sessions");
+            if sessions.exists() {
+                roots.push(sessions.to_string_lossy().to_string());
             }
         }
-        let default_root = home.join(".codex");
+        let default_root = home.join(".codex").join("sessions");
         if default_root.exists() {
-            roots.push(default_root.to_string_lossy().to_string());
+            let root = default_root.to_string_lossy().to_string();
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
         }
 
         if roots.is_empty() {
@@ -78,7 +82,11 @@ impl CodexProvider {
             .into_iter()
             .filter(|r| !ignored.contains(r))
             .collect();
-        let manual = self.manual_roots(config);
+        let manual = self
+            .manual_roots(config)
+            .into_iter()
+            .map(|root| codex_session_root(&root))
+            .collect::<Vec<_>>();
 
         let mut files = Vec::new();
         for root in auto.iter().chain(manual.iter()) {
@@ -192,6 +200,15 @@ impl CodexProvider {
         }
 
         events
+    }
+}
+
+fn codex_session_root(root: &str) -> String {
+    let sessions = Path::new(root).join("sessions");
+    if sessions.exists() {
+        sessions.to_string_lossy().to_string()
+    } else {
+        root.to_string()
     }
 }
 
@@ -370,5 +387,25 @@ mod tests {
         let u2 = extract_usage(&row2).unwrap();
         let delta2 = u2.delta_total(150); // 300 - 150 = 150
         assert_eq!(delta2, 150);
+    }
+
+    #[test]
+    fn test_manual_codex_home_uses_sessions_subdir() {
+        let root = std::env::temp_dir().join(format!(
+            "atl-codex-root-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        assert_eq!(
+            codex_session_root(&root.to_string_lossy()),
+            sessions.to_string_lossy()
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

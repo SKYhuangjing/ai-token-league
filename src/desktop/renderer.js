@@ -1197,12 +1197,46 @@ function applyUsageSnapshot(usage) {
   allUsage = (usage.items || []).map(normalizeUsageTotal);
   latestScanAt = usage.scannedAt || latestScanAt;
   latestUsage = allUsage.filter((item) => item.day === localDay());
-  if (usage.health) latestHealth = usage.health;
+  if (usage.health) latestHealth = reconcileHealthWithConfig(usage.health, latestConfig);
   renderToday();
   renderWorkdirs();
   renderHealth();
   renderAliases();
   renderRailStatus();
+}
+
+function reconcileHealthWithConfig(health = [], config = latestConfig) {
+  if (!config?.providerRoots) return health;
+  return health.map((item) => {
+    if (!["codex_local", "claude_code_local"].includes(item.providerId)) return item;
+    const manualRoots = config.providerRoots?.[item.providerId] || [];
+    const existingSources = item.sources || [];
+    const existingManualByPath = new Map(
+      existingSources
+        .filter((source) => source.kind === "manual")
+        .map((source) => [source.path || source.id, source])
+    );
+    const nonManualSources = existingSources.filter((source) => source.kind !== "manual");
+    const manualSources = manualRoots.map((root) => ({
+      kind: "manual",
+      id: root,
+      label: existingManualByPath.get(root)?.label || root,
+      path: root,
+      ignored: false
+    }));
+    const sourceIds = new Set([...nonManualSources, ...manualSources].map((source) => source.path || source.id).filter(Boolean));
+    const roots = (item.roots || []).filter((root) => sourceIds.has(root));
+    for (const root of manualRoots) {
+      if (!roots.includes(root)) roots.push(root);
+    }
+    return {
+      ...item,
+      roots,
+      sources: [...nonManualSources, ...manualSources],
+      detected: roots.length > 0,
+      ok: roots.length > 0
+    };
+  });
 }
 
 function normalizeUsageTotal(item) {
@@ -1269,11 +1303,15 @@ async function confirmSyncUpload() {
 
 async function addProviderRoot(providerId) {
   const config = await api.addProviderRoot(providerId);
-  if (!config?.canceled) {
-    latestConfig = config;
-    renderConfig(config);
+  if (config?.canceled) {
+    await loadToday(false);
+    await loadBackgroundStatus();
+    return;
   }
-  await loadToday();
+  latestConfig = config;
+  renderConfig(config);
+  await loadHealth();
+  await loadToday(true);
   await loadBackgroundStatus();
 }
 

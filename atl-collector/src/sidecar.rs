@@ -2,7 +2,7 @@ use collector_core::config;
 use collector_core::protocol::{Command, SidecarRequest, SidecarResponse};
 use collector_core::scanner;
 use collector_core::version;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -658,13 +658,15 @@ async fn ensure_config_with_api_connection() -> config::AppConfig {
 
 async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_json::Value, String> {
     if !force {
-        if let Some(cached) = read_usage_cache().filter(is_fresh_usage_cache) {
+        if let Some(cached) =
+            read_usage_cache().filter(|snapshot| is_fresh_usage_cache(snapshot, cfg))
+        {
             return Ok(public_usage_snapshot(cached, true));
         }
     }
     let source_cache = read_source_index_cache();
     let result = scanner::scan_usage_async(cfg, source_cache).await;
-    let snapshot = build_usage_snapshot(result.items, result.health, false);
+    let snapshot = build_usage_snapshot(result.items, result.health, false, cfg);
     write_source_index_cache(&result.source_index, &snapshot)?;
     write_usage_cache(&snapshot)?;
     Ok(snapshot)
@@ -674,10 +676,12 @@ fn build_usage_snapshot(
     items: Vec<serde_json::Value>,
     health: Vec<serde_json::Value>,
     from_cache: bool,
+    cfg: &config::AppConfig,
 ) -> serde_json::Value {
     let scanned_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let row_count = items.len();
     let fingerprint = source_fingerprint(&items);
+    let config_fingerprint = usage_source_config_fingerprint(cfg);
     serde_json::json!({
         "items": items,
         "health": health,
@@ -685,6 +689,7 @@ fn build_usage_snapshot(
         "rowCount": row_count,
         "scannedAt": scanned_at,
         "sourceFingerprint": fingerprint,
+        "usageSourceConfigFingerprint": config_fingerprint,
         "fromCache": from_cache
     })
 }
@@ -721,7 +726,14 @@ fn write_usage_cache(snapshot: &serde_json::Value) -> Result<(), String> {
     fs::write(config::usage_cache_path(), format!("{}\n", text)).map_err(|e| e.to_string())
 }
 
-fn is_fresh_usage_cache(snapshot: &serde_json::Value) -> bool {
+fn is_fresh_usage_cache(snapshot: &serde_json::Value, cfg: &config::AppConfig) -> bool {
+    if snapshot
+        .get("usageSourceConfigFingerprint")
+        .and_then(|v| v.as_str())
+        != Some(usage_source_config_fingerprint(cfg).as_str())
+    {
+        return false;
+    }
     let Some(scanned_at) = snapshot.get("scannedAt").and_then(|v| v.as_str()) else {
         return false;
     };
@@ -771,6 +783,7 @@ fn write_source_index_cache(
         "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
         "scannedAt": snapshot.get("scannedAt").cloned().unwrap_or(serde_json::Value::Null),
         "sourceFingerprint": snapshot.get("sourceFingerprint").cloned().unwrap_or(serde_json::Value::Null),
+        "usageSourceConfigFingerprint": snapshot.get("usageSourceConfigFingerprint").cloned().unwrap_or(serde_json::Value::Null),
         "sources": source_index
     });
     let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
@@ -1353,6 +1366,64 @@ fn source_fingerprint(items: &[serde_json::Value]) -> String {
     collector_core::crypto::sha256_hex(&parts.join("\n"))
 }
 
+fn usage_source_config_fingerprint(cfg: &config::AppConfig) -> String {
+    let cursor_accounts = cfg
+        .cursor_dashboard_usage
+        .accounts
+        .iter()
+        .map(|account| {
+            serde_json::json!({
+                "authId": account.auth_id,
+                "sub": account.sub,
+                "emailHash": collector_core::crypto::sha256_hex(&account.email),
+                "accountHash": account.account_hash,
+                "authStatus": account.auth_status,
+                "ignored": account.ignored
+            })
+        })
+        .collect::<Vec<_>>();
+    let cursor_tokens = cfg
+        .cursor_dashboard_usage
+        .workos_session_tokens
+        .iter()
+        .map(|token| {
+            serde_json::json!({
+                "tokenHash": collector_core::crypto::sha256_hex(&token.token),
+                "accountNameHash": collector_core::crypto::sha256_hex(&token.account_name)
+            })
+        })
+        .collect::<Vec<_>>();
+    let source_config = serde_json::json!({
+        "providerEnabled": sorted_bool_map(&cfg.provider_enabled),
+        "providerRoots": sorted_vec_map(&cfg.provider_roots),
+        "providerIgnoredAutoSources": sorted_vec_map(&cfg.provider_ignored_auto_sources),
+        "cursorDashboardUsage": {
+            "legacyTokenHash": collector_core::crypto::sha256_hex(&cfg.cursor_dashboard_usage.workos_session_token),
+            "tokens": cursor_tokens,
+            "accounts": cursor_accounts
+        }
+    });
+    collector_core::crypto::sha256_hex(&source_config.to_string())
+}
+
+fn sorted_bool_map(input: &HashMap<String, bool>) -> BTreeMap<String, bool> {
+    input
+        .iter()
+        .map(|(key, value)| (key.clone(), *value))
+        .collect()
+}
+
+fn sorted_vec_map(input: &HashMap<String, Vec<String>>) -> BTreeMap<String, Vec<String>> {
+    input
+        .iter()
+        .map(|(key, value)| {
+            let mut values = value.clone();
+            values.sort();
+            (key.clone(), values)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1473,18 +1544,40 @@ mod tests {
 
     #[test]
     fn usage_cache_freshness_uses_five_minute_ttl() {
+        let cfg = test_config();
+        let fingerprint = usage_source_config_fingerprint(&cfg);
         let fresh = serde_json::json!({
             "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
-            "scannedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            "scannedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "usageSourceConfigFingerprint": fingerprint
         });
         let stale = serde_json::json!({
             "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
             "scannedAt": (chrono::Utc::now() - chrono::Duration::minutes(10))
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "usageSourceConfigFingerprint": fingerprint
         });
 
-        assert!(is_fresh_usage_cache(&fresh));
-        assert!(!is_fresh_usage_cache(&stale));
+        assert!(is_fresh_usage_cache(&fresh, &cfg));
+        assert!(!is_fresh_usage_cache(&stale, &cfg));
+    }
+
+    #[test]
+    fn usage_cache_freshness_rejects_changed_source_config() {
+        let cfg = test_config();
+        let mut changed = cfg.clone();
+        changed.provider_roots.insert(
+            "claude_code_local".to_string(),
+            vec!["/tmp/other-claude-root".to_string()],
+        );
+        let snapshot = serde_json::json!({
+            "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
+            "scannedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "usageSourceConfigFingerprint": usage_source_config_fingerprint(&cfg)
+        });
+
+        assert!(is_fresh_usage_cache(&snapshot, &cfg));
+        assert!(!is_fresh_usage_cache(&snapshot, &changed));
     }
 
     #[test]
