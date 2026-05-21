@@ -31,6 +31,8 @@ Thumbs.db
 !.env.example
 env.*
 !env.example
+!env.host.example
+!env.github.example
 docker-compose.mysql.yml
 
 # Electron/package caches (removed, keep for safety)
