@@ -240,7 +240,7 @@ The script updates only the files that match the selected mode:
 3. For product baseline changes, create `doc/<baseline>-development-tasks.md` with task plan.
 4. Run `npm install --package-lock-only` if `package.json` version changed.
 5. Run `cargo update -p ai-token-league --precise <new-version>` if root `Cargo.toml` version changed.
-6. Run `npm run release:check -- --tag v<new-version>`, `npm test`, and `cargo test --workspace`.
+6. Run `npm run release:check -- --tag v<new-version>`, `npm test`, `cargo test --workspace`, and `npm run verify:ccusage`.
 
 ### Step 3: Tag protocol for agents
 
@@ -254,6 +254,7 @@ When the user asks to "打 tag", "推 tag", "发版 tag", or "push a release tag
 npm run release:check -- --tag v<new-version>
 npm test
 cargo test --workspace
+npm run verify:ccusage
 git diff --check
 ```
 
@@ -402,7 +403,8 @@ For server deployment, release channel configuration, and client preset setup, s
 Use the smallest verification that covers the touched surface:
 
 - README or docs only: inspect rendered Markdown-sensitive links and run `git diff --check`.
-- Claude Code or Codex collector changes: run `npm test` and `cargo test --workspace`; when checking real local totals against ccusage, use a temporary external/manual comparison, not a legacy in-repo collector path.
+- Claude Code or Codex collector changes: run `npm test`, `cargo test --workspace`, and `npm run verify:ccusage`; the ccusage verifier compares completed local days against `ccusage` and `ccusage-codex` and requires those commands plus local usage logs.
+- Every release regression must include `npm run verify:ccusage` before tagging or packaging release artifacts, because collector correctness is product-critical and internal tests cannot catch external tool scope drift.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop feature quick self-test: if the goal is local behavior or UI-direction confirmation during development, run the desktop feature quick self-test loop above. This is enough for development-stage self-test, not for final delivery.
 - Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm test`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches. This is the default path for renderer/UI behavior.

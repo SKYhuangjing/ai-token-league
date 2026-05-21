@@ -139,6 +139,7 @@ Before tagging, verify the release line locally:
 npm run release:check -- --tag v0.6.4
 npm test
 cargo test --workspace
+npm run verify:ccusage
 node --check scripts/prepare-github-release.js
 node --check scripts/upload-github-release-asset.js
 node --check scripts/build-github-tauri-update-json.js
@@ -262,6 +263,7 @@ node --check scripts/upload-github-release-asset.js
 node --check scripts/build-github-tauri-update-json.js
 cargo test --workspace
 npm test
+npm run verify:ccusage
 npm run desktop
 node scripts/publish-release.js --env env.local --dry-run
 ```

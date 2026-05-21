@@ -274,6 +274,7 @@ GitHub Actions 是官方发布流。触发方式是推送 `v*` tag，tag 版本�
 npm run release:check -- --tag v0.6.4
 npm test
 cargo test --workspace
+npm run verify:ccusage
 git diff --check
 ```
 
