@@ -67,7 +67,7 @@ const plan = finalize
   : buildPublishPlan(scanDistArtifacts());
 
 if (dryRun) {
-  console.log(JSON.stringify({ dryRun: true, mode: finalize ? "finalize" : publishPart ? "part" : "full", version, releasePath: config.releasePath, requiredPlatforms: config.requiredPlatforms, uploads: plan.map(({ key, last }) => ({ key, last: Boolean(last) })) }, null, 2));
+  console.log(JSON.stringify({ dryRun: true, mode: finalize ? "finalize" : publishPart ? "part" : "full", version, releasePath: config.releasePath, requiredPlatforms: config.requiredPlatforms, uploads: plan.map(({ key, size, last }) => ({ key, size, last: Boolean(last) })) }, null, 2));
   process.exit(0);
 }
 
@@ -312,7 +312,8 @@ function artifactUploadItems(updaterArtifacts, installerArtifacts) {
 function dedupeArtifactsByKey(artifacts) {
   const byKey = new Map();
   for (const artifact of artifacts) {
-    if (!byKey.has(artifact.key)) byKey.set(artifact.key, artifact);
+    const key = artifact.key || artifact.url || `${artifact.platform}:${artifact.fileName}`;
+    if (!byKey.has(key)) byKey.set(key, artifact);
   }
   return [...byKey.values()];
 }

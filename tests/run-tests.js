@@ -1301,6 +1301,86 @@ async function testBuildGithubTauriUpdateJsonUsesReleaseId() {
   }
 }
 
+async function testPublishReleaseFinalizeKeepsAllChecksums() {
+  const version = "9.9.9";
+  const shaA = "a".repeat(64);
+  const shaB = "b".repeat(64);
+  const shaC = "c".repeat(64);
+  const parts = {
+    "darwin-arm64": releasePart(version, "darwin-arm64", "AI Token League-darwin-arm64.app.tar.gz", "AI Token League-darwin-arm64.dmg", shaA),
+    "darwin-x64": releasePart(version, "darwin-x64", "AI Token League-darwin-x64.app.tar.gz", "AI Token League-darwin-x64.dmg", shaB),
+    "win32-x64": releasePart(version, "win32-x64", "AI Token League_9.9.9_x64-setup.exe", "AI Token League_9.9.9_x64-setup.exe", shaC)
+  };
+  const server = http.createServer((req, res) => {
+    const fileName = path.basename(new URL(req.url || "/", "http://127.0.0.1").pathname);
+    const platform = fileName.endsWith(".json") ? fileName.slice(0, -".json".length) : "";
+    if (!parts[platform]) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(parts[platform]));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const publicBaseUrl = `http://127.0.0.1:${server.address().port}`;
+    for (const part of Object.values(parts)) {
+      part.updaterArtifact.url = `${publicBaseUrl}/tauri-releases/${version}/${encodeURIComponent(part.updaterArtifact.fileName)}`;
+      part.installerArtifact.url = `${publicBaseUrl}/tauri-releases/${version}/${encodeURIComponent(part.installerArtifact.fileName)}`;
+    }
+    const envFile = path.join(tmp, "publish-release-finalize.env");
+    fs.writeFileSync(envFile, [
+      `RELEASE_PUBLIC_BASE_URL=${publicBaseUrl}`,
+      "RELEASE_RELEASE_PATH=tauri-releases",
+      "RELEASE_OSS_ENDPOINT=oss.example.com",
+      "RELEASE_OSS_BUCKET=test-bucket",
+      "RELEASE_OSS_PREFIX=ai-token-league",
+      "RELEASE_REQUIRED_PLATFORMS=darwin-arm64,darwin-x64,win32-x64"
+    ].join("\n"));
+    const stdout = await runNodeScript([
+      "scripts/publish-release.js",
+      "--env", envFile,
+      "--version", version,
+      "--finalize",
+      "--dry-run"
+    ]);
+    const result = JSON.parse(stdout);
+    const checksums = result.uploads.find((item) => item.key.endsWith(`/${version}/checksums.txt`));
+    const expected = [
+      `${shaA}  AI Token League-darwin-arm64.app.tar.gz`,
+      `${shaB}  AI Token League-darwin-x64.app.tar.gz`,
+      `${shaC}  AI Token League_9.9.9_x64-setup.exe`,
+      `${shaA}  AI Token League-darwin-arm64.dmg`,
+      `${shaB}  AI Token League-darwin-x64.dmg`
+    ].join("\n") + "\n";
+    assert.equal(checksums.size, Buffer.byteLength(expected));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+function releasePart(version, platform, updaterFileName, installerFileName, sha256) {
+  const artifact = (fileName, ext, signature = "") => ({
+    platform,
+    tauriPlatform: platform === "darwin-arm64" ? "darwin-aarch64" : platform === "win32-x64" ? "windows-x86_64" : platform,
+    fileName,
+    ext,
+    size: 100,
+    sha256,
+    signature,
+    url: ""
+  });
+  return {
+    schemaVersion: 1,
+    version,
+    releasePath: "tauri-releases",
+    platform,
+    updaterArtifact: artifact(updaterFileName, platform === "win32-x64" ? "exe" : "app.tar.gz", `signature-${platform}`),
+    installerArtifact: artifact(installerFileName, platform === "win32-x64" ? "exe" : "dmg")
+  };
+}
+
 async function runNodeScript(args) {
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
@@ -1789,6 +1869,7 @@ testLocalBackupSchedulerIsIndependent();
 await testReleaseBodyUsesChangelog();
 await testVersionCompatibilityAndManifest();
 await testBuildGithubTauriUpdateJsonUsesReleaseId();
+await testPublishReleaseFinalizeKeepsAllChecksums();
 testDisplayAndPricing();
 await testOpenRouterRefresh();
 // ─── Composition module tests ────────────────────────────────────────────────
