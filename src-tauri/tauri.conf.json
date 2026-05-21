@@ -45,7 +45,8 @@
     ],
     "resources": {
       "binaries/": "",
-      "icons/tray-iconTemplate.png": "icons/tray-iconTemplate.png"
+      "icons/tray-iconTemplate.png": "icons/tray-iconTemplate.png",
+      "../assets/preset.json": "assets/preset.json"
     },
     "windows": {
       "nsis": {

@@ -53,6 +53,7 @@ jobs:
           node --check scripts/check-release-version.js
           node --check scripts/prepare-github-release.js
           node --check scripts/upload-github-release-asset.js
+          bash -n scripts/patch-dmg-readme.sh
       - id: release-body
         shell: bash
         run: |
@@ -143,6 +144,30 @@ jobs:
           updaterJsonPreferNsis: true
           assetNamePattern: "AI Token League_[version]_[platform]_[arch][setup][ext]"
           args: ${{ matrix.args }}
+      - name: Inject install readme into macOS DMG
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DMG=$(find src-tauri/target -path "*/bundle/dmg/*.dmg" -print | head -1)
+          if [[ -z "$DMG" ]]; then
+            echo "Error: no DMG found"
+            exit 1
+          fi
+
+          scripts/patch-dmg-readme.sh --dmg "$DMG"
+
+          REL_ID="${{ needs.prepare-release.outputs.release_id }}"
+          REPO="${{ github.repository }}"
+          ANAME="$(basename "$DMG")"
+          node scripts/upload-github-release-asset.js \
+            --repo "$REPO" \
+            --release-id "$REL_ID" \
+            --file "$DMG" \
+            --name "$ANAME" \
+            --clobber
 
   prepare-release:
     needs: validate
@@ -212,7 +237,11 @@ jobs:
           grep -q '^latest.json$' assets.txt
           grep -q '\.app\.tar\.gz$' assets.txt
           grep -q -- '-setup\.exe$' assets.txt
-          grep -q '\.dmg$' assets.txt
+          dmg_count=$(grep -c '\.dmg$' assets.txt || true)
+          if [[ "$dmg_count" -lt 2 ]]; then
+            echo "Expected at least 2 macOS DMG assets, found $dmg_count"
+            exit 1
+          fi
           grep -q '\.AppImage$' assets.txt
       - name: Publish release
         env:

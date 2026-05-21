@@ -451,43 +451,6 @@ set +e
 echo ">>> Collecting artifacts..."
 mkdir -p dist
 
-# Inject mac-install-readme.txt into an existing DMG.
-# Tauri creates the DMG (compressed). We convert to sparse (rw), add file, re-compress.
-inject_readme_into_dmg() {
-  local dmg_path="$1"
-  local readme="$PROJECT_ROOT/assets/mac-install-readme.txt"
-  if [[ ! -f "$readme" ]]; then return 0; fi
-  if [[ ! -f "$dmg_path" ]]; then return 0; fi
-
-  local dir base tmp_sparse tmp_compressed
-  dir="$(dirname "$dmg_path")"
-  base="$(basename "$dmg_path" .dmg)"
-  tmp_sparse="$dir/${base}-rw.sparseimage"
-  tmp_compressed="$dir/${base}-final.dmg"
-
-  # Compressed DMG → sparse (read-write)
-  hdiutil convert "$dmg_path" -format UDSP -o "$tmp_sparse" 2>/dev/null || return 0
-
-  # Mount, copy readme, unmount
-  local mount_output mount_point
-  mount_output=$(hdiutil attach "$tmp_sparse" -nobrowse 2>/dev/null) || { rm -f "$tmp_sparse"; return 0; }
-  mount_point=$(echo "$mount_output" | grep "/Volumes/" | sed 's|^.*\(/Volumes/.*\)$|\1|')
-
-  if [[ -n "$mount_point" ]]; then
-    cp "$readme" "$mount_point/mac-install-readme.txt" || true
-    sync
-    hdiutil detach "$mount_point" 2>/dev/null || true
-  fi
-
-  # Sparse → compressed DMG (temp file, then replace)
-  hdiutil convert "$tmp_sparse" -format UDZO -o "$tmp_compressed" 2>/dev/null || true
-  rm -f "$tmp_sparse"
-  if [[ -f "$tmp_compressed" ]]; then
-    mv "$tmp_compressed" "$dmg_path"
-  fi
-  return 0
-}
-
 collect_mac_artifacts() {
   local arch="$1"
   local rust_target="$2"
@@ -510,7 +473,10 @@ collect_mac_artifacts() {
   dmg=$(find "$dmg_dir" -name "*.dmg" 2>/dev/null | head -1)
   if [[ -n "$dmg" ]]; then
     cp "$dmg" "dist/AI Token League${suffix}.dmg"
-    inject_readme_into_dmg "dist/AI Token League${suffix}.dmg"
+    if ! scripts/patch-dmg-readme.sh --dmg "dist/AI Token League${suffix}.dmg"; then
+      echo "Error: failed to inject mac-install-readme.txt into dist/AI Token League${suffix}.dmg"
+      exit 1
+    fi
   fi
 
   # Updater package (.app.tar.gz + .sig)
