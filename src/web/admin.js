@@ -32,6 +32,8 @@ const detailBackdrop = document.querySelector("#admin-detail-backdrop");
 const participantFilter = document.querySelector("#participant-filter");
 const pricingStatus = document.querySelector("#pricing-status");
 let detailCloseTimer = null;
+let qualityCacheKey = "";
+let qualityCacheData = null;
 
 async function fetchAdmin(url, options) {
   const response = await fetch(url, options);
@@ -59,7 +61,7 @@ document.querySelector(".admin-tabs").addEventListener("click", (event) => {
   document.querySelectorAll("[data-admin-panel]").forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
   document.querySelector(`[data-admin-panel="${button.dataset.adminTab}"]`).classList.add("active");
-  if (button.dataset.adminTab === "quality") loadQuality().catch((error) => {
+  if (button.dataset.adminTab === "quality") loadQuality({ useCache: true }).catch((error) => {
     document.querySelector("#quality-status").textContent = error.message;
   });
   if (button.dataset.adminTab === "devices") loadDevices().catch((error) => {
@@ -149,11 +151,14 @@ async function refreshOpenRouter(recalculate) {
   pricingStatus.textContent = recalculate ? t("admin.refreshingRecalc") : t("admin.refreshing");
   const response = await fetchAdmin(`/api/admin/model-prices/refresh-openrouter?recalculate=${recalculate ? "1" : "0"}`, { method: "POST" });
   if (!response.ok) throw new Error((await response.json()).error || t("admin.error.refreshOpenRouter"));
+  invalidateQualityCache();
   await loadPricing();
   if (recalculate) await loadUsage();
+  else await refreshQualityIfActive();
 }
 
 async function loadUsage() {
+  invalidateQualityCache();
   updateAutoGrain();
   syncRangeInputs();
   statusEl.textContent = t("admin.loading");
@@ -162,7 +167,7 @@ async function loadUsage() {
   renderParticipantOptions(data.participants || []);
   render(data.items || []);
   statusEl.textContent = t("admin.usage.rows", { count: data.items.length, plural: data.items.length === 1 ? "" : "s", from: data.from || "-", to: data.to || "-" });
-  await loadQuality();
+  await refreshQualityIfActive();
 }
 
 async function loadDevices() {
@@ -450,9 +455,31 @@ async function loadDetail(participantId, rowRange = null) {
     .join("");
 }
 
-async function loadQuality() {
-  const response = await fetchAdmin(`/api/admin/quality?${qualityQueryString()}`);
+function activeAdminTab() {
+  return document.querySelector("[data-admin-tab].active")?.dataset.adminTab || "usage";
+}
+
+function invalidateQualityCache() {
+  qualityCacheKey = "";
+  qualityCacheData = null;
+}
+
+async function refreshQualityIfActive() {
+  if (activeAdminTab() !== "quality") return;
+  invalidateQualityCache();
+  await loadQuality();
+}
+
+async function loadQuality({ useCache = false } = {}) {
+  const query = qualityQueryString();
+  if (useCache && qualityCacheKey === query && qualityCacheData) {
+    renderQualityBoard(qualityCacheData);
+    return;
+  }
+  const response = await fetchAdmin(`/api/admin/quality?${query}`);
   const data = await response.json();
+  qualityCacheKey = query;
+  qualityCacheData = data;
   renderQualityBoard(data);
 }
 

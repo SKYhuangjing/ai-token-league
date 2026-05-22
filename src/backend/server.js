@@ -37,6 +37,7 @@ const BOARD_ANONYMIZATION_NAMES_PATH = process.env.BOARD_ANONYMIZATION_NAMES_PAT
 const MIN_CLIENT_ENFORCE = String(process.env.MIN_CLIENT_ENFORCE || "").toLowerCase() === "true";
 const USAGE_UPLOAD_SUCCESS_LOG = String(process.env.USAGE_UPLOAD_SUCCESS_LOG || "").toLowerCase() === "true";
 const SLOW_USAGE_UPLOAD_LOG_MS = Number(process.env.SLOW_USAGE_UPLOAD_LOG_MS || 1000);
+const API_PRETTY_JSON = String(process.env.API_PRETTY_JSON || "").toLowerCase() === "true";
 
 if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
   console.error("FATAL: BOARD_SECURITY_LEVEL=authenticated requires PUBLIC_BOARD_AUTH_USERNAME to be set");
@@ -166,7 +167,7 @@ function transformTrendResult(trend) {
 
 function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(body, null, 2));
+  res.end(API_PRETTY_JSON ? JSON.stringify(body, null, 2) : JSON.stringify(body));
 }
 
 function checkBasicAuth(req, res, { username = ADMIN_USERNAME, password = ADMIN_PASSWORD, realm = "Admin" } = {}) {
@@ -201,7 +202,7 @@ async function handleApi(req, res) {
   if (req.url.startsWith("/api/admin/") && !checkBasicAuth(req, res)) return;
   if (req.method === "GET" && req.url.startsWith("/api/board/summary")) {
     return sendJson(res, 200, withBusinessDay({
-      ...store.boardSummary(),
+      ...(await store.boardSummary()),
       identityMode: BOARD_SECURITY_LEVEL,
       identityLabel: BOARD_SECURITY_LEVEL === "anonymous" ? "anonymousDisplayName" : "nickname"
     }));
@@ -224,6 +225,100 @@ async function handleApi(req, res) {
     const result = await store.registerDevice(body);
     if (boardAnonymizer) boardAnonymizer.markDirty();
     return sendJson(res, 200, { ...result, compatibility });
+  }
+  if (req.method === "POST" && req.url === "/api/usage/daily-batches") {
+    const requestId = newId("req");
+    const started = Date.now();
+    const body = await readBody(req);
+    const batches = Array.isArray(body.batches) ? body.batches : [];
+    const baseLog = {
+      requestId,
+      participantId: body.participantId || "",
+      deviceId: body.deviceId || "",
+      clientGeneratedAt: body.clientGeneratedAt || "",
+      dbType: store.dbType || "json",
+      batchCount: batches.length
+    };
+    const compatibility = serverCompatibility(body.client || body);
+    if (!compatibility.compatible) {
+      logServerEvent("usage_batch_upload_rejected", "warn", {
+        ...baseLog,
+        status: 426,
+        errorKind: "incompatible_client",
+        error: compatibility.status,
+        durationMs: Date.now() - started
+      });
+      return sendJson(res, 426, { error: compatibility.status, compatibility });
+    }
+    if (!batches.length) {
+      return sendJson(res, 400, { error: "batches required" });
+    }
+    const participant = store.getParticipant(body.participantId);
+    if (!participant) {
+      logServerEvent("usage_batch_upload_rejected", "warn", {
+        ...baseLog,
+        status: 404,
+        errorKind: "participant_not_registered",
+        durationMs: Date.now() - started
+      });
+      return sendJson(res, 404, { error: "participant is not registered" });
+    }
+    const payload = {
+      participantId: body.participantId,
+      deviceId: body.deviceId,
+      clientGeneratedAt: body.clientGeneratedAt,
+      ...(Object.hasOwn(body, "client") ? { client: body.client } : {}),
+      batches: body.batches
+    };
+    if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
+      logServerEvent("usage_batch_upload_rejected", "warn", {
+        ...baseLog,
+        status: 401,
+        errorKind: "invalid_signature",
+        durationMs: Date.now() - started
+      });
+      return sendJson(res, 401, { error: "invalid signature" });
+    }
+    for (const [index, batch] of batches.entries()) {
+      try {
+        assertSnapshot(batch.snapshot, batch.items, body.participantId, body.deviceId);
+      } catch (e) {
+        logServerEvent("usage_batch_upload_rejected", "warn", {
+          ...baseLog,
+          status: 400,
+          errorKind: "invalid_snapshot",
+          batchIndex: index,
+          error: e.message,
+          durationMs: Date.now() - started
+        });
+        return sendJson(res, 400, { error: e.message, batchIndex: index });
+      }
+    }
+    try {
+      const result = await store.upsertUsageBatchSet(payload);
+      const durationMs = Date.now() - started;
+      if (shouldLogUsageUploadSuccess(result, store.dbType === "mysql" ? "batch" : "json", durationMs)) {
+        logServerEvent("usage_batch_upload_processed", "info", {
+          ...baseLog,
+          status: 200,
+          accepted: result.accepted || 0,
+          rejected: result.rejected || 0,
+          duplicateBucketCount: result.duplicateBucketCount || 0,
+          noOpBucketCount: result.noOpBucketCount || 0,
+          durationMs
+        });
+      }
+      return sendJson(res, 200, { ...result, compatibility });
+    } catch (error) {
+      logServerEvent("usage_batch_upload_error", "error", {
+        ...baseLog,
+        status: 500,
+        errorKind: "store_write_failed",
+        error: error.message,
+        durationMs: Date.now() - started
+      });
+      throw error;
+    }
   }
   if (req.method === "POST" && req.url === "/api/usage/daily-batch") {
     const requestId = newId("req");
@@ -331,7 +426,7 @@ async function handleApi(req, res) {
     if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
       return sendJson(res, 401, { error: "invalid signature" });
     }
-    return sendJson(res, 200, store.compareSyncState(payload));
+    return sendJson(res, 200, await store.compareSyncState(payload));
   }
   if (req.method === "POST" && req.url === "/api/admin/recalculate-costs") {
     return sendJson(res, 200, await store.recalculateCosts());
@@ -341,10 +436,10 @@ async function handleApi(req, res) {
     return sendJson(res, 200, await store.refreshOpenRouterPrices({ recalculate: includeFlag(url, "recalculate") }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/model-prices")) {
-    return sendJson(res, 200, store.listModelPrices());
+    return sendJson(res, 200, await store.listModelPrices());
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/model-prices")) {
-    return sendJson(res, 200, store.listModelPrices());
+    return sendJson(res, 200, await store.listModelPrices());
   }
   if (req.method === "POST" && req.url === "/api/admin/model-prices") {
     const body = await readBody(req);
@@ -365,7 +460,7 @@ async function handleApi(req, res) {
   if (req.method === "GET" && req.url.startsWith("/api/admin/participants/") && !req.url.includes("/trend")) {
     const url = new URL(req.url, "http://localhost");
     const participantId = decodeURIComponent(url.pathname.replace("/api/admin/participants/", ""));
-    const detail = store.participantDetail(participantId, {
+    const detail = await store.participantDetail(participantId, {
       period: url.searchParams.get("grain") || "",
       range: url.searchParams.get("range") || "today",
       startDay: url.searchParams.get("start") || "",
@@ -397,7 +492,7 @@ async function handleApi(req, res) {
       return sendJson(res, 401, { error: "timestamp is too old or invalid" });
     }
     const participant = store.getParticipant(body.participantId);
-    if (!participant) return sendJson(res, 200, store.deleteParticipantData(body.participantId));
+    if (!participant) return sendJson(res, 200, await store.deleteParticipantData(body.participantId));
     const payload = { participantId: body.participantId, timestamp: body.timestamp };
     if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
       return sendJson(res, 401, { error: "invalid signature" });
@@ -413,7 +508,7 @@ async function handleApi(req, res) {
     return sendJson(res, 200, {
       period: period || range,
       tool: url.searchParams.get("tool") || "all",
-      items: store.leaderboard({
+      items: await store.leaderboard({
         period,
         range,
         tool: url.searchParams.get("tool") || "all",
@@ -431,18 +526,18 @@ async function handleApi(req, res) {
       period: period || range,
       identityMode: BOARD_SECURITY_LEVEL,
       identityLabel: BOARD_SECURITY_LEVEL === "anonymous" ? "anonymousDisplayName" : "nickname",
-      items: store.publicLeaderboard({
+      items: (await store.publicLeaderboard({
         period,
         range,
         startDay: url.searchParams.get("start") || "",
         endDay: url.searchParams.get("end") || "",
         includeCost: includeCost(url)
-      }).map((item) => transformBoardItem(item))
+      })).map((item) => transformBoardItem(item))
     }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/usage")) {
     const url = new URL(req.url, "http://localhost");
-    return sendJson(res, 200, store.adminUsage({
+    return sendJson(res, 200, await store.adminUsage({
       grain: url.searchParams.get("grain") || "day",
       range: url.searchParams.get("range") || "month",
       startDay: url.searchParams.get("start") || "",
@@ -453,7 +548,7 @@ async function handleApi(req, res) {
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/quality")) {
     const url = new URL(req.url, "http://localhost");
-    return sendJson(res, 200, store.adminQuality({
+    return sendJson(res, 200, await store.adminQuality({
       range: url.searchParams.get("range") || "month",
       startDay: url.searchParams.get("start") || "",
       endDay: url.searchParams.get("end") || "",
@@ -468,7 +563,7 @@ async function handleApi(req, res) {
     const displayId = decodeURIComponent(url.pathname.replace("/api/board/participants/", "").replace("/trend", ""));
     ensureAnonymizerFresh();
     const realId = BOARD_SECURITY_LEVEL === "anonymous" ? boardAnonymizer?.resolveParticipantId(displayId) || displayId : displayId;
-    const detail = store.participantTrend(realId, {
+    const detail = await store.participantTrend(realId, {
       grain: url.searchParams.get("grain") || "day",
       range: url.searchParams.get("range") || "last30",
       startDay: url.searchParams.get("start") || "",
@@ -484,7 +579,7 @@ async function handleApi(req, res) {
     ensureAnonymizerFresh();
     const realId = BOARD_SECURITY_LEVEL === "anonymous" ? boardAnonymizer?.resolveParticipantId(displayId) || displayId : displayId;
     const period = url.searchParams.get("period") || "";
-    const detail = store.participantDetail(realId, {
+    const detail = await store.participantDetail(realId, {
       period,
       range: url.searchParams.get("range") || "today",
       startDay: url.searchParams.get("start") || "",
@@ -757,7 +852,7 @@ async function warmOpenRouterPrices(targetStore) {
   if (String(process.env.OPENROUTER_PRICING_AUTO_REFRESH || "true").toLowerCase() === "false") return;
   const remote = targetStore.db.modelPriceCache?.remote || {};
   if (remote.status === "fresh" && remote.expiresAt && Date.parse(remote.expiresAt) > Date.now()) {
-    if (targetStore.missingPriceModels().length) await targetStore.recalculateCosts();
+    if ((await targetStore.missingPriceModels()).length) await targetStore.recalculateCosts();
     return;
   }
   await targetStore.refreshOpenRouterPrices({ recalculate: true });

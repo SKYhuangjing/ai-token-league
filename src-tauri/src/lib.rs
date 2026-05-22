@@ -169,9 +169,16 @@ async fn call_sidecar(state: &SidecarState, command: &str, args: Value) -> Resul
 
 fn sidecar_timeout_for_command(command: &str) -> std::time::Duration {
     match command {
-        "usage:scan" | "usage:scan-start" | "usage:scan-status" | "usage:sync" => {
-            std::time::Duration::from_secs(10 * 60)
-        }
+        "usage:scan"
+        | "usage:scan-start"
+        | "usage:scan-status"
+        | "usage:summary"
+        | "usage:trend"
+        | "usage:workdirs"
+        | "usage:detail-page"
+        | "usage:detail-window"
+        | "usage:sync"
+        | "usage:sync-start" => std::time::Duration::from_secs(10 * 60),
         _ => std::time::Duration::from_secs(30),
     }
 }
@@ -478,13 +485,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     "refresh" => {
                         let _ = app_handle.emit("tray:refresh-start", ());
-                        match call_sidecar(
-                            &app_handle.state::<SidecarState>(),
-                            "usage:scan-start",
-                            json!({"force": true}),
-                        )
-                        .await
-                        {
+                        match run_sidecar_refresh(&app_handle, false).await {
                             Ok(_) => {
                                 rebuild_tray_menu_coalesced(&app_handle).await;
                                 let _ = app_handle.emit("tray:refresh-done", ());
@@ -528,14 +529,29 @@ async fn forward_to_sidecar(
     args: Value,
 ) -> Result<Value, String> {
     let result = call_sidecar(&state, &command, args).await?;
-    if command_updates_usage_cache(&command) {
+    if command_updates_usage_cache(&command, &result) {
         rebuild_tray_menu_coalesced(&app).await;
     }
     Ok(result)
 }
 
-fn command_updates_usage_cache(command: &str) -> bool {
-    matches!(command, "usage:scan" | "usage:scan-start" | "usage:sync")
+fn command_updates_usage_cache(command: &str, result: &Value) -> bool {
+    if matches!(command, "usage:scan" | "usage:scan-start" | "usage:sync") {
+        return true;
+    }
+    if command != "usage:scan-status" {
+        return false;
+    }
+    let terminal = !status_bool(result, "running") && !status_bool(result, "syncRunning");
+    let has_fresh_payload = result
+        .get("snapshot")
+        .filter(|value| !value.is_null())
+        .is_some()
+        || result
+            .get("syncResult")
+            .filter(|value| !value.is_null())
+            .is_some();
+    terminal && has_fresh_payload
 }
 
 #[tauri::command]
@@ -1027,31 +1043,120 @@ async fn background_status(background: State<'_, BackgroundState>) -> Result<Val
     Ok(background.status.lock().await.clone())
 }
 
+async fn run_sidecar_refresh(app: &AppHandle, sync_to_cloud: bool) -> Result<Value, String> {
+    let command = if sync_to_cloud {
+        "usage:sync-start"
+    } else {
+        "usage:scan-start"
+    };
+    let args = if sync_to_cloud {
+        json!(null)
+    } else {
+        json!({"force": true})
+    };
+    let sidecar = app.state::<SidecarState>();
+    let mut status = call_sidecar(&sidecar, command, args).await?;
+    for _ in 0..600 {
+        if !status_bool(&status, "running") && !status_bool(&status, "syncRunning") {
+            if let Some(error) = status_error(&status) {
+                return Err(error);
+            }
+            return Ok(status);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let sidecar = app.state::<SidecarState>();
+        status = call_sidecar(&sidecar, "usage:scan-status", json!(null)).await?;
+    }
+    Err("background refresh timeout".to_string())
+}
+
+fn status_bool(status: &Value, key: &str) -> bool {
+    status.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+fn status_error(status: &Value) -> Option<String> {
+    status
+        .get("error")
+        .or_else(|| status.get("syncError"))
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.to_string())
+}
+
+fn background_refresh_payload<'a>(status: &'a Value, mode: &str) -> &'a Value {
+    if mode == "sync" {
+        status
+            .get("syncResult")
+            .filter(|value| !value.is_null())
+            .unwrap_or(status)
+    } else {
+        status
+            .get("snapshot")
+            .filter(|value| !value.is_null())
+            .unwrap_or(status)
+    }
+}
+
+fn background_refresh_count(payload: &Value) -> u64 {
+    payload
+        .get("scanned")
+        .or_else(|| payload.get("rowCount"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+}
+
+fn background_refresh_interval_secs(config: Option<&Value>) -> u64 {
+    config
+        .and_then(|v| v.get("refreshIntervalMinutes"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(15)
+        .max(1)
+        .saturating_mul(60)
+}
+
+fn background_api_base_url(config: Option<&Value>) -> String {
+    config
+        .and_then(|v| v.get("apiBaseUrl"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
 fn start_background_refresh(app: AppHandle, background: BackgroundState) {
     tauri::async_runtime::spawn(async move {
+        let mut next_run_at: Option<u64> = None;
+        let mut last_interval_secs: u64 = 0;
         loop {
             let config = {
                 let sidecar = app.state::<SidecarState>();
                 call_sidecar(&sidecar, "config:get", json!(null)).await.ok()
             };
-            let refresh_minutes = config
-                .as_ref()
-                .and_then(|v| v.get("refreshIntervalMinutes"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(15)
-                .max(1);
-            let next_run_at = checked_at_after(refresh_minutes * 60);
+            let refresh_secs = background_refresh_interval_secs(config.as_ref());
+            let now = unix_now_secs();
+            if next_run_at.is_none() || last_interval_secs != refresh_secs {
+                next_run_at = Some(now.saturating_add(refresh_secs));
+                last_interval_secs = refresh_secs;
+            }
+            let due_at = next_run_at.unwrap_or_else(|| now.saturating_add(refresh_secs));
             set_background_status(
                 &background,
                 json!({
                     "enabled": true,
-                    "nextRunAt": next_run_at,
+                    "running": false,
+                    "nextRunAt": iso_from_unix_secs(due_at),
                     "updateCheck": {"status": "idle"}
                 }),
             )
             .await;
 
-            tokio::time::sleep(std::time::Duration::from_secs(refresh_minutes * 60)).await;
+            if now < due_at {
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    (due_at - now).min(60).max(1),
+                ))
+                .await;
+                continue;
+            }
 
             let started_at = checked_at_iso();
             set_background_status(
@@ -1067,37 +1172,16 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
             .await;
             let _ = app.emit("tray:refresh-start", json!(null));
 
-            let api_base_url = config
-                .as_ref()
-                .and_then(|v| v.get("apiBaseUrl"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let (mode, result) = {
-                let sidecar = app.state::<SidecarState>();
-                if api_base_url.is_empty() {
-                    (
-                        "scan",
-                        call_sidecar(&sidecar, "usage:scan", json!({"force": true})).await,
-                    )
-                } else {
-                    (
-                        "sync",
-                        call_sidecar(&sidecar, "usage:sync", json!(null)).await,
-                    )
-                }
-            };
+            let sync_to_cloud = !background_api_base_url(config.as_ref()).is_empty();
+            let mode = if sync_to_cloud { "sync" } else { "scan" };
+            let result = run_sidecar_refresh(&app, sync_to_cloud).await;
 
             match result {
                 Ok(value) => {
-                    let count = value
-                        .get("scanned")
-                        .or_else(|| value.get("rowCount"))
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
+                    let payload = background_refresh_payload(&value, mode);
+                    let count = background_refresh_count(payload);
                     let text = if mode == "sync" {
-                        if value.get("queued").and_then(|v| v.as_bool()) == Some(true) {
+                        if payload.get("queued").and_then(|v| v.as_bool()) == Some(true) {
                             format!("Queued {} rows", count)
                         } else {
                             format!("Uploaded {} rows", count)
@@ -1110,8 +1194,8 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                         "lastMode": mode,
                         "lastResult": text,
                         "lastError": null,
-                        "cacheScannedAt": value.get("scannedAt").cloned().unwrap_or(Value::Null),
-                        "sourceFingerprint": value.get("sourceFingerprint").cloned().unwrap_or(Value::Null),
+                        "cacheScannedAt": payload.get("scannedAt").cloned().unwrap_or(Value::Null),
+                        "sourceFingerprint": payload.get("sourceFingerprint").cloned().unwrap_or(Value::Null),
                         "rowCount": count
                     })).await;
                     rebuild_tray_menu_coalesced(&app).await;
@@ -1131,6 +1215,7 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                     let _ = app.emit("tray:refresh-failed", json!(null));
                 }
             }
+            next_run_at = Some(unix_now_secs().saturating_add(refresh_secs));
         }
     });
 }
@@ -1157,11 +1242,12 @@ fn chrono_ts() -> String {
     format!("{}", secs)
 }
 
-fn checked_at_after(offset_secs: u64) -> String {
+fn unix_now_secs() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
-        + std::time::Duration::from_secs(offset_secs);
-    iso_from_unix_secs(duration.as_secs())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 fn seconds_until_next_local_midnight() -> u64 {
@@ -1232,6 +1318,58 @@ fn iso_from_unix_secs(secs: u64) -> String {
         minutes,
         seconds
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_interval_defaults_and_clamps() {
+        assert_eq!(background_refresh_interval_secs(None), 15 * 60);
+        assert_eq!(
+            background_refresh_interval_secs(Some(&json!({"refreshIntervalMinutes": 0}))),
+            60
+        );
+        assert_eq!(
+            background_refresh_interval_secs(Some(&json!({"refreshIntervalMinutes": 3}))),
+            3 * 60
+        );
+    }
+
+    #[test]
+    fn background_payload_prefers_terminal_result() {
+        let sync_status = json!({
+            "syncResult": {"scanned": 7, "queued": true},
+            "snapshot": {"rowCount": 99}
+        });
+        let scan_status = json!({
+            "snapshot": {"rowCount": 11}
+        });
+        assert_eq!(
+            background_refresh_count(background_refresh_payload(&sync_status, "sync")),
+            7
+        );
+        assert_eq!(
+            background_refresh_count(background_refresh_payload(&scan_status, "scan")),
+            11
+        );
+    }
+
+    #[test]
+    fn terminal_refresh_errors_are_exposed() {
+        assert_eq!(
+            status_error(
+                &json!({"running": false, "syncRunning": false, "syncError": "upload failed"})
+            ),
+            Some("upload failed".to_string())
+        );
+        assert_eq!(
+            status_error(&json!({"running": false, "syncRunning": false, "error": "scan failed"})),
+            Some("scan failed".to_string())
+        );
+        assert_eq!(status_error(&json!({"error": ""})), None);
+    }
 }
 
 // ── Entry ──────────────────────────────────────────────────────────

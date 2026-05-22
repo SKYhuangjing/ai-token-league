@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod date;
 pub mod diagnostics;
 pub mod local_backup;
+pub mod local_usage_store;
 pub mod observability;
 pub mod protocol;
 pub mod provider;

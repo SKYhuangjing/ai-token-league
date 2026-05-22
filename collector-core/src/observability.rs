@@ -61,17 +61,31 @@ pub fn runtime_log_summary() -> Value {
         .filter_map(|path| fs::metadata(path).ok())
         .map(|m| m.len())
         .sum::<u64>();
-    let events = read_recent_runtime_events(usize::MAX);
-    let latest_event_at = events
-        .last()
-        .and_then(|event| event.get("ts"))
-        .and_then(|ts| ts.as_str())
-        .unwrap_or("");
+    let mut retained_events = 0usize;
+    let mut latest_event_at = String::new();
+    for path in &files {
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        for line in content.lines() {
+            retained_events += 1;
+            if let Some(ts) = parse_log_line(line).and_then(|event| {
+                event
+                    .get("ts")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+            }) {
+                if ts > latest_event_at {
+                    latest_event_at = ts;
+                }
+            }
+        }
+    }
     json!({
         "path": PATH_REDACTED,
         "exists": !files.is_empty(),
         "sizeBytes": size_bytes,
-        "retainedEvents": events.len(),
+        "retainedEvents": retained_events,
         "latestEventAt": latest_event_at,
         "retentionDays": retention_days
     })
@@ -110,7 +124,16 @@ pub fn summarize_command_args(command: &str, args: &Value) -> Value {
         "usage:scan" | "usage:scan-start" => json!({
             "force": args.get("force").and_then(|v| v.as_bool()).unwrap_or(false)
         }),
-        "usage:sync" => json!({}),
+        "usage:summary"
+        | "usage:trend"
+        | "usage:workdirs"
+        | "usage:detail-page"
+        | "usage:detail-window" => json!({
+            "range": args.get("range").and_then(|v| v.as_str()).unwrap_or("today"),
+            "grain": args.get("grain").and_then(|v| v.as_str()).unwrap_or(""),
+            "limit": args.get("limit").and_then(|v| v.as_i64()).unwrap_or(0)
+        }),
+        "usage:sync" | "usage:sync-start" => json!({}),
         "api:check" => json!({
             "hasApiBaseUrl": args.get("apiBaseUrl").and_then(|v| v.as_str()).map(|v| !v.trim().is_empty()).unwrap_or(false)
         }),
@@ -148,6 +171,16 @@ pub fn summarize_command_result(command: &str, result: &Result<Value, String>) -
                     "hasSyncError": value.get("syncError").map(|v| !v.is_null()).unwrap_or(false)
                 })
             }
+            "usage:summary" => json!({
+                "rows": value.get("totals").and_then(|v| v.get("rows")).and_then(|v| v.as_u64()).unwrap_or(0),
+                "totalTokens": value.get("totals").and_then(|v| v.get("totalTokens")).and_then(|v| v.as_u64()).unwrap_or(0)
+            }),
+            "usage:trend" | "usage:workdirs" | "usage:detail-page" | "usage:detail-window" => {
+                json!({
+                    "rowCount": value.get("items").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
+                    "totalRows": value.get("totalRows").and_then(|v| v.as_u64()).unwrap_or(0)
+                })
+            }
             "usage:sync" => json!({
                 "accepted": value.get("accepted").and_then(|v| v.as_u64()).unwrap_or(0),
                 "rejected": value.get("rejected").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -157,6 +190,10 @@ pub fn summarize_command_result(command: &str, result: &Result<Value, String>) -
                 "queueUploaded": value.get("queueUploaded").and_then(|v| v.as_u64()).unwrap_or(0),
                 "queueFailed": value.get("queueFailed").and_then(|v| v.as_u64()).unwrap_or(0),
                 "newFailedBucketCount": value.get("newFailedBucketCount").and_then(|v| v.as_u64()).unwrap_or(0)
+            }),
+            "usage:sync-start" => json!({
+                "running": value.get("running").and_then(|v| v.as_bool()).unwrap_or(false),
+                "started": value.get("started").and_then(|v| v.as_bool()).unwrap_or(false)
             }),
             "providers:health" => json!({
                 "providerCount": value.as_array().map(|v| v.len()).unwrap_or(0)

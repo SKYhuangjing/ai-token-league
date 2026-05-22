@@ -154,8 +154,9 @@ function testBackendUpload(identity, items) {
     publicBoard[0].inputTokens + publicBoard[0].outputTokens + publicBoard[0].cacheReadTokens + publicBoard[0].cacheWriteTokens
   );
   assert.ok(publicBoard[0].compositionSummary);
-  assert.ok(Object.keys(store.db.aggregateCache).length >= 1);
-  store.db.aggregateCache = {};
+  assert.ok(Object.keys(store.aggregateCache).length >= 1);
+  assert.equal(Object.keys(store.db.aggregateCache).length, 0);
+  store.aggregateCache = {};
   assert.equal(store.publicLeaderboard({ range: "today" }).length, 1);
   const customBoard = store.publicLeaderboard({ range: "custom", startDay: testDay, endDay: testDay });
   assert.equal(customBoard.length, 1);
@@ -290,7 +291,7 @@ function testDeleteParticipantDataAllowsResync() {
   const first = store.upsertUsageBatch(payload);
   assert.equal(first.accepted, 1);
   assert.equal(store.publicLeaderboard({ range: "today" }).length, 1);
-  assert.ok(Object.keys(store.db.aggregateCache).length >= 1);
+  assert.ok(Object.keys(store.aggregateCache).length >= 1);
 
   const deleted = store.deleteParticipantData(identity.participantId);
   assert.equal(deleted.deleted, true);
@@ -309,6 +310,7 @@ function testDeleteParticipantDataAllowsResync() {
   assert.equal(Object.values(store.db.workdirs).some((row) => row.participantId === identity.participantId), false);
   assert.equal(Object.values(store.db.usageDaily).some((row) => row.participantId === identity.participantId), false);
   assert.equal(Object.values(store.db.uploadBatches).some((row) => row.participantId === identity.participantId), false);
+  assert.equal(Object.keys(store.aggregateCache).length, 0);
   assert.equal(Object.keys(store.db.aggregateCache).length, 0);
 
   store.registerDevice({
@@ -515,7 +517,7 @@ function testStoreBusinessDayScopedCache() {
   assert.equal(d1Board[0].totalTokens, 100);
   const d1Summary = store.boardSummary();
   assert.equal(d1Summary.todayTokens, 100);
-  assert.equal(Object.values(store.db.aggregateCache).some((entry) => entry.args.businessDay === "2026-05-10"), true);
+  assert.equal(Object.values(store.aggregateCache).some((entry) => entry.args.businessDay === "2026-05-10"), true);
 
   businessDay = "2026-05-11";
   const d2Board = store.publicLeaderboard({ period: "today" });
@@ -523,11 +525,11 @@ function testStoreBusinessDayScopedCache() {
   const d2Summary = store.boardSummary();
   assert.equal(d2Summary.todayTokens, 200);
   assert.equal(d2Summary.yesterdayTokens, 100);
-  assert.equal(Object.values(store.db.aggregateCache).some((entry) => entry.args.businessDay === "2026-05-11"), true);
+  assert.equal(Object.values(store.aggregateCache).some((entry) => entry.args.businessDay === "2026-05-11"), true);
 
   const customD1 = store.publicLeaderboard({ range: "custom", startDay: "2026-05-10", endDay: "2026-05-10" });
   assert.equal(customD1[0].totalTokens, 100);
-  const customEntries = Object.values(store.db.aggregateCache).filter((entry) => entry.name === "publicLeaderboard" && entry.args.range === "custom");
+  const customEntries = Object.values(store.aggregateCache).filter((entry) => entry.name === "publicLeaderboard" && entry.args.range === "custom");
   assert.equal(customEntries.every((entry) => !Object.hasOwn(entry.args, "businessDay")), true);
 }
 
@@ -1010,6 +1012,357 @@ async function testMysqlHourlyIncrementalSyncScopesDeletes() {
     "hourly bucket metadata should be updated"
   );
   console.log("  testMysqlHourlyIncrementalSyncScopesDeletes passed");
+}
+
+async function testMysqlLoadSkipsUsageMirrors() {
+  const store = new MySqlStore({});
+  const queries = [];
+  store.pool = {
+    async query(sql) {
+      queries.push(String(sql).replace(/\s+/g, " ").trim());
+      if (String(sql).includes("FROM participants")) return [[{
+        id: "p_mysql_load",
+        nickname: "mysql-load",
+        avatarColor: "#000",
+        identityPublicKey: "pk",
+        createdAt: "2026-05-14T00:00:00.000Z",
+        updatedAt: "2026-05-14T00:00:00.000Z",
+        lastSeenAt: "2026-05-14T00:00:00.000Z"
+      }]];
+      if (String(sql).includes("FROM devices")) return [[]];
+      if (String(sql).includes("FROM workdirs")) return [[]];
+      if (String(sql).includes("FROM model_prices")) return [[]];
+      if (String(sql).includes("FROM model_price_aliases")) return [[]];
+      if (String(sql).includes("FROM model_price_cache_meta")) return [[]];
+      if (String(sql).includes("FROM model_price_cache")) return [[]];
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+  await store.load();
+  assert.equal(queries.some((sql) => /SELECT \* FROM usage_daily/.test(sql)), false);
+  assert.equal(queries.some((sql) => /SELECT \* FROM usage_hourly/.test(sql)), false);
+  assert.equal(queries.some((sql) => /SELECT \* FROM upload_batches/.test(sql)), false);
+  assert.equal(Object.keys(store.db.usageDaily).length, 0);
+  assert.equal(Object.keys(store.db.usageHourly).length, 0);
+  console.log("  testMysqlLoadSkipsUsageMirrors passed");
+}
+
+async function testMysqlReadPathUsesRequestScopedRows() {
+  const store = new MySqlStore({});
+  store.businessDayProvider = () => "2026-05-14";
+  store.db.participants = {
+    p_mysql_read: {
+      id: "p_mysql_read",
+      nickname: "mysql-read",
+      avatarColor: "#000",
+      identityPublicKey: "pk",
+      createdAt: "2026-05-14T00:00:00.000Z",
+      updatedAt: "2026-05-14T00:00:00.000Z",
+      lastSeenAt: "2026-05-14T00:00:00.000Z"
+    }
+  };
+  const queries = [];
+  store.pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, " ").trim();
+      queries.push({ sql: normalized, params });
+      if (normalized.includes("JOIN participants") && normalized.includes("GROUP BY u.participantId")) {
+        return [[{
+          participantId: "p_mysql_read",
+          nickname: "mysql-read",
+          totalTokens: 15,
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          estimatedCostUsd: 0,
+          missingPriceTokens: 15,
+          knownPriceRows: 0,
+          costQualityRank: 2,
+          pricingVersion: "",
+          pricingSource: ""
+        }]];
+      }
+      if (normalized.includes("GROUP BY u.participantId, u.model")) {
+        return [[{
+          participantId: "p_mysql_read",
+          name: "gpt-5",
+          totalTokens: 15,
+          estimatedCostUsd: 0,
+          missingPriceTokens: 15,
+          knownPriceRows: 0,
+          costQualityRank: 2,
+          pricingVersion: "",
+          pricingSource: ""
+        }]];
+      }
+      return [[{
+        usageKey: "uk_mysql_read",
+        day: "2026-05-14",
+        participantId: "p_mysql_read",
+        deviceId: "d_mysql_read",
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirId: "p_mysql_read:h_mysql_read",
+        workdirHash: "h_mysql_read",
+        workdirDisplayName: "mysql-read-workdir",
+        model: "gpt-5",
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 15,
+        estimatedCostUsd: null,
+        costQuality: "",
+        pricingVersion: "",
+        pricingModel: "",
+        pricingSource: "",
+        sourceQuality: "exact",
+        rawSourceRef: "",
+        providerVersion: "",
+        parserVersion: "",
+        sourceFingerprint: "fp_mysql_read",
+        uploadedAt: "2026-05-14T00:00:00.000Z"
+      }]];
+    }
+  };
+  const board = await store.publicLeaderboard({ range: "today" });
+  assert.equal(board.length, 1);
+  assert.equal(board[0].totalTokens, 15);
+  assert.equal(queries.length, 2);
+  assert.ok(queries[0].sql.includes("JOIN participants"));
+  assert.ok(queries[0].sql.includes("GROUP BY u.participantId"));
+  assert.equal(queries.some((q) => q.sql.startsWith("SELECT * FROM usage_daily")), false);
+  assert.deepEqual(queries[0].params, ["2026-05-14"]);
+  assert.equal(Object.keys(store.db.usageDaily).length, 0, "request-scoped rows must not remain resident after the read");
+  console.log("  testMysqlReadPathUsesRequestScopedRows passed");
+}
+
+async function testMysqlDeleteDeviceDataClearsCloudSyncScopesFromSql() {
+  const store = new MySqlStore({});
+  store.db.devices = {
+    d_mysql_delete: {
+      id: "d_mysql_delete",
+      participantId: "p_mysql_delete",
+      os: "test",
+      appVersion: "0.7.0",
+      createdAt: "2026-05-14T00:00:00.000Z",
+      lastSeenAt: "2026-05-14T00:00:00.000Z"
+    }
+  };
+  const queries = [];
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, " ").trim();
+      queries.push({ sql: normalized, params });
+      if (normalized.startsWith("SELECT DISTINCT participantId, day, hour, providerId")) {
+        return [[{
+          participantId: "p_mysql_delete",
+          day: "2026-05-14",
+          hour: 10,
+          providerId: "cursor_dashboard_usage"
+        }], []];
+      }
+      if (normalized.startsWith("DELETE FROM usage_sync_buckets_hourly WHERE deviceId")) {
+        return [{ affectedRows: 1 }, []];
+      }
+      if (normalized.startsWith("DELETE FROM usage_sync_buckets_hourly WHERE (participantId")) {
+        return [{ affectedRows: 1 }, []];
+      }
+      if (normalized.startsWith("DELETE FROM devices WHERE id")) {
+        return [{ affectedRows: 1 }, []];
+      }
+      return [{ affectedRows: 0 }, []];
+    }
+  };
+  store.pool = { getConnection: async () => conn };
+
+  const result = await store.deleteDeviceData("d_mysql_delete");
+  assert.equal(result.participantId, "p_mysql_delete");
+  assert.equal(result.removed.devices, 1);
+  assert.equal(result.removed.usageSyncBucketsHourly, 2);
+  assert.deepEqual(result.cloudHourlyScopes, [{
+    participantId: "p_mysql_delete",
+    day: "2026-05-14",
+    hour: 10,
+    providerId: "cursor_dashboard_usage"
+  }]);
+  assert.ok(
+    queries.some((q) => q.sql.startsWith("DELETE FROM usage_sync_buckets_hourly WHERE (participantId = ? AND day = ? AND hour = ? AND providerId = ?)")),
+    "cloud provider device deletion must clear same-scope sync buckets so remaining devices can reupload"
+  );
+  assert.equal(store.db.devices.d_mysql_delete, undefined);
+  console.log("  testMysqlDeleteDeviceDataClearsCloudSyncScopesFromSql passed");
+}
+
+async function testMysqlModelPriceRecalculationIsModelScoped() {
+  const store = new MySqlStore({});
+  const queries = [];
+  store.pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, " ").trim();
+      queries.push({ sql: normalized, params });
+      if (normalized.startsWith("SELECT * FROM usage_daily WHERE model IN")) {
+        return [[{
+          usageKey: "uk_mysql_price",
+          day: "2026-05-14",
+          participantId: "p_mysql_price",
+          deviceId: "d_mysql_price",
+          toolCode: "codex",
+          providerId: "codex_local",
+          workdirId: "p_mysql_price:h_mysql_price",
+          workdirHash: "h_mysql_price",
+          workdirDisplayName: "mysql-price-workdir",
+          model: "gpt-5",
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 150,
+          estimatedCostUsd: null,
+          costQuality: "",
+          pricingVersion: "",
+          pricingModel: "",
+          pricingSource: "",
+          sourceQuality: "exact",
+          rawSourceRef: "",
+          providerVersion: "",
+          parserVersion: "",
+          sourceFingerprint: "fp_mysql_price",
+          uploadedAt: "2026-05-14T00:00:00.000Z"
+        }], []];
+      }
+      return [[], []];
+    },
+    async getConnection() {
+      return {
+        async beginTransaction() {},
+        async commit() {},
+        async rollback() {},
+        release() {},
+        async query(sql, params = []) {
+          queries.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
+          return [{ affectedRows: 1 }, []];
+        }
+      };
+    }
+  };
+
+  const result = await store.upsertModelPrice({
+    model: "gpt-5",
+    inputCostPerMTok: 1,
+    outputCostPerMTok: 2,
+    cacheReadCostPerMTok: 0,
+    cacheWriteCostPerMTok: 0
+  });
+
+  assert.equal(result.recalculated.updated, 1);
+  assert.ok(
+    queries.some((q) => q.sql.startsWith("SELECT * FROM usage_daily WHERE model IN") && q.params.length === 1 && q.params[0] === "gpt-5"),
+    "price recalculation should load only affected model rows"
+  );
+  assert.ok(
+    queries.some((q) => q.sql.startsWith("INSERT INTO usage_daily") && q.sql.includes("ON DUPLICATE KEY UPDATE")),
+    "price recalculation should upsert affected usage rows"
+  );
+  assert.equal(
+    queries.some((q) => q.sql === "DELETE FROM usage_daily"),
+    false,
+    "price recalculation must not wipe usage_daily"
+  );
+  console.log("  testMysqlModelPriceRecalculationIsModelScoped passed");
+}
+
+async function testMysqlFullPriceRecalculationUsesBatches() {
+  const store = new MySqlStore({});
+  store.db.modelPrices = {
+    "gpt-5": {
+      model: "gpt-5",
+      inputCostPerMTok: 1,
+      outputCostPerMTok: 2,
+      cacheReadCostPerMTok: 0,
+      cacheWriteCostPerMTok: 0,
+      reasoningCostPerMTok: 0,
+      source: "custom",
+      notes: "",
+      updatedAt: "2026-05-14T00:00:00.000Z"
+    }
+  };
+  const queries = [];
+  let batchSelects = 0;
+  store.pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, " ").trim();
+      queries.push({ sql: normalized, params });
+      if (normalized.startsWith("SELECT * FROM usage_daily WHERE usageKey > ?")) {
+        batchSelects += 1;
+        if (batchSelects > 1) return [[], []];
+        return [[{
+          usageKey: "uk_mysql_recalc",
+          day: "2026-05-14",
+          participantId: "p_mysql_recalc",
+          deviceId: "d_mysql_recalc",
+          toolCode: "codex",
+          providerId: "codex_local",
+          workdirId: "p_mysql_recalc:h_mysql_recalc",
+          workdirHash: "h_mysql_recalc",
+          workdirDisplayName: "mysql-recalc-workdir",
+          model: "gpt-5",
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 150,
+          estimatedCostUsd: null,
+          costQuality: "",
+          pricingVersion: "",
+          pricingModel: "",
+          pricingSource: "",
+          sourceQuality: "exact",
+          rawSourceRef: "",
+          providerVersion: "",
+          parserVersion: "",
+          sourceFingerprint: "fp_mysql_recalc",
+          uploadedAt: "2026-05-14T00:00:00.000Z"
+        }], []];
+      }
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+    async getConnection() {
+      return {
+        async beginTransaction() {},
+        async commit() {},
+        async rollback() {},
+        release() {},
+        async query(sql, params = []) {
+          queries.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
+          return [{ affectedRows: 1 }, []];
+        }
+      };
+    }
+  };
+
+  const result = await store.recalculateCosts({ batchSize: 1 });
+  assert.equal(result.updated, 1);
+  assert.equal(batchSelects, 2);
+  assert.ok(
+    queries.some((q) => q.sql.startsWith("INSERT INTO usage_daily") && q.sql.includes("ON DUPLICATE KEY UPDATE")),
+    "batched recalculation should upsert recalculated rows"
+  );
+  assert.equal(
+    queries.some((q) => q.sql === "SELECT * FROM usage_daily" || q.sql === "DELETE FROM usage_daily"),
+    false,
+    "full price recalculation must not load or rewrite the full usage table"
+  );
+  console.log("  testMysqlFullPriceRecalculationUsesBatches passed");
 }
 
 function testBucketMetadataSchema() {
@@ -2378,6 +2731,66 @@ async function testUsageUploadEndpointSignatureVerification() {
   } finally { await cleanup(); }
 }
 
+async function testUsageBatchUploadEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "batch-test",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+
+    const hour10 = makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 10, workdirHash: "batch_h10", sourceFingerprint: "batch_sf_10" })
+    ], identity.participantId, deviceId, { hour: 10 });
+    const hour11 = makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 11, workdirHash: "batch_h11", sourceFingerprint: "batch_sf_11" })
+    ], identity.participantId, deviceId, { hour: 11 });
+    const payload = {
+      participantId: identity.participantId,
+      deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      batches: [
+        { snapshot: hour10.snapshot, items: hour10.items },
+        { snapshot: hour11.snapshot, items: hour11.items }
+      ]
+    };
+    const signature = signPayload(identity.identityPrivateKey, payload);
+    const res = await fetch(`${baseUrl}/api/usage/daily-batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature })
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.bucketCount, 2);
+    assert.equal(body.accepted, 2);
+    assert.equal(body.rejected, 0);
+
+    const duplicateRes = await fetch(`${baseUrl}/api/usage/daily-batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature })
+    });
+    assert.equal(duplicateRes.status, 200);
+    const duplicateBody = await duplicateRes.json();
+    assert.equal(duplicateBody.noOpBucketCount, 2);
+
+    const invalidSigRes = await fetch(`${baseUrl}/api/usage/daily-batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: "invalid-signature" })
+    });
+    assert.equal(invalidSigRes.status, 401);
+    console.log("  testUsageBatchUploadEndpoint passed");
+  } finally { await cleanup(); }
+}
+
 async function testUsageUploadRejectsUnregistered() {
   const { baseUrl, cleanup } = await createTestServer();
   try {
@@ -2986,7 +3399,7 @@ function testStoreAggregateCacheInvalidation() {
   });
   const board1 = store.publicLeaderboard({ range: "today" });
   assert.equal(board1[0].totalTokens, 150);
-  assert.ok(Object.keys(store.db.aggregateCache).length >= 1);
+  assert.ok(Object.keys(store.aggregateCache).length >= 1);
 
   store.upsertUsageBatch({
     participantId: identity.participantId, deviceId,
@@ -3126,6 +3539,7 @@ testSchemaForbiddenFields();
 await testHealthEndpoint();
 await testDeviceRegistrationEndpoint();
 await testUsageUploadEndpointSignatureVerification();
+await testUsageBatchUploadEndpoint();
 await testUsageUploadRejectsUnregistered();
 await testAdminAuthEnforcement();
 await testAdminAuthDisabledWhenNotConfigured();
@@ -3437,6 +3851,11 @@ testI18nDataAttributesMatchKeys();
 // MySQL incremental sync tests
 await testMysqlHourlySnapshotUsesIncrementalSync();
 await testMysqlHourlyIncrementalSyncScopesDeletes();
+await testMysqlLoadSkipsUsageMirrors();
+await testMysqlReadPathUsesRequestScopedRows();
+await testMysqlDeleteDeviceDataClearsCloudSyncScopesFromSql();
+await testMysqlModelPriceRecalculationIsModelScoped();
+await testMysqlFullPriceRecalculationUsesBatches();
 
 // Cloud provider dedup tests
 testCursorSameAccountDedupAcrossDevices();

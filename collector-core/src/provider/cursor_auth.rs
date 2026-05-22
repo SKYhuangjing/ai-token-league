@@ -51,10 +51,7 @@ pub struct AuthPollResult {
 /// Poll the Cursor auth/poll endpoint.
 /// Returns Ok with tokens on success, Err with "pending" on 404.
 pub async fn poll_auth(uuid: &str, code_verifier: &str) -> Result<AuthPollResult, String> {
-    let url = format!(
-        "{}?uuid={}&verifier={}",
-        AUTH_POLL_URL, uuid, code_verifier
-    );
+    let url = format!("{}?uuid={}&verifier={}", AUTH_POLL_URL, uuid, code_verifier);
     let client = reqwest::Client::new();
     let resp = client
         .get(&url)
@@ -201,7 +198,10 @@ pub async fn fetch_account_info(access_token: &str, sub: &str) -> Result<Account
         .unwrap_or("")
         .to_string();
 
-    Ok(AccountInfo { email, sub: user_sub })
+    Ok(AccountInfo {
+        email,
+        sub: user_sub,
+    })
 }
 
 pub struct AccountInfo {
@@ -240,7 +240,10 @@ pub fn token_needs_refresh(account: &CursorAccount) -> bool {
 /// Derive a stable account hash from email and participantId.
 pub fn compute_account_hash(email: &str, participant_id: &str) -> String {
     let normalized = email.trim().to_lowercase();
-    crate::crypto::sha256_hex(&format!("cursor-dashboard:{}:{}", normalized, participant_id))
+    crate::crypto::sha256_hex(&format!(
+        "cursor-dashboard:{}:{}",
+        normalized, participant_id
+    ))
 }
 
 /// Extract JWT payload without verification (for sub/exp fields only).

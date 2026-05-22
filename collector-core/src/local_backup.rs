@@ -375,11 +375,7 @@ fn list_backups_in_dir(directory: &str) -> Vec<Value> {
         let Ok(metadata) = item.metadata() else {
             continue;
         };
-        let created_at = fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-            .and_then(|backup| backup["createdAt"].as_str().map(|s| s.to_string()))
-            .unwrap_or_default();
+        let created_at = backup_created_at_from_metadata(&path, &metadata);
         rows.push(json!({
             "fileName": path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string(),
             "filePath": path.to_string_lossy().to_string(),
@@ -394,6 +390,33 @@ fn list_backups_in_dir(directory: &str) -> Vec<Value> {
             .cmp(a["fileName"].as_str().unwrap_or(""))
     });
     rows
+}
+
+fn backup_created_at_from_metadata(path: &Path, metadata: &fs::Metadata) -> String {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return metadata_modified_at(metadata);
+    };
+    let Some(slug) = name
+        .strip_prefix("ai-token-league-backup-")
+        .and_then(|value| value.strip_suffix(".json"))
+    else {
+        return metadata_modified_at(metadata);
+    };
+    chrono::NaiveDateTime::parse_from_str(slug, "%Y%m%d-%H%M%S-%3f")
+        .map(|dt| {
+            chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        })
+        .unwrap_or_else(|_| metadata_modified_at(metadata))
+}
+
+fn metadata_modified_at(metadata: &fs::Metadata) -> String {
+    metadata
+        .modified()
+        .ok()
+        .map(chrono::DateTime::<chrono::Utc>::from)
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .unwrap_or_default()
 }
 
 fn enforce_retention_by_days(directory: &Path, retention_days: u64) -> Result<(), String> {

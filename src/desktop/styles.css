@@ -261,6 +261,16 @@ nav button.active, nav button:hover {
   margin-bottom: 12px;
 }
 
+.model-detail-virtual-wrap {
+  max-height: min(52vh, 520px);
+  overflow: auto;
+}
+
+.model-detail-spacer td {
+  border: 0;
+  padding: 0;
+}
+
 button {
   border: 1px solid var(--ink);
   border-radius: 6px;

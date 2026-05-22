@@ -28,8 +28,16 @@ pub fn usage_cache_path() -> PathBuf {
     app_dir().join("usage-cache.json")
 }
 
+pub fn local_usage_db_path() -> PathBuf {
+    app_dir().join("usage-local.sqlite3")
+}
+
 pub fn source_index_cache_path() -> PathBuf {
     app_dir().join("source-index-cache.json")
+}
+
+pub fn source_index_cache_dir() -> PathBuf {
+    app_dir().join("source-index-cache")
 }
 
 pub fn runtime_log_dir() -> PathBuf {
@@ -813,7 +821,11 @@ pub fn reset_local_data() {
     let _ = fs::remove_file(queue_path());
     let _ = fs::remove_file(manifest_path());
     let _ = fs::remove_file(usage_cache_path());
+    let _ = fs::remove_file(local_usage_db_path());
+    let _ = fs::remove_file(local_usage_db_path().with_extension("sqlite3-wal"));
+    let _ = fs::remove_file(local_usage_db_path().with_extension("sqlite3-shm"));
     let _ = fs::remove_file(source_index_cache_path());
+    let _ = fs::remove_dir_all(source_index_cache_dir());
     let _ = fs::remove_file(legacy_runtime_log_path());
     let _ = fs::remove_dir_all(runtime_log_dir());
 }

@@ -8,6 +8,10 @@ import { initI18n, setLang, t, getCurrentLang, createLangSwitcher, bindLangSwitc
 const currentLang = initI18n();
 
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const MODEL_DETAIL_VIRTUAL_THRESHOLD = 120;
+const MODEL_DETAIL_ROW_HEIGHT = 44;
+const MODEL_DETAIL_OVERSCAN = 8;
+const FULL_USAGE_RENDER_CACHE_LIMIT = 5000;
 
 function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
@@ -57,7 +61,10 @@ let pricingSource = t("desktop.renderer.localFallbackPricing");
 let latestScanAt = "";
 let scanRunning = false;
 let scanPollTimer = null;
+let scanPollInFlight = false;
 let backgroundStatusTimer = null;
+let backgroundStatusInFlight = null;
+let backgroundStatusQueuedArgs = null;
 let latestUpdateState = null;
 let latestBackgroundStatus = null;
 let latestBackupStatus = null;
@@ -67,6 +74,7 @@ let latestClientInfo = null;
 let lastIdentityCheckLocalDay = localDay();
 let identityRefreshTimer = null;
 let updateCheckTimer = null;
+let updateCheckInFlight = null;
 let runtimeEventHandlersRegistered = false;
 let overviewRange = "today";
 let workdirsRange = "today";
@@ -76,6 +84,17 @@ let pricingRefreshPromise = null;
 let mandatoryUpdateActive = false;
 let latestTrayCostKey = "";
 let foregroundSyncRunning = false;
+let nextVirtualModelDetailId = 1;
+let usageQueryGeneration = 0;
+let usageQueryRefreshRunning = false;
+let usageQueryRefreshPending = false;
+const virtualModelDetailTables = new Map();
+const usageQueryState = {
+  summaries: new Map(),
+  trends: new Map(),
+  workdirs: new Map(),
+  lastRowCount: 0
+};
 
 function showToast(message) {
   const toast = document.querySelector("#toast");
@@ -252,6 +271,7 @@ $("#overview-range").addEventListener("click", (event) => {
   overviewRange = button.dataset.range;
   setSegmentActive($("#overview-range"), overviewRange);
   renderToday();
+  refreshUsageQuerySurfaces().catch(console.error);
 });
 $("#workdirs-range").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-range]");
@@ -259,6 +279,7 @@ $("#workdirs-range").addEventListener("click", (event) => {
   workdirsRange = button.dataset.range;
   setSegmentActive($("#workdirs-range"), workdirsRange);
   renderWorkdirs();
+  refreshUsageQuerySurfaces().catch(console.error);
 });
 $("#settings-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("button");
@@ -916,9 +937,17 @@ function registerRuntimeEventHandlers() {
   }
   if (api.onTrayRefreshDone) {
     api.onTrayRefreshDone(() => {
-      setScanState(false);
-      showToast(t("desktop.rail.scanComplete"));
-      loadToday(false).catch(console.error);
+      run(async () => {
+        const status = api.usageScanStatus ? await api.usageScanStatus() : null;
+        if (status) {
+          applyUsageScanStatus(status);
+          await refreshForegroundSyncStatus(status);
+        } else {
+          setScanState(false);
+        }
+        showToast(t("desktop.rail.scanComplete"));
+        await loadBackgroundStatus({ refreshConfig: true });
+      });
     });
   }
   if (api.onTrayRefreshFailed) {
@@ -1107,11 +1136,10 @@ async function finalizeUsageScanStatus(status, showCompletionToast = false) {
     restartUsageScanPoll();
     return;
   }
-  if (scanPollTimer) {
-    clearInterval(scanPollTimer);
-    scanPollTimer = null;
-  }
+  stopUsageScanPoll();
   setScanState(false);
+  await refreshForegroundSyncStatus(status);
+  if (usageScanTerminalError(status)) return;
   startForegroundSync(status);
   if (showCompletionToast) {
     showToast(t("desktop.rail.scanComplete"));
@@ -1119,36 +1147,41 @@ async function finalizeUsageScanStatus(status, showCompletionToast = false) {
 }
 
 function restartUsageScanPoll() {
-  if (scanPollTimer) {
-    clearInterval(scanPollTimer);
-    scanPollTimer = null;
-  }
+  stopUsageScanPoll();
   pollUsageScan();
+}
+
+function stopUsageScanPoll() {
+  if (scanPollTimer) clearInterval(scanPollTimer);
+  scanPollTimer = null;
+  scanPollInFlight = false;
 }
 
 function pollUsageScan() {
   if (scanPollTimer) return;
   scanPollTimer = setInterval(async () => {
+    if (scanPollInFlight) return;
+    scanPollInFlight = true;
     try {
       const status = await api.usageScanStatus();
       applyUsageScanStatus(status);
-      if (!status.running) {
-        setScanState(false);
-      }
       if (!status.running && !status.syncRunning) {
-        clearInterval(scanPollTimer);
-        scanPollTimer = null;
+        stopUsageScanPoll();
+        setScanState(false);
+        await refreshForegroundSyncStatus(status);
+        if (usageScanTerminalError(status)) return;
         startForegroundSync(status);
         showToast(t("desktop.rail.scanComplete"));
         loadMyIdentity().catch((error) => console.error(error));
       }
     } catch (error) {
-      clearInterval(scanPollTimer);
-      scanPollTimer = null;
+      stopUsageScanPoll();
       setScanState(false);
       $("#workdirs-summary").textContent = t("desktop.renderer.refreshStatusFailed", { error: error.message });
       showToast(t("desktop.renderer.refreshStatusFailed", { error: error.message }));
       console.error(error);
+    } finally {
+      scanPollInFlight = false;
     }
   }, 1000);
 }
@@ -1183,27 +1216,46 @@ function startUpdateCheckTimer() {
 
 function applyUsageScanStatus(status, { force = false } = {}) {
   if (status.snapshot) applyUsageSnapshot(status.snapshot);
-  setScanState(Boolean(status.running), status.force ?? force);
+  setScanState(Boolean(status.running || status.syncRunning), status.force ?? force);
   if (status.error) {
     $("#workdirs-summary").textContent = t("desktop.renderer.refreshFailed", { error: status.error });
     showToast(t("desktop.renderer.refreshFailed", { error: status.error }));
   }
 }
 
+function usageScanTerminalError(status) {
+  return status?.error || status?.syncError || "";
+}
+
 async function refreshForegroundSyncStatus(status) {
   if (!status.syncResult && !status.syncError) return;
   if (status.syncResult) renderSyncStatus(latestConfig, status.syncResult);
-  if (status.syncError) setStatusMessage(t("desktop.renderer.refreshFailed", { error: status.syncError }));
+  if (status.syncError) {
+    setStatusMessage(t("desktop.renderer.refreshFailed", { error: status.syncError }));
+    showToast(t("desktop.renderer.refreshFailed", { error: status.syncError }));
+  }
   await loadBackgroundStatus({ config: latestConfig });
 }
 
 function startForegroundSync(status) {
   if (foregroundSyncRunning) return;
+  if (status?.syncResult || status?.syncError) return;
   if (status?.snapshot?.fromCache) return;
   if (!latestConfig?.apiBaseUrl || !latestConfig?.participantId) return;
+  const syncStart = api.startUsageSync || api.syncUsage;
   foregroundSyncRunning = true;
-  api.syncUsage()
+  syncStart()
     .then((result) => {
+      if (result?.running || result?.syncRunning) {
+        restartUsageScanPoll();
+        return null;
+      }
+      if (usageScanTerminalError(result)) {
+        const error = usageScanTerminalError(result);
+        setStatusMessage(t("desktop.renderer.refreshFailed", { error }));
+        showToast(t("desktop.renderer.refreshFailed", { error }));
+        return loadBackgroundStatus({ config: latestConfig });
+      }
       renderSyncStatus(latestConfig, result);
       return loadBackgroundStatus({ config: latestConfig });
     })
@@ -1217,7 +1269,9 @@ function startForegroundSync(status) {
 }
 
 function applyUsageSnapshot(usage) {
-  allUsage = (usage.items || []).map(normalizeUsageTotal);
+  const items = (usage.items || []).map(normalizeUsageTotal);
+  usageQueryState.lastRowCount = Number(usage.rowCount || items.length || 0);
+  allUsage = items.length <= FULL_USAGE_RENDER_CACHE_LIMIT ? items : [];
   latestScanAt = usage.scannedAt || latestScanAt;
   latestUsage = allUsage.filter((item) => item.day === localDay());
   if (usage.health) latestHealth = reconcileHealthWithConfig(usage.health, latestConfig);
@@ -1226,6 +1280,120 @@ function applyUsageSnapshot(usage) {
   renderHealth();
   renderAliases();
   renderRailStatus();
+  refreshUsageQuerySurfaces().catch(console.error);
+}
+
+async function refreshUsageQuerySurfaces() {
+  if (!api.usageSummary || !api.usageTrend || !api.usageWorkdirs) return;
+  if (usageQueryRefreshRunning) {
+    usageQueryRefreshPending = true;
+    return;
+  }
+  usageQueryRefreshRunning = true;
+  const generation = ++usageQueryGeneration;
+  try {
+    const trendGrain = overviewTrendGrain();
+    const trendKey = usageQueryKey(overviewRange, trendGrain);
+    const results = await Promise.allSettled([
+      api.usageSummary({ range: overviewRange }),
+      api.usageTrend({ range: overviewRange, grain: trendGrain }),
+      api.usageWorkdirs({ range: workdirsRange, limit: 100 }),
+      workdirsRange === "today" ? Promise.resolve(null) : api.usageWorkdirs({ range: "today", limit: 100 }),
+      api.usageWorkdirs({ range: "all", limit: 500 })
+    ]);
+    if (generation !== usageQueryGeneration) return;
+    const [summary, trend, workdirs, todayWorkdirs, allWorkdirs] = results.map((result) => result.status === "fulfilled" ? result.value : null);
+    if (summary) usageQueryState.summaries.set(overviewRange, normalizeUsageSummary(summary));
+    if (trend) usageQueryState.trends.set(trendKey, normalizeUsageTrend(trend));
+    if (workdirs) usageQueryState.workdirs.set(workdirsRange, normalizeUsageWorkdirs(workdirs));
+    if (todayWorkdirs) usageQueryState.workdirs.set("today", normalizeUsageWorkdirs(todayWorkdirs));
+    else if (workdirsRange === "today" && workdirs) usageQueryState.workdirs.set("today", normalizeUsageWorkdirs(workdirs));
+    if (allWorkdirs) usageQueryState.workdirs.set("all", normalizeUsageWorkdirs(allWorkdirs));
+    renderToday();
+    renderWorkdirs();
+    renderAliases();
+    renderRailStatus();
+  } finally {
+    usageQueryRefreshRunning = false;
+    if (usageQueryRefreshPending) {
+      usageQueryRefreshPending = false;
+      refreshUsageQuerySurfaces().catch(console.error);
+    }
+  }
+}
+
+function usageQueryKey(range, grain = "") {
+  return `${range}|${grain}`;
+}
+
+function normalizeUsageSummary(summary = {}) {
+  return {
+    ...summary,
+    totals: normalizeTokenAggregate(summary.totals || {}),
+    providers: normalizeBreakdownItems(summary.providers || []),
+    workdirs: normalizeBreakdownItems(summary.workdirs || []),
+    models: normalizeBreakdownItems(summary.models || [])
+  };
+}
+
+function normalizeUsageTrend(trend = {}) {
+  return {
+    ...trend,
+    items: (trend.items || []).map((item) => {
+      const aggregate = normalizeTokenAggregate(item);
+      return {
+        periodStart: item.periodStart || item.day || "",
+        periodEnd: item.periodEnd || item.periodStart || item.day || "",
+        ...(item.hour === null || item.hour === undefined ? {} : { hour: clampHour(Number(item.hour)) }),
+        ...aggregate,
+        compositionSummary: tokenCompositionSummary(aggregate),
+        modelBreakdown: [],
+        workdirBreakdown: [],
+        detailBreakdown: [],
+        modelDetails: []
+      };
+    }).filter(hasPositiveUsage)
+  };
+}
+
+function normalizeUsageWorkdirs(workdirs = {}) {
+  return {
+    ...workdirs,
+    items: (workdirs.items || []).map((item) => ({
+      ...normalizeTokenAggregate(item),
+      workdirHash: item.workdirHash || item.name || "unknown",
+      name: item.name || item.workdirDisplayName || "unknown",
+      rows: positiveInteger(item.rows)
+    })).filter(hasPositiveUsage)
+  };
+}
+
+function normalizeBreakdownItems(items = []) {
+  return items
+    .map((item) => ({
+      ...normalizeTokenAggregate(item),
+      name: item.name || "unknown",
+      rows: positiveInteger(item.rows)
+    }))
+    .filter(hasPositiveUsage)
+    .sort((a, b) => b.totalTokens - a.totalTokens);
+}
+
+function normalizeTokenAggregate(item = {}) {
+  const inputTokens = positiveInteger(item.inputTokens);
+  const outputTokens = positiveInteger(item.outputTokens);
+  const cacheReadTokens = positiveInteger(item.cacheReadTokens);
+  const cacheWriteTokens = positiveInteger(item.cacheWriteTokens);
+  const reasoningTokens = positiveInteger(item.reasoningTokens);
+  const explicitTotal = positiveInteger(item.totalTokens);
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    reasoningTokens,
+    totalTokens: explicitTotal || inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+  };
 }
 
 function reconcileHealthWithConfig(health = [], config = latestConfig) {
@@ -1300,7 +1468,18 @@ async function syncNow() {
       return;
     }
     setStatusMessage(t("desktop.renderer.syncing"));
-    const result = await api.syncUsage();
+    const syncStart = api.startUsageSync || api.syncUsage;
+    const result = await syncStart();
+    if (result?.running || result?.syncRunning) {
+      applyUsageScanStatus(result);
+      restartUsageScanPoll();
+      return;
+    }
+    if (usageScanTerminalError(result)) {
+      setStatusMessage(t("desktop.renderer.refreshFailed", { error: usageScanTerminalError(result) }));
+      showToast(t("desktop.renderer.refreshFailed", { error: usageScanTerminalError(result) }));
+      return;
+    }
     latestConfig = await api.getConfig();
     renderSyncStatus(latestConfig, result);
     await loadToday();
@@ -1319,7 +1498,7 @@ async function confirmSyncUpload() {
     await confirmDialog(t("desktop.renderer.configureCloudFirst"), { alertOnly: true });
     return false;
   }
-  const rows = allUsage.length || latestUsage.length || 0;
+  const rows = usageQueryState.lastRowCount || allUsage.length || latestUsage.length || 0;
   const scannedAt = latestScanAt ? formatDateTime(latestScanAt) : "-";
   return confirmDialog(t("desktop.renderer.confirmUpload", { url: apiBaseUrl, rows, scannedAt }));
 }
@@ -1486,6 +1665,14 @@ function setUpdateCardBusy(isBusy) {
 }
 
 async function checkUpdate({ automatic = false } = {}) {
+  if (updateCheckInFlight) return updateCheckInFlight;
+  updateCheckInFlight = doCheckUpdate({ automatic }).finally(() => {
+    updateCheckInFlight = null;
+  });
+  return updateCheckInFlight;
+}
+
+async function doCheckUpdate({ automatic = false } = {}) {
   if (isApiBaseUrlDirty()) {
     if (automatic || !(await confirmDialog(t("desktop.sync.unsavedApiBaseUrl")))) return;
   }
@@ -1896,13 +2083,15 @@ function renderSyncStatus(config, result = null) {
 }
 
 function renderToday() {
-  const rangeItems = usageForRange(overviewRange);
-  const total = rangeItems.reduce((sum, item) => sum + item.totalTokens, 0);
-  const workdirs = groupBy(rangeItems, "workdirDisplayName");
-  const models = groupBy(rangeItems, "model");
-  const providers = groupProviders(rangeItems);
-  const cost = aggregateUsageCost(rangeItems);
-  const composition = aggregateComposition(rangeItems);
+  const summary = usageQueryState.summaries.get(overviewRange);
+  const rangeItems = summary ? [] : usageForRange(overviewRange);
+  const composition = summary?.totals || aggregateComposition(rangeItems);
+  const total = summary ? composition.totalTokens : rangeItems.reduce((sum, item) => sum + item.totalTokens, 0);
+  const workdirs = summary?.workdirs || groupBy(rangeItems, "workdirDisplayName");
+  const models = summary?.models || groupBy(rangeItems, "model");
+  const providers = summary?.providers?.map((row) => ({ ...row, name: sourceName(row.name) })) || groupProviders(rangeItems);
+  const cost = summary && !rangeItems.length ? {} : aggregateUsageCost(rangeItems);
+  const showOverviewCost = Boolean(latestConfig?.showEstimatedCost && !summary);
 
   $("#today-total").textContent = formatToken(total);
   $("#today-total").title = formatTokenRaw(total);
@@ -1915,13 +2104,13 @@ function renderToday() {
     const detailEl = document.querySelector(`#overview-${key}-detail`);
     if (!detailEl) return;
     const pct = Math.round(tokens / compTotal * 100) + "%";
-    const costPart = latestConfig?.showEstimatedCost ? ` · ${renderCostAmountValue(costValueForField(cost, field) || 0)}` : "";
+    const costPart = showOverviewCost ? ` · ${renderCostAmountValue(costValueForField(cost, field) || 0)}` : "";
     detailEl.innerHTML = escapeHtml(pct) + costPart;
   });
 
   const costEl = document.querySelector("#today-cost");
   if (costEl) {
-    if (latestConfig?.showEstimatedCost) {
+    if (showOverviewCost) {
       costEl.innerHTML = `${renderCostAmount(cost)} <span class="cost-note">${escapeHtml(t("common.estimated").toLowerCase())}</span>`;
       costEl.title = costTitle(cost);
     } else {
@@ -1931,13 +2120,13 @@ function renderToday() {
   }
 
   $("#provider-list").innerHTML = providers.length
-    ? renderMiniMeters(providers, { showCost: latestConfig?.showEstimatedCost, limit: 3, colorClasses: ["meter-yellow", "", ""] })
+    ? renderMiniMeters(providers, { showCost: showOverviewCost, limit: 3, colorClasses: ["meter-yellow", "", ""] })
     : `<div class="empty-state">${t("desktop.overview.noProviderUsage")}</div>`;
   $("#workdir-list").innerHTML = workdirs.length
-    ? renderMiniMeters(workdirs, { showCost: latestConfig?.showEstimatedCost, limit: 3, colorClasses: ["", "meter-yellow", "meter-violet"] })
+    ? renderMiniMeters(workdirs, { showCost: showOverviewCost, limit: 3, colorClasses: ["", "meter-yellow", "meter-violet"] })
     : `<div class="empty-state">${t("desktop.renderer.noWorkdirUsage")}</div>`;
   $("#model-list").innerHTML = models.length
-    ? renderMiniMeters(models, { showCost: latestConfig?.showEstimatedCost, limit: 3, colorClasses: ["meter-violet", "", "meter-yellow"] })
+    ? renderMiniMeters(models, { showCost: showOverviewCost, limit: 3, colorClasses: ["meter-violet", "", "meter-yellow"] })
     : `<div class="empty-state">${t("desktop.renderer.noModelUsage")}</div>`;
   renderOverviewTrend(rangeItems);
   renderRailStatus();
@@ -1945,16 +2134,19 @@ function renderToday() {
 }
 
 function renderWorkdirs() {
-  const rangeItems = usageForRange(workdirsRange);
-  const todayWorkdirs = groupWorkdirDetails(usageForRange("today"));
-  const total = rangeItems.reduce((sum, item) => sum + item.totalTokens, 0);
+  const query = usageQueryState.workdirs.get(workdirsRange);
+  const todayQuery = usageQueryState.workdirs.get("today");
+  const rangeItems = query ? [] : usageForRange(workdirsRange);
+  const todayWorkdirs = todayQuery?.items || groupWorkdirDetails(usageForRange("today"));
+  const total = query ? (query.items || []).reduce((sum, item) => sum + item.totalTokens, 0) : rangeItems.reduce((sum, item) => sum + item.totalTokens, 0);
   const todayTokenByWorkdir = new Map(todayWorkdirs.map((item) => [item.workdirHash, item.totalTokens]));
-  const workdirs = groupWorkdirDetails(rangeItems).map((item) => ({
+  const rawWorkdirs = query?.items || groupWorkdirDetails(rangeItems);
+  const denominator = total || 1;
+  const workdirs = rawWorkdirs.map((item) => ({
     ...item,
+    contributionRatio: item.contributionRatio ?? (item.totalTokens || 0) / denominator,
     todayTokens: todayTokenByWorkdir.get(item.workdirHash) || 0
   }));
-  const models = groupBy(rangeItems, "model");
-  const cost = aggregateUsageCost(rangeItems);
   $("#workdirs-summary").textContent = workdirs.length
     ? t("desktop.workdirs.summary", { count: workdirs.length })
     : t("desktop.renderer.noWorkdirUsage");
@@ -1965,9 +2157,10 @@ function renderWorkdirs() {
 
 function renderOverviewTrend(items) {
   const grain = overviewTrendGrain();
-  const rows = overviewRange === "today"
+  const queryTrend = usageQueryState.trends.get(usageQueryKey(overviewRange, grain));
+  const rows = queryTrend?.items || (overviewRange === "today"
     ? groupByHour(items)
-    : groupByGrain(usageForRange(overviewRange), grain).filter(hasPositiveUsage);
+    : groupByGrain(usageForRange(overviewRange), grain).filter(hasPositiveUsage));
   const max = Math.max(...rows.map((row) => row.totalTokens), 1);
   const peakIdx = rows.length ? rows.reduce((best, row, i) => row.totalTokens > rows[best].totalTokens ? i : best, 0) : -1;
 
@@ -2199,6 +2392,7 @@ function railCloudStatus(config = latestConfig) {
 
 function renderTrend() {
   if (!$("#trend-chart-panel")) return;
+  virtualModelDetailTables.clear();
   const rows = groupTrend(allUsage);
   if (rows.length && !selectedTrendBucketKey) selectedTrendBucketKey = trendBucketKey(rows[0]);
   if (!rows.some((row) => trendBucketKey(row) === selectedTrendBucketKey)) selectedTrendBucketKey = rows[0] ? trendBucketKey(rows[0]) : "";
@@ -2227,6 +2421,7 @@ function renderTrend() {
     ? renderTrendSelection(rows.find((row) => trendBucketKey(row) === selectedTrendBucketKey))
     : "";
   renderTrendDrawer(rows);
+  hydrateVirtualModelDetailTables();
   document.querySelectorAll("[data-expand-trend]").forEach((button) => {
     button.addEventListener("click", () => {
       trendDrawerBucketKey = trendDrawerBucketKey === button.dataset.expandTrend ? "" : button.dataset.expandTrend;
@@ -2243,7 +2438,7 @@ function renderTrend() {
 
 function renderAliases() {
   if (!$("#workdir-alias-list")) return;
-  const workdirs = groupWorkdirs(allUsage);
+  const workdirs = usageQueryState.workdirs.get("all")?.items || groupWorkdirs(allUsage);
   $("#workdir-alias-list").innerHTML = workdirs.length
     ? workdirs
         .map((item) => `<article class="alias-row">
@@ -2383,7 +2578,32 @@ function sourceDescription(providerId) {
   return t("desktop.sources.localDesc");
 }
 
-async function loadBackgroundStatus({ config = latestConfig, refreshConfig = false } = {}) {
+async function loadBackgroundStatus(args = {}) {
+  if (backgroundStatusInFlight) {
+    backgroundStatusQueuedArgs = mergeBackgroundStatusArgs(backgroundStatusQueuedArgs, args);
+    return backgroundStatusInFlight;
+  }
+  backgroundStatusInFlight = doLoadBackgroundStatus(args)
+    .finally(() => {
+      backgroundStatusInFlight = null;
+      if (backgroundStatusQueuedArgs) {
+        const queued = backgroundStatusQueuedArgs;
+        backgroundStatusQueuedArgs = null;
+        loadBackgroundStatus(queued).catch((error) => console.error(error));
+      }
+    });
+  return backgroundStatusInFlight;
+}
+
+function mergeBackgroundStatusArgs(left = null, right = {}) {
+  return {
+    ...(left || {}),
+    ...right,
+    refreshConfig: Boolean(left?.refreshConfig || right.refreshConfig)
+  };
+}
+
+async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = false } = {}) {
   const previousCacheScannedAt = latestBackgroundStatus?.cacheScannedAt || "";
   const [status, freshConfig] = await Promise.all([
     api.backgroundStatus(),
@@ -2399,13 +2619,13 @@ async function loadBackgroundStatus({ config = latestConfig, refreshConfig = fal
   renderSilentUpdateStatus(status.updateCheck, config);
   renderRailStatus();
   checkMandatoryFromConfig(config);
-  if (previousCacheScannedAt && status.cacheScannedAt && status.cacheScannedAt !== previousCacheScannedAt && !scanRunning && !scanPollTimer) {
+  if (previousCacheScannedAt && status.cacheScannedAt && status.cacheScannedAt !== previousCacheScannedAt && !status.running && !scanRunning && !scanPollTimer) {
     const scanStatus = await api.startUsageScan({ force: false });
     applyUsageScanStatus(scanStatus);
-    if (scanStatus.running) {
-      pollUsageScan();
+    if (scanStatus.running || scanStatus.syncRunning) {
+      restartUsageScanPoll();
     } else {
-      startForegroundSync(scanStatus);
+      await finalizeUsageScanStatus(scanStatus);
     }
   }
 }
@@ -2774,7 +2994,7 @@ function renderWorkdirCards(items) {
     const pct = Math.round(item.contributionRatio * 100);
     const badgeClass = pct > 50 ? "badge dark" : pct > 20 ? "badge" : "badge";
     const badgeText = pct > 50 ? t("desktop.workdirs.tierMain") : pct > 20 ? t("desktop.workdirs.tierMid") : t("desktop.workdirs.tierSmall");
-    const costText = latestConfig?.showEstimatedCost ? ` · ${renderCostAmount(item)}` : "";
+    const costText = latestConfig?.showEstimatedCost && item.estimatedCostUsd !== undefined ? ` · ${renderCostAmount(item)}` : "";
     const todayTokens = item.todayTokens || 0;
     const colorClass = colorClasses[index % colorClasses.length] || "";
     return `<article class="workdir-card" data-open-workdir="${escapeHtml(item.workdirHash)}" role="button" tabindex="0">
@@ -2888,6 +3108,7 @@ function renderTrendDrawer(rows) {
   $("#trend-drawer-backdrop").hidden = false;
   $("#trend-drawer-title").textContent = formatTrendPeriod(row);
   $("#trend-drawer-body").innerHTML = renderTrendSelection(row);
+  hydrateVirtualModelDetailTables($("#trend-drawer-body"));
   requestAnimationFrame(() => {
     $("#trend-drawer").classList.add("is-open");
     $("#trend-drawer-backdrop").classList.add("is-open");
@@ -2908,6 +3129,7 @@ function openDetailDrawer({ eyebrow, title, body }) {
   const copyEl = $("#trend-drawer-copy");
   if (copyEl) copyEl.textContent = eyebrow || "";
   $("#trend-drawer-body").innerHTML = body;
+  hydrateVirtualModelDetailTables($("#trend-drawer-body"));
   requestAnimationFrame(() => {
     $("#trend-drawer").classList.add("is-open");
     $("#trend-drawer-backdrop").classList.add("is-open");
@@ -3051,12 +3273,18 @@ function animateTrendDrawerClosed() {
 function renderTrendModelDetails(row) {
   const details = row.modelDetails || [];
   if (!details.length) return "";
+  const tableId = `model-detail-${nextVirtualModelDetailId++}`;
+  const virtual = details.length > MODEL_DETAIL_VIRTUAL_THRESHOLD;
+  if (virtual) virtualModelDetailTables.set(tableId, details);
+  const wrapAttrs = virtual
+    ? ` class="table-wrap model-detail-virtual-wrap" data-model-detail-scroll="${tableId}"`
+    : ` class="table-wrap"`;
   return `<section class="trend-model-details">
     <div class="section-title">
       <h3>${t("desktop.renderer.modelDetail")}</h3>
       <p>${t("desktop.renderer.groupedBy")}</p>
     </div>
-    <div class="table-wrap">
+    <div${wrapAttrs}>
       <table class="trend-table model-detail-table">
         <thead>
           <tr>
@@ -3069,20 +3297,61 @@ function renderTrendModelDetails(row) {
             ${latestConfig?.showEstimatedCost ? `<th>${t("desktop.today.estCost")}</th>` : ""}
           </tr>
         </thead>
-        <tbody>
-          ${details.map((item) => `<tr>
-            <td>${escapeHtml(item.workdirDisplayName)}</td>
-            <td>${escapeHtml(item.model)}</td>
-            <td class="numeric" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
-            <td class="numeric" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)}</td>
-            <td class="numeric" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)}</td>
-            <td class="numeric" title="${formatTokenRaw(cacheTokens(item))}">${renderAccountingToken(cacheTokens(item), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))}</td>
-            ${latestConfig?.showEstimatedCost ? `<td class="numeric" title="${escapeHtml(costTitle(item))}">${renderCostAmount(item)}</td>` : ""}
-          </tr>`).join("")}
+        <tbody data-model-detail-rows="${tableId}">
+          ${virtual ? renderVirtualModelDetailRows(details, 0) : renderModelDetailRows(details)}
         </tbody>
       </table>
     </div>
   </section>`;
+}
+
+function renderModelDetailRows(details, start = 0, end = details.length) {
+  return details.slice(start, end).map((item) => `<tr>
+    <td>${escapeHtml(item.workdirDisplayName)}</td>
+    <td>${escapeHtml(item.model)}</td>
+    <td class="numeric" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
+    <td class="numeric" title="${formatTokenRaw(item.inputTokens)}">${renderAccountingToken(item.inputTokens, item.inputCostUsd)}</td>
+    <td class="numeric" title="${formatTokenRaw(item.outputTokens)}">${renderAccountingToken(item.outputTokens, item.outputCostUsd)}</td>
+    <td class="numeric" title="${formatTokenRaw(cacheTokens(item))}">${renderAccountingToken(cacheTokens(item), sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd))}</td>
+    ${latestConfig?.showEstimatedCost ? `<td class="numeric" title="${escapeHtml(costTitle(item))}">${renderCostAmount(item)}</td>` : ""}
+  </tr>`).join("");
+}
+
+function renderVirtualModelDetailRows(details, scrollTop = 0, viewportHeight = 420) {
+  const visibleCount = Math.ceil(viewportHeight / MODEL_DETAIL_ROW_HEIGHT) + MODEL_DETAIL_OVERSCAN * 2;
+  const start = Math.max(0, Math.floor(scrollTop / MODEL_DETAIL_ROW_HEIGHT) - MODEL_DETAIL_OVERSCAN);
+  const end = Math.min(details.length, start + visibleCount);
+  const topHeight = start * MODEL_DETAIL_ROW_HEIGHT;
+  const bottomHeight = Math.max(0, (details.length - end) * MODEL_DETAIL_ROW_HEIGHT);
+  const colSpan = latestConfig?.showEstimatedCost ? 7 : 6;
+  return `
+    ${topHeight ? `<tr class="model-detail-spacer" style="height:${topHeight}px"><td colspan="${colSpan}"></td></tr>` : ""}
+    ${renderModelDetailRows(details, start, end)}
+    ${bottomHeight ? `<tr class="model-detail-spacer" style="height:${bottomHeight}px"><td colspan="${colSpan}"></td></tr>` : ""}
+  `;
+}
+
+function hydrateVirtualModelDetailTables(root = document) {
+  root.querySelectorAll("[data-model-detail-scroll]").forEach((wrap) => {
+    const tableId = wrap.dataset.modelDetailScroll;
+    const details = virtualModelDetailTables.get(tableId);
+    const body = wrap.querySelector(`[data-model-detail-rows="${CSS.escape(tableId)}"]`);
+    if (!details || !body) return;
+    const render = () => {
+      body.innerHTML = renderVirtualModelDetailRows(details, wrap.scrollTop, wrap.clientHeight || 420);
+    };
+    render();
+    if (wrap.dataset.virtualBound === "true") return;
+    wrap.dataset.virtualBound = "true";
+    wrap.addEventListener("scroll", () => {
+      if (wrap.dataset.virtualFrame === "true") return;
+      wrap.dataset.virtualFrame = "true";
+      requestAnimationFrame(() => {
+        wrap.dataset.virtualFrame = "false";
+        render();
+      });
+    }, { passive: true });
+  });
 }
 
 function aggregateComposition(items) {

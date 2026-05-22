@@ -2,10 +2,11 @@ use collector_core::config;
 use collector_core::protocol::{Command, SidecarRequest, SidecarResponse};
 use collector_core::scanner;
 use collector_core::version;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 const USAGE_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 
@@ -88,7 +89,8 @@ struct PendingCursorConnect {
 
 #[derive(Default)]
 struct SidecarRuntime {
-    last_scan_status: Option<serde_json::Value>,
+    last_scan_status: Arc<Mutex<Option<serde_json::Value>>>,
+    sync_running: Arc<Mutex<bool>>,
     next_scan_task_id: u64,
     tray_estimated_cost_usd: Option<f64>,
     pending_cursor_connect: Option<PendingCursorConnect>,
@@ -153,6 +155,32 @@ async fn handle_command(
             let force = request.args["force"].as_bool().unwrap_or(false);
             usage_snapshot(&cfg, force).await
         }
+        Command::UsageSummary => local_usage_query(|store| {
+            let range = arg_str(&request.args, "range", "today");
+            store.summary(&range)
+        }),
+        Command::UsageTrend => local_usage_query(|store| {
+            let range = arg_str(&request.args, "range", "today");
+            let grain = arg_str(&request.args, "grain", "day");
+            store.trend(&range, &grain)
+        }),
+        Command::UsageWorkdirs => local_usage_query(|store| {
+            let range = arg_str(&request.args, "range", "today");
+            let limit = arg_i64(&request.args, "limit", 100);
+            store.workdirs(&range, limit)
+        }),
+        Command::UsageDetailPage => local_usage_query(|store| {
+            let range = arg_str(&request.args, "range", "today");
+            let page = arg_i64(&request.args, "page", 1).max(1);
+            let page_size = arg_i64(&request.args, "pageSize", 100).clamp(1, 500);
+            store.detail_window(&range, (page - 1) * page_size, page_size)
+        }),
+        Command::UsageDetailWindow => local_usage_query(|store| {
+            let range = arg_str(&request.args, "range", "today");
+            let offset = arg_i64(&request.args, "offset", 0);
+            let limit = arg_i64(&request.args, "limit", 100);
+            store.detail_window(&range, offset, limit)
+        }),
         Command::UsageSync => {
             let cfg = config::ensure_desktop_config();
             if cfg.api_base_url.is_empty() {
@@ -160,6 +188,112 @@ async fn handle_command(
             }
             let snapshot = usage_snapshot(&cfg, false).await?;
             sync_snapshot(&cfg, &snapshot).await
+        }
+        Command::UsageSyncStart => {
+            let existing_status = read_scan_status(&runtime.last_scan_status);
+            if existing_status
+                .get("running")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                || existing_status
+                    .get("syncRunning")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            {
+                return Ok(existing_status);
+            }
+            if read_bool_state(&runtime.sync_running) {
+                let status =
+                    serde_json::json!({"running": false, "syncRunning": true, "started": false});
+                write_scan_status(&runtime.last_scan_status, status.clone());
+                return Ok(status);
+            }
+            let cfg = config::ensure_desktop_config();
+            if cfg.api_base_url.is_empty() {
+                return Err("API base URL not configured".to_string());
+            }
+            runtime.next_scan_task_id = runtime.next_scan_task_id.saturating_add(1);
+            let task_id = runtime.next_scan_task_id;
+            let started_at =
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let status = serde_json::json!({
+                "running": false,
+                "syncRunning": true,
+                "started": true,
+                "taskId": task_id,
+                "startedAt": started_at,
+                "finishedAt": null,
+                "force": false,
+                "error": null,
+                "syncResult": null,
+                "syncError": null,
+                "snapshot": null
+            });
+            write_scan_status(&runtime.last_scan_status, status.clone());
+            write_bool_state(&runtime.sync_running, true);
+            let sync_running = Arc::clone(&runtime.sync_running);
+            let scan_status = Arc::clone(&runtime.last_scan_status);
+            tokio::spawn(async move {
+                let snapshot_result = usage_snapshot(&cfg, false).await;
+                let finished_at =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                let finished_status = match snapshot_result {
+                    Ok(snapshot) => match sync_snapshot(&cfg, &snapshot).await {
+                        Ok(sync_result) => serde_json::json!({
+                            "running": false,
+                            "syncRunning": false,
+                            "started": true,
+                            "taskId": task_id,
+                            "startedAt": started_at,
+                            "finishedAt": finished_at,
+                            "force": false,
+                            "error": null,
+                            "syncResult": sync_result,
+                            "syncError": null,
+                            "snapshot": snapshot
+                        }),
+                        Err(error) => {
+                            let now = chrono::Utc::now()
+                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                            persist_sync_status(&cfg, "failed", &now, &now, None, &error);
+                            serde_json::json!({
+                                "running": false,
+                                "syncRunning": false,
+                                "started": true,
+                                "taskId": task_id,
+                                "startedAt": started_at,
+                                "finishedAt": finished_at,
+                                "force": false,
+                                "error": null,
+                                "syncResult": null,
+                                "syncError": error,
+                                "snapshot": snapshot
+                            })
+                        }
+                    },
+                    Err(error) => {
+                        let now =
+                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                        persist_sync_status(&cfg, "failed", &now, &now, None, &error);
+                        serde_json::json!({
+                            "running": false,
+                            "syncRunning": false,
+                            "started": true,
+                            "taskId": task_id,
+                            "startedAt": started_at,
+                            "finishedAt": finished_at,
+                            "force": false,
+                            "error": error,
+                            "syncResult": null,
+                            "syncError": null,
+                            "snapshot": null
+                        })
+                    }
+                };
+                write_scan_status(&scan_status, finished_status);
+                write_bool_state(&sync_running, false);
+            });
+            Ok(status)
         }
         Command::ProvidersHealth => {
             let cfg = config::ensure_desktop_config();
@@ -470,42 +604,119 @@ async fn handle_command(
         Command::TrayRebuildMenu | Command::TrayRefreshNow => Ok(serde_json::json!({"ok": true})),
         Command::UsageScanStart | Command::UsageScanStatus => {
             if command == Command::UsageScanStatus {
-                return Ok(runtime.last_scan_status.clone().unwrap_or_else(|| {
-                    serde_json::json!({
-                        "running": false,
-                        "syncRunning": false,
-                        "taskId": null,
-                        "snapshot": null,
-                        "error": null,
-                        "syncError": null
-                    })
-                }));
+                return Ok(read_scan_status(&runtime.last_scan_status));
             }
 
             let force = request.args["force"].as_bool().unwrap_or(false);
+            let existing_status = read_scan_status(&runtime.last_scan_status);
+            if existing_status
+                .get("running")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                || existing_status
+                    .get("syncRunning")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            {
+                return Ok(existing_status);
+            }
+            if read_bool_state(&runtime.sync_running) {
+                let status =
+                    serde_json::json!({"running": false, "syncRunning": true, "started": false});
+                write_scan_status(&runtime.last_scan_status, status.clone());
+                return Ok(status);
+            }
+
             let cfg = config::ensure_desktop_config();
             runtime.next_scan_task_id = runtime.next_scan_task_id.saturating_add(1);
             let task_id = runtime.next_scan_task_id;
             let started_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let snapshot = usage_snapshot(&cfg, force).await?;
-            let finished_at =
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let status = serde_json::json!({
-                "running": false,
+                "running": true,
                 "syncRunning": false,
                 "taskId": task_id,
                 "startedAt": started_at,
-                "finishedAt": finished_at,
+                "finishedAt": null,
+                "force": force,
                 "error": null,
                 "syncResult": null,
                 "syncError": null,
-                "snapshot": snapshot
+                "snapshot": null
             });
-            runtime.last_scan_status = Some(status.clone());
+            write_scan_status(&runtime.last_scan_status, status.clone());
+
+            let scan_status = Arc::clone(&runtime.last_scan_status);
+            tokio::spawn(async move {
+                let result = usage_snapshot(&cfg, force).await;
+                let finished_at =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                let finished_status = match result {
+                    Ok(snapshot) => serde_json::json!({
+                        "running": false,
+                        "syncRunning": false,
+                        "taskId": task_id,
+                        "startedAt": started_at,
+                        "finishedAt": finished_at,
+                        "force": force,
+                        "error": null,
+                        "syncResult": null,
+                        "syncError": null,
+                        "snapshot": snapshot
+                    }),
+                    Err(error) => serde_json::json!({
+                        "running": false,
+                        "syncRunning": false,
+                        "taskId": task_id,
+                        "startedAt": started_at,
+                        "finishedAt": finished_at,
+                        "force": force,
+                        "error": error,
+                        "syncResult": null,
+                        "syncError": null,
+                        "snapshot": null
+                    }),
+                };
+                write_scan_status(&scan_status, finished_status);
+            });
             Ok(status)
         }
         Command::PricingModelPrices => model_prices().await,
+    }
+}
+
+fn default_scan_status() -> serde_json::Value {
+    serde_json::json!({
+        "running": false,
+        "syncRunning": false,
+        "taskId": null,
+        "snapshot": null,
+        "error": null,
+        "syncError": null
+    })
+}
+
+fn read_scan_status(status: &Arc<Mutex<Option<serde_json::Value>>>) -> serde_json::Value {
+    status
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .unwrap_or_else(default_scan_status)
+}
+
+fn write_scan_status(status: &Arc<Mutex<Option<serde_json::Value>>>, value: serde_json::Value) {
+    if let Ok(mut guard) = status.lock() {
+        *guard = Some(value);
+    }
+}
+
+fn read_bool_state(status: &Arc<Mutex<bool>>) -> bool {
+    status.lock().map(|guard| *guard).unwrap_or(false)
+}
+
+fn write_bool_state(status: &Arc<Mutex<bool>>, value: bool) {
+    if let Ok(mut guard) = status.lock() {
+        *guard = value;
     }
 }
 
@@ -657,19 +868,67 @@ async fn ensure_config_with_api_connection() -> config::AppConfig {
 }
 
 async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_json::Value, String> {
+    let mut local_store = collector_core::local_usage_store::LocalUsageStore::open_default().ok();
     if !force {
         if let Some(cached) =
             read_usage_cache().filter(|snapshot| is_fresh_usage_cache(snapshot, cfg))
         {
-            return Ok(public_usage_snapshot(cached, true));
+            let sqlite_ready = local_store
+                .as_ref()
+                .map(|store| store.has_usage_facts().unwrap_or(false))
+                .unwrap_or(true);
+            if sqlite_ready {
+                return Ok(public_usage_snapshot(cached, true));
+            }
         }
     }
-    let source_cache = read_source_index_cache();
-    let result = scanner::scan_usage_async(cfg, source_cache).await;
+    let result = if let Some(store) = local_store.as_mut() {
+        scanner::scan_usage_async_with_source_cache(cfg, store).await
+    } else {
+        let source_cache = read_source_index_cache();
+        scanner::scan_usage_async(cfg, source_cache).await
+    };
     let snapshot = build_usage_snapshot(result.items, result.health, false, cfg);
-    write_source_index_cache(&result.source_index, &snapshot)?;
+    if let Some(store) = local_store.as_mut() {
+        let scanned_at = snapshot
+            .get("scannedAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let items = snapshot
+            .get("items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        store.replace_source_cache(&result.source_index, scanned_at)?;
+        store.replace_usage_facts(&items, scanned_at)?;
+        clear_json_source_index_cache();
+    } else {
+        write_source_index_cache(&result.source_index, &snapshot)?;
+    }
     write_usage_cache(&snapshot)?;
     Ok(snapshot)
+}
+
+fn local_usage_query(
+    query: impl FnOnce(
+        &collector_core::local_usage_store::LocalUsageStore,
+    ) -> Result<serde_json::Value, String>,
+) -> Result<serde_json::Value, String> {
+    let store = collector_core::local_usage_store::LocalUsageStore::open_default()?;
+    query(&store)
+}
+
+fn arg_str(args: &serde_json::Value, key: &str, default_value: &str) -> String {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or(default_value)
+        .to_string()
+}
+
+fn arg_i64(args: &serde_json::Value, key: &str, default_value: i64) -> i64 {
+    args.get(key)
+        .and_then(|v| v.as_i64())
+        .unwrap_or(default_value)
 }
 
 fn build_usage_snapshot(
@@ -765,6 +1024,10 @@ fn source_cache_from_snapshot(
 }
 
 fn read_source_index_cache() -> HashMap<String, Vec<serde_json::Value>> {
+    let split_cache = read_split_source_index_cache();
+    if !split_cache.is_empty() {
+        return split_cache;
+    }
     if let Some(value) = fs::read_to_string(config::source_index_cache_path())
         .ok()
         .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
@@ -774,20 +1037,130 @@ fn read_source_index_cache() -> HashMap<String, Vec<serde_json::Value>> {
     source_cache_from_snapshot(read_usage_cache().as_ref())
 }
 
+fn clear_json_source_index_cache() {
+    let _ = fs::remove_file(config::source_index_cache_path());
+    let dir = config::source_index_cache_dir();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+    let _ = fs::remove_dir(&dir);
+}
+
+fn read_split_source_index_cache() -> HashMap<String, Vec<serde_json::Value>> {
+    let mut result = HashMap::new();
+    let Ok(entries) = fs::read_dir(config::source_index_cache_dir()) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if path.file_name().and_then(|value| value.to_str()) == Some("manifest.json") {
+            continue;
+        }
+        let Some(fingerprint) = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .and_then(source_cache_fingerprint_from_stem)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+        else {
+            continue;
+        };
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        if value
+            .get("cacheVersion")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|version| version != collector_core::schema::USAGE_CACHE_VERSION as u64)
+        {
+            continue;
+        }
+        if let Some(items) = value.as_array() {
+            result.insert(fingerprint, items.clone());
+        } else if let Some(items) = value.get("items").and_then(|v| v.as_array()) {
+            result.insert(fingerprint, items.clone());
+        }
+    }
+    result
+}
+
 fn write_source_index_cache(
     source_index: &HashMap<String, Vec<serde_json::Value>>,
     snapshot: &serde_json::Value,
 ) -> Result<(), String> {
     config::ensure_app_dir();
-    let value = serde_json::json!({
+    let dir = config::source_index_cache_dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut keep_files = HashSet::new();
+    for (fingerprint, items) in source_index {
+        if fingerprint.trim().is_empty() {
+            continue;
+        }
+        let file_name = source_cache_file_name(fingerprint);
+        keep_files.insert(file_name.clone());
+        let path = dir.join(&file_name);
+        if path.exists() {
+            continue;
+        }
+        let value = serde_json::json!({
+            "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
+            "fingerprint": fingerprint,
+            "items": items
+        });
+        let text = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, format!("{}\n", text)).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    }
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if file_name != "manifest.json" && !keep_files.contains(file_name) {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+    let manifest = serde_json::json!({
         "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
         "scannedAt": snapshot.get("scannedAt").cloned().unwrap_or(serde_json::Value::Null),
         "sourceFingerprint": snapshot.get("sourceFingerprint").cloned().unwrap_or(serde_json::Value::Null),
         "usageSourceConfigFingerprint": snapshot.get("usageSourceConfigFingerprint").cloned().unwrap_or(serde_json::Value::Null),
-        "sources": source_index
+        "sourceCount": source_index.len()
     });
-    let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    fs::write(config::source_index_cache_path(), format!("{}\n", text)).map_err(|e| e.to_string())
+    let text = serde_json::to_string(&manifest).map_err(|e| e.to_string())?;
+    fs::write(dir.join("manifest.json"), format!("{}\n", text)).map_err(|e| e.to_string())?;
+    let _ = fs::remove_file(config::source_index_cache_path());
+    Ok(())
+}
+
+fn source_cache_file_name(fingerprint: &str) -> String {
+    format!(
+        "v{}-{}.json",
+        collector_core::schema::USAGE_CACHE_VERSION,
+        fingerprint
+    )
+}
+
+fn source_cache_fingerprint_from_stem(stem: &str) -> Option<&str> {
+    let prefix = format!("v{}-", collector_core::schema::USAGE_CACHE_VERSION);
+    stem.strip_prefix(&prefix)
 }
 
 async fn sync_snapshot(

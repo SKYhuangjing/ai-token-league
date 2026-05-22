@@ -78,7 +78,11 @@ impl CursorDashboardProvider {
                     match accounts.get(account_index) {
                         Some(acc) if !acc.refresh_token.is_empty() => acc.refresh_token.clone(),
                         _ => {
-                            if let Some(acc) = config.cursor_dashboard_usage.accounts.get_mut(account_index) {
+                            if let Some(acc) = config
+                                .cursor_dashboard_usage
+                                .accounts
+                                .get_mut(account_index)
+                            {
                                 acc.auth_status = "reauth_required".to_string();
                             }
                             crate::config::save_config(config);
@@ -92,7 +96,8 @@ impl CursorDashboardProvider {
                         let new_access_token;
                         let new_cookie;
                         {
-                            let account = &mut config.cursor_dashboard_usage.accounts[account_index];
+                            let account =
+                                &mut config.cursor_dashboard_usage.accounts[account_index];
                             account.access_token = result.access_token.clone();
                             new_access_token = result.access_token;
                             account.last_refresh_at = Some(now);
@@ -110,7 +115,11 @@ impl CursorDashboardProvider {
                         self.fetch_usage(&new_cookie).await
                     }
                     Err(refresh_err) => {
-                        if let Some(account) = config.cursor_dashboard_usage.accounts.get_mut(account_index) {
+                        if let Some(account) = config
+                            .cursor_dashboard_usage
+                            .accounts
+                            .get_mut(account_index)
+                        {
                             account.auth_status = if refresh_err == "shouldLogout" {
                                 "reauth_required".to_string()
                             } else {

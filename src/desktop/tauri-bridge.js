@@ -90,9 +90,15 @@
     scanUsage:           fwd("usage:scan"),
     startUsageScan:      fwd("usage:scan-start"),
     usageScanStatus:     fwd("usage:scan-status"),
+    usageSummary:        fwd("usage:summary"),
+    usageTrend:          fwd("usage:trend"),
+    usageWorkdirs:       fwd("usage:workdirs"),
+    usageDetailPage:     fwd("usage:detail-page"),
+    usageDetailWindow:   fwd("usage:detail-window"),
 
     // ── Sync ────────────────────────────────────────────────────
     syncUsage:           fwd("usage:sync"),
+    startUsageSync:      fwd("usage:sync-start"),
 
     // ── Identity ────────────────────────────────────────────────
     getMyIdentity:       fwd("my-identity"),

@@ -35,7 +35,7 @@ export class Store {
     this.businessDayProvider = options.businessDayProvider || currentBusinessDay;
     this.db = this.persist && fs.existsSync(dbPath) ? JSON.parse(fs.readFileSync(dbPath, "utf8")) : structuredClone(DEFAULT_DB);
     this.db.schemaVersion ||= STORAGE_SCHEMA_VERSION;
-    this.db.aggregateCache ||= {};
+    this.db.aggregateCache = {};
     this.db.modelPrices ||= {};
     this.db.modelPriceAliases ||= {};
     this.db.modelPriceCache ||= structuredClone(DEFAULT_DB.modelPriceCache);
@@ -44,12 +44,34 @@ export class Store {
     this.db.usageSyncBuckets ||= {};
     this.db.usageHourly ||= {};
     this.db.usageSyncBucketsHourly ||= {};
+    this.aggregateCache = {};
+    this.priceMapCache = null;
+    this.deferSaveDepth = 0;
+    this.pendingDeferredSave = false;
     if (this.migrateLegacyUsageRows()) this.save();
   }
 
   save() {
     if (!this.persist) return;
+    if (this.deferSaveDepth > 0) {
+      this.pendingDeferredSave = true;
+      return;
+    }
+    this.db.aggregateCache = {};
     fs.writeFileSync(this.dbPath, `${JSON.stringify(this.db, null, 2)}\n`);
+  }
+
+  withDeferredSave(work) {
+    this.deferSaveDepth += 1;
+    try {
+      return work();
+    } finally {
+      this.deferSaveDepth -= 1;
+      if (this.deferSaveDepth === 0 && this.pendingDeferredSave) {
+        this.pendingDeferredSave = false;
+        this.save();
+      }
+    }
   }
 
   currentBusinessDay() {
@@ -235,6 +257,8 @@ export class Store {
     }
     let accepted = 0;
     let rejected = 0;
+    const legacyIndexes = buildLegacyUsageIndexes(this.db.usageDaily);
+    const priceMap = this.priceMap();
     for (const incoming of input.items || []) {
       try {
         const raw = normalizeUsageTotal(incoming);
@@ -259,34 +283,17 @@ export class Store {
           ];
         }
         if (raw.sourceFingerprint) {
-          for (const [existingKey, existing] of Object.entries(this.db.usageDaily)) {
-            if (
-              existingKey !== key &&
-              existing.day === raw.day &&
-              existing.participantId === input.participantId &&
-              existing.deviceId === input.deviceId &&
-              existing.toolCode === raw.toolCode &&
-              existing.providerId === raw.providerId &&
-              existing.workdirHash === raw.workdirHash &&
-              existing.model === raw.model &&
-              existing.sourceFingerprint === raw.sourceFingerprint
-            ) {
+          const dedupeKey = sourceFingerprintDedupKey(raw, input.participantId, input.deviceId);
+          for (const existingKey of legacyIndexes.sourceFingerprint.get(dedupeKey) || []) {
+            if (existingKey !== key) {
               delete this.db.usageDaily[existingKey];
             }
           }
         }
         if (raw.toolCode === "cursor" && raw.workdirDisplayName === "Cursor") {
-          for (const [existingKey, existing] of Object.entries(this.db.usageDaily)) {
-            if (
-              existingKey !== key &&
-              existing.day === raw.day &&
-              existing.participantId === input.participantId &&
-              existing.deviceId === input.deviceId &&
-              existing.toolCode === raw.toolCode &&
-              existing.providerId === raw.providerId &&
-              existing.model === raw.model &&
-              existing.workdirDisplayName === raw.workdirDisplayName
-            ) {
+          const dedupeKey = cursorDisplayDedupKey(raw, input.participantId, input.deviceId);
+          for (const existingKey of legacyIndexes.cursorDisplay.get(dedupeKey) || []) {
+            if (existingKey !== key) {
               delete this.db.usageDaily[existingKey];
             }
           }
@@ -295,7 +302,7 @@ export class Store {
           accepted += 1;
           continue;
         }
-        const withCost = addCostToUsageItem(raw, this.priceMap());
+        const withCost = addCostToUsageItem(raw, priceMap);
         this.db.usageDaily[key] = {
           ...raw,
           inputCostUsd: withCost.inputCostUsd,
@@ -339,6 +346,46 @@ export class Store {
     return { accepted, rejected, batchId };
   }
 
+  upsertUsageBatchSet(input) {
+    const batches = Array.isArray(input.batches) ? input.batches : [];
+    const results = [];
+    let accepted = 0;
+    let rejected = 0;
+    let duplicate = 0;
+    let noOp = 0;
+    return this.withDeferredSave(() => {
+      batches.forEach((batch, index) => {
+        const result = this.upsertUsageBatch({
+          participantId: input.participantId,
+          deviceId: input.deviceId,
+          clientGeneratedAt: input.clientGeneratedAt,
+          ...(Object.hasOwn(input, "client") ? { client: input.client } : {}),
+          snapshot: batch.snapshot,
+          items: batch.items
+        });
+        accepted += result.accepted || 0;
+        rejected += result.rejected || 0;
+        if (result.duplicate) duplicate += 1;
+        if (result.noOp) noOp += 1;
+        results.push({
+          index,
+          accepted: result.accepted || 0,
+          rejected: result.rejected || 0,
+          duplicate: Boolean(result.duplicate),
+          noOp: Boolean(result.noOp)
+        });
+      });
+      return {
+        accepted,
+        rejected,
+        bucketCount: batches.length,
+        duplicateBucketCount: duplicate,
+        noOpBucketCount: noOp,
+        results
+      };
+    });
+  }
+
   upsertSnapshotBatch(input) {
     const now = new Date().toISOString();
     const snapshot = input.snapshot;
@@ -356,6 +403,7 @@ export class Store {
     let accepted = 0;
     let rejected = 0;
     const incomingKeys = new Set();
+    const priceMap = this.priceMap();
 
     for (const incoming of input.items || []) {
       try {
@@ -388,7 +436,7 @@ export class Store {
           accepted += 1;
           continue;
         }
-        const withCost = addCostToUsageItem(raw, this.priceMap());
+        const withCost = addCostToUsageItem(raw, priceMap);
         this.db.usageDaily[key] = {
           ...raw,
           inputCostUsd: withCost.inputCostUsd,
@@ -456,6 +504,7 @@ export class Store {
     let accepted = 0;
     let rejected = 0;
     const incomingHourlyKeys = new Set();
+    const priceMap = this.priceMap();
 
     // Write hourly rows
     for (const incoming of input.items || []) {
@@ -478,7 +527,7 @@ export class Store {
         const hKey = hourlyUsageKey(raw, input.participantId, input.deviceId);
         incomingHourlyKeys.add(hKey);
 
-        const withCost = addCostToUsageItem(raw, this.priceMap());
+        const withCost = addCostToUsageItem(raw, priceMap);
         this.db.usageHourly[hKey] = {
           ...raw,
           hour: snapshotHour,
@@ -621,6 +670,7 @@ export class Store {
   }
 
   invalidateAggregateCache() {
+    this.aggregateCache = {};
     this.db.aggregateCache = {};
   }
 
@@ -759,7 +809,10 @@ export class Store {
 
   migrateLegacyUsageRows() {
     let changed = false;
-    for (const [key, item] of Object.entries(this.db.usageDaily || {})) {
+    const entries = Object.entries(this.db.usageDaily || {});
+    if (!entries.length) return false;
+    const priceMap = this.priceMap();
+    for (const [key, item] of entries) {
       if (!item.sourceFingerprint) {
         item.rawSourceRef ||= "legacy";
         item.providerVersion ||= "legacy";
@@ -768,13 +821,13 @@ export class Store {
         changed = true;
       }
       if (!item.costQuality || !item.pricingVersion || item.inputCostUsd === undefined) {
-        Object.assign(item, addCostToUsageItem(item, this.priceMap()));
+        Object.assign(item, addCostToUsageItem(item, priceMap));
         changed = true;
       }
       const nextTotalTokens = displayTotalTokens(item);
       if (item.totalTokens !== nextTotalTokens) {
         item.totalTokens = nextTotalTokens;
-        Object.assign(item, addCostToUsageItem(item, this.priceMap()));
+        Object.assign(item, addCostToUsageItem(item, priceMap));
         changed = true;
       }
     }
@@ -785,8 +838,9 @@ export class Store {
   leaderboard({ period, range = "today", tool = "all", startDay = "", endDay = "" } = {}) {
     const businessDay = this.currentBusinessDay();
     const days = period ? daysForPeriod(period, { businessDay }) : daysForDetailRange(range, { startDay, endDay, businessDay });
+    const daySet = new Set(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      return days.includes(item.day) && (tool === "all" || item.toolCode === tool);
+      return daySet.has(item.day) && (tool === "all" || item.toolCode === tool);
     });
     const byParticipant = new Map();
     for (const item of rows) {
@@ -829,34 +883,45 @@ export class Store {
   }
 
   computeBoardSummary() {
-    const todayItems = this.publicLeaderboard({ range: "today", includeCost: true });
-    const yesterdayItems = this.publicLeaderboard({ range: "yesterday", includeCost: true });
-    const weekItems = this.publicLeaderboard({ range: "this_week", includeCost: true });
-    const lastWeekItems = this.publicLeaderboard({ range: "last_week", includeCost: true });
-    const monthItems = this.publicLeaderboard({ range: "this_month", includeCost: true });
-    const lastMonthItems = this.publicLeaderboard({ range: "last_month", includeCost: true });
-    const sumTokens = (items) => items.reduce((s, i) => s + i.totalTokens, 0);
-    const sumCost = (items) => items.reduce((s, i) => s + (i.estimatedCostUsd || 0), 0);
+    const businessDay = this.currentBusinessDay();
+    const ranges = {
+      today: new Set(daysForQuery({ range: "today" }, { businessDay })),
+      yesterday: new Set(daysForQuery({ range: "yesterday" }, { businessDay })),
+      week: new Set(daysForQuery({ range: "this_week" }, { businessDay })),
+      lastWeek: new Set(daysForQuery({ range: "last_week" }, { businessDay })),
+      thisMonth: new Set(daysForQuery({ range: "this_month" }, { businessDay })),
+      lastMonth: new Set(daysForQuery({ range: "last_month" }, { businessDay }))
+    };
+    const totals = Object.fromEntries(
+      Object.keys(ranges).map((key) => [key, { tokens: 0, cost: 0 }])
+    );
+    for (const item of Object.values(this.db.usageDaily || {})) {
+      for (const [key, days] of Object.entries(ranges)) {
+        if (!days.has(item.day)) continue;
+        totals[key].tokens += item.totalTokens || 0;
+        totals[key].cost += item.estimatedCostUsd || 0;
+      }
+    }
     return {
       participantCount: Object.keys(this.db.participants).length,
-      todayTokens: sumTokens(todayItems),
-      yesterdayTokens: sumTokens(yesterdayItems),
-      weekTokens: sumTokens(weekItems),
-      lastWeekTokens: sumTokens(lastWeekItems),
-      thisMonthTokens: sumTokens(monthItems),
-      lastMonthTokens: sumTokens(lastMonthItems),
-      todayCost: sumCost(todayItems),
-      yesterdayCost: sumCost(yesterdayItems),
-      weekCost: sumCost(weekItems),
-      lastWeekCost: sumCost(lastWeekItems),
-      thisMonthCost: sumCost(monthItems),
-      lastMonthCost: sumCost(lastMonthItems)
+      todayTokens: totals.today.tokens,
+      yesterdayTokens: totals.yesterday.tokens,
+      weekTokens: totals.week.tokens,
+      lastWeekTokens: totals.lastWeek.tokens,
+      thisMonthTokens: totals.thisMonth.tokens,
+      lastMonthTokens: totals.lastMonth.tokens,
+      todayCost: totals.today.cost,
+      yesterdayCost: totals.yesterday.cost,
+      weekCost: totals.week.cost,
+      lastWeekCost: totals.lastWeek.cost,
+      thisMonthCost: totals.thisMonth.cost,
+      lastMonthCost: totals.lastMonth.cost
     };
   }
 
   computePublicLeaderboard({ period, range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
-    const days = daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
-    const rows = Object.values(this.db.usageDaily).filter((item) => days.includes(item.day));
+    const daySet = new Set(daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() }));
+    const rows = Object.values(this.db.usageDaily).filter((item) => daySet.has(item.day));
     const byParticipant = new Map();
     for (const item of rows) {
       const participant = this.db.participants[item.participantId];
@@ -913,7 +978,8 @@ export class Store {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
     const days = daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
-    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && days.includes(item.day));
+    const daySet = new Set(days);
+    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && daySet.has(item.day));
     const selectedPeriod = period || range;
     const rankRow = this.publicLeaderboard({ period, range, startDay, endDay, includeCost }).find((item) => item.participantId === participantId);
     const detail = {
@@ -999,7 +1065,8 @@ export class Store {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
-    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && days.includes(item.day));
+    const daySet = new Set(days);
+    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && daySet.has(item.day));
     return {
       participantId,
       nickname: participant.nickname,
@@ -1017,8 +1084,9 @@ export class Store {
 
   computeAdminUsage({ grain = "day", range = "month", startDay = "", endDay = "", participantId = "", includeCost = false } = {}) {
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
+    const daySet = new Set(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      return days.includes(item.day) && (!participantId || item.participantId === participantId);
+      return daySet.has(item.day) && (!participantId || item.participantId === participantId);
     });
     return {
       grain: normalizeGrain(grain),
@@ -1033,26 +1101,26 @@ export class Store {
 
   cachedAggregate(name, args, compute, { dayScoped = false } = {}) {
     const cacheArgs = dayScoped ? { ...args, businessDay: this.currentBusinessDay() } : args;
-    const key = sha256Hex(JSON.stringify({ name, args: cacheArgs, schemaVersion: STORAGE_SCHEMA_VERSION }));
-    const cached = this.db.aggregateCache?.[key];
+    const key = `${name}|${STORAGE_SCHEMA_VERSION}|${JSON.stringify(cacheArgs)}`;
+    const cached = this.aggregateCache?.[key];
     if (cached) return cached.value;
     const value = compute();
-    this.db.aggregateCache ||= {};
-    this.db.aggregateCache[key] = {
+    this.aggregateCache ||= {};
+    this.aggregateCache[key] = {
       key,
       name,
       args: cacheArgs,
       createdAt: new Date().toISOString(),
       value
     };
-    this.save();
     return value;
   }
 
   adminQuality({ range = "month", startDay = "", endDay = "", participantId = "" } = {}) {
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
+    const daySet = new Set(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      return days.includes(item.day) && (!participantId || item.participantId === participantId);
+      return daySet.has(item.day) && (!participantId || item.participantId === participantId);
     });
     const totals = {
       rows: rows.length,
@@ -1085,6 +1153,7 @@ export class Store {
     const byDay = new Map();
     const devicesByParticipant = new Map();
     const byBucket = new Map();
+    const priceMap = this.priceMap();
     for (const item of rows) {
       totals.totalTokens += item.totalTokens || 0;
       totals.inputTokens += item.inputTokens || 0;
@@ -1117,7 +1186,7 @@ export class Store {
       bucket.reasoningTokens += item.reasoningTokens || 0;
       bucket.participants.add(item.participantId);
       byBucket.set(item.day, bucket);
-      const coverageRow = addCostToUsageItem(item, this.priceMap());
+      const coverageRow = addCostToUsageItem(item, priceMap);
       totals.pricingCoverage.rowsByQuality[coverageRow.costQuality || "unknown_price"] += 1;
       if (coverageRow.estimatedCostUsd === null || coverageRow.estimatedCostUsd === undefined) {
         totals.pricingCoverage.missingTokens += item.totalTokens || 0;
@@ -1240,10 +1309,13 @@ export class Store {
     }).sort((a, b) => (b.lastSeenAt || "").localeCompare(a.lastSeenAt || ""));
   }
 
-  recalculateCosts() {
+  recalculateCosts({ models = null } = {}) {
+    const modelSet = models ? new Set(models.map((model) => normalizeModelName(model)).filter(Boolean)) : null;
+    const priceMap = this.priceMap();
     let updated = 0;
     for (const item of Object.values(this.db.usageDaily || {})) {
-      Object.assign(item, addCostToUsageItem(item, this.priceMap()));
+      if (modelSet && !modelSet.has(normalizeModelName(item.model))) continue;
+      Object.assign(item, addCostToUsageItem(item, priceMap));
       updated += 1;
     }
     this.invalidateAggregateCache();
@@ -1252,7 +1324,24 @@ export class Store {
   }
 
   priceMap() {
-    return createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices, this.db.modelPriceAliases);
+    if (!this.priceMapCache) {
+      this.priceMapCache = createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices, this.db.modelPriceAliases);
+    }
+    return this.priceMapCache;
+  }
+
+  invalidatePriceMap() {
+    this.priceMapCache = null;
+  }
+
+  affectedModelsForPrice(model) {
+    const normalized = normalizeModelName(model || "");
+    if (!normalized) return [];
+    const affected = new Set([normalized]);
+    for (const [sourceModel, targetModel] of Object.entries(this.db.modelPriceAliases || {})) {
+      if (normalizeModelName(targetModel) === normalized) affected.add(normalizeModelName(sourceModel));
+    }
+    return [...affected];
   }
 
   listModelPrices() {
@@ -1271,6 +1360,7 @@ export class Store {
   async refreshOpenRouterPrices({ recalculate = false } = {}) {
     try {
       this.db.modelPriceCache = await fetchOpenRouterModelPrices();
+      this.invalidatePriceMap();
       let recalculated = null;
       if (recalculate) recalculated = this.recalculateCosts();
       this.save();
@@ -1284,6 +1374,7 @@ export class Store {
         lastError: error.message
       };
       this.db.modelPriceCache = previous;
+      this.invalidatePriceMap();
       this.save();
       return { remote: this.db.modelPriceCache.remote, recalculated: null };
     }
@@ -1305,18 +1396,21 @@ export class Store {
       updatedAt: now
     };
     this.db.modelPrices[model] = price;
-    const recalculated = this.recalculateCosts();
+    this.invalidatePriceMap();
+    const recalculated = this.recalculateCosts({ models: this.affectedModelsForPrice(model) });
     return { price, recalculated };
   }
 
   deleteModelPrice(modelInput) {
     const model = normalizeModelName(modelInput || "");
     if (!model || !this.db.modelPrices[model]) return { deleted: false };
+    const affectedModels = this.affectedModelsForPrice(model);
     delete this.db.modelPrices[model];
     for (const [sourceModel, targetModel] of Object.entries(this.db.modelPriceAliases || {})) {
       if (targetModel === model) delete this.db.modelPriceAliases[sourceModel];
     }
-    const recalculated = this.recalculateCosts();
+    this.invalidatePriceMap();
+    const recalculated = this.recalculateCosts({ models: affectedModels });
     return { deleted: true, recalculated };
   }
 
@@ -1329,7 +1423,8 @@ export class Store {
     const basePriceMap = createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices);
     if (!basePriceMap[targetModel]) throw new Error(`target model price not found: ${targetModel}`);
     this.db.modelPriceAliases[model] = targetModel;
-    const recalculated = this.recalculateCosts();
+    this.invalidatePriceMap();
+    const recalculated = this.recalculateCosts({ models: [model] });
     return { alias: { model, targetModel }, recalculated };
   }
 
@@ -1337,15 +1432,17 @@ export class Store {
     const model = normalizeModelName(modelInput || "");
     if (!model || !this.db.modelPriceAliases[model]) return { deleted: false };
     delete this.db.modelPriceAliases[model];
-    const recalculated = this.recalculateCosts();
+    this.invalidatePriceMap();
+    const recalculated = this.recalculateCosts({ models: [model] });
     return { deleted: true, recalculated };
   }
 
   missingPriceModels({ range = "month", startDay = "", endDay = "" } = {}) {
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
+    const daySet = new Set(days);
     const map = new Map();
     for (const item of Object.values(this.db.usageDaily || {})) {
-      if (!days.includes(item.day)) continue;
+      if (!daySet.has(item.day)) continue;
       if (item.estimatedCostUsd !== null && item.estimatedCostUsd !== undefined) continue;
       const model = item.model || "unknown";
       const current = map.get(model) || { model, totalTokens: 0, rows: 0, providers: {}, lastSeenAt: "" };
@@ -1362,6 +1459,51 @@ export class Store {
         providers: sortedBreakdown(item.providers)
       }));
   }
+}
+
+function buildLegacyUsageIndexes(usageDaily = {}) {
+  const sourceFingerprint = new Map();
+  const cursorDisplay = new Map();
+  for (const [key, row] of Object.entries(usageDaily || {})) {
+    if (row.sourceFingerprint) {
+      mapPush(sourceFingerprint, sourceFingerprintDedupKey(row), key);
+    }
+    if (row.toolCode === "cursor" && row.workdirDisplayName === "Cursor") {
+      mapPush(cursorDisplay, cursorDisplayDedupKey(row), key);
+    }
+  }
+  return { sourceFingerprint, cursorDisplay };
+}
+
+function mapPush(map, key, value) {
+  const values = map.get(key);
+  if (values) values.push(value);
+  else map.set(key, [value]);
+}
+
+function sourceFingerprintDedupKey(row, participantId = row.participantId, deviceId = row.deviceId) {
+  return [
+    row.day,
+    participantId,
+    deviceId,
+    row.toolCode,
+    row.providerId,
+    row.workdirHash,
+    row.model,
+    row.sourceFingerprint
+  ].join("|");
+}
+
+function cursorDisplayDedupKey(row, participantId = row.participantId, deviceId = row.deviceId) {
+  return [
+    row.day,
+    participantId,
+    deviceId,
+    row.toolCode,
+    row.providerId,
+    row.model,
+    row.workdirDisplayName
+  ].join("|");
 }
 
 function daysForQuery({ period = "", range = "today", startDay = "", endDay = "" } = {}, { businessDay = localDay() } = {}) {

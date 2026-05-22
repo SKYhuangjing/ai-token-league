@@ -11,6 +11,7 @@ use std::net::IpAddr;
 
 const MAX_QUEUE_DRAIN_PER_RUN: usize = 50;
 const MAX_RETRY_DELAY_MINUTES: i64 = 6 * 60;
+const MAX_BATCH_UPLOAD_BUCKETS: usize = 25;
 
 /// Result of a sync operation.
 pub struct SyncResult {
@@ -60,6 +61,20 @@ struct FailedUpload {
     error: String,
 }
 
+#[derive(Debug, Clone)]
+struct PreparedUpload {
+    bucket_key: String,
+    day: String,
+    hour: i64,
+    provider_id: String,
+    fingerprint: String,
+    row_count: usize,
+    total_tokens: i64,
+    snapshot: Value,
+    items: Vec<Value>,
+    body: Value,
+}
+
 #[derive(Debug, Default)]
 struct QueueDrainStats {
     attempted: usize,
@@ -96,6 +111,9 @@ pub async fn sync_usage(
     let mut noop = 0;
     let mut failed_buckets: Vec<FailedUpload> = Vec::new();
 
+    let mut dirty_uploads: Vec<PreparedUpload> = Vec::new();
+    let client_metadata = crate::version::client_metadata();
+
     for (_key, bucket) in &buckets {
         let bucket_items = bucket["items"].as_array().cloned().unwrap_or_default();
         let day = bucket["day"].as_str().unwrap_or("");
@@ -129,10 +147,8 @@ pub async fn sync_usage(
             "totalTokens": total_tokens
         });
 
-        // Build payload
         let client_generated_at =
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let client_metadata = crate::version::client_metadata();
         let payload = json!({
             "participantId": config.participant_id,
             "deviceId": config.device_id,
@@ -142,10 +158,7 @@ pub async fn sync_usage(
             "items": bucket_items
         });
 
-        // Sign
         let signature = sign_payload(&config.identity_private_key, &payload);
-
-        // Upload
         let body = json!({
             "participantId": config.participant_id,
             "deviceId": config.device_id,
@@ -157,59 +170,33 @@ pub async fn sync_usage(
             "identityPublicKey": config.identity_public_key
         });
 
-        match client
-            .post(format!("{}/api/usage/daily-batch", api_base_url))
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    accepted += 1;
-                    uploaded += 1;
-                    update_manifest_bucket(
-                        &mut manifest,
-                        &bucket_key,
-                        day,
-                        hour,
-                        provider_id,
-                        &fingerprint,
-                        row_count,
-                        total_tokens,
-                    );
-                    save_sync_manifest_for(api_base_url, &manifest);
-                } else {
-                    let status = resp.status();
-                    rejected += 1;
-                    append_upload_failure_event(
-                        "usage_upload_failed",
-                        &body,
-                        format!("HTTP {}", status),
-                        Some(status.as_u16()),
-                        0,
-                    );
-                    failed_buckets.push(FailedUpload {
-                        payload: body,
-                        error: format!("HTTP {}", status),
-                    });
-                }
-            }
-            Err(error) => {
-                let error_text = error.to_string();
-                rejected += 1;
-                append_upload_failure_event(
-                    "usage_upload_failed",
-                    &body,
-                    error_text.clone(),
-                    None,
-                    0,
-                );
-                failed_buckets.push(FailedUpload {
-                    payload: body,
-                    error: error_text,
-                });
-            }
-        }
+        dirty_uploads.push(PreparedUpload {
+            bucket_key,
+            day: day.to_string(),
+            hour,
+            provider_id: provider_id.to_string(),
+            fingerprint,
+            row_count,
+            total_tokens,
+            snapshot,
+            items: bucket_items,
+            body,
+        });
+    }
+
+    for chunk in dirty_uploads.chunks(MAX_BATCH_UPLOAD_BUCKETS) {
+        upload_prepared_chunk(
+            &client,
+            config,
+            api_base_url,
+            chunk,
+            &mut manifest,
+            &mut accepted,
+            &mut rejected,
+            &mut uploaded,
+            &mut failed_buckets,
+        )
+        .await;
     }
 
     // Save manifest
@@ -258,6 +245,191 @@ pub async fn sync_usage(
         queue_failed: queue_drain.failed,
         new_failed_bucket_count: failed_buckets.len(),
     })
+}
+
+async fn upload_prepared_chunk(
+    client: &reqwest::Client,
+    config: &AppConfig,
+    api_base_url: &str,
+    chunk: &[PreparedUpload],
+    manifest: &mut SyncManifest,
+    accepted: &mut usize,
+    rejected: &mut usize,
+    uploaded: &mut usize,
+    failed_buckets: &mut Vec<FailedUpload>,
+) {
+    if chunk.is_empty() {
+        return;
+    }
+    if chunk.len() == 1 {
+        upload_prepared_single(
+            client,
+            api_base_url,
+            &chunk[0],
+            manifest,
+            accepted,
+            rejected,
+            uploaded,
+            failed_buckets,
+        )
+        .await;
+        return;
+    }
+
+    let client_generated_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let client_metadata = crate::version::client_metadata();
+    let batches = chunk
+        .iter()
+        .map(|upload| {
+            json!({
+                "snapshot": upload.snapshot.clone(),
+                "items": upload.items.clone()
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "client": client_metadata,
+        "batches": batches
+    });
+    let signature = sign_payload(&config.identity_private_key, &payload);
+    let body = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "client": client_metadata,
+        "batches": payload["batches"],
+        "signature": signature,
+        "identityPublicKey": config.identity_public_key
+    });
+
+    match client
+        .post(format!(
+            "{}/api/usage/daily-batches",
+            api_base_url.trim_end_matches('/')
+        ))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            for upload in chunk {
+                mark_upload_success(manifest, upload);
+            }
+            *accepted += chunk.len();
+            *uploaded += chunk.len();
+        }
+        Ok(resp) if matches!(resp.status().as_u16(), 404 | 405 | 501) => {
+            for upload in chunk {
+                upload_prepared_single(
+                    client,
+                    api_base_url,
+                    upload,
+                    manifest,
+                    accepted,
+                    rejected,
+                    uploaded,
+                    failed_buckets,
+                )
+                .await;
+            }
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            for upload in chunk {
+                mark_upload_failure(
+                    upload,
+                    format!("HTTP {}", status),
+                    Some(status.as_u16()),
+                    failed_buckets,
+                );
+                *rejected += 1;
+            }
+        }
+        Err(error) => {
+            let error_text = error.to_string();
+            for upload in chunk {
+                mark_upload_failure(upload, error_text.clone(), None, failed_buckets);
+                *rejected += 1;
+            }
+        }
+    }
+}
+
+async fn upload_prepared_single(
+    client: &reqwest::Client,
+    api_base_url: &str,
+    upload: &PreparedUpload,
+    manifest: &mut SyncManifest,
+    accepted: &mut usize,
+    rejected: &mut usize,
+    uploaded: &mut usize,
+    failed_buckets: &mut Vec<FailedUpload>,
+) {
+    match client
+        .post(format!(
+            "{}/api/usage/daily-batch",
+            api_base_url.trim_end_matches('/')
+        ))
+        .json(&upload.body)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            *accepted += 1;
+            *uploaded += 1;
+            mark_upload_success(manifest, upload);
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            *rejected += 1;
+            mark_upload_failure(
+                upload,
+                format!("HTTP {}", status),
+                Some(status.as_u16()),
+                failed_buckets,
+            );
+        }
+        Err(error) => {
+            *rejected += 1;
+            mark_upload_failure(upload, error.to_string(), None, failed_buckets);
+        }
+    }
+}
+
+fn mark_upload_success(manifest: &mut SyncManifest, upload: &PreparedUpload) {
+    update_manifest_bucket(
+        manifest,
+        &upload.bucket_key,
+        &upload.day,
+        upload.hour,
+        &upload.provider_id,
+        &upload.fingerprint,
+        upload.row_count,
+        upload.total_tokens,
+    );
+}
+
+fn mark_upload_failure(
+    upload: &PreparedUpload,
+    error: String,
+    status_code: Option<u16>,
+    failed_buckets: &mut Vec<FailedUpload>,
+) {
+    append_upload_failure_event(
+        "usage_upload_failed",
+        &upload.body,
+        error.clone(),
+        status_code,
+        0,
+    );
+    failed_buckets.push(FailedUpload {
+        payload: upload.body.clone(),
+        error,
+    });
 }
 
 async fn reconcile_sync_state(
@@ -426,7 +598,6 @@ async fn drain_upload_queue(
             Ok(resp) if resp.status().is_success() => {
                 uploaded += 1;
                 update_manifest_from_payload(manifest, &entry.payload);
-                save_sync_manifest_for(api_base_url, manifest);
             }
             Ok(resp) => {
                 let status = resp.status();

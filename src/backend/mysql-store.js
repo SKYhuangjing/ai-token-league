@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import mysql from "mysql2/promise";
 import { Store } from "./store.js";
+import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { normalizeModelName } from "../shared/pricing.js";
-import { localDay } from "../shared/date.js";
+import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { CLOUD_PROVIDER_IDS, displayTotalTokens } from "../shared/schema.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
@@ -113,26 +114,24 @@ export class MySqlStore extends Store {
     if (!bucketGranularityColumns.length) {
       await this.pool.query("ALTER TABLE usage_sync_buckets ADD COLUMN granularity VARCHAR(16) NOT NULL DEFAULT 'daily' AFTER providerId");
     }
+    await ensureIndex(this.pool, "usage_daily", "idx_usage_device_day", "CREATE INDEX idx_usage_device_day ON usage_daily (deviceId, day)");
+    await ensureIndex(this.pool, "usage_daily", "idx_usage_daily_scope", "CREATE INDEX idx_usage_daily_scope ON usage_daily (participantId, deviceId, day, providerId)");
+    await ensureIndex(this.pool, "usage_hourly", "idx_hourly_scope", "CREATE INDEX idx_hourly_scope ON usage_hourly (participantId, deviceId, day, hour, providerId)");
   }
 
   async load() {
     const [participants] = await this.pool.query("SELECT * FROM participants");
     const [devices] = await this.pool.query("SELECT * FROM devices");
     const [workdirs] = await this.pool.query("SELECT * FROM workdirs");
-    const [usageRows] = await this.pool.query("SELECT * FROM usage_daily");
-    const [uploadBatches] = await this.pool.query("SELECT * FROM upload_batches");
     const [modelPrices] = await this.pool.query("SELECT * FROM model_prices");
     const [modelPriceAliases] = await this.pool.query("SELECT * FROM model_price_aliases");
     const [modelPriceCache] = await this.pool.query("SELECT * FROM model_price_cache");
     const [modelPriceCacheMeta] = await this.pool.query("SELECT * FROM model_price_cache_meta WHERE source = 'openrouter'");
-    const syncBuckets = await this.pool.query("SELECT * FROM usage_sync_buckets").catch(() => [[]]);
-    const usageHourlyRows = await this.pool.query("SELECT * FROM usage_hourly").catch(() => [[]]);
-    const syncBucketsHourly = await this.pool.query("SELECT * FROM usage_sync_buckets_hourly").catch(() => [[]]);
     this.db.participants = Object.fromEntries(participants.map((row) => [row.id, normalizeRow(row)]));
     this.db.devices = Object.fromEntries(devices.map((row) => [row.id, normalizeRow(row)]));
     this.db.workdirs = Object.fromEntries(workdirs.map((row) => [row.id, normalizeRow(row)]));
-    this.db.usageDaily = Object.fromEntries(usageRows.map((row) => [row.usageKey, usageFromRow(row)]));
-    this.db.uploadBatches = Object.fromEntries(uploadBatches.map((row) => [row.payloadHash, normalizeRow(row)]));
+    this.db.usageDaily = {};
+    this.db.uploadBatches = {};
     this.db.modelPrices = Object.fromEntries(modelPrices.map((row) => [row.model, priceFromRow(row)]));
     this.db.modelPriceAliases = Object.fromEntries(modelPriceAliases.map((row) => [row.model, row.targetModel]));
     this.db.modelPriceCache = {
@@ -140,14 +139,9 @@ export class MySqlStore extends Store {
       prices: Object.fromEntries(modelPriceCache.map((row) => [row.model, cachedPriceFromRow(row)]))
     };
     this.db.aggregateCache = {};
-    this.db.usageSyncBuckets = Object.fromEntries(
-      syncBuckets[0].map((row) => [row.bucketKey, normalizeRow(row)])
-    );
-    this.db.usageHourly = Object.fromEntries(usageHourlyRows[0].map((row) => [row.usageKey, usageFromRow(row)]));
-    this.db.usageSyncBucketsHourly = Object.fromEntries(
-      syncBucketsHourly[0].map((row) => [row.bucketKey, normalizeRow(row)])
-    );
-    if (this.migrateLegacyUsageRows()) await this.syncUsageDaily();
+    this.db.usageSyncBuckets = {};
+    this.db.usageHourly = {};
+    this.db.usageSyncBucketsHourly = {};
   }
 
   async registerDevice(input) {
@@ -158,6 +152,7 @@ export class MySqlStore extends Store {
 
   async upsertUsageBatch(input) {
     if (input.snapshot?.mode === "device_day_hour_provider") {
+      if (this.pool) await this.loadWriteScope(input.participantId, input.deviceId, input.snapshot);
       const result = Store.prototype.upsertUsageBatch.call(this, input);
       if (result.noOp) return result;
       try {
@@ -168,10 +163,516 @@ export class MySqlStore extends Store {
       }
       return result;
     }
-    if (input.snapshot) return this.upsertSnapshotBatch(input);
+    if (input.snapshot) {
+      if (this.pool) await this.loadWriteScope(input.participantId, input.deviceId, input.snapshot);
+      return this.upsertSnapshotBatch(input);
+    }
+    if (this.pool) await this.loadUsageMirrorForMaintenance();
     const result = super.upsertUsageBatch(input);
     if (!result.duplicate) await this.syncAllTables();
     return result;
+  }
+
+  async loadWriteScope(participantId, deviceId, snapshot = {}) {
+    const day = toDayString(snapshot.day);
+    const providerId = snapshot.providerId || "";
+    if (!this.pool || !participantId || !deviceId || !day || !providerId) return;
+    const [dailyRows] = await this.pool.query(
+      "SELECT * FROM usage_daily WHERE participantId = ? AND day = ? AND providerId = ?",
+      [participantId, day, providerId]
+    );
+    const [hourlyRows] = await this.pool.query(
+      "SELECT * FROM usage_hourly WHERE participantId = ? AND day = ? AND providerId = ?",
+      [participantId, day, providerId]
+    ).catch(() => [[]]);
+    const [dailyBuckets] = await this.pool.query(
+      "SELECT * FROM usage_sync_buckets WHERE participantId = ? AND day = ? AND providerId = ?",
+      [participantId, day, providerId]
+    ).catch(() => [[]]);
+    const [hourlyBuckets] = await this.pool.query(
+      "SELECT * FROM usage_sync_buckets_hourly WHERE participantId = ? AND day = ? AND providerId = ?",
+      [participantId, day, providerId]
+    ).catch(() => [[]]);
+    this.db.usageDaily = Object.fromEntries(dailyRows.map((row) => [row.usageKey, usageFromRow(row)]));
+    this.db.usageHourly = Object.fromEntries(hourlyRows.map((row) => [row.usageKey, usageFromRow(row)]));
+    this.db.usageSyncBuckets = Object.fromEntries(dailyBuckets.map((row) => [row.bucketKey, normalizeRow(row)]));
+    this.db.usageSyncBucketsHourly = Object.fromEntries(hourlyBuckets.map((row) => [row.bucketKey, normalizeRow(row)]));
+    this.invalidateAggregateCache();
+  }
+
+  async loadUsageMirrorForMaintenance() {
+    if (!this.pool) return;
+    const [usageRows] = await this.pool.query("SELECT * FROM usage_daily");
+    const [usageHourlyRows] = await this.pool.query("SELECT * FROM usage_hourly").catch(() => [[]]);
+    const [syncBuckets] = await this.pool.query("SELECT * FROM usage_sync_buckets").catch(() => [[]]);
+    const [syncBucketsHourly] = await this.pool.query("SELECT * FROM usage_sync_buckets_hourly").catch(() => [[]]);
+    const [uploadBatches] = await this.pool.query("SELECT * FROM upload_batches").catch(() => [[]]);
+    this.db.usageDaily = Object.fromEntries(usageRows.map((row) => [row.usageKey, usageFromRow(row)]));
+    this.db.usageHourly = Object.fromEntries(usageHourlyRows.map((row) => [row.usageKey, usageFromRow(row)]));
+    this.db.usageSyncBuckets = Object.fromEntries(syncBuckets.map((row) => [row.bucketKey, normalizeRow(row)]));
+    this.db.usageSyncBucketsHourly = Object.fromEntries(syncBucketsHourly.map((row) => [row.bucketKey, normalizeRow(row)]));
+    this.db.uploadBatches = Object.fromEntries(uploadBatches.map((row) => [row.payloadHash, normalizeRow(row)]));
+    this.invalidateAggregateCache();
+  }
+
+  async loadUsageDailyForModels(models = []) {
+    if (!this.pool) return;
+    const normalizedModels = [...new Set((models || []).map((model) => normalizeModelName(model)).filter(Boolean))];
+    if (!normalizedModels.length) {
+      this.db.usageDaily = {};
+      this.invalidateAggregateCache();
+      return;
+    }
+    const [usageRows] = await this.pool.query(
+      `SELECT * FROM usage_daily WHERE model IN (${normalizedModels.map(() => "?").join(",")})`,
+      normalizedModels
+    );
+    this.db.usageDaily = Object.fromEntries(usageRows.map((row) => [row.usageKey, usageFromRow(row)]));
+    this.invalidateAggregateCache();
+  }
+
+  async usageRowsForQuery({ period = "", range = "today", startDay = "", endDay = "", participantId = "", tool = "all" } = {}) {
+    const { whereSql, params } = this.mysqlUsageScope({ period, range, startDay, endDay, participantId, tool });
+    const sql = `SELECT * FROM usage_daily${whereSql}`;
+    const [rows] = await this.pool.query(sql, params);
+    return rows.map(usageFromRow);
+  }
+
+  mysqlUsageScope({ period = "", range = "today", startDay = "", endDay = "", participantId = "", tool = "all" } = {}, alias = "") {
+    const days = mysqlDaysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
+    const prefix = alias ? `${alias}.` : "";
+    const where = [];
+    const params = [];
+    if (days) {
+      const dayPredicate = mysqlDayPredicate(days, prefix);
+      if (dayPredicate.sql) {
+        where.push(dayPredicate.sql);
+        params.push(...dayPredicate.params);
+      }
+    }
+    if (participantId) {
+      where.push(`${prefix}participantId = ?`);
+      params.push(participantId);
+    }
+    if (tool && tool !== "all") {
+      where.push(`${prefix}toolCode = ?`);
+      params.push(tool);
+    }
+    return {
+      where,
+      whereSql: where.length ? ` WHERE ${where.join(" AND ")}` : "",
+      params,
+      days
+    };
+  }
+
+  async withScopedUsageRows(rows, fn, { useInheritedPublicLeaderboard = false } = {}) {
+    const previousUsageDaily = this.db.usageDaily;
+    const previousAggregateCache = this.aggregateCache;
+    const previousDbAggregateCache = this.db.aggregateCache;
+    const hadOwnPublicLeaderboard = Object.hasOwn(this, "publicLeaderboard");
+    const previousPublicLeaderboard = this.publicLeaderboard;
+    this.db.usageDaily = Object.fromEntries(rows.map((row, index) => [
+      row.usageKey || [row.day, row.participantId, row.deviceId, row.toolCode, row.providerId, row.workdirHash, row.model, index].join("|"),
+      row
+    ]));
+    this.aggregateCache = {};
+    this.db.aggregateCache = {};
+    if (useInheritedPublicLeaderboard) {
+      this.publicLeaderboard = Store.prototype.publicLeaderboard.bind(this);
+    }
+    try {
+      return fn();
+    } finally {
+      this.db.usageDaily = previousUsageDaily;
+      this.aggregateCache = previousAggregateCache;
+      this.db.aggregateCache = previousDbAggregateCache;
+      if (useInheritedPublicLeaderboard) {
+        if (hadOwnPublicLeaderboard) this.publicLeaderboard = previousPublicLeaderboard;
+        else delete this.publicLeaderboard;
+      }
+    }
+  }
+
+  async leaderboard(args = {}) {
+    const { whereSql, params } = this.mysqlUsageScope({ ...args, tool: args.tool || "all" }, "u");
+    const [rows] = await this.pool.query(
+      `SELECT u.participantId, p.nickname,
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              CASE WHEN SUM(CASE WHEN u.sourceQuality <> 'exact' THEN 1 ELSE 0 END) > 0 THEN 'partial' ELSE 'exact' END AS sourceQuality,
+              MAX(u.uploadedAt) AS lastSyncedAt
+       FROM usage_daily u
+       JOIN participants p ON p.id = u.participantId
+       ${whereSql}
+       GROUP BY u.participantId, p.nickname
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const [toolRows] = await this.pool.query(
+      `SELECT u.participantId, u.toolCode AS name, COALESCE(SUM(u.totalTokens), 0) AS totalTokens
+       FROM usage_daily u
+       ${whereSql}
+       GROUP BY u.participantId, u.toolCode
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const [workdirRows] = await this.pool.query(
+      `SELECT u.participantId, u.workdirDisplayName AS name, COALESCE(SUM(u.totalTokens), 0) AS totalTokens
+       FROM usage_daily u
+       ${whereSql}
+       GROUP BY u.participantId, u.workdirDisplayName
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const toolBreakdowns = groupBreakdowns(toolRows, "participantId");
+    const workdirBreakdowns = groupBreakdowns(workdirRows, "participantId");
+    return rows.map((row, index) => ({
+      rank: index + 1,
+      participantId: row.participantId,
+      nickname: row.nickname,
+      totalTokens: Number(row.totalTokens || 0),
+      toolBreakdown: Object.fromEntries((toolBreakdowns.get(row.participantId) || []).map((item) => [item.name, item.totalTokens])),
+      workdirBreakdown: Object.fromEntries((workdirBreakdowns.get(row.participantId) || []).map((item) => [item.name, item.totalTokens])),
+      sourceQuality: row.sourceQuality || "exact",
+      lastSyncedAt: row.lastSyncedAt || "",
+      workdirs: workdirBreakdowns.get(row.participantId) || []
+    }));
+  }
+
+  async publicLeaderboard(args = {}) {
+    const { whereSql, params } = this.mysqlUsageScope(args, "u");
+    const includeCost = Boolean(args.includeCost);
+    const [rows] = await this.pool.query(
+      `SELECT u.participantId, p.nickname,
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              COALESCE(SUM(u.inputTokens), 0) AS inputTokens,
+              COALESCE(SUM(u.outputTokens), 0) AS outputTokens,
+              COALESCE(SUM(u.cacheReadTokens), 0) AS cacheReadTokens,
+              COALESCE(SUM(u.cacheWriteTokens), 0) AS cacheWriteTokens,
+              COALESCE(SUM(u.reasoningTokens), 0) AS reasoningTokens,
+              ${mysqlCostAggregateSelect("u")}
+       FROM usage_daily u
+       JOIN participants p ON p.id = u.participantId
+       ${whereSql}
+       GROUP BY u.participantId, p.nickname
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const [modelRows] = await this.pool.query(
+      `SELECT u.participantId, u.model AS name,
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              ${mysqlCostAggregateSelect("u")}
+       FROM usage_daily u
+       ${whereSql}
+       GROUP BY u.participantId, u.model
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const modelBreakdowns = groupBreakdowns(modelRows, "participantId", { includeCost });
+    return rows.map((row, index) => {
+      const item = mysqlAggregateRow(row);
+      return {
+        rank: index + 1,
+        participantId: row.participantId,
+        nickname: row.nickname,
+        totalTokens: item.totalTokens,
+        inputTokens: item.inputTokens,
+        outputTokens: item.outputTokens,
+        cacheReadTokens: item.cacheReadTokens,
+        cacheWriteTokens: item.cacheWriteTokens,
+        reasoningTokens: item.reasoningTokens,
+        compositionSummary: tokenCompositionSummary(item),
+        dominantComposition: dominantComposition(item),
+        models: modelBreakdowns.get(row.participantId) || [],
+        ...(includeCost ? mysqlCostFields(row) : {})
+      };
+    });
+  }
+
+  async boardSummary() {
+    const businessDay = this.currentBusinessDay();
+    const ranges = {
+      today: mysqlRangeBounds(mysqlDaysForQuery({ range: "today" }, { businessDay })),
+      yesterday: mysqlRangeBounds(mysqlDaysForQuery({ range: "yesterday" }, { businessDay })),
+      week: mysqlRangeBounds(mysqlDaysForQuery({ range: "this_week" }, { businessDay })),
+      lastWeek: mysqlRangeBounds(mysqlDaysForQuery({ range: "last_week" }, { businessDay })),
+      thisMonth: mysqlRangeBounds(mysqlDaysForQuery({ range: "this_month" }, { businessDay })),
+      lastMonth: mysqlRangeBounds(mysqlDaysForQuery({ range: "last_month" }, { businessDay }))
+    };
+    const rangeOrder = [ranges.today, ranges.yesterday, ranges.week, ranges.lastWeek, ranges.thisMonth, ranges.lastMonth];
+    const [participants] = await this.pool.query("SELECT COUNT(*) AS count FROM participants");
+    const [rows] = await this.pool.query(
+      `SELECT
+        ${mysqlRangeSum("totalTokens", "today", ranges.today)} AS todayTokens,
+        ${mysqlRangeSum("totalTokens", "yesterday", ranges.yesterday)} AS yesterdayTokens,
+        ${mysqlRangeSum("totalTokens", "week", ranges.week)} AS weekTokens,
+        ${mysqlRangeSum("totalTokens", "lastWeek", ranges.lastWeek)} AS lastWeekTokens,
+        ${mysqlRangeSum("totalTokens", "thisMonth", ranges.thisMonth)} AS thisMonthTokens,
+        ${mysqlRangeSum("totalTokens", "lastMonth", ranges.lastMonth)} AS lastMonthTokens,
+        ${mysqlRangeSum("estimatedCostUsd", "today", ranges.today)} AS todayCost,
+        ${mysqlRangeSum("estimatedCostUsd", "yesterday", ranges.yesterday)} AS yesterdayCost,
+        ${mysqlRangeSum("estimatedCostUsd", "week", ranges.week)} AS weekCost,
+        ${mysqlRangeSum("estimatedCostUsd", "lastWeek", ranges.lastWeek)} AS lastWeekCost,
+        ${mysqlRangeSum("estimatedCostUsd", "thisMonth", ranges.thisMonth)} AS thisMonthCost,
+       ${mysqlRangeSum("estimatedCostUsd", "lastMonth", ranges.lastMonth)} AS lastMonthCost
+       FROM usage_daily`,
+      [...rangeOrder, ...rangeOrder].flatMap((range) => [range.from, range.to])
+    );
+    const row = rows[0] || {};
+    return {
+      participantCount: Number(participants?.[0]?.count || 0),
+      todayTokens: Number(row.todayTokens || 0),
+      yesterdayTokens: Number(row.yesterdayTokens || 0),
+      weekTokens: Number(row.weekTokens || 0),
+      lastWeekTokens: Number(row.lastWeekTokens || 0),
+      thisMonthTokens: Number(row.thisMonthTokens || 0),
+      lastMonthTokens: Number(row.lastMonthTokens || 0),
+      todayCost: Number(row.todayCost || 0),
+      yesterdayCost: Number(row.yesterdayCost || 0),
+      weekCost: Number(row.weekCost || 0),
+      lastWeekCost: Number(row.lastWeekCost || 0),
+      thisMonthCost: Number(row.thisMonthCost || 0),
+      lastMonthCost: Number(row.lastMonthCost || 0)
+    };
+  }
+
+  async usageRowsForDays(days) {
+    if (!days?.length) return [];
+    const [rows] = await this.pool.query(
+      `SELECT * FROM usage_daily WHERE day IN (${days.map(() => "?").join(",")})`,
+      days
+    );
+    return rows.map(usageFromRow);
+  }
+
+  async participantDetail(participantId, args = {}) {
+    const rows = await this.usageRowsForQuery({ ...args, participantId });
+    return this.withScopedUsageRows(
+      rows,
+      () => Store.prototype.participantDetail.call(this, participantId, args),
+      { useInheritedPublicLeaderboard: true }
+    );
+  }
+
+  async participantTrend(participantId, args = {}) {
+    const participant = this.db.participants[participantId];
+    if (!participant) return null;
+    const effectiveArgs = { ...args, participantId, range: args.range || "last30" };
+    const grain = mysqlNormalizeGrain(args.grain || "day");
+    const { whereSql, params, days } = this.mysqlUsageScope(effectiveArgs, "u");
+    const items = await this.mysqlAggregateUsageRows({ whereSql, params, grain, includeCost: Boolean(args.includeCost) });
+    return {
+      participantId,
+      nickname: participant.nickname,
+      grain,
+      from: days?.[0] || "",
+      to: days?.at(-1) || "",
+      items
+    };
+  }
+
+  async adminUsage(args = {}) {
+    const effectiveArgs = { range: "month", ...args };
+    const grain = mysqlNormalizeGrain(effectiveArgs.grain || "day");
+    const { whereSql, params, days } = this.mysqlUsageScope(effectiveArgs, "u");
+    const items = await this.mysqlAggregateUsageRows({
+      whereSql,
+      params,
+      grain,
+      includeAdminFields: true,
+      includeCost: Boolean(effectiveArgs.includeCost)
+    });
+    return {
+      grain,
+      from: days?.[0] || "",
+      to: days?.at(-1) || "",
+      participants: Object.values(this.db.participants)
+        .map((item) => ({ participantId: item.id, nickname: item.nickname }))
+        .sort((a, b) => a.nickname.localeCompare(b.nickname)),
+      items
+    };
+  }
+
+  async adminQuality(args = {}) {
+    const effectiveArgs = { range: "month", ...args };
+    const rows = await this.usageRowsForQuery(effectiveArgs);
+    return this.withScopedUsageRows(rows, () => Store.prototype.adminQuality.call(this, effectiveArgs));
+  }
+
+  async missingPriceModels(args = {}) {
+    const effectiveArgs = { range: "month", ...args };
+    const { whereSql, params } = this.mysqlUsageScope(effectiveArgs, "u");
+    const [rows] = await this.pool.query(
+      `SELECT u.model,
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              COUNT(*) AS rowCount,
+              MAX(u.uploadedAt) AS lastSeenAt
+       FROM usage_daily u
+       ${whereSql ? `${whereSql} AND` : "WHERE"} u.estimatedCostUsd IS NULL
+       GROUP BY u.model
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const [providerRows] = await this.pool.query(
+      `SELECT u.model, u.providerId AS name, COALESCE(SUM(u.totalTokens), 0) AS totalTokens
+       FROM usage_daily u
+       ${whereSql ? `${whereSql} AND` : "WHERE"} u.estimatedCostUsd IS NULL
+       GROUP BY u.model, u.providerId
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const providers = groupBreakdowns(providerRows, "model");
+    return rows.map((row) => ({
+      model: row.model || "unknown",
+      totalTokens: Number(row.totalTokens || 0),
+      rows: Number(row.rowCount || 0),
+      providers: providers.get(row.model) || [],
+      lastSeenAt: row.lastSeenAt || ""
+    }));
+  }
+
+  async mysqlAggregateUsageRows({ whereSql = "", params = [], grain = "day", includeAdminFields = false, includeCost = false } = {}) {
+    const period = mysqlPeriodExpressions(grain, "u");
+    const groupColumns = includeAdminFields
+      ? `${period.groupBy}, u.participantId, p.nickname`
+      : period.groupBy;
+    const selectParticipant = includeAdminFields ? ", u.participantId, p.nickname" : "";
+    const joinParticipant = includeAdminFields ? "JOIN participants p ON p.id = u.participantId" : "";
+    const [rows] = await this.pool.query(
+      `SELECT ${period.selectStart} AS periodStart,
+              ${period.selectEnd} AS periodEnd
+              ${selectParticipant},
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              COALESCE(SUM(u.inputTokens), 0) AS inputTokens,
+              COALESCE(SUM(u.outputTokens), 0) AS outputTokens,
+              COALESCE(SUM(u.cacheReadTokens), 0) AS cacheReadTokens,
+              COALESCE(SUM(u.cacheWriteTokens), 0) AS cacheWriteTokens,
+              COALESCE(SUM(u.reasoningTokens), 0) AS reasoningTokens,
+              CASE WHEN SUM(CASE WHEN u.sourceQuality <> 'exact' THEN 1 ELSE 0 END) > 0 THEN 'partial' ELSE 'exact' END AS sourceQuality,
+              MAX(u.uploadedAt) AS lastSyncedAt,
+              ${mysqlCostAggregateSelect("u")}
+       FROM usage_daily u
+       ${joinParticipant}
+       ${whereSql}
+       GROUP BY ${groupColumns}
+       ORDER BY periodStart DESC, totalTokens DESC`,
+      params
+    );
+    const keyFor = (row) => includeAdminFields ? `${toDayString(row.periodStart)}|${row.participantId}` : toDayString(row.periodStart);
+    const breakdowns = {};
+    for (const [field, column] of Object.entries({ models: "model", workdirs: "workdirDisplayName", providers: "providerId" })) {
+      const [breakdownRows] = await this.pool.query(
+        `SELECT ${period.selectStart} AS periodStart
+                ${selectParticipant},
+                u.${column} AS name,
+                COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+                ${mysqlCostAggregateSelect("u")}
+         FROM usage_daily u
+         ${joinParticipant}
+         ${whereSql}
+         GROUP BY ${period.groupBy}${includeAdminFields ? ", u.participantId, p.nickname" : ""}, u.${column}
+         ORDER BY totalTokens DESC`,
+        params
+      );
+      breakdowns[field] = groupBreakdowns(breakdownRows.map((row) => ({ ...row, aggregateKey: keyFor(row) })), "aggregateKey", { includeCost });
+    }
+    return rows.map((row) => {
+      const item = mysqlAggregateRow(row);
+      const aggregateKey = keyFor(row);
+      return {
+        ...item,
+        ...(includeAdminFields ? { participantId: row.participantId, nickname: row.nickname } : {}),
+        compositionSummary: tokenCompositionSummary(item),
+        dominantComposition: dominantComposition(item),
+        sourceQuality: row.sourceQuality || "exact",
+        lastSyncedAt: row.lastSyncedAt || "",
+        ...(includeCost ? mysqlCostFields(row) : {}),
+        models: breakdowns.models.get(aggregateKey) || [],
+        workdirs: breakdowns.workdirs.get(aggregateKey) || [],
+        providers: breakdowns.providers.get(aggregateKey) || []
+      };
+    });
+  }
+
+  async listModelPrices() {
+    const hadOwnMissingPriceModels = Object.hasOwn(this, "missingPriceModels");
+    const previousMissingPriceModels = this.missingPriceModels;
+    this.missingPriceModels = () => [];
+    let result;
+    try {
+      result = Store.prototype.listModelPrices.call(this);
+    } finally {
+      if (hadOwnMissingPriceModels) this.missingPriceModels = previousMissingPriceModels;
+      else delete this.missingPriceModels;
+    }
+    result.missingModels = await this.missingPriceModels();
+    return result;
+  }
+
+  async compareSyncState({ participantId, deviceId, buckets }) {
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000);
+    const cutoffDay = utcDateToDay(cutoff);
+    const candidates = (buckets || []).filter((bucket) => bucket.day >= cutoffDay);
+    if (!candidates.length) return { missing: [], different: [], matched: [] };
+    const clauses = candidates.map(() => "(day = ? AND hour = ? AND providerId = ?)").join(" OR ");
+    const params = [participantId, deviceId, ...candidates.flatMap((bucket) => [bucket.day, bucket.hour ?? 0, bucket.providerId || ""])];
+    const [rows] = await this.pool.query(
+      `SELECT day, hour, providerId, bucketFingerprint
+       FROM usage_sync_buckets_hourly
+       WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
+      params
+    ).catch(() => [[]]);
+    const byKey = new Map(rows.map((row) => [[toDayString(row.day), Number(row.hour || 0), row.providerId].join("|"), row]));
+    const missing = [];
+    const different = [];
+    const matched = [];
+    for (const bucket of candidates) {
+      const key = [bucket.day, Number(bucket.hour || 0), bucket.providerId || ""].join("|");
+      const serverBucket = byKey.get(key);
+      if (!serverBucket) missing.push(bucket);
+      else if (serverBucket.bucketFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint: serverBucket.bucketFingerprint });
+      else matched.push(bucket);
+    }
+    return { missing, different, matched };
+  }
+
+  async upsertUsageBatchSet(input) {
+    const batches = Array.isArray(input.batches) ? input.batches : [];
+    const results = [];
+    let accepted = 0;
+    let rejected = 0;
+    let duplicate = 0;
+    let noOp = 0;
+    for (const [index, batch] of batches.entries()) {
+      const result = await this.upsertUsageBatch({
+        participantId: input.participantId,
+        deviceId: input.deviceId,
+        clientGeneratedAt: input.clientGeneratedAt,
+        ...(Object.hasOwn(input, "client") ? { client: input.client } : {}),
+        snapshot: batch.snapshot,
+        items: batch.items
+      });
+      accepted += result.accepted || 0;
+      rejected += result.rejected || 0;
+      if (result.duplicate) duplicate += 1;
+      if (result.noOp) noOp += 1;
+      results.push({
+        index,
+        accepted: result.accepted || 0,
+        rejected: result.rejected || 0,
+        duplicate: Boolean(result.duplicate),
+        noOp: Boolean(result.noOp)
+      });
+    }
+    return {
+      accepted,
+      rejected,
+      bucketCount: batches.length,
+      duplicateBucketCount: duplicate,
+      noOpBucketCount: noOp,
+      results
+    };
   }
 
   async upsertSnapshotBatch(input) {
@@ -371,22 +872,57 @@ export class MySqlStore extends Store {
     if (workdirEntries.length) await replaceWorkdirs(conn, workdirEntries);
   }
 
-  async recalculateCosts() {
-    const result = super.recalculateCosts();
-    await this.syncUsageDaily();
-    return result;
+  async recalculateCosts(args = {}) {
+    return this.recalculateUsageCostsInBatches(args);
   }
 
   async refreshOpenRouterPrices(input) {
-    const result = await super.refreshOpenRouterPrices(input);
+    const result = await Store.prototype.refreshOpenRouterPrices.call(this, { recalculate: false });
     await this.syncPriceCache();
-    if (result.recalculated) await this.syncUsageDaily();
+    if (input?.recalculate && result.remote?.status === "fresh") {
+      result.recalculated = await this.recalculateUsageCostsInBatches();
+    }
     return result;
+  }
+
+  async recalculateUsageCostsInBatches({ models = null, batchSize = Number(process.env.MYSQL_RECALCULATE_BATCH_SIZE || 1000) } = {}) {
+    const normalizedModels = models ? [...new Set(models.map((model) => normalizeModelName(model)).filter(Boolean))] : null;
+    const limit = Math.max(1, Math.min(Number(batchSize) || 1000, 5000));
+    let lastUsageKey = "";
+    let updated = 0;
+    for (;;) {
+      const where = ["usageKey > ?"];
+      const params = [lastUsageKey];
+      if (normalizedModels?.length) {
+        where.push(`model IN (${normalizedModels.map(() => "?").join(",")})`);
+        params.push(...normalizedModels);
+      }
+      params.push(limit);
+      const [rows] = await this.pool.query(
+        `SELECT * FROM usage_daily
+         WHERE ${where.join(" AND ")}
+         ORDER BY usageKey
+         LIMIT ?`,
+        params
+      );
+      if (!rows.length) break;
+      lastUsageKey = rows.at(-1).usageKey;
+      this.db.usageDaily = Object.fromEntries(rows.map((row) => [row.usageKey, usageFromRow(row)]));
+      const result = Store.prototype.recalculateCosts.call(this, { models: normalizedModels });
+      await this.syncUsageDailyRows();
+      updated += result.updated || 0;
+      if (rows.length < limit) break;
+    }
+    this.db.usageDaily = {};
+    this.invalidateAggregateCache();
+    return { updated };
   }
 
   async upsertModelPrice(input) {
     const model = normalizeModelName(input.model || "");
     if (!model) throw new Error("model is required");
+    const affectedModels = this.affectedModelsForPrice(model);
+    await this.loadUsageDailyForModels(affectedModels);
     const now = new Date().toISOString();
     const price = {
       model,
@@ -400,66 +936,160 @@ export class MySqlStore extends Store {
       updatedAt: now
     };
     this.db.modelPrices[model] = price;
-    const recalculated = Store.prototype.recalculateCosts.call(this);
-    await this.syncAllTables();
+    this.invalidatePriceMap();
+    const recalculated = Store.prototype.recalculateCosts.call(this, { models: affectedModels });
+    await this.syncPricingTables();
+    await this.syncUsageDailyRows();
     return { price, recalculated };
   }
 
   async deleteModelPrice(model) {
     const normalized = normalizeModelName(model || "");
     if (!normalized || !this.db.modelPrices[normalized]) return { deleted: false };
+    const affectedModels = this.affectedModelsForPrice(normalized);
+    await this.loadUsageDailyForModels(affectedModels);
     delete this.db.modelPrices[normalized];
     for (const [sourceModel, targetModel] of Object.entries(this.db.modelPriceAliases || {})) {
       if (targetModel === normalized) delete this.db.modelPriceAliases[sourceModel];
     }
-    const recalculated = Store.prototype.recalculateCosts.call(this);
-    await this.syncAllTables();
+    this.invalidatePriceMap();
+    const recalculated = Store.prototype.recalculateCosts.call(this, { models: affectedModels });
+    await this.syncPricingTables();
+    await this.syncUsageDailyRows();
     return { deleted: true, recalculated };
   }
 
   async upsertModelPriceAlias(input) {
+    const model = normalizeModelName(input.model || input.sourceModel || "");
+    await this.loadUsageDailyForModels(model ? [model] : []);
     const result = Store.prototype.upsertModelPriceAlias.call(this, input);
-    await this.syncAllTables();
+    await this.syncPricingTables();
+    await this.syncUsageDailyRows();
     return result;
   }
 
   async deleteModelPriceAlias(model) {
+    const normalized = normalizeModelName(model || "");
+    if (!normalized || !this.db.modelPriceAliases[normalized]) return { deleted: false };
+    await this.loadUsageDailyForModels([normalized]);
     const result = Store.prototype.deleteModelPriceAlias.call(this, model);
-    await this.syncAllTables();
+    await this.syncPricingTables();
+    await this.syncUsageDailyRows();
     return result;
   }
 
   async deleteParticipantData(participantId) {
-    const result = Store.prototype.deleteParticipantData.call(this, participantId);
+    if (!participantId) throw new Error("participantId is required");
+    const removed = {
+      participants: 0,
+      devices: 0,
+      workdirs: 0,
+      usageDaily: 0,
+      uploadBatches: 0,
+      usageSyncBuckets: 0,
+      usageHourly: 0,
+      usageSyncBucketsHourly: 0
+    };
     await withTransaction(this.pool, async (conn) => {
-      await conn.query("DELETE FROM upload_batches WHERE participantId = ?", [participantId]);
-      await conn.query("DELETE FROM usage_sync_buckets WHERE participantId = ?", [participantId]);
-      await conn.query("DELETE FROM usage_sync_buckets_hourly WHERE participantId = ?", [participantId]).catch(() => {});
-      await conn.query("DELETE FROM usage_hourly WHERE participantId = ?", [participantId]).catch(() => {});
-      await conn.query("DELETE FROM usage_daily WHERE participantId = ?", [participantId]);
-      await conn.query("DELETE FROM workdirs WHERE participantId = ?", [participantId]);
-      await conn.query("DELETE FROM devices WHERE participantId = ?", [participantId]);
-      await conn.query("DELETE FROM participants WHERE id = ?", [participantId]);
+      removed.uploadBatches = await deleteAffected(conn, "DELETE FROM upload_batches WHERE participantId = ?", [participantId]);
+      removed.usageSyncBuckets = await deleteAffected(conn, "DELETE FROM usage_sync_buckets WHERE participantId = ?", [participantId]);
+      removed.usageSyncBucketsHourly = await deleteAffected(conn, "DELETE FROM usage_sync_buckets_hourly WHERE participantId = ?", [participantId]);
+      removed.usageHourly = await deleteAffected(conn, "DELETE FROM usage_hourly WHERE participantId = ?", [participantId]);
+      removed.usageDaily = await deleteAffected(conn, "DELETE FROM usage_daily WHERE participantId = ?", [participantId]);
+      removed.workdirs = await deleteAffected(conn, "DELETE FROM workdirs WHERE participantId = ?", [participantId]);
+      removed.devices = await deleteAffected(conn, "DELETE FROM devices WHERE participantId = ?", [participantId]);
+      removed.participants = await deleteAffected(conn, "DELETE FROM participants WHERE id = ?", [participantId]);
     });
-    return result;
+    delete this.db.participants[participantId];
+    for (const [id, row] of Object.entries(this.db.devices || {})) {
+      if (row.participantId === participantId) delete this.db.devices[id];
+    }
+    for (const [id, row] of Object.entries(this.db.workdirs || {})) {
+      if (row.participantId === participantId) delete this.db.workdirs[id];
+    }
+    this.db.usageDaily = {};
+    this.db.usageHourly = {};
+    this.db.usageSyncBuckets = {};
+    this.db.usageSyncBucketsHourly = {};
+    this.db.uploadBatches = {};
+    this.invalidateAggregateCache();
+    return {
+      deleted: Object.values(removed).some((count) => count > 0),
+      participantId,
+      removed
+    };
   }
 
   async deleteDeviceData(deviceId) {
-    const result = Store.prototype.deleteDeviceData.call(this, deviceId);
+    if (!deviceId) throw new Error("deviceId is required");
+    const removed = {
+      devices: 0,
+      usageDaily: 0,
+      uploadBatches: 0,
+      usageSyncBuckets: 0,
+      usageHourly: 0,
+      usageSyncBucketsHourly: 0
+    };
+    let participantId = this.db.devices?.[deviceId]?.participantId || "";
+    let cloudHourlyScopes = [];
     await withTransaction(this.pool, async (conn) => {
-      await conn.query("DELETE FROM upload_batches WHERE deviceId = ?", [deviceId]);
-      await conn.query("DELETE FROM usage_sync_buckets WHERE deviceId = ?", [deviceId]);
-      await conn.query("DELETE FROM usage_sync_buckets_hourly WHERE deviceId = ?", [deviceId]).catch(() => {});
-      if (result.cloudHourlyScopes?.length) {
-        const clauses = result.cloudHourlyScopes.map(() => "(participantId = ? AND day = ? AND hour = ? AND providerId = ?)").join(" OR ");
-        const params = result.cloudHourlyScopes.flatMap((scope) => [scope.participantId, scope.day, scope.hour, scope.providerId]);
-        await conn.query(`DELETE FROM usage_sync_buckets_hourly WHERE ${clauses}`, params).catch(() => {});
+      if (!participantId) {
+        const [devices] = await conn.query("SELECT participantId FROM devices WHERE id = ?", [deviceId]);
+        participantId = devices?.[0]?.participantId || "";
       }
-      await conn.query("DELETE FROM usage_hourly WHERE deviceId = ?", [deviceId]).catch(() => {});
-      await conn.query("DELETE FROM usage_daily WHERE deviceId = ?", [deviceId]);
-      await conn.query("DELETE FROM devices WHERE id = ?", [deviceId]);
+      const [scopeRows] = await conn.query(
+        `SELECT DISTINCT participantId, day, hour, providerId
+         FROM usage_hourly
+         WHERE deviceId = ? AND providerId IN (${[...CLOUD_PROVIDER_IDS].map(() => "?").join(",")})`,
+        [deviceId, ...CLOUD_PROVIDER_IDS]
+      ).catch(() => [[]]);
+      cloudHourlyScopes = (scopeRows || []).map((row) => ({
+        participantId: row.participantId,
+        day: toDayString(row.day),
+        hour: Number(row.hour || 0),
+        providerId: row.providerId
+      }));
+
+      removed.uploadBatches = await deleteAffected(conn, "DELETE FROM upload_batches WHERE deviceId = ?", [deviceId]);
+      removed.usageSyncBuckets = await deleteAffected(conn, "DELETE FROM usage_sync_buckets WHERE deviceId = ?", [deviceId]);
+      removed.usageSyncBucketsHourly = await deleteAffected(conn, "DELETE FROM usage_sync_buckets_hourly WHERE deviceId = ?", [deviceId]);
+      if (cloudHourlyScopes.length) {
+        const clauses = cloudHourlyScopes.map(() => "(participantId = ? AND day = ? AND hour = ? AND providerId = ?)").join(" OR ");
+        const params = cloudHourlyScopes.flatMap((scope) => [scope.participantId, scope.day, scope.hour, scope.providerId]);
+        removed.usageSyncBucketsHourly += await deleteAffected(conn, `DELETE FROM usage_sync_buckets_hourly WHERE ${clauses}`, params);
+      }
+      removed.usageHourly = await deleteAffected(conn, "DELETE FROM usage_hourly WHERE deviceId = ?", [deviceId]);
+      removed.usageDaily = await deleteAffected(conn, "DELETE FROM usage_daily WHERE deviceId = ?", [deviceId]);
+      removed.devices = await deleteAffected(conn, "DELETE FROM devices WHERE id = ?", [deviceId]);
     });
-    return result;
+    delete this.db.devices[deviceId];
+    for (const [key, row] of Object.entries(this.db.usageDaily || {})) {
+      if (row.deviceId === deviceId) delete this.db.usageDaily[key];
+    }
+    for (const [key, row] of Object.entries(this.db.usageHourly || {})) {
+      if (row.deviceId === deviceId) delete this.db.usageHourly[key];
+    }
+    for (const [key, row] of Object.entries(this.db.usageSyncBuckets || {})) {
+      if (row.deviceId === deviceId) delete this.db.usageSyncBuckets[key];
+    }
+    for (const [key, row] of Object.entries(this.db.usageSyncBucketsHourly || {})) {
+      const sameDevice = row.deviceId === deviceId;
+      const sameCloudScope = cloudHourlyScopes.some((scope) => (
+        row.participantId === scope.participantId &&
+        row.day === scope.day &&
+        Number(row.hour || 0) === scope.hour &&
+        row.providerId === scope.providerId
+      ));
+      if (sameDevice || sameCloudScope) delete this.db.usageSyncBucketsHourly[key];
+    }
+    this.invalidateAggregateCache();
+    return {
+      deleted: Object.values(removed).some((count) => count > 0),
+      participantId,
+      deviceId,
+      cloudHourlyScopes,
+      removed
+    };
   }
 
   async syncIdentityTables() {
@@ -481,6 +1111,19 @@ export class MySqlStore extends Store {
   async syncPriceCache() {
     await withTransaction(this.pool, async (conn) => {
       await replaceModelPriceCache(conn, this.db.modelPriceCache);
+    });
+  }
+
+  async syncPricingTables() {
+    await withTransaction(this.pool, async (conn) => {
+      await replaceModelPrices(conn, Object.values(this.db.modelPrices));
+      await replaceModelPriceAliases(conn, this.db.modelPriceAliases);
+    });
+  }
+
+  async syncUsageDailyRows(entries = Object.entries(this.db.usageDaily || {})) {
+    await withTransaction(this.pool, async (conn) => {
+      await upsertUsageRows(conn, entries);
     });
   }
 
@@ -521,6 +1164,20 @@ async function withTransaction(pool, fn) {
   } finally {
     conn.release();
   }
+}
+
+async function ensureIndex(pool, tableName, indexName, createSql) {
+  const [rows] = await pool.query(
+    `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? LIMIT 1`,
+    [tableName, indexName]
+  );
+  if (!rows.length) await pool.query(createSql);
+}
+
+async function deleteAffected(conn, sql, params = []) {
+  const [result] = await conn.query(sql, params).catch(() => [{ affectedRows: 0 }]);
+  return Number(result?.affectedRows || 0);
 }
 
 async function replaceParticipants(conn, rows) {
@@ -764,6 +1421,66 @@ async function insertUsageRows(conn, entries) {
   );
 }
 
+async function upsertUsageRows(conn, entries) {
+  if (!entries.length) return;
+  await conn.query(
+    `INSERT INTO usage_daily
+      (usageKey, day, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
+       model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
+       estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
+       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
+     VALUES ?
+     ON DUPLICATE KEY UPDATE
+       inputTokens = VALUES(inputTokens),
+       outputTokens = VALUES(outputTokens),
+       cacheReadTokens = VALUES(cacheReadTokens),
+       cacheWriteTokens = VALUES(cacheWriteTokens),
+       reasoningTokens = VALUES(reasoningTokens),
+       totalTokens = VALUES(totalTokens),
+       estimatedCostUsd = VALUES(estimatedCostUsd),
+       costQuality = VALUES(costQuality),
+       pricingVersion = VALUES(pricingVersion),
+       pricingModel = VALUES(pricingModel),
+       pricingSource = VALUES(pricingSource),
+       sourceQuality = VALUES(sourceQuality),
+       rawSourceRef = VALUES(rawSourceRef),
+       providerVersion = VALUES(providerVersion),
+       parserVersion = VALUES(parserVersion),
+       sourceFingerprint = VALUES(sourceFingerprint),
+       uploadedAt = VALUES(uploadedAt),
+       workdirDisplayName = VALUES(workdirDisplayName)`,
+    [entries.map(([usageKey, row]) => [
+      usageKey,
+      row.day,
+      row.participantId,
+      row.deviceId,
+      row.toolCode,
+      row.providerId,
+      row.workdirId,
+      row.workdirHash,
+      row.workdirDisplayName,
+      row.model,
+      row.inputTokens || 0,
+      row.outputTokens || 0,
+      row.cacheReadTokens || 0,
+      row.cacheWriteTokens || 0,
+      row.reasoningTokens || 0,
+      row.totalTokens || 0,
+      row.estimatedCostUsd,
+      row.costQuality || "",
+      row.pricingVersion || "",
+      row.pricingModel || "",
+      row.pricingSource || "",
+      row.sourceQuality || "unknown",
+      row.rawSourceRef || "",
+      row.providerVersion || "",
+      row.parserVersion || "",
+      row.sourceFingerprint || "",
+      row.uploadedAt || null
+    ])]
+  );
+}
+
 async function insertUsageHourlyRows(conn, entries) {
   if (!entries.length) return;
   await conn.query(
@@ -821,6 +1538,7 @@ function usageFromRow(row) {
     totalTokens: Number(row.totalTokens || 0)
   };
   return {
+    usageKey: row.usageKey || "",
     day: toDayString(row.day),
     hour: row.hour ?? 0,
     participantId: row.participantId,
@@ -884,6 +1602,208 @@ function cachedPriceFromRow(row) {
 function toDayString(value) {
   if (value instanceof Date) return localDay(value);
   return String(value || "").slice(0, 10);
+}
+
+function mysqlAggregateRow(row) {
+  return {
+    periodStart: toDayString(row.periodStart),
+    periodEnd: toDayString(row.periodEnd),
+    totalTokens: Number(row.totalTokens || 0),
+    inputTokens: Number(row.inputTokens || 0),
+    outputTokens: Number(row.outputTokens || 0),
+    reasoningTokens: Number(row.reasoningTokens || 0),
+    cacheReadTokens: Number(row.cacheReadTokens || 0),
+    cacheWriteTokens: Number(row.cacheWriteTokens || 0)
+  };
+}
+
+function mysqlCostAggregateSelect(alias = "u") {
+  const prefix = alias ? `${alias}.` : "";
+  return `
+    COALESCE(SUM(${prefix}estimatedCostUsd), 0) AS estimatedCostUsd,
+    SUM(CASE WHEN ${prefix}estimatedCostUsd IS NULL THEN ${prefix}totalTokens ELSE 0 END) AS missingPriceTokens,
+    SUM(CASE WHEN ${prefix}estimatedCostUsd IS NOT NULL THEN 1 ELSE 0 END) AS knownPriceRows,
+    MAX(CASE
+      WHEN ${prefix}estimatedCostUsd IS NULL OR ${prefix}costQuality = 'unknown_price' THEN 2
+      WHEN ${prefix}costQuality = 'estimated_price' THEN 1
+      WHEN ${prefix}costQuality = 'exact_price' THEN 0
+      ELSE -1
+    END) AS costQualityRank,
+    MAX(${prefix}pricingVersion) AS pricingVersion,
+    MAX(${prefix}pricingSource) AS pricingSource`;
+}
+
+function mysqlCostFields(row) {
+  const knownPriceRows = Number(row.knownPriceRows || 0);
+  const missingPriceTokens = Number(row.missingPriceTokens || 0);
+  const hasKnownPrice = knownPriceRows > 0;
+  return {
+    inputCostUsd: null,
+    outputCostUsd: null,
+    cacheReadCostUsd: null,
+    cacheWriteCostUsd: null,
+    reasoningCostUsd: null,
+    estimatedCostUsd: hasKnownPrice ? roundMysqlUsd(row.estimatedCostUsd) : null,
+    costQuality: mysqlCostQuality(row.costQualityRank),
+    pricingVersion: row.pricingVersion || "",
+    pricingSource: row.pricingSource || "",
+    missingPriceTokens,
+    missingPriceModels: []
+  };
+}
+
+function mysqlCostQuality(rank) {
+  const number = Number(rank);
+  if (number >= 2) return "unknown_price";
+  if (number === 1) return "estimated_price";
+  if (number === 0) return "exact_price";
+  return "unknown_price";
+}
+
+function roundMysqlUsd(value) {
+  const number = Number(value || 0);
+  return Math.round(number * 100000000) / 100000000;
+}
+
+function groupBreakdowns(rows, keyField, { includeCost = false } = {}) {
+  const map = new Map();
+  for (const row of rows || []) {
+    const key = row[keyField] || "";
+    const item = {
+      name: row.name || "unknown",
+      totalTokens: Number(row.totalTokens || 0),
+      ...(includeCost ? mysqlCostFields(row) : {})
+    };
+    const list = map.get(key) || [];
+    list.push(item);
+    map.set(key, list);
+  }
+  for (const [key, list] of map.entries()) {
+    map.set(key, list.sort((a, b) => b.totalTokens - a.totalTokens));
+  }
+  return map;
+}
+
+function mysqlPeriodExpressions(grain = "day", alias = "u") {
+  const day = alias ? `${alias}.day` : "day";
+  if (grain === "month") {
+    const start = `DATE_FORMAT(${day}, '%Y-%m-01')`;
+    return { selectStart: start, selectEnd: `DATE_FORMAT(LAST_DAY(${day}), '%Y-%m-%d')`, groupBy: start };
+  }
+  if (grain === "week") {
+    const start = `DATE_FORMAT(DATE_SUB(${day}, INTERVAL WEEKDAY(${day}) DAY), '%Y-%m-%d')`;
+    return { selectStart: start, selectEnd: `DATE_FORMAT(DATE_ADD(DATE_SUB(${day}, INTERVAL WEEKDAY(${day}) DAY), INTERVAL 6 DAY), '%Y-%m-%d')`, groupBy: start };
+  }
+  return { selectStart: `DATE_FORMAT(${day}, '%Y-%m-%d')`, selectEnd: `DATE_FORMAT(${day}, '%Y-%m-%d')`, groupBy: `DATE_FORMAT(${day}, '%Y-%m-%d')` };
+}
+
+function mysqlNormalizeGrain(grain) {
+  return ["day", "week", "month"].includes(grain) ? grain : "day";
+}
+
+function mysqlRangeBounds(days) {
+  const unique = [...new Set(days || [])].sort();
+  return { from: unique[0] || "0000-01-01", to: unique.at(-1) || "0000-01-01" };
+}
+
+function mysqlRangeSum(field, _name, range) {
+  return `COALESCE(SUM(CASE WHEN day BETWEEN ? AND ? THEN COALESCE(${field}, 0) ELSE 0 END), 0)`;
+}
+
+function mysqlDaysForQuery({ period = "", range = "today", startDay = "", endDay = "" } = {}, { businessDay = localDay() } = {}) {
+  if (period) return mysqlDaysForPeriod(period, { businessDay });
+  return mysqlDaysForRange(range, { startDay, endDay, businessDay });
+}
+
+function mysqlDayPredicate(days, prefix = "") {
+  if (!days) return { sql: "", params: [] };
+  const unique = [...new Set(days)].sort();
+  if (!unique.length) return { sql: "1 = 0", params: [] };
+  if (unique.length === 1) return { sql: `${prefix}day = ?`, params: [unique[0]] };
+  return { sql: `${prefix}day BETWEEN ? AND ?`, params: [unique[0], unique.at(-1)] };
+}
+
+function mysqlDaysForPeriod(period, { businessDay = localDay() } = {}) {
+  const today = businessDay;
+  if (period === "today") return [today];
+  if (period === "yesterday") return [addDays(today, -1)];
+  if (period === "this_week" || period === "last_week") {
+    const start = mysqlStartOfUtcWeek(dayToUtcDate(today));
+    if (period === "last_week") start.setUTCDate(start.getUTCDate() - 7);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 6);
+    return daysBetween(mysqlToDay(start), mysqlToDay(period === "this_week" && end > dayToUtcDate(today) ? dayToUtcDate(today) : end));
+  }
+  if (period === "this_month" || period === "last_month") {
+    const todayDate = dayToUtcDate(today);
+    const start = new Date(Date.UTC(todayDate.getUTCFullYear(), todayDate.getUTCMonth() + (period === "last_month" ? -1 : 0), 1));
+    const end = period === "last_month"
+      ? new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0))
+      : todayDate;
+    return daysBetween(mysqlToDay(start), mysqlToDay(end));
+  }
+  return mysqlDaysForPeriod("today", { businessDay });
+}
+
+function mysqlDaysForRange(range, { startDay = "", endDay = "", businessDay = localDay() } = {}) {
+  const today = businessDay;
+  if (range === "all") return null;
+  if (range === "custom" && mysqlIsDay(startDay) && mysqlIsDay(endDay)) return daysBetween(startDay, endDay);
+  if (["today", "yesterday", "this_week", "last_week", "this_month", "last_month"].includes(range)) {
+    return mysqlDaysForPeriod(range, { businessDay });
+  }
+  if (range === "month" || range === "lastMonth") {
+    const todayDate = dayToUtcDate(today);
+    const year = todayDate.getUTCFullYear();
+    const month = todayDate.getUTCMonth() + (range === "lastMonth" ? -1 : 0);
+    const start = new Date(Date.UTC(year, month, 1));
+    const end = range === "lastMonth"
+      ? new Date(Date.UTC(year, month + 1, 0))
+      : todayDate;
+    return daysBetween(mysqlToDay(start), mysqlToDay(end));
+  }
+  if (range === "last7" || range === "7d") return mysqlTrailingDays(7, { businessDay });
+  if (range === "last30" || range === "30d") return mysqlTrailingDays(30, { businessDay });
+  if (range === "last12_weeks") return mysqlDaysForLastWeeks(12, { businessDay });
+  if (range === "last12_months") return mysqlDaysForLastMonths(12, { businessDay });
+  return [today];
+}
+
+function mysqlTrailingDays(count, { businessDay = localDay() } = {}) {
+  const today = dayToUtcDate(businessDay);
+  return Array.from({ length: count }, (_, index) => {
+    const d = new Date(today);
+    d.setUTCDate(today.getUTCDate() - count + index + 1);
+    return mysqlToDay(d);
+  });
+}
+
+function mysqlDaysForLastWeeks(count, { businessDay = localDay() } = {}) {
+  const today = dayToUtcDate(businessDay);
+  const start = mysqlStartOfUtcWeek(today);
+  start.setUTCDate(start.getUTCDate() - ((count - 1) * 7));
+  return daysBetween(mysqlToDay(start), mysqlToDay(today));
+}
+
+function mysqlDaysForLastMonths(count, { businessDay = localDay() } = {}) {
+  const today = dayToUtcDate(businessDay);
+  const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - count + 1, 1));
+  return daysBetween(mysqlToDay(start), mysqlToDay(today));
+}
+
+function mysqlToDay(date) {
+  return utcDateToDay(date);
+}
+
+function mysqlStartOfUtcWeek(date) {
+  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = start.getUTCDay() || 7;
+  start.setUTCDate(start.getUTCDate() - day + 1);
+  return start;
+}
+
+function mysqlIsDay(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function nonNegativeNumber(value) {

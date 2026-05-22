@@ -15,12 +15,30 @@ pub struct ScanResult {
     pub source_index: HashMap<String, Vec<Value>>,
 }
 
+pub trait SourceCache {
+    fn take_cached_source(&mut self, fingerprint: &str) -> Option<Vec<Value>>;
+}
+
+impl SourceCache for HashMap<String, Vec<Value>> {
+    fn take_cached_source(&mut self, fingerprint: &str) -> Option<Vec<Value>> {
+        self.remove(fingerprint)
+    }
+}
+
 /// Async scan: local providers plus Cursor dashboard usage when enabled.
 pub async fn scan_usage_async(
     config: &AppConfig,
     cache_items: HashMap<String, Vec<Value>>,
 ) -> ScanResult {
-    let mut result = scan_usage(config, cache_items);
+    let mut cache_items = cache_items;
+    scan_usage_async_with_source_cache(config, &mut cache_items).await
+}
+
+pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
+    config: &AppConfig,
+    source_cache: &mut C,
+) -> ScanResult {
+    let mut result = scan_usage_with_source_cache(config, source_cache);
 
     let cursor = CursorDashboardProvider;
     if cursor.is_enabled(config) {
@@ -101,6 +119,13 @@ pub async fn scan_usage_async(
 
 /// Main scan: iterate all providers, collect usage items, aggregate.
 pub fn scan_usage(config: &AppConfig, mut cache_items: HashMap<String, Vec<Value>>) -> ScanResult {
+    scan_usage_with_source_cache(config, &mut cache_items)
+}
+
+pub fn scan_usage_with_source_cache<C: SourceCache>(
+    config: &AppConfig,
+    source_cache: &mut C,
+) -> ScanResult {
     let mut health = Vec::new();
     let mut source_index: HashMap<String, Vec<Value>> = HashMap::new();
 
@@ -110,8 +135,8 @@ pub fn scan_usage(config: &AppConfig, mut cache_items: HashMap<String, Vec<Value
     for file in &codex_files {
         let source_meta =
             crate::provider::common::source_metadata(file, codex.id(), codex.version());
-        let items = if let Some(cached) = cache_items
-            .remove(&source_meta.source_fingerprint)
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
             .filter(|items| cached_items_have_hour(items))
         {
             cached
@@ -140,8 +165,8 @@ pub fn scan_usage(config: &AppConfig, mut cache_items: HashMap<String, Vec<Value
     for file in &claude_files {
         let source_meta =
             crate::provider::common::source_metadata(file, claude.id(), claude.version());
-        let items = if let Some(cached) = cache_items
-            .remove(&source_meta.source_fingerprint)
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
             .filter(|items| cached_items_have_hour(items))
         {
             cached
@@ -163,8 +188,6 @@ pub fn scan_usage(config: &AppConfig, mut cache_items: HashMap<String, Vec<Value
         claude_files.len(),
         true,
     ));
-
-    drop(cache_items);
 
     // Aggregate
     let aggregated = aggregate_item_refs(source_index.values().flat_map(|items| items.iter()));
