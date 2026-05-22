@@ -83,14 +83,14 @@ pub fn generate_identity() -> Identity {
 /// DER structure for Ed25519 public key:
 ///   30 2a                         SEQUENCE (42 bytes)
 ///     30 05                       SEQUENCE (5 bytes)
-///       06 03 55 3d 65            OID 1.3.101.112 (Ed25519)
+///       06 03 2b 65 70            OID 1.3.101.112 (Ed25519)
 ///     03 21                       BIT STRING (33 bytes)
 ///       00                        no unused bits
 ///       <32 bytes raw public key>
 const ED25519_SPKI_PREFIX: &[u8] = &[
     0x30, 0x2a, // SEQUENCE, 42 bytes
     0x30, 0x05, // SEQUENCE, 5 bytes
-    0x06, 0x03, 0x55, 0x3d, 0x65, // OID 1.3.101.112
+    0x06, 0x03, 0x2b, 0x65, 0x70, // OID 1.3.101.112
     0x03, 0x21, // BIT STRING, 33 bytes
     0x00, // no unused bits
 ];
@@ -100,7 +100,7 @@ const ED25519_SPKI_PREFIX: &[u8] = &[
 ///   30 2e                         SEQUENCE (46 bytes)
 ///     02 01 00                    INTEGER version 0
 ///     30 05                       SEQUENCE (5 bytes)
-///       06 03 55 3d 65            OID 1.3.101.112 (Ed25519)
+///       06 03 2b 65 70            OID 1.3.101.112 (Ed25519)
 ///     04 22                       OCTET STRING (34 bytes)
 ///       04 20                     OCTET STRING (32 bytes)
 ///         <32 bytes raw seed>
@@ -108,7 +108,7 @@ const ED25519_PKCS8_PREFIX: &[u8] = &[
     0x30, 0x2e, // SEQUENCE, 46 bytes
     0x02, 0x01, 0x00, // INTEGER version 0
     0x30, 0x05, // SEQUENCE, 5 bytes
-    0x06, 0x03, 0x55, 0x3d, 0x65, // OID 1.3.101.112
+    0x06, 0x03, 0x2b, 0x65, 0x70, // OID 1.3.101.112
     0x04, 0x22, // OCTET STRING, 34 bytes
     0x04, 0x20, // OCTET STRING, 32 bytes
 ];

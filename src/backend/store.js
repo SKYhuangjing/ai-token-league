@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { newId, sha256Hex } from "../shared/crypto.js";
+import { newId, normalizeLegacyEd25519Pem, sha256Hex } from "../shared/crypto.js";
 import { compositionRatio, costQualityLabel, dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, priceToPublic } from "../shared/pricing.js";
 import { STORAGE_SCHEMA_VERSION, CLOUD_PROVIDER_IDS, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, cloudNaturalKey, computeBucketFingerprint, displayTotalTokens, hourlyUsageKey, usageKey } from "../shared/schema.js";
@@ -61,15 +61,16 @@ export class Store {
     if (!input.participantId || !input.deviceId || !input.identityPublicKey) {
       throw new Error("participantId, deviceId and identityPublicKey are required");
     }
+    const identityPublicKey = normalizeLegacyEd25519Pem(input.identityPublicKey);
     const existing = this.db.participants[input.participantId];
-    if (existing && existing.identityPublicKey !== input.identityPublicKey) {
+    if (existing && normalizeLegacyEd25519Pem(existing.identityPublicKey) !== identityPublicKey) {
       throw new Error("participant identityPublicKey mismatch");
     }
     this.db.participants[input.participantId] = {
       id: input.participantId,
       nickname: input.nickname || existing?.nickname || "anonymous",
       avatarColor: existing?.avatarColor || colorFromId(input.participantId),
-      identityPublicKey: input.identityPublicKey,
+      identityPublicKey,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
       lastSeenAt: now

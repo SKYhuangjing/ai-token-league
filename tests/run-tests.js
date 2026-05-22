@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Store } from "../src/backend/store.js";
 import { MySqlStore } from "../src/backend/mysql-store.js";
-import { generateIdentity, newId, signPayload, hmacSha256Hex } from "../src/shared/crypto.js";
+import { generateIdentity, newId, signPayload, hmacSha256Hex, verifyPayload, normalizeLegacyEd25519Pem } from "../src/shared/crypto.js";
 import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
 import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, SNAPSHOT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
@@ -42,6 +42,48 @@ process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
 function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
+}
+
+function withLegacyEd25519Oid(pem) {
+  const match = pem.match(/^-----BEGIN ([A-Z ]+)-----\s*([A-Za-z0-9+/=\s]+?)\s*-----END \1-----\s*$/s);
+  assert.ok(match);
+  const [, label, body] = match;
+  const der = Buffer.from(body.replace(/\s+/g, ""), "base64");
+  const offset = der.indexOf(Buffer.from([0x06, 0x03, 0x2b, 0x65, 0x70]));
+  assert.ok(offset >= 0);
+  Buffer.from([0x06, 0x03, 0x55, 0x3d, 0x65]).copy(der, offset);
+  return `-----BEGIN ${label}-----\n${der.toString("base64").match(/.{1,64}/g).join("\n")}\n-----END ${label}-----\n`;
+}
+
+function testLegacyEd25519PemCompatibility() {
+  const identity = generateIdentity();
+  const legacyPublicKey = withLegacyEd25519Oid(identity.identityPublicKey);
+  const legacyPrivateKey = withLegacyEd25519Oid(identity.identityPrivateKey);
+  const payload = { probe: "legacy-ed25519-pem" };
+  const signature = signPayload(legacyPrivateKey, payload);
+
+  assert.equal(verifyPayload(legacyPublicKey, payload, signature), true);
+  assert.equal(normalizeLegacyEd25519Pem(legacyPublicKey), identity.identityPublicKey);
+
+  const store = new Store(path.join(tmp, "legacy-ed25519-db.json"));
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "legacy",
+    identityPublicKey: legacyPublicKey,
+    os: "test",
+    appVersion: "0.1.0"
+  });
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "legacy",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: "0.1.0"
+  });
+  assert.equal(store.getParticipant(identity.participantId).identityPublicKey, identity.identityPublicKey);
 }
 
 function testBackendUpload(identity, items) {
@@ -3380,6 +3422,7 @@ function testDeleteParticipantDataClearsHourlySyncState() {
 }
 
 // i18n completeness tests
+testLegacyEd25519PemCompatibility();
 testI18nCompleteness();
 testI18nDataAttributesMatchKeys();
 
