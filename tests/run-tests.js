@@ -281,6 +281,39 @@ function testDeleteParticipantDataAllowsResync() {
   assert.equal(second.accepted, 1);
 }
 
+function testDeleteDeviceDataKeepsParticipantAndOtherDevices() {
+  const tmpPath = path.join(tmp, `db-delete-device-${Date.now()}.json`);
+  const store = new Store(tmpPath);
+  const identity = generateIdentity();
+  const didA = newId("d");
+  const didB = newId("d");
+  const day = "2026-05-14";
+
+  store.registerDevice({ participantId: identity.participantId, deviceId: didA, nickname: "reset-device", identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION });
+  store.registerDevice({ participantId: identity.participantId, deviceId: didB, nickname: "reset-device", identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION });
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "wd_device_a", totalTokens: 100, providerId: "codex_local", day, hour: 9 })
+  ], identity.participantId, didA, { providerId: "codex_local", day, hour: 9 }));
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "wd_device_b", totalTokens: 200, providerId: "codex_local", day, hour: 9 })
+  ], identity.participantId, didB, { providerId: "codex_local", day, hour: 9 }));
+
+  const deleted = store.deleteDeviceData(didA);
+  assert.equal(deleted.deleted, true);
+  assert.equal(deleted.participantId, identity.participantId);
+  assert.equal(deleted.removed.devices, 1);
+  assert.equal(deleted.removed.usageHourly, 1);
+  assert.equal(store.getParticipant(identity.participantId)?.id, identity.participantId);
+  assert.equal(Boolean(store.db.devices[didA]), false);
+  assert.equal(Boolean(store.db.devices[didB]), true);
+  assert.equal(Object.values(store.db.usageHourly).some((row) => row.deviceId === didA), false);
+  assert.equal(Object.values(store.db.usageHourly).some((row) => row.deviceId === didB), true);
+  assert.equal(Object.values(store.db.usageSyncBucketsHourly).some((row) => row.deviceId === didA), false);
+
+  if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+  console.log("  testDeleteDeviceDataKeepsParticipantAndOtherDevices passed");
+}
+
 async function testParticipantDataDeleteMissingIsNoop() {
   const dbPath = path.join(tmp, "db-participant-delete-missing.json");
   const originalDbPath = process.env.DB_PATH;
@@ -1849,6 +1882,7 @@ testLoadOrGenerateSalt();
 testLoadNames();
 testBackendUpload(identity, items);
 testDeleteParticipantDataAllowsResync();
+testDeleteDeviceDataKeepsParticipantAndOtherDevices();
 await testParticipantDataDeleteMissingIsNoop();
 await testBoardApiBusinessDayMetadata();
 testStoreBusinessDayScopedCache();
@@ -2546,8 +2580,33 @@ async function testAdminCrudViaHttp() {
   const { baseUrl, cleanup } = await createTestServer({ ADMIN_USERNAME: "admin", ADMIN_PASSWORD: "secret" });
   const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
   try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId,
+        deviceId,
+        nickname: "admin-device-reset",
+        identityPublicKey: identity.identityPublicKey,
+        os: "test",
+        appVersion: APP_VERSION
+      })
+    });
+
     const devicesRes = await fetch(`${baseUrl}/api/admin/devices`, { headers: auth });
     assert.equal(devicesRes.status, 200);
+    const devices = await devicesRes.json();
+    assert.ok(devices.some((item) => item.deviceId === deviceId));
+
+    const deleteDeviceRes = await fetch(`${baseUrl}/api/admin/devices/${encodeURIComponent(deviceId)}/data`, {
+      method: "DELETE", headers: auth
+    });
+    assert.equal(deleteDeviceRes.status, 200);
+    const deleteDeviceBody = await deleteDeviceRes.json();
+    assert.equal(deleteDeviceBody.deviceId, deviceId);
+    assert.equal(deleteDeviceBody.removed.devices, 1);
 
     const qualityRes = await fetch(`${baseUrl}/api/admin/quality?range=month`, { headers: auth });
     assert.equal(qualityRes.status, 200);
@@ -3083,6 +3142,34 @@ function testCursorSameAccountDedupAcrossDevices() {
   console.log("  testCursorSameAccountDedupAcrossDevices passed");
 }
 
+function testDeleteCloudDeviceForcesEarlierDeviceReupload() {
+  const tmpPath = path.join(os.tmpdir(), `test-cloud-device-reset-${Date.now()}.json`);
+  const store = new Store(tmpPath);
+  const pid = "p_cloud_reset", didA = "d_cloud_reset_a", didB = "d_cloud_reset_b";
+  const workdirHash = "cursor_reset_acct";
+  const day = "2026-05-14", hour = 10, providerId = "cursor_dashboard_usage";
+
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_cloud_reset", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_cloud_reset", os: "test", appVersion: "0.1.0" });
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didA, { providerId, day, hour }));
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash, inputTokens: 100, outputTokens: 50, totalTokens: 150, providerId, model: "gpt-5" })
+  ], pid, didB, { providerId, day, hour }));
+
+  assert.equal(Object.values(store.db.usageHourly).some((row) => row.deviceId === didA), false, "device A row should be deduped by device B");
+  assert.ok(store.getHourlyBucketSync(pid, didA, day, hour, providerId), "device A sync bucket is preserved before reset");
+
+  const deleted = store.deleteDeviceData(didB);
+  assert.equal(deleted.removed.usageHourly, 1);
+  assert.equal(Object.values(store.db.usageHourly).some((row) => row.deviceId === didB), false);
+  assert.equal(store.getHourlyBucketSync(pid, didA, day, hour, providerId), null, "device A bucket should be missing so it can reupload the deduped cloud row");
+
+  if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+  console.log("  testDeleteCloudDeviceForcesEarlierDeviceReupload passed");
+}
+
 function testCursorDifferentAccountsNoDedup() {
   const tmp = path.join(os.tmpdir(), `test-cloud-nodedup-${Date.now()}.json`);
   const store = new Store(tmp);
@@ -3302,6 +3389,7 @@ await testMysqlHourlyIncrementalSyncScopesDeletes();
 
 // Cloud provider dedup tests
 testCursorSameAccountDedupAcrossDevices();
+testDeleteCloudDeviceForcesEarlierDeviceReupload();
 testCursorDifferentAccountsNoDedup();
 testLocalProviderNoDedup();
 testCursorDedupSyncBucketPreserved();

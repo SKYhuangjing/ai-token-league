@@ -380,6 +380,12 @@ async function handleApi(req, res) {
     if (boardAnonymizer) boardAnonymizer.markDirty();
     return sendJson(res, 200, result);
   }
+  if (req.method === "DELETE" && req.url.startsWith("/api/admin/devices/") && req.url.endsWith("/data")) {
+    const deviceId = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/devices/", "").replace("/data", ""));
+    const result = await store.deleteDeviceData(deviceId);
+    if (boardAnonymizer) boardAnonymizer.markDirty();
+    return sendJson(res, 200, result);
+  }
   if (req.method === "DELETE" && req.url === "/api/participant/data") {
     const body = await readBody(req);
     if (!body.participantId || !body.timestamp || !body.signature) {

@@ -578,8 +578,9 @@ const translations = {
     "admin.usage.expandRow": "展开行",
     "admin.usage.collapseRow": "收起行",
     "admin.usage.resetUser": "重置用户",
-    "admin.usage.deleteConfirm": "删除 {label} 所有已上传的服务器数据？\n\n用户客户端需要重新同步才能重新上传聚合数据。",
-    "admin.usage.deletingUser": "删除 {label} 中...",
+    "admin.usage.clearUserData": "清空用户全部数据",
+    "admin.usage.deleteConfirm": "清空 {label} 的全部云端身份数据？\n\n这会删除该用户、该用户所有设备、所有上传使用量和同步状态。只有确认要重建整个用户身份时才执行。",
+    "admin.usage.deletingUser": "清空 {label} 中...",
     "admin.usage.deleted": "已删除 {label}: {usage} 行使用量, {batches} 个上传批次。",
     "admin.usage.noData": "未找到 {label} 的服务器数据。",
     "admin.usage.today": "今天",
@@ -702,6 +703,10 @@ const translations = {
     "admin.devices.platform": "平台",
     "admin.devices.build": "构建",
     "admin.devices.lastSeen": "最后在线",
+    "admin.devices.action": "操作",
+    "admin.devices.resetDevice": "重置设备",
+    "admin.devices.deleteConfirm": "重置 {label} 这台设备的云端数据？\n\n设备 ID: {deviceId}\n\n这只删除该设备上传的使用量和同步状态，不删除用户身份，也不影响同一用户的其他设备。",
+    "admin.devices.deletingDevice": "重置 {label} 中...",
     "admin.devices.empty": "暂无注册设备。",
     "admin.devices.count": "{count} 台设备",
     "admin.devices.countOne": "1 台设备",
@@ -710,7 +715,8 @@ const translations = {
     "admin.error.savePrice": "保存模型价格失败",
     "admin.error.refreshOpenRouter": "刷新 OpenRouter 价格失败",
     "admin.error.saveAlias": "保存模型别名失败",
-    "admin.error.deleteParticipant": "删除参与者数据失败"
+    "admin.error.deleteParticipant": "删除参与者数据失败",
+    "admin.error.deleteDevice": "重置设备数据失败"
   },
 
   "en": {
@@ -1284,8 +1290,9 @@ const translations = {
     "admin.usage.expandRow": "Expand row",
     "admin.usage.collapseRow": "Collapse row",
     "admin.usage.resetUser": "Reset user",
-    "admin.usage.deleteConfirm": "Delete all uploaded server data for {label}?\n\nThe user's client must sync again to re-upload fresh aggregate data.",
-    "admin.usage.deletingUser": "Deleting {label}...",
+    "admin.usage.clearUserData": "Clear all user data",
+    "admin.usage.deleteConfirm": "Clear all cloud identity data for {label}?\n\nThis deletes the user, all of their devices, all uploaded usage, and sync state. Use this only when the whole user identity should be rebuilt.",
+    "admin.usage.deletingUser": "Clearing {label}...",
     "admin.usage.deleted": "Deleted {label}: {usage} usage rows, {batches} upload batches.",
     "admin.usage.noData": "No server data found for {label}.",
     "admin.usage.today": "Today",
@@ -1408,6 +1415,10 @@ const translations = {
     "admin.devices.platform": "Platform",
     "admin.devices.build": "Build",
     "admin.devices.lastSeen": "Last seen",
+    "admin.devices.action": "Action",
+    "admin.devices.resetDevice": "Reset device",
+    "admin.devices.deleteConfirm": "Reset cloud data for the {label} device?\n\nDevice ID: {deviceId}\n\nThis only deletes usage and sync state uploaded by this device. It does not delete the user identity or affect the same user's other devices.",
+    "admin.devices.deletingDevice": "Resetting {label}...",
     "admin.devices.empty": "No devices registered.",
     "admin.devices.count": "{count} devices",
     "admin.devices.countOne": "1 device",
@@ -1416,7 +1427,8 @@ const translations = {
     "admin.error.savePrice": "failed to save model price",
     "admin.error.refreshOpenRouter": "failed to refresh OpenRouter prices",
     "admin.error.saveAlias": "failed to save model alias",
-    "admin.error.deleteParticipant": "failed to delete participant data"
+    "admin.error.deleteParticipant": "failed to delete participant data",
+    "admin.error.deleteDevice": "failed to reset device data"
   }
 };
 

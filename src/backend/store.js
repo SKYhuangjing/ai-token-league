@@ -160,6 +160,69 @@ export class Store {
     };
   }
 
+  deleteDeviceData(deviceId) {
+    if (!deviceId) throw new Error("deviceId is required");
+    const device = this.db.devices?.[deviceId] || null;
+    const participantId = device?.participantId || "";
+    const removed = {
+      devices: device ? 1 : 0,
+      usageDaily: 0,
+      uploadBatches: 0,
+      usageSyncBuckets: 0,
+      usageHourly: 0,
+      usageSyncBucketsHourly: 0
+    };
+    const cloudHourlyScopes = new Set();
+    if (device) delete this.db.devices[deviceId];
+    for (const [key, row] of Object.entries(this.db.usageDaily || {})) {
+      if (row.deviceId === deviceId) {
+        delete this.db.usageDaily[key];
+        removed.usageDaily += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.uploadBatches || {})) {
+      if (row.deviceId === deviceId) {
+        delete this.db.uploadBatches[key];
+        removed.uploadBatches += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.usageSyncBuckets || {})) {
+      if (row.deviceId === deviceId) {
+        delete this.db.usageSyncBuckets[key];
+        removed.usageSyncBuckets += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.usageHourly || {})) {
+      if (row.deviceId === deviceId) {
+        if (row.participantId && CLOUD_PROVIDER_IDS.has(row.providerId)) {
+          cloudHourlyScopes.add([row.participantId, row.day, row.hour ?? 0, row.providerId].join("|"));
+        }
+        delete this.db.usageHourly[key];
+        removed.usageHourly += 1;
+      }
+    }
+    for (const [key, row] of Object.entries(this.db.usageSyncBucketsHourly || {})) {
+      const sameDevice = row.deviceId === deviceId;
+      const sameCloudScope = cloudHourlyScopes.has([row.participantId, row.day, row.hour ?? 0, row.providerId].join("|"));
+      if (sameDevice || sameCloudScope) {
+        delete this.db.usageSyncBucketsHourly[key];
+        removed.usageSyncBucketsHourly += 1;
+      }
+    }
+    this.invalidateAggregateCache();
+    this.save();
+    return {
+      deleted: Object.values(removed).some((count) => count > 0),
+      participantId,
+      deviceId,
+      cloudHourlyScopes: [...cloudHourlyScopes].map((scope) => {
+        const [scopeParticipantId, day, hour, providerId] = scope.split("|");
+        return { participantId: scopeParticipantId, day, hour: Number(hour), providerId };
+      }),
+      removed
+    };
+  }
+
   upsertUsageBatch(input) {
     if (input.snapshot?.mode === "device_day_hour_provider") return this.upsertHourlySnapshotBatch(input);
     if (input.snapshot) return this.upsertSnapshotBatch(input);

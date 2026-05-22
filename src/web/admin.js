@@ -185,9 +185,42 @@ function renderDevices(devices) {
     <td>${escapeHtml(item.lanIp || "-")}</td>
     <td>${escapeHtml(item.clientAppVersion || "-")}</td>
     <td>${escapeHtml(item.clientPlatform || item.os || "-")}</td>
-    <td>${escapeHtml(item.clientBuild || "-")}</td>
     <td>${escapeHtml(item.lastSeenAt ? new Date(item.lastSeenAt).toLocaleDateString() : "-")}</td>
+    <td>
+      <div class="row-actions">
+        <button type="button" class="danger-link" data-delete-device="${escapeHtml(item.deviceId)}" data-delete-device-label="${escapeHtml(item.nickname || item.deviceId)}">${t("admin.devices.resetDevice")}</button>
+        <button type="button" class="danger-link" data-delete-participant="${escapeHtml(item.participantId)}" data-delete-nickname="${escapeHtml(item.nickname)}">${t("admin.usage.clearUserData")}</button>
+      </div>
+    </td>
   </tr>`).join("");
+  tbody.querySelectorAll("[data-delete-device]").forEach((button) => {
+    button.addEventListener("click", () => {
+      deleteDeviceData(button.dataset.deleteDevice, button.dataset.deleteDeviceLabel).catch((error) => {
+        statusEl.textContent = error.message;
+      });
+    });
+  });
+  tbody.querySelectorAll("[data-delete-participant]").forEach((button) => {
+    button.addEventListener("click", () => {
+      deleteParticipantData(button.dataset.deleteParticipant, button.dataset.deleteNickname, { statusElement: statusEl }).catch((error) => {
+        statusEl.textContent = error.message;
+      });
+    });
+  });
+}
+
+async function deleteDeviceData(deviceId, label) {
+  const displayLabel = label || deviceId;
+  const confirmed = window.confirm(t("admin.devices.deleteConfirm", { label: displayLabel, deviceId }));
+  if (!confirmed) return;
+  const statusEl = document.querySelector("#devices-status");
+  statusEl.textContent = t("admin.devices.deletingDevice", { label: displayLabel });
+  const response = await fetchAdmin(`/api/admin/devices/${encodeURIComponent(deviceId)}/data`, { method: "DELETE" });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || t("admin.error.deleteDevice"));
+  await loadDevices();
+  await loadUsage();
+  await loadPricing();
 }
 
 async function loadPricing() {
@@ -339,7 +372,6 @@ function render(items) {
         <td>
           <div class="row-actions">
             <button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? t("admin.usage.collapseRow") : t("admin.usage.expandRow")}</button>
-            <button type="button" class="danger-link" data-delete-participant="${escapeHtml(item.participantId)}" data-delete-nickname="${escapeHtml(item.nickname)}">${t("admin.usage.resetUser")}</button>
           </div>
         </td>
       </tr>
@@ -362,28 +394,22 @@ function render(items) {
       render(items);
     });
   });
-  tbody.querySelectorAll("[data-delete-participant]").forEach((button) => {
-    button.addEventListener("click", () => {
-      deleteParticipantData(button.dataset.deleteParticipant, button.dataset.deleteNickname).catch((error) => {
-        statusEl.textContent = error.message;
-      });
-    });
-  });
 }
 
-async function deleteParticipantData(participantId, nickname) {
+async function deleteParticipantData(participantId, nickname, { statusElement = statusEl } = {}) {
   const label = nickname || participantId;
   const confirmed = window.confirm(t("admin.usage.deleteConfirm", { label }));
   if (!confirmed) return;
-  statusEl.textContent = t("admin.usage.deletingUser", { label });
+  statusElement.textContent = t("admin.usage.deletingUser", { label });
   const response = await fetchAdmin(`/api/admin/participants/${encodeURIComponent(participantId)}`, { method: "DELETE" });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || t("admin.error.deleteParticipant"));
   if (state.participantId === participantId) state.participantId = "";
   state.expandedUsageKey = "";
+  await loadDevices();
   await loadUsage();
   await loadPricing();
-  statusEl.textContent = result.deleted
+  statusElement.textContent = result.deleted
     ? t("admin.usage.deleted", { label, usage: result.removed.usageDaily || 0, batches: result.removed.uploadBatches || 0 })
     : t("admin.usage.noData", { label });
 }

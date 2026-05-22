@@ -444,6 +444,24 @@ export class MySqlStore extends Store {
     return result;
   }
 
+  async deleteDeviceData(deviceId) {
+    const result = Store.prototype.deleteDeviceData.call(this, deviceId);
+    await withTransaction(this.pool, async (conn) => {
+      await conn.query("DELETE FROM upload_batches WHERE deviceId = ?", [deviceId]);
+      await conn.query("DELETE FROM usage_sync_buckets WHERE deviceId = ?", [deviceId]);
+      await conn.query("DELETE FROM usage_sync_buckets_hourly WHERE deviceId = ?", [deviceId]).catch(() => {});
+      if (result.cloudHourlyScopes?.length) {
+        const clauses = result.cloudHourlyScopes.map(() => "(participantId = ? AND day = ? AND hour = ? AND providerId = ?)").join(" OR ");
+        const params = result.cloudHourlyScopes.flatMap((scope) => [scope.participantId, scope.day, scope.hour, scope.providerId]);
+        await conn.query(`DELETE FROM usage_sync_buckets_hourly WHERE ${clauses}`, params).catch(() => {});
+      }
+      await conn.query("DELETE FROM usage_hourly WHERE deviceId = ?", [deviceId]).catch(() => {});
+      await conn.query("DELETE FROM usage_daily WHERE deviceId = ?", [deviceId]);
+      await conn.query("DELETE FROM devices WHERE id = ?", [deviceId]);
+    });
+    return result;
+  }
+
   async syncIdentityTables() {
     await withTransaction(this.pool, async (conn) => {
       await replaceParticipants(conn, Object.values(this.db.participants));
