@@ -425,6 +425,10 @@ $("#localBackupRetention").addEventListener("change", () => run(saveBackupPrefer
 $("#runtimeLogRetentionDays").addEventListener("change", () => run(saveRuntimeLogPreferences));
 $("#enforcement-download-update").addEventListener("click", (event) => {
   event.stopPropagation();
+  if ($("#enforcement-download-update").dataset.updateAction === "install") {
+    run(installAndRestartUpdate);
+    return;
+  }
   run(downloadUpdate);
 });
 $("#enforcement-download-installer").addEventListener("click", (event) => {
@@ -942,12 +946,20 @@ function isUpdateDownloading(state = latestUpdateState) {
 function renderUpdateActions(state = latestUpdateState) {
   const updateButton = $("#download-update");
   const installerButton = $("#download-installer");
+  const enforcementButton = $("#enforcement-download-update");
   if (!updateButton || !installerButton) return;
   const ready = hasReadyUpdatePackage(state);
   const available = hasUpdateAvailable(state);
   const failed = state?.status === "failed" && state?.lastError;
   installerButton.hidden = !(failed && !ready);
   installerButton.disabled = installerButton.hidden;
+  if (enforcementButton) {
+    enforcementButton.disabled = isUpdateDownloading(state);
+    enforcementButton.dataset.updateAction = ready ? "install" : "download";
+    enforcementButton.textContent = ready
+      ? t("desktop.rail.restartUpdate")
+      : t("desktop.app.downloadRestart");
+  }
   if (ready || isUpdateDownloading(state)) {
     updateButton.hidden = true;
     updateButton.disabled = true;
@@ -1501,18 +1513,21 @@ async function checkUpdate({ automatic = false } = {}) {
   }
 }
 
-async function downloadUpdate({ restart = true } = {}) {
+async function downloadUpdate({ restart = false } = {}) {
   $("#download-update").hidden = false;
   $("#download-update").disabled = true;
+  $("#enforcement-download-update").disabled = true;
   $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
     await api.downloadUpdate();
     latestUpdateState = { ...(latestUpdateState || {}), status: "downloaded" };
     renderUpdateActions(latestUpdateState);
+    renderRailStatus();
     if (restart) await installAndRestartUpdate();
   } catch (error) {
     $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
     $("#download-update").disabled = false;
+    $("#enforcement-download-update").disabled = false;
   }
 }
 

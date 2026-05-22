@@ -61,6 +61,17 @@ struct BackgroundState {
     status: Arc<Mutex<Value>>,
 }
 
+struct PendingUpdate {
+    update: tauri_plugin_updater::Update,
+    path: std::path::PathBuf,
+}
+
+impl Drop for PendingUpdate {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 impl Default for BackgroundState {
     fn default() -> Self {
         Self {
@@ -110,7 +121,11 @@ fn apply_launch_at_login(app: &AppHandle, config: &Value) {
         manager.disable()
     };
     if let Err(e) = result {
-        eprintln!("[autostart] {} failed: {}", if enabled { "enable" } else { "disable" }, e);
+        eprintln!(
+            "[autostart] {} failed: {}",
+            if enabled { "enable" } else { "disable" },
+            e
+        );
     }
 }
 
@@ -182,9 +197,15 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
         // with the \\?\ prefix that Windows resource_dir() returns.
         let from_resource = resource_dir_path.join(binary_name);
         // Dev: workspace target/debug
-        let from_debug = std::path::PathBuf::from(&cwd).join("target").join("debug").join(binary_name);
+        let from_debug = std::path::PathBuf::from(&cwd)
+            .join("target")
+            .join("debug")
+            .join(binary_name);
         // Dev: workspace target/release
-        let from_release = std::path::PathBuf::from(&cwd).join("target").join("release").join(binary_name);
+        let from_release = std::path::PathBuf::from(&cwd)
+            .join("target")
+            .join("release")
+            .join(binary_name);
 
         if from_resource.exists() {
             from_resource.to_string_lossy().to_string()
@@ -204,7 +225,10 @@ fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
 
     let mut cmd = Command::new(&collector_path);
     cmd.arg("--sidecar")
-        .env("ATL_RESOURCE_DIR", resource_dir_path.to_string_lossy().to_string())
+        .env(
+            "ATL_RESOURCE_DIR",
+            resource_dir_path.to_string_lossy().to_string(),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -897,7 +921,11 @@ async fn check_update(app: AppHandle, state: State<'_, SidecarState>) -> Result<
 }
 
 #[tauri::command]
-async fn download_update(app: AppHandle, state: State<'_, SidecarState>) -> Result<Value, String> {
+async fn download_update(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    pending: State<'_, Arc<tokio::sync::Mutex<Option<PendingUpdate>>>>,
+) -> Result<Value, String> {
     use tauri_plugin_updater::UpdaterExt;
     let endpoints = updater_endpoints(&state).await;
     if endpoints.is_empty() {
@@ -915,8 +943,8 @@ async fn download_update(app: AppHandle, state: State<'_, SidecarState>) -> Resu
     };
     let mut downloaded = 0u64;
     let start = std::time::Instant::now();
-    update
-        .download_and_install(
+    let bytes = update
+        .download(
             |chunk_len, total| {
                 downloaded += chunk_len as u64;
                 let elapsed = start.elapsed().as_secs_f64();
@@ -945,11 +973,30 @@ async fn download_update(app: AppHandle, state: State<'_, SidecarState>) -> Resu
         )
         .await
         .map_err(|e| e.to_string())?;
+    let temp_dir = std::env::temp_dir().join("ai-token-league-update");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    let temp_path = temp_dir.join(format!("{}.update", update.version));
+    std::fs::write(&temp_path, &bytes).map_err(|e| e.to_string())?;
+    *pending.lock().await = Some(PendingUpdate {
+        update,
+        path: temp_path,
+    });
     Ok(json!({ "ok": true }))
 }
 
 #[tauri::command]
-async fn install_and_restart(app: AppHandle) -> Result<(), String> {
+async fn install_and_restart(
+    app: AppHandle,
+    pending: State<'_, Arc<tokio::sync::Mutex<Option<PendingUpdate>>>>,
+) -> Result<(), String> {
+    let mut guard = pending.lock().await;
+    let pending_update = guard.take().ok_or("No downloaded update to install")?;
+    let bytes = std::fs::read(&pending_update.path)
+        .map_err(|e| format!("Failed to read update file: {}", e))?;
+    pending_update
+        .update
+        .install(&bytes)
+        .map_err(|e| e.to_string())?;
     app.restart();
 }
 
@@ -1205,6 +1252,7 @@ pub fn run() {
             app.manage(state);
             let background = BackgroundState::default();
             app.manage(background.clone());
+            app.manage(Arc::new(tokio::sync::Mutex::new(None::<PendingUpdate>)));
 
             // Setup tray
             setup_tray(app.handle())?;
