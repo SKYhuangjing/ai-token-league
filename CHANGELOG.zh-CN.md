@@ -6,6 +6,32 @@
 
 ---
 
+## [0.7.0] - 2026-05-22
+
+### 新增
+
+- [Desktop] 新增更新下载与安装拆步流程：检查更新可在后台下载更新包，重启/安装仍由用户显式触发。
+- [Desktop] 新增 Cloud Connection 已配置时的周期性更新检查，并改善最新版本和检查间隔状态展示。
+- 新增 `npm run verify:ccusage`，用于将本地 Codex 与 Claude Code 的 completed days 结果对齐 `ccusage-codex` 和 `ccusage`。
+- 新增自部署 Tauri release 的 part/finalize 发布流程，支持 macOS、Windows、Linux 分平台构建机汇总发布。
+
+### 变更
+
+- [Desktop] 降低 collector sidecar 扫描大量本地 Codex / Claude Code 日志时的内存占用。
+- [Desktop] 本地 Codex 用量扫描口径对齐 `ccusage-codex` 的 completed local days。
+- 自部署 Tauri release metadata 默认发布到 `tauri-releases/`，不再复用旧 Electron `releases/` 路径。
+- 自部署发布必须显式选择 `--part`、`--finalize` 或 `--full`，并按 `RELEASE_REQUIRED_PLATFORMS` 校验平台完整性。
+- 更新 env 示例和发布文档，补齐静态 Tauri 更新 metadata、脱敏 host/GitHub 示例、checksum 校验和分平台发布说明。
+
+### 修复
+
+- 修复 hourly MySQL snapshot sync，使 bucket replacement 只作用于签名的 day/hour/provider bucket，且不再走全表 flush。
+- 修复 hourly bucket 的 release/upload 日志和同步诊断信息。
+- 修复 macOS release packaging 和 release workflow 中的 DMG README 注入。
+- 修复 finalized release 的 checksum 生成，确保 `checksums.txt` 包含所有 finalized updater 和 installer artifacts。
+
+---
+
 ## [0.6.5] - 2026-05-20
 
 ### 新增

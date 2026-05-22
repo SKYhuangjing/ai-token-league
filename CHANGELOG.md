@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] - 2026-05-22
+
+### Added
+
+- [Desktop] Added explicit download-then-install updater flow: update checks can download the package in the background, while restart/install remains a user action.
+- [Desktop] Added periodic update checks when Cloud Connection is configured, with clearer latest-version and check-interval status text.
+- Added `npm run verify:ccusage` to compare completed local Codex and Claude Code days against `ccusage-codex` and `ccusage`.
+- Added self-hosted Tauri release part/finalize publishing for split macOS, Windows, and Linux build hosts.
+
+### Changed
+
+- [Desktop] Reduced collector sidecar scan memory usage for large local Codex and Claude Code log sets.
+- [Desktop] Aligned local Codex usage scanning with `ccusage-codex` for completed local days.
+- Self-hosted Tauri release metadata now defaults to `tauri-releases/` instead of the legacy Electron `releases/` path.
+- Self-hosted publishing now requires explicit `--part`, `--finalize`, or `--full` mode and validates `RELEASE_REQUIRED_PLATFORMS`.
+- Updated env examples and release docs for static Tauri update metadata, sanitized host/GitHub examples, checksum validation, and split-platform publishing.
+
+### Fixed
+
+- Fixed hourly MySQL snapshot sync so bucket replacement is scoped to the signed day/hour/provider bucket and does not use a full-table flush.
+- Fixed release upload logging and sync diagnostics for hourly buckets.
+- Fixed macOS release packaging and DMG README injection in the release workflow.
+- Fixed finalized release checksums so `checksums.txt` includes all finalized updater and installer artifacts.
+
+---
+
 ## [0.6.5] - 2026-05-20
 
 ### Added

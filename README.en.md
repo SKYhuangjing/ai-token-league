@@ -12,7 +12,7 @@ A local-first AI coding token usage collector and public leaderboard for **Codex
 
 **Officially supported platforms**: macOS Apple silicon, macOS Intel, and Windows x64.
 
-Current version: `0.6.5`
+Current version: `0.7.0`
 
 ---
 
@@ -142,9 +142,9 @@ Practical safety tips:
 
 Go to [GitHub Releases](https://github.com/SKYhuangjing/ai-token-league/releases) and download the installer for your system:
 
-- **macOS Apple silicon**: `AI Token League-0.6.5-mac-arm64-installer.dmg`
-- **macOS Intel**: `AI Token League-0.6.5-mac-x64-installer.dmg`
-- **Windows x64**: `AI Token League-0.6.5-win-x64-installer.exe`
+- **macOS Apple silicon**: `AI Token League-0.7.0-mac-arm64-installer.dmg`
+- **macOS Intel**: `AI Token League-0.7.0-mac-x64-installer.dmg`
+- **Windows x64**: `AI Token League-0.7.0-win-x64-installer.exe`
 
 ### Option B: Download Zip Packages
 
