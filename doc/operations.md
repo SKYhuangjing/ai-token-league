@@ -235,7 +235,7 @@ PUBLIC_BOARD_AUTH_PASSWORD=<your-password>
 | 模式 | 适用场景 | 构建/发布入口 | 服务端上游 |
 | --- | --- | --- | --- |
 | `github` | 官方公开发布 | GitHub Actions `Release` workflow | GitHub Release assets |
-| `static` | 自部署、私有部署、OSS/CDN 分发 | `scripts/release.sh --platform all --env <env> --upload --yes` + `scripts/publish-release.js` | 静态 `tauri-update.json` / `installer.json` / `latest.json` |
+| `static` | 自部署、私有部署、OSS/CDN 分发 | 单平台 `scripts/release.sh --platform <platform> --env <env> --upload --yes` 上传 part，最后 `node scripts/publish-release.js --env <env> --finalize` 合并；完整本地 dist 才使用 `--full` | 静态 `tauri-update.json` / `installer.json` / `latest.json` |
 
 服务端 release 端点保持一致：
 
@@ -316,7 +316,7 @@ RELEASE_GITHUB_TOKEN=        # 可选，private repo 或规避匿名 API rate li
 自部署资产有两种稳定来源：
 
 1. 仍使用 GitHub Actions 构建四平台产物，然后把 Release assets 镜像到自己的 OSS/CDN。
-2. 自备 macOS、Windows、Ubuntu 三类构建机；每台只构建本平台产物，最终汇总到同一个 release `dist/` 后再执行 `node scripts/publish-release.js`。
+2. 自备 macOS、Windows、Ubuntu 三类构建机；每台只构建本平台产物并上传 `parts/<platform>.json`，最后由一个可信发布环境执行 `node scripts/publish-release.js --finalize` 合并。
 
 OSS 发布环境需要以下变量：
 
@@ -345,22 +345,28 @@ cp env.example env.local
 
 ```text
 RELEASE_SOURCE=static
-RELEASE_TAURI_UPDATE_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league/releases/tauri-update.json
-RELEASE_INSTALLER_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league/releases/installer.json
+RELEASE_RELEASE_PATH=tauri-releases
+RELEASE_TAURI_UPDATE_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league/tauri-releases/tauri-update.json
+RELEASE_INSTALLER_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league/tauri-releases/installer.json
 RELEASE_PUBLIC_BASE_URL=https://my-bucket.oss-cn-shanghai.aliyuncs.com/ai-token-league
+# 可选：私有部署不发布 Linux 时，显式收窄完整性校验集合
+RELEASE_REQUIRED_PLATFORMS=darwin-arm64,darwin-x64,win32-x64
 ```
 
-发布入口：
+单平台构建机发布 part：
 
 ```bash
-scripts/release.sh --platform all --env env.local --upload --yes
+scripts/release.sh --platform mac-all --env env.local --upload --yes
+scripts/release.sh --platform win --env env.local --upload --yes
+scripts/release.sh --platform linux --env env.local --upload --yes
+node scripts/publish-release.js --env env.local --finalize
 ```
 
-先 dry run 再正式上传：
+如果一个可信发布环境已经拥有完整 `dist/`，先 dry run 再正式上传完整 metadata：
 
 ```bash
-node scripts/publish-release.js --env env.local --dry-run
-node scripts/publish-release.js --env env.local
+node scripts/publish-release.js --env env.local --dry-run --full
+node scripts/publish-release.js --env env.local --full
 ```
 
 交互式发布脚本仍可用于本机验证或人工发布，它会按顺序处理版本确认、平台选择、env/preset、安装包和上传：
@@ -368,23 +374,21 @@ node scripts/publish-release.js --env env.local
 ```bash
 scripts/release.sh
 scripts/release.sh --platform current --yes
-scripts/release.sh --platform all --env env.local --upload --yes
+scripts/release.sh --platform mac-all --env env.local --upload --yes
 ```
 
-底层构建和发布仍可拆成四步，用于定向验证或排障：
+如果当前可信环境已经拥有所有平台产物，底层构建和发布可拆成三步，用于定向验证或排障：
 
 ```bash
-# 1. 构建所有产物（zip + 安装包 + preset）
+# 1. 构建所有产物（zip + 安装包 + preset）。正式全平台发布仍应来自真实平台构建机或 GitHub Actions matrix。
 scripts/release.sh --platform all --env env.local --yes
 
 # 2. 验证 manifest（不上传）
-node scripts/publish-release.js --env env.local --dry-run
+node scripts/publish-release.js --env env.local --dry-run --full
 
 # 3. 上传到 OSS
-node scripts/publish-release.js --env env.local
+node scripts/publish-release.js --env env.local --full
 
-# 4. 或者一步完成（构建 + 上传）
-scripts/release.sh --platform all --env env.local --upload --yes
 ```
 
 构建产物：
@@ -400,19 +404,22 @@ src-tauri/target/release/bundle/AI Token League.app.tar.gz.sig      (minisign si
 上传到 OSS 的文件：
 
 ```text
-<prefix>/releases/<version>/AI Token League-darwin-arm64.app.tar.gz      (macOS updater package)
-<prefix>/releases/<version>/AI Token League-darwin-arm64.app.tar.gz.sig  (minisign signature)
-<prefix>/releases/<version>/AI Token League-darwin-x64.app.tar.gz        (macOS updater package)
-<prefix>/releases/<version>/AI Token League-darwin-x64.app.tar.gz.sig    (minisign signature)
-<prefix>/releases/<version>/AI Token League-darwin-arm64-installer.dmg
-<prefix>/releases/<version>/AI Token League-darwin-x64-installer.dmg
-<prefix>/releases/<version>/AI Token League-win-x64-setup.exe
-<prefix>/releases/checksums.txt
-<prefix>/releases/tauri-update.json       (Tauri updater manifest)
-<prefix>/releases/installer.json          (安装包元数据)
-<prefix>/releases/<version>/installer.json
-<prefix>/releases/latest.json             (backward-compatible manifest)
+<prefix>/tauri-releases/<version>/AI Token League-darwin-arm64.app.tar.gz      (macOS updater package)
+<prefix>/tauri-releases/<version>/AI Token League-darwin-arm64.app.tar.gz.sig  (minisign signature)
+<prefix>/tauri-releases/<version>/AI Token League-darwin-x64.app.tar.gz        (macOS updater package)
+<prefix>/tauri-releases/<version>/AI Token League-darwin-x64.app.tar.gz.sig    (minisign signature)
+<prefix>/tauri-releases/<version>/AI Token League-darwin-arm64-installer.dmg
+<prefix>/tauri-releases/<version>/AI Token League-darwin-x64-installer.dmg
+<prefix>/tauri-releases/<version>/AI Token League-win-x64-setup.exe
+<prefix>/tauri-releases/<version>/parts/<platform>.json
+<prefix>/tauri-releases/<version>/checksums.txt
+<prefix>/tauri-releases/tauri-update.json       (Tauri updater manifest)
+<prefix>/tauri-releases/installer.json          (安装包元数据)
+<prefix>/tauri-releases/<version>/installer.json
+<prefix>/tauri-releases/latest.json             (backward-compatible manifest)
 ```
+
+`checksums.txt` 是 finalized release 完整性的独立证据。验证时要直接检查它覆盖了所有 updater 和 installer artifact；不能只看 `tauri-update.json` 或 `installer.json` 是否完整。
 
 可调参数（env 变量）：
 
@@ -443,14 +450,14 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 
 ### 2.5 Cloud Usage Snapshot Sync
 
-0.7 引入 protocol v2 的 `device_day_provider` bucket snapshot 同步协议，用于收敛云端 usage 数据到本地 collector 真实状态。
+0.7 引入 protocol v2 的 bucket snapshot 同步协议，用于收敛云端 usage 数据到本地 collector 真实状态。当前客户端优先使用 `device_day_hour_provider`，服务端仍兼容 `device_day_provider` day bucket。
 
 **协议版本**：
 
 | 协议版本 | 客户端行为 |
 | --- | --- |
 | `1`（legacy） | 全量 upsert-only，不删除云端缺失 rows |
-| `2`（snapshot-capable） | 按 `day + providerId` 分桶上传，服务端删除桶内缺失 rows |
+| `2`（snapshot-capable） | 按 `day + hour + providerId` 分桶上传，服务端删除桶内缺失 rows；day bucket 保持兼容 |
 
 **灰度期**：
 
@@ -464,7 +471,8 @@ MIN_CLIENT_ENFORCE=true         # 开启后，低于 LATEST_CLIENT_VERSION 的�
 | --- | --- |
 | `~/.ai-token-league/sync-manifest.json` | 客户端 bucket sync manifest（独立于 config.json） |
 | `~/.ai-token-league/upload-queue.json` | 离线队列（兼容旧 whole-history 和新 bucket snapshot 格式） |
-| `usage_sync_buckets`（MySQL 表） | 服务端 bucket 同步元数据，不参与 ranking truth |
+| `usage_hourly`（MySQL 表） | hourly snapshot 原始存储；daily rows 可由 hourly rows 派生 |
+| `usage_sync_buckets` / `usage_sync_buckets_hourly`（MySQL 表） | 服务端 bucket 同步元数据，不参与 ranking truth |
 | `scripts/query-usage-daily.js --sync-buckets` | 查询 sync metadata 用于运营诊断 |
 
 ### 2.6 下载通道验证

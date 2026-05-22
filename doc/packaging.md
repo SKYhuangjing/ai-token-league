@@ -270,7 +270,7 @@ cargo test --workspace
 npm test
 npm run verify:ccusage
 npm run desktop
-node scripts/publish-release.js --env env.local --dry-run
+node scripts/publish-release.js --env env.local --dry-run --full
 ```
 
 After building, verify the packaged macOS app launches:
