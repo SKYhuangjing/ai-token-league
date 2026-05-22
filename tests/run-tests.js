@@ -2187,7 +2187,7 @@ async function testHealthEndpoint() {
 }
 
 async function testDeviceRegistrationEndpoint() {
-  const { baseUrl, cleanup } = await createTestServer();
+  const { baseUrl, cleanup, dbPath } = await createTestServer();
   try {
     const identity = generateIdentity();
     const regRes = await fetch(`${baseUrl}/api/devices/register`, {
@@ -2199,13 +2199,16 @@ async function testDeviceRegistrationEndpoint() {
         nickname: "reg-test",
         identityPublicKey: identity.identityPublicKey,
         os: "test",
-        appVersion: APP_VERSION
+        appVersion: APP_VERSION,
+        networkInfo: { lanIps: ["192.168.1.8", "10.0.0.2"] }
       })
     });
     assert.equal(regRes.status, 200);
     const regBody = await regRes.json();
     assert.ok(regBody.deviceId);
     assert.ok(regBody.compatibility);
+    const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+    assert.equal(db.devices[regBody.deviceId].lanIp, "192.168.1.8, 10.0.0.2");
 
     const dupRes = await fetch(`${baseUrl}/api/devices/register`, {
       method: "POST",

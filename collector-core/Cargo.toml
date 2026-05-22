@@ -21,3 +21,4 @@ walkdir = { workspace = true }
 base64 = { workspace = true }
 urlencoding = { workspace = true }
 regex = { workspace = true }
+local-ip-address = "0.6.13"

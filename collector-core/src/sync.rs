@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
+use std::net::IpAddr;
 
 const MAX_QUEUE_DRAIN_PER_RUN: usize = 50;
 const MAX_RETRY_DELAY_MINUTES: i64 = 6 * 60;
@@ -359,6 +360,7 @@ pub async fn register_device(
         "os": client_metadata["os"],
         "appVersion": client_metadata["clientAppVersion"],
         "client": client_metadata,
+        "networkInfo": collect_network_info(),
     });
 
     let resp = client
@@ -374,6 +376,20 @@ pub async fn register_device(
     }
 
     Ok(())
+}
+
+fn collect_network_info() -> Value {
+    let lan_ips: Vec<String> = local_ip_address::list_afinet_netifas()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(_name, ip)| match ip {
+            IpAddr::V4(addr) if !addr.is_loopback() && !addr.is_unspecified() => {
+                Some(addr.to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    json!({ "lanIps": lan_ips })
 }
 
 async fn drain_upload_queue(
@@ -827,6 +843,17 @@ mod tests {
         assert_eq!(row["fingerprint"], "fp1");
         assert_eq!(row["rowCount"], 1);
         assert_eq!(row["totalTokens"], 42);
+    }
+
+    #[test]
+    fn network_info_serializes_lan_ips_array() {
+        let info = collect_network_info();
+        assert!(info["lanIps"].is_array());
+        for ip in info["lanIps"].as_array().unwrap() {
+            let parsed = ip.as_str().unwrap().parse::<std::net::Ipv4Addr>().unwrap();
+            assert!(!parsed.is_loopback());
+            assert!(!parsed.is_unspecified());
+        }
     }
 
     #[test]
