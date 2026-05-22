@@ -1464,6 +1464,14 @@ async function loadCloudStatus() {
   renderCloudStatus(latestConfig);
 }
 
+async function refreshApiConnection(apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "")) {
+  if (!apiBaseUrl) return null;
+  const apiConnection = await api.checkApi({ apiBaseUrl });
+  latestConfig = await api.updateConfig({ apiBaseUrl, apiConnection });
+  renderCloudStatus(latestConfig);
+  return apiConnection;
+}
+
 async function loadSystemStatus() {
   const client = await api.appVersion();
   latestClientInfo = client;
@@ -1493,12 +1501,11 @@ async function checkUpdate({ automatic = false } = {}) {
   $("#download-installer").hidden = true;
   $("#update-message").textContent = t("desktop.renderer.checking");
   try {
+    const apiConnection = await refreshApiConnection(apiBaseUrl);
     latestUpdateState = await api.checkUpdate();
-    renderSystemStatus(latestUpdateState);
+    renderSystemStatus({ ...latestUpdateState, server: latestConfig?.apiConnection || apiConnection || null });
     $("#update-message").textContent = updateMessage(latestUpdateState);
     renderSilentUpdateStatus(latestUpdateState, latestConfig);
-    latestConfig = await api.getConfig();
-    renderCloudStatus(latestConfig);
     if (hasUpdateAvailable(latestUpdateState)) {
       await downloadUpdate({ restart: false });
     }
