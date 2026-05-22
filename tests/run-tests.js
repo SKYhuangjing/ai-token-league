@@ -14,6 +14,7 @@ import {
   buildInstallerMetadataFromGithubRelease,
   buildTauriUpdateJson,
   githubReleaseApiUrl,
+  installerMetadataPlatforms,
   releaseConfigFromEnv,
   releaseDistributionFromEnv,
   releasePublicConfig,
@@ -1268,6 +1269,13 @@ async function testVersionCompatibilityAndManifest() {
       "win32-x64": installerMetadata.platforms["win32-x64"]
     }
   }, { publicBaseUrl: "https://cdn.example", requiredPlatforms: ["darwin-arm64", "win32-x64"] })).length, 2);
+  assert.deepEqual(installerMetadataPlatforms({
+    platforms: {
+      "darwin-arm64": installerMetadata.platforms["darwin-arm64"],
+      "darwin-x64": installerMetadata.platforms["darwin-x64"],
+      "win32-x64": installerMetadata.platforms["win32-x64"]
+    }
+  }), ["darwin-arm64", "darwin-x64", "win32-x64"]);
   assert.throws(() => validateInstallerMetadata({
     platforms: {
       ...installerMetadata.platforms,

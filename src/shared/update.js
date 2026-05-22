@@ -157,6 +157,12 @@ export function validateInstallerMetadata(metadata, { publicBaseUrl = "", requir
   return normalized;
 }
 
+export function installerMetadataPlatforms(metadata) {
+  if (!metadata || typeof metadata !== "object") return [];
+  if (!metadata.platforms || typeof metadata.platforms !== "object") return [];
+  return Object.keys(metadata.platforms).filter(Boolean);
+}
+
 export function sha256File(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }

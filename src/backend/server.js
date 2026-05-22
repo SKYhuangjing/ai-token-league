@@ -10,6 +10,7 @@ import {
   buildInstallerMetadataFromGithubRelease,
   buildTauriUpdateJson,
   githubReleaseApiUrl,
+  installerMetadataPlatforms,
   releaseConfigFromEnv,
   releaseDistributionFromEnv,
   releasePublicConfig,
@@ -648,18 +649,23 @@ async function installerMetadataFromReleaseSource(release) {
   if (release.source === "github") {
     const meta = await fetchGithubRelease(release);
     const installerMeta = buildInstallerMetadataFromGithubRelease(meta);
-    return validateInstallerMetadata(installerMeta, { requiredPlatforms: release.requiredPlatforms });
+    return validateInstallerMetadata(installerMeta, { requiredPlatforms: publishedInstallerPlatforms(installerMeta, release.requiredPlatforms) });
   }
   if (release.source === "static" || release.source === "self-hosted" || release.source === "self_hosted") {
     if (!release.installerUrl) return null;
     const meta = await fetchReleaseJson(release.installerUrl);
-    return validateInstallerMetadata(meta, { publicBaseUrl: release.publicBaseUrl, requiredPlatforms: release.requiredPlatforms });
+    return validateInstallerMetadata(meta, { publicBaseUrl: release.publicBaseUrl, requiredPlatforms: publishedInstallerPlatforms(meta, release.requiredPlatforms) });
   }
   const config = releaseConfigFromEnv();
   validateReleaseConfig(config);
   const installerUrl = `${config.publicBaseUrl}/${config.releasePath}/installer.json`;
   const meta = await fetchReleaseJson(installerUrl);
-  return validateInstallerMetadata(meta, { publicBaseUrl: config.publicBaseUrl, requiredPlatforms: config.requiredPlatforms });
+  return validateInstallerMetadata(meta, { publicBaseUrl: config.publicBaseUrl, requiredPlatforms: publishedInstallerPlatforms(meta, config.requiredPlatforms) });
+}
+
+function publishedInstallerPlatforms(metadata, fallbackPlatforms) {
+  const platforms = installerMetadataPlatforms(metadata);
+  return platforms.length ? platforms : fallbackPlatforms;
 }
 
 async function fetchGithubRelease(release) {
