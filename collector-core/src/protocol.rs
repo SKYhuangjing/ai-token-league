@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SidecarRequest {
     pub id: String,
     pub command: String,
     pub args: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SidecarResponse {
     pub id: String,
     pub ok: bool,
@@ -170,5 +170,135 @@ impl SidecarEvent {
             event: event.into(),
             data: if data.is_null() { None } else { Some(data) },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_command_from_str_all_known_commands() {
+        let commands = [
+            ("config:get", Command::ConfigGet),
+            ("api:check", Command::ApiCheck),
+            ("config:init", Command::ConfigInit),
+            ("config:update", Command::ConfigUpdate),
+            ("identity:export:prepare", Command::IdentityExportPrepare),
+            ("identity:import:apply", Command::IdentityImportApply),
+            ("config:export:prepare", Command::ConfigExportPrepare),
+            ("config:import:apply", Command::ConfigImportApply),
+            ("diagnostics:export:prepare", Command::DiagnosticsExportPrepare),
+            ("diagnostics:status", Command::DiagnosticsStatus),
+            ("diagnostics:clear-runtime-log", Command::DiagnosticsClearRuntimeLog),
+            ("local-backup:export:prepare", Command::LocalBackupExportPrepare),
+            ("local-backup:status", Command::LocalBackupStatus),
+            ("local-backup:create", Command::LocalBackupCreate),
+            ("local-backup:clear", Command::LocalBackupClear),
+            ("local-backup:run-due-auto", Command::LocalBackupRunDueAuto),
+            ("local-backup:inspect", Command::LocalBackupInspect),
+            ("local-backup:restore:apply", Command::LocalBackupRestoreApply),
+            ("providers:add-root", Command::ProvidersAddRoot),
+            ("config:remove-provider-root", Command::ConfigRemoveProviderRoot),
+            ("cursor:add-token", Command::CursorAddToken),
+            ("cursor:remove-token", Command::CursorRemoveToken),
+            ("cursor:connect:start", Command::CursorConnectStart),
+            ("cursor:connect:poll", Command::CursorConnectPoll),
+            ("cursor:connect:cancel", Command::CursorConnectCancel),
+            ("cursor:disconnect", Command::CursorDisconnect),
+            ("config:ignore-auto-source", Command::ConfigIgnoreAutoSource),
+            ("config:unignore-auto-source", Command::ConfigUnignoreAutoSource),
+            ("background:status", Command::BackgroundStatus),
+            ("workdirs:set-alias", Command::WorkdirsSetAlias),
+            ("providers:health", Command::ProvidersHealth),
+            ("pricing:model-prices", Command::PricingModelPrices),
+            ("usage:scan", Command::UsageScan),
+            ("usage:scan-start", Command::UsageScanStart),
+            ("usage:scan-status", Command::UsageScanStatus),
+            ("usage:summary", Command::UsageSummary),
+            ("usage:trend", Command::UsageTrend),
+            ("usage:workdirs", Command::UsageWorkdirs),
+            ("usage:detail-page", Command::UsageDetailPage),
+            ("usage:detail-window", Command::UsageDetailWindow),
+            ("usage:sync", Command::UsageSync),
+            ("usage:sync-start", Command::UsageSyncStart),
+            ("my-identity", Command::MyIdentity),
+            ("app:version", Command::AppVersion),
+            ("update:download-installer", Command::UpdateDownloadInstaller),
+            ("update:enforcement-status", Command::UpdateEnforcementStatus),
+            ("app:reset-local-data", Command::AppResetLocalData),
+            ("app:reset-with-cloud", Command::AppResetWithCloud),
+            ("runtime:log", Command::RuntimeLog),
+            ("tray:cost-state", Command::TrayCostState),
+            ("tray:rebuild-menu", Command::TrayRebuildMenu),
+            ("tray:menu-data", Command::TrayMenuData),
+            ("tray:refresh-now", Command::TrayRefreshNow),
+            ("ping", Command::Ping),
+        ];
+        for (s, expected) in &commands {
+            assert_eq!(Command::from_str(s), Some(expected.clone()), "failed for '{}'", s);
+        }
+    }
+
+    #[test]
+    fn test_command_from_str_unknown_returns_none() {
+        assert!(Command::from_str("").is_none());
+        assert!(Command::from_str("unknown:command").is_none());
+        assert!(Command::from_str("config:get ").is_none()); // trailing space
+        assert!(Command::from_str("CONFIG:GET").is_none()); // case-sensitive
+    }
+
+    #[test]
+    fn test_sidecar_response_ok() {
+        let resp = SidecarResponse::ok("req-1".into(), serde_json::json!({"count": 42}));
+        assert_eq!(resp.id, "req-1");
+        assert!(resp.ok);
+        assert_eq!(resp.data.unwrap()["count"], 42);
+        assert!(resp.error.is_none());
+    }
+
+    #[test]
+    fn test_sidecar_response_error() {
+        let resp = SidecarResponse::error("req-2".into(), "something failed");
+        assert_eq!(resp.id, "req-2");
+        assert!(!resp.ok);
+        assert!(resp.data.is_none());
+        assert_eq!(resp.error.unwrap(), "something failed");
+    }
+
+    #[test]
+    fn test_sidecar_event_new_with_data() {
+        let evt = SidecarEvent::new("scan-complete", serde_json::json!({"rows": 10}));
+        assert_eq!(evt.event, "scan-complete");
+        assert_eq!(evt.data.unwrap()["rows"], 10);
+    }
+
+    #[test]
+    fn test_sidecar_event_new_with_null() {
+        let evt = SidecarEvent::new("ping", serde_json::Value::Null);
+        assert_eq!(evt.event, "ping");
+        assert!(evt.data.is_none(), "null data should become None");
+    }
+
+    #[test]
+    fn test_sidecar_response_serialization() {
+        let ok_resp = SidecarResponse::ok("r1".into(), serde_json::json!(true));
+        let json = serde_json::to_string(&ok_resp).unwrap();
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"id\":\"r1\""));
+
+        let err_resp = SidecarResponse::error("r2".into(), "fail");
+        let json = serde_json::to_string(&err_resp).unwrap();
+        assert!(json.contains("\"ok\":false"));
+        assert!(!json.contains("\"data\""), "data should be skipped when None");
+    }
+
+    #[test]
+    fn test_sidecar_request_deserialization() {
+        let json = r#"{"id":"r3","command":"usage:scan","args":{"force":true}}"#;
+        let req: SidecarRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.id, "r3");
+        assert_eq!(req.command, "usage:scan");
+        assert_eq!(req.args["force"], true);
     }
 }

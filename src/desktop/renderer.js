@@ -4,6 +4,65 @@ import { formatTokenCompact, formatTokenRaw, formatUsd } from "../shared/display
 import { dayToUtcDate, localDay, utcDateToDay } from "../shared/date.js";
 import { initI18n, setLang, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "../shared/i18n.js";
 
+import {
+  escapeHtml as _escapeHtml, cssEscape as _cssEscape, clampHour as _clampHour,
+  formatNumber as _formatNumber, formatHourLabel as _formatHourLabel,
+  formatTime as _formatTime, formatDateTime as _formatDateTime,
+  formatBytes as _formatBytes, formatDate as _formatDate,
+  formatTrendPeriod as _formatTrendPeriod, formatAxisLabel as _formatAxisLabel,
+  formatDetailBreakdownPeriod as _formatDetailBreakdownPeriod,
+  hasPositiveUsage as _hasPositiveUsage, hasConfiguredApiBaseUrl as _hasConfiguredApiBaseUrl,
+  normalizeApiBaseUrl as _normalizeApiBaseUrl, startOfUtcWeek as _startOfUtcWeek,
+  trailingDays as _trailingDays, daysForLastWeeks as _daysForLastWeeks,
+  daysForLastMonths as _daysForLastMonths, bucketForDay as _bucketForDay,
+  renderCostValue as _renderCostValue, renderCostAmountValue as _renderCostAmountValue,
+  renderCost as _renderCost, renderCostAmount as _renderCostAmount,
+  costValueForField as _costValueForField, cacheTokens as _cacheTokens,
+  sumKnownCosts as _sumKnownCosts, mergeCostQualityForDisplay as _mergeCostQualityForDisplay,
+  costTitle as _costTitle, renderAccountingToken as _renderAccountingToken,
+  sortedBreakdown as _sortedBreakdown, finalizeCostBreakdown as _finalizeCostBreakdown,
+  addCostBreakdownItem as _addCostBreakdownItem, aggregateUsageCost as _aggregateUsageCost,
+  aggregateTrendRowCost as _aggregateTrendRowCost, normalizeMissingPriceModels as _normalizeMissingPriceModels,
+  trendBucketKey as _trendBucketKey, emptyTrendRow as _emptyTrendRow,
+  summaryLabel as _summaryLabel, summaryTitle as _summaryTitle,
+  positiveInteger as _positiveInteger, normalizeTokenAggregate as _normalizeTokenAggregate,
+  normalizeBreakdownItems as _normalizeBreakdownItems,
+  normalizeUsageSummary as _normalizeUsageSummary,
+  normalizeUsageTrend as _normalizeUsageTrend,
+  normalizeUsageWorkdirs as _normalizeUsageWorkdirs,
+  normalizeUsageTotal as _normalizeUsageTotal,
+  reconcileHealthWithConfig as _reconcileHealthWithConfig
+} from "./renderer-helpers.js";
+
+import {
+  sourceName as _sourceName, sourceDescription as _sourceDescription,
+  sourceSummary as _sourceSummary, daysForRange as _daysForRange,
+  usageForRange as _usageForRange, rangeLabel as _rangeLabel,
+  overviewTrendGrain as _overviewTrendGrain, railCloudStatus as _railCloudStatus,
+  groupBy as _groupBy, groupProviders as _groupProviders,
+  groupByGrain as _groupByGrain, groupByHour as _groupByHour,
+  groupTrend as _groupTrend, groupWorkdirs as _groupWorkdirs,
+  groupWorkdirDetails as _groupWorkdirDetails, groupDailyRows as _groupDailyRows,
+  aggregateComposition as _aggregateComposition,
+  aggregatePeriodRow as _aggregatePeriodRow
+} from "./renderer-data.js";
+
+import {
+  formatToken as _formatToken, localeTokenCompact as _localeTokenCompact,
+  visibleCompositionFields as _visibleCompositionFields,
+  visibleCompositionEntries as _visibleCompositionEntries,
+  renderCompositionTiles as _renderCompositionTiles,
+  renderMiniMeters as _renderMiniMeters, renderDetailMeters as _renderDetailMeters,
+  renderWorkdirCards as _renderWorkdirCards, renderSparkBarValue as _renderSparkBarValue,
+  renderCompactBreakdown as _renderCompactBreakdown,
+  sourceSwitchButton as _sourceSwitchButton,
+  updateSourceSwitchButton as _updateSourceSwitchButton,
+  renderTrendDashboard as _renderTrendDashboard,
+  renderTrendSelection as _renderTrendSelection,
+  renderTrendDetailHero as _renderTrendDetailHero,
+  renderTrendDetailBreakdown as _renderTrendDetailBreakdown
+} from "./renderer-components.js";
+
 // 初始化多语言
 const currentLang = initI18n();
 
@@ -848,9 +907,7 @@ function closeResetConfirmModal() {
   $("#reset-confirm-modal").hidden = true;
 }
 
-function hasConfiguredApiBaseUrl(config) {
-  return Boolean(String(config?.apiBaseUrl || "").trim());
-}
+const hasConfiguredApiBaseUrl = _hasConfiguredApiBaseUrl;
 
 async function resetLocalOnly() {
   closeResetConfirmModal();
@@ -1326,127 +1383,16 @@ function usageQueryKey(range, grain = "") {
   return `${range}|${grain}`;
 }
 
-function normalizeUsageSummary(summary = {}) {
-  return {
-    ...summary,
-    totals: normalizeTokenAggregate(summary.totals || {}),
-    providers: normalizeBreakdownItems(summary.providers || []),
-    workdirs: normalizeBreakdownItems(summary.workdirs || []),
-    models: normalizeBreakdownItems(summary.models || [])
-  };
-}
-
-function normalizeUsageTrend(trend = {}) {
-  return {
-    ...trend,
-    items: (trend.items || []).map((item) => {
-      const aggregate = normalizeTokenAggregate(item);
-      return {
-        periodStart: item.periodStart || item.day || "",
-        periodEnd: item.periodEnd || item.periodStart || item.day || "",
-        ...(item.hour === null || item.hour === undefined ? {} : { hour: clampHour(Number(item.hour)) }),
-        ...aggregate,
-        compositionSummary: tokenCompositionSummary(aggregate),
-        modelBreakdown: [],
-        workdirBreakdown: [],
-        detailBreakdown: [],
-        modelDetails: []
-      };
-    }).filter(hasPositiveUsage)
-  };
-}
-
-function normalizeUsageWorkdirs(workdirs = {}) {
-  return {
-    ...workdirs,
-    items: (workdirs.items || []).map((item) => ({
-      ...normalizeTokenAggregate(item),
-      workdirHash: item.workdirHash || item.name || "unknown",
-      name: item.name || item.workdirDisplayName || "unknown",
-      rows: positiveInteger(item.rows)
-    })).filter(hasPositiveUsage)
-  };
-}
-
-function normalizeBreakdownItems(items = []) {
-  return items
-    .map((item) => ({
-      ...normalizeTokenAggregate(item),
-      name: item.name || "unknown",
-      rows: positiveInteger(item.rows)
-    }))
-    .filter(hasPositiveUsage)
-    .sort((a, b) => b.totalTokens - a.totalTokens);
-}
-
-function normalizeTokenAggregate(item = {}) {
-  const inputTokens = positiveInteger(item.inputTokens);
-  const outputTokens = positiveInteger(item.outputTokens);
-  const cacheReadTokens = positiveInteger(item.cacheReadTokens);
-  const cacheWriteTokens = positiveInteger(item.cacheWriteTokens);
-  const reasoningTokens = positiveInteger(item.reasoningTokens);
-  const explicitTotal = positiveInteger(item.totalTokens);
-  return {
-    inputTokens,
-    outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    reasoningTokens,
-    totalTokens: explicitTotal || inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
-  };
-}
+const normalizeUsageSummary = _normalizeUsageSummary;
+const normalizeUsageTrend = _normalizeUsageTrend;
+const normalizeUsageWorkdirs = _normalizeUsageWorkdirs;
+const normalizeBreakdownItems = _normalizeBreakdownItems;
+const normalizeTokenAggregate = _normalizeTokenAggregate;
+const normalizeUsageTotal = _normalizeUsageTotal;
+const positiveInteger = _positiveInteger;
 
 function reconcileHealthWithConfig(health = [], config = latestConfig) {
-  if (!config?.providerRoots) return health;
-  return health.map((item) => {
-    if (!["codex_local", "claude_code_local"].includes(item.providerId)) return item;
-    const manualRoots = config.providerRoots?.[item.providerId] || [];
-    const existingSources = item.sources || [];
-    const existingManualByPath = new Map(
-      existingSources
-        .filter((source) => source.kind === "manual")
-        .map((source) => [source.path || source.id, source])
-    );
-    const nonManualSources = existingSources.filter((source) => source.kind !== "manual");
-    const manualSources = manualRoots.map((root) => ({
-      kind: "manual",
-      id: root,
-      label: existingManualByPath.get(root)?.label || root,
-      path: root,
-      ignored: false
-    }));
-    const sourceIds = new Set([...nonManualSources, ...manualSources].map((source) => source.path || source.id).filter(Boolean));
-    const roots = (item.roots || []).filter((root) => sourceIds.has(root));
-    for (const root of manualRoots) {
-      if (!roots.includes(root)) roots.push(root);
-    }
-    return {
-      ...item,
-      roots,
-      sources: [...nonManualSources, ...manualSources],
-      detected: roots.length > 0,
-      ok: roots.length > 0
-    };
-  });
-}
-
-function normalizeUsageTotal(item) {
-  const inputTokens = positiveInteger(item.inputTokens);
-  const outputTokens = positiveInteger(item.outputTokens);
-  return {
-    ...item,
-    inputTokens,
-    outputTokens,
-    cacheReadTokens: positiveInteger(item.cacheReadTokens),
-    cacheWriteTokens: positiveInteger(item.cacheWriteTokens),
-    reasoningTokens: positiveInteger(item.reasoningTokens),
-    totalTokens: inputTokens + positiveInteger(item.cacheReadTokens) + positiveInteger(item.cacheWriteTokens) + outputTokens
-  };
-}
-
-function positiveInteger(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+  return _reconcileHealthWithConfig(health, config);
 }
 
 async function loadHealth() {
@@ -2302,9 +2248,7 @@ function finalizeTrendRow(row) {
   };
 }
 
-function hasPositiveUsage(row) {
-  return Number(row?.totalTokens || 0) > 0;
-}
+const hasPositiveUsage = _hasPositiveUsage;
 
 function formatAxisLabel(row, grain) {
   if (grain === "hour") {
@@ -3372,9 +3316,10 @@ function aggregateComposition(items) {
   });
 }
 
-function trendBucketKey(row) {
-  return row.hour !== undefined ? `${row.periodStart}|${row.periodEnd}|${row.hour}` : `${row.periodStart}|${row.periodEnd}`;
-}
+const trendBucketKey = _trendBucketKey;
+const costValueForField = _costValueForField;
+const cacheTokens = _cacheTokens;
+const sumKnownCosts = _sumKnownCosts;
 
 function humanDominant(value = "") {
   const labels = {
@@ -3387,30 +3332,9 @@ function humanDominant(value = "") {
   return labels[value] || value || "-";
 }
 
-function costValueForField(item, field) {
-  return {
-    inputTokens: item.inputCostUsd,
-    outputTokens: item.outputCostUsd,
-    cacheTokens: sumKnownCosts(item.cacheReadCostUsd, item.cacheWriteCostUsd),
-    cacheReadTokens: item.cacheReadCostUsd,
-    cacheWriteTokens: item.cacheWriteCostUsd,
-    reasoningTokens: item.reasoningCostUsd
-  }[field];
-}
-
 function renderAccountingToken(tokens, cost) {
   const costLine = latestConfig?.showEstimatedCost ? `<small>${renderCostAmountValue(cost)}</small>` : "";
   return `<span class="token-accounting">${formatToken(tokens || 0)}${costLine}</span>`;
-}
-
-function cacheTokens(item = {}) {
-  return Number(item.cacheReadTokens || 0) + Number(item.cacheWriteTokens || 0);
-}
-
-function sumKnownCosts(...values) {
-  const known = values.filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)));
-  if (!known.length) return null;
-  return known.reduce((sum, value) => sum + Number(value), 0);
 }
 
 function renderTrendDashboard(rows) {
@@ -3447,37 +3371,8 @@ function renderTrendDashboard(rows) {
   </div>`;
 }
 
-function aggregateTrendRowCost(rows) {
-  const current = {
-    estimatedCostUsd: 0,
-    costQuality: "",
-    pricingVersion: "",
-    missingPriceTokens: 0,
-    missingPriceModels: {}
-  };
-  for (const row of rows) {
-    if (row.hasKnownPrice) {
-      current.hasKnownPrice = true;
-      current.estimatedCostUsd += row.estimatedCostUsd || 0;
-      current.costQuality = mergeCostQualityForDisplay(current.costQuality, row.costQuality);
-      current.pricingVersion ||= row.pricingVersion || "";
-    }
-    for (const item of row.missingPriceModels || []) {
-      current.missingPriceModels[item.name] = (current.missingPriceModels[item.name] || 0) + (item.totalTokens || 0);
-      current.missingPriceTokens += item.totalTokens || 0;
-      current.costQuality = mergeCostQualityForDisplay(current.costQuality, "unknown_price");
-    }
-  }
-  current.missingPriceModels = sortedBreakdown(current.missingPriceModels);
-  return current;
-}
-
-function mergeCostQualityForDisplay(left = "", right = "") {
-  const rank = { exact_price: 0, estimated_price: 1, unknown_price: 2 };
-  if (!left) return right || "";
-  if (!right) return left;
-  return rank[right] > rank[left] ? right : left;
-}
+const aggregateTrendRowCost = _aggregateTrendRowCost;
+const mergeCostQualityForDisplay = _mergeCostQualityForDisplay;
 
 function renderTrendMetric(label, value, note, title = "") {
   return `<article class="trend-metric"${title ? ` title="${escapeHtml(title)}"` : ""}>
@@ -3541,42 +3436,16 @@ function setSaveMessage(message, tone = "") {
   if (message && tone === "error") showToast(message);
 }
 
-function normalizeApiBaseUrl(value) {
-  return String(value || "").trim().replace(/\/+$/, "");
-}
-
-function formatNumber(value) {
-  return new Intl.NumberFormat().format(value || 0);
-}
+const normalizeApiBaseUrl = _normalizeApiBaseUrl;
+const formatNumber = _formatNumber;
+const normalizeMissingPriceModels = _normalizeMissingPriceModels;
+const renderCost = _renderCost;
+const renderCostAmount = _renderCostAmount;
+const renderCostAmountValue = _renderCostAmountValue;
+const renderCostValue = _renderCostValue;
 
 function costTitle(item) {
-  const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
-  return `${item.costQuality || t("desktop.renderer.unknownPrice")} · ${item.pricingVersion || t("desktop.renderer.noPricingVersion")} · ${pricingSource}${missing ? ` · ${t("desktop.renderer.missing")}: ${missing}` : ""}`;
-}
-
-function normalizeMissingPriceModels(value) {
-  if (Array.isArray(value)) return value;
-  return sortedBreakdown(value || {});
-}
-
-function renderCost(item) {
-  const value = renderCostValue(item);
-  if (value === "-") return value;
-  return `${value}${item.missingPriceTokens ? " *" : ""}`;
-}
-
-function renderCostAmount(item) {
-  return renderCostAmountValue(renderCost(item));
-}
-
-function renderCostAmountValue(value) {
-  const text = typeof value === "string" ? value : formatUsd(value);
-  return `<span class="cost-amount">${escapeHtml(text)}</span>`;
-}
-
-function renderCostValue(item) {
-  if (!item.hasKnownPrice && item.missingPriceTokens > 0) return "-";
-  return formatUsd(item.estimatedCostUsd);
+  return _costTitle(item, { pricingSource, t });
 }
 
 function aggregateUsageCost(items) {
@@ -3667,80 +3536,31 @@ async function syncTrayCostState() {
   }
 }
 
-function sortedBreakdown(obj) {
-  return Object.entries(obj || {})
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, totalTokens]) => ({ name, totalTokens }));
-}
+const sortedBreakdown = _sortedBreakdown;
 
 function addCostBreakdownItem(map, name, item, withCost = addDisplayCostToUsageItem(item)) {
-  const key = name || "unknown";
-  const current = map[key] || {
-    name: key,
-    totalTokens: 0,
-    estimatedCostUsd: 0,
-    costQuality: "",
-    pricingVersion: ""
-  };
-  current.totalTokens += item.totalTokens || 0;
-  aggregateCost(current, withCost);
-  map[key] = current;
-  return current;
+  return _addCostBreakdownItem(map, name, item, withCost);
 }
 
-function finalizeCostBreakdown(map) {
-  return Object.values(map || {})
-    .sort((a, b) => b.totalTokens - a.totalTokens)
-    .map((item) => ({
-      ...item,
-      missingPriceModels: sortedBreakdown(item.missingPriceModels || {})
-    }));
-}
+const finalizeCostBreakdown = _finalizeCostBreakdown;
+const formatTime = _formatTime;
+const formatDateTime = _formatDateTime;
+const formatBytes = _formatBytes;
+const formatDate = _formatDate;
+const formatTrendPeriod = _formatTrendPeriod;
+const clampHour = _clampHour;
+const formatHourLabel = _formatHourLabel;
+const trailingDays = _trailingDays;
+const daysForLastWeeks = _daysForLastWeeks;
+const daysForLastMonths = _daysForLastMonths;
 
 function formatToken(value) {
-  return latestConfig?.showRawTokens ? formatNumber(value) : localeTokenCompact(value);
+  return latestConfig?.showRawTokens ? _formatNumber(value) : localeTokenCompact(value);
 }
 
 function metricTitle(row) {
   const cost = latestConfig?.showEstimatedCost ? ` · ${t("common.cost")} ${renderCost(row)}` : "";
   return `${formatTrendPeriod(row)} · ${formatToken(row.totalTokens)}${cost}`;
-}
-
-function formatTime(value) {
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatDateTime(value) {
-  const date = new Date(value);
-  return `${date.toLocaleDateString([], { month: "short", day: "2-digit" })} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-}
-
-function formatBytes(value) {
-  const bytes = Number(value || 0);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDate(value) {
-  const date = new Date(`${value}T00:00:00Z`);
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" }).format(date);
-}
-
-function formatTrendPeriod(row) {
-  if (row?.hour !== undefined) return `${formatDate(row.periodStart)} ${formatHourLabel(row.hour)}`;
-  if (row.periodStart === row.periodEnd) return formatDate(row.periodStart);
-  return `${formatDate(row.periodStart)} - ${formatDate(row.periodEnd)}`;
-}
-
-function clampHour(value) {
-  const hour = Number(value ?? 0);
-  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return 0;
-  return hour;
-}
-
-function formatHourLabel(hour) {
-  return `${String(clampHour(hour)).padStart(2, "0")}:00`;
 }
 
 function trendViewMeta() {
@@ -3759,36 +3579,6 @@ function daysForTrendView(view) {
   return trailingDays(30);
 }
 
-function trailingDays(count) {
-  const today = utcToday();
-  return Array.from({ length: count }, (_, index) => {
-    const day = new Date(today);
-    day.setUTCDate(today.getUTCDate() - count + index + 1);
-    return toDay(day);
-  });
-}
-
-function daysForLastWeeks(count) {
-  const today = utcToday();
-  const start = startOfUtcWeek(today);
-  start.setUTCDate(start.getUTCDate() - ((count - 1) * 7));
-  const days = [];
-  for (const day = new Date(start); day <= today; day.setUTCDate(day.getUTCDate() + 1)) {
-    days.push(toDay(day));
-  }
-  return days;
-}
-
-function daysForLastMonths(count) {
-  const today = utcToday();
-  const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - count + 1, 1));
-  const days = [];
-  for (const day = new Date(start); day <= today; day.setUTCDate(day.getUTCDate() + 1)) {
-    days.push(toDay(day));
-  }
-  return days;
-}
-
 function renderCompactBreakdown(items = []) {
   if (!items.length) return "-";
   return items
@@ -3797,38 +3587,10 @@ function renderCompactBreakdown(items = []) {
     .join("");
 }
 
-function summaryLabel(items = []) {
-  if (!items.length) return "-";
-  const top = items.slice(0, 2).map((item) => item.name).join(", ");
-  return items.length > 2 ? `${top} +${items.length - 2}` : top;
-}
-
-function summaryTitle(items = []) {
-  return items.map((item) => `${item.name} ${formatTokenRaw(item.totalTokens)}`).join(", ");
-}
-
-function bucketForDay(day, grain) {
-  const date = new Date(`${day}T00:00:00Z`);
-  if (grain === "month") {
-    const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
-    const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
-    return { key: toDay(start), periodStart: toDay(start), periodEnd: toDay(end) };
-  }
-  if (grain === "week") {
-    const start = startOfUtcWeek(date);
-    const end = new Date(start);
-    end.setUTCDate(start.getUTCDate() + 6);
-    return { key: toDay(start), periodStart: toDay(start), periodEnd: toDay(end) };
-  }
-  return { key: day, periodStart: day, periodEnd: day };
-}
-
-function startOfUtcWeek(date) {
-  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const weekday = start.getUTCDay() || 7;
-  start.setUTCDate(start.getUTCDate() - weekday + 1);
-  return start;
-}
+const summaryLabel = _summaryLabel;
+const summaryTitle = _summaryTitle;
+const bucketForDay = _bucketForDay;
+const startOfUtcWeek = _startOfUtcWeek;
 
 function utcToday() {
   return dayToUtcDate(localDay());
@@ -3838,13 +3600,8 @@ function toDay(date) {
   return utcDateToDay(date);
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
-}
-
-function cssEscape(value) {
-  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
+const escapeHtml = _escapeHtml;
+const cssEscape = _cssEscape;
 
 // 初始化语言切换器
 const langContainer = document.querySelector("#lang-switcher-container");

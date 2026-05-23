@@ -56,7 +56,9 @@ atl-collector/    Rust CLI and Tauri sidecar binary
 src/desktop/      Tauri desktop renderer and bridge
 src/shared/       Shared schema, pricing, crypto, dates, display helpers
 src/web/          Public and admin Web UI (index.html, admin.html, app.js, admin.js, styles.css)
-tests/            Node-based test runner
+tests/            Node-based test runner (backend + shared)
+tests/renderer/   Renderer unit tests (Vitest, jsdom)
+tests/e2e/        E2E tests with mock Tauri bridge (Playwright)
 doc/              Product, architecture, deployment, packaging, and smoke docs
 migrations/       MySQL migrations
 samples/          Sample usage data
@@ -119,8 +121,22 @@ Do not package by default for ordinary desktop UI or renderer changes. Package o
 Tests:
 
 ```bash
-npm test
+npm test                            # Backend + shared module tests (Node)
+npm run test:ui                     # Renderer unit tests (Vitest, jsdom, 412 tests)
+npm run test:ui:watch               # Watch mode
+npm run test:ui:coverage            # Coverage report
+npm run test:ui:bench               # Benchmarks for hot-path functions
+npm run test:e2e                    # Mock E2E (Playwright, 52 tests, no Tauri needed)
+npm run test:e2e:mock               # Same as test:e2e (explicit alias)
+npm run test:e2e:mock:headed        # Mock E2E with visible browser
+npm run test:e2e:tauri              # Real Tauri E2E (requires Rust toolchain)
 ```
+
+Renderer unit tests (`tests/renderer/`) import extracted modules (`renderer-helpers.js`, `renderer-data.js`, `renderer-components.js`) directly and test pure functions, data transforms, and HTML generators without a browser. Setup (`tests/renderer/setup.js`) includes a symlink pre-check that fails if any symlinks exist in `src/`.
+
+E2E tests (`tests/e2e/`) use a lightweight Node test server (`tests/e2e/test-server.js`) that serves `src/desktop/` as root and proxies `/shared/*` to `src/shared/`, inject a mock Tauri bridge via `addInitScript`, and verify real product behavior: scan → data display, range switching, navigation, settings save flow, workdir drawer interaction, onboarding wizard, and sync status. Scenario config via `window.__ATL_E2E_CONFIG__` (e.g., `{ desktopAutoInitialized: false, language: "zh-CN" }`). Config: `playwright.mock.config.js`. Mock data: `tests/e2e/mock-tauri.js`.
+
+Test output is consolidated under `tests/output/`: `coverage/` for Vitest coverage reports, `playwright/` for Playwright traces and failure screenshots.
 
 Backend smoke:
 
@@ -408,9 +424,21 @@ Use the smallest verification that covers the touched surface:
 - Every release regression must include `npm run verify:ccusage` before tagging or packaging release artifacts, because collector correctness is product-critical and internal tests cannot catch external tool scope drift.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop feature quick self-test: if the goal is local behavior or UI-direction confirmation during development, run the desktop feature quick self-test loop above. This is enough for development-stage self-test, not for final delivery.
-- Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm test`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches. This is the default path for renderer/UI behavior.
+- Desktop renderer changes (pure functions, data transforms, HTML generators in `renderer-helpers.js`, `renderer-data.js`, `renderer-components.js`): run `npm run test:ui`. These unit tests import real production code and verify outputs directly.
+- Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm run test:ui`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches.
+- Desktop UI feature verification (scan display, range switching, navigation, settings, wizard, sync status): run `npm run test:e2e` (52 mock E2E tests including zh-CN locale, async scan, empty data, error states, large dataset, and product workflows).
+- Collector correctness gate: run `npm run verify:ccusage` — compares against external ccusage output.
+- Full desktop release gate: `npm test`, `npm run test:ui`, `npm run test:e2e`, `cargo test --workspace`, `npm run desktop`. All must pass before packaging.
 - Packaging, updater, preset, bundled-asset, install/download UX, or package-resource changes: run tests, then build with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.
+
+New feature quality gate:
+
+- Every new product feature must define and verify its logic, interaction, and performance surface before handoff. Do not treat a feature as covered by only one test layer unless the surface truly has no UI or no measurable runtime path.
+- Logic verification: add or update production-code tests for pure functions, data transforms, storage/query behavior, protocol validation, and collector/backend contracts touched by the feature.
+- Interaction verification: add or update E2E coverage for user-visible desktop flows, including happy path, empty state, error state, relevant i18n text (`zh-CN` and `en` when UI text changes), and state persistence across navigation or refresh when applicable.
+- Performance verification: for feature paths that can affect startup, scan, range switching, rendering, sync, backup, import/export, or large datasets, add an explicit budget or benchmark. At minimum, reuse `npm run test:e2e` performance specs or `npm run test:ui:bench`; for collector hot paths, use Rust tests or targeted timing evidence.
+- Boundary verification: if a feature depends on real Tauri/native behavior, filesystem dialogs, OAuth redirects, updater lifecycle, packaging resources, or external services, mock E2E is not sufficient by itself. Add real Tauri/manual smoke, package, or integration evidence that matches the changed runtime boundary.
 
 Smoke checklist: `doc/smoke-checklist.md`.
 

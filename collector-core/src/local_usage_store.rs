@@ -282,6 +282,9 @@ impl LocalUsageStore {
             "hour" => {
                 "SELECT day || 'T' || printf('%02d', hour) AS bucket, day AS periodStart, day AS periodEnd, hour, SUM(inputTokens), SUM(outputTokens), SUM(cacheReadTokens), SUM(cacheWriteTokens), SUM(reasoningTokens), SUM(totalTokens) FROM usage_fact"
             }
+            "week" => {
+                "SELECT date(day, '-' || ((strftime('%w', day) + 6) % 7) || ' days') AS bucket, date(day, '-' || ((strftime('%w', day) + 6) % 7) || ' days') AS periodStart, date(day, '-' || ((strftime('%w', day) + 6) % 7) || ' days', '+6 days') AS periodEnd, NULL AS hour, SUM(inputTokens), SUM(outputTokens), SUM(cacheReadTokens), SUM(cacheWriteTokens), SUM(reasoningTokens), SUM(totalTokens) FROM usage_fact"
+            }
             "month" => {
                 "SELECT substr(day, 1, 7) AS bucket, substr(day, 1, 7) || '-01' AS periodStart, substr(day, 1, 7) || '-01' AS periodEnd, NULL AS hour, SUM(inputTokens), SUM(outputTokens), SUM(cacheReadTokens), SUM(cacheWriteTokens), SUM(reasoningTokens), SUM(totalTokens) FROM usage_fact"
             }
@@ -292,6 +295,7 @@ impl LocalUsageStore {
         let mut sql = format!("{} {}", sql, where_clause(from.as_deref(), to.as_deref()));
         sql.push_str(match grain {
             "hour" => " GROUP BY day, hour ORDER BY day, hour",
+            "week" => " GROUP BY date(day, '-' || ((strftime('%w', day) + 6) % 7) || ' days') ORDER BY date(day, '-' || ((strftime('%w', day) + 6) % 7) || ' days')",
             "month" => " GROUP BY substr(day, 1, 7) ORDER BY substr(day, 1, 7)",
             _ => " GROUP BY day ORDER BY day",
         });
@@ -548,16 +552,44 @@ fn bounds_params(from: Option<&str>, to: Option<&str>) -> Vec<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn local_usage_store_roundtrips_cache_and_facts() {
+    fn temp_db() -> (LocalUsageStore, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!(
-            "atl-local-usage-{}.sqlite3",
+            "atl-lus-test-{}.sqlite3",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let mut store = LocalUsageStore::open(path.clone()).unwrap();
+        let store = LocalUsageStore::open(path.clone()).unwrap();
+        (store, path)
+    }
+
+    fn make_item(day: &str, hour: i64, tool: &str, provider: &str, model: &str, tokens: i64) -> Value {
+        json!({
+            "day": day,
+            "hour": hour,
+            "toolCode": tool,
+            "providerId": provider,
+            "workdirHash": format!("h_{}", provider),
+            "workdirDisplayName": format!("proj_{}", provider),
+            "model": model,
+            "inputTokens": tokens / 2,
+            "outputTokens": tokens / 4,
+            "cacheReadTokens": tokens / 8,
+            "cacheWriteTokens": tokens / 8,
+            "reasoningTokens": 0,
+            "totalTokens": tokens,
+            "sourceQuality": "exact",
+            "rawSourceRef": "a.jsonl",
+            "providerVersion": "1",
+            "parserVersion": "1",
+            "sourceFingerprint": format!("fp_{}_{}", provider, day)
+        })
+    }
+
+    #[test]
+    fn local_usage_store_roundtrips_cache_and_facts() {
+        let (mut store, path) = temp_db();
         let item = json!({
             "day": crate::date::local_day(),
             "hour": 10,
@@ -602,6 +634,250 @@ mod tests {
             150
         );
         assert_eq!(store.detail_window("today", 0, 10).unwrap()["totalRows"], 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn summary_aggregates_multiple_providers() {
+        let (mut store, path) = temp_db();
+        let today = crate::date::local_day();
+        store.replace_usage_facts(&[
+            make_item(&today, 10, "codex", "codex_local", "codex-1", 100),
+            make_item(&today, 10, "claude_code", "claude_code_local", "claude-3", 200),
+            make_item(&today, 11, "codex", "codex_local", "codex-1", 50),
+        ], "now").unwrap();
+
+        let summary = store.summary("today").unwrap();
+        assert_eq!(summary["totals"]["totalTokens"], 350);
+        assert_eq!(summary["totals"]["rows"], 3);
+
+        let providers = summary["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 2);
+
+        let models = summary["models"].as_array().unwrap();
+        assert_eq!(models.len(), 2);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn trend_daily_grain() {
+        let (mut store, path) = temp_db();
+        store.replace_usage_facts(&[
+            make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
+            make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
+            make_item("2026-05-11", 9, "codex", "codex_local", "gpt-5", 200),
+        ], "now").unwrap();
+
+        let trend = store.trend("2026-05-10..2026-05-11", "day").unwrap();
+        let items = trend["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["totalTokens"], 150); // 2026-05-10
+        assert_eq!(items[1]["totalTokens"], 200); // 2026-05-11
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn trend_hourly_grain() {
+        let (mut store, path) = temp_db();
+        store.replace_usage_facts(&[
+            make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
+            make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
+        ], "now").unwrap();
+
+        let trend = store.trend("2026-05-10..2026-05-10", "hour").unwrap();
+        let items = trend["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items[0]["bucket"].as_str().unwrap().contains("T10"));
+        assert!(items[1]["bucket"].as_str().unwrap().contains("T11"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn trend_monthly_grain() {
+        let (mut store, path) = temp_db();
+        store.replace_usage_facts(&[
+            make_item("2026-05-01", 10, "codex", "codex_local", "gpt-5", 100),
+            make_item("2026-05-15", 10, "codex", "codex_local", "gpt-5", 200),
+            make_item("2026-06-01", 10, "codex", "codex_local", "gpt-5", 300),
+        ], "now").unwrap();
+
+        let trend = store.trend("2026-05-01..2026-06-30", "month").unwrap();
+        let items = trend["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["totalTokens"], 300); // 2026-05
+        assert_eq!(items[1]["totalTokens"], 300); // 2026-06
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn trend_weekly_grain() {
+        let (mut store, path) = temp_db();
+        // 2026-05-18 is Monday, 2026-05-19 is Tuesday (same week: May 18-24)
+        // 2026-05-25 is Monday (next week: May 25-31)
+        store.replace_usage_facts(&[
+            make_item("2026-05-18", 10, "codex", "codex_local", "gpt-5", 100),
+            make_item("2026-05-19", 11, "codex", "codex_local", "gpt-5", 200),
+            make_item("2026-05-25", 9, "codex", "codex_local", "gpt-5", 300),
+        ], "now").unwrap();
+
+        let trend = store.trend("2026-05-18..2026-05-31", "week").unwrap();
+        let items = trend["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        // First week bucket: 2026-05-18 (Monday) — aggregates May 18 + May 19
+        assert_eq!(items[0]["periodStart"], "2026-05-18");
+        assert_eq!(items[0]["periodEnd"], "2026-05-24");
+        assert_eq!(items[0]["totalTokens"], 300);
+        // Second week bucket: 2026-05-25 (Monday)
+        assert_eq!(items[1]["periodStart"], "2026-05-25");
+        assert_eq!(items[1]["periodEnd"], "2026-05-31");
+        assert_eq!(items[1]["totalTokens"], 300);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn workdirs_groups_and_sorts() {
+        let (mut store, path) = temp_db();
+        let today = crate::date::local_day();
+        store.replace_usage_facts(&[
+            make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
+            make_item(&today, 11, "codex", "codex_local", "gpt-5", 200),
+        ], "now").unwrap();
+
+        let w = store.workdirs("today", 10).unwrap();
+        let items = w["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["totalTokens"], 300);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn detail_window_pagination() {
+        let (mut store, path) = temp_db();
+        let today = crate::date::local_day();
+        let items: Vec<Value> = (0..15)
+            .map(|i| make_item(&today, i, "codex", "codex_local", "gpt-5", (i + 1) * 10))
+            .collect();
+        store.replace_usage_facts(&items, "now").unwrap();
+
+        let page1 = store.detail_window("today", 0, 5).unwrap();
+        assert_eq!(page1["totalRows"], 15);
+        assert_eq!(page1["items"].as_array().unwrap().len(), 5);
+        assert_eq!(page1["offset"], 0);
+
+        let page2 = store.detail_window("today", 5, 5).unwrap();
+        assert_eq!(page2["offset"], 5);
+        assert_ne!(
+            page1["items"].as_array().unwrap()[0],
+            page2["items"].as_array().unwrap()[0]
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn detail_window_clamps_limit() {
+        let (mut store, path) = temp_db();
+        let today = crate::date::local_day();
+        store.replace_usage_facts(&[
+            make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
+        ], "now").unwrap();
+
+        let result = store.detail_window("today", 0, 0).unwrap();
+        assert_eq!(result["limit"], 1, "limit 0 should be clamped to 1");
+
+        let result = store.detail_window("today", 0, 999).unwrap();
+        assert_eq!(result["limit"], 500, "limit > 500 should be clamped to 500");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn empty_database_queries() {
+        let (store, path) = temp_db();
+
+        let summary = store.summary("today").unwrap();
+        assert_eq!(summary["totals"]["rows"], 0);
+        assert_eq!(summary["totals"]["totalTokens"], 0);
+        assert!(summary["providers"].as_array().unwrap().is_empty());
+
+        assert!(!store.has_usage_facts().unwrap());
+
+        let w = store.workdirs("today", 10).unwrap();
+        assert!(w["items"].as_array().unwrap().is_empty());
+
+        let trend = store.trend("today", "day").unwrap();
+        assert!(trend["items"].as_array().unwrap().is_empty());
+
+        let detail = store.detail_window("today", 0, 10).unwrap();
+        assert_eq!(detail["totalRows"], 0);
+
+        let all = store.all_usage_items().unwrap();
+        assert!(all.is_empty());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn range_bounds_parsing() {
+        let (from, to) = range_bounds("today");
+        assert!(from.is_some());
+        assert_eq!(from, to);
+
+        let (from, to) = range_bounds("all");
+        assert!(from.is_none());
+        assert!(to.is_none());
+
+        let (from, to) = range_bounds("2026-05-10..2026-05-15");
+        assert_eq!(from.as_deref(), Some("2026-05-10"));
+        assert_eq!(to.as_deref(), Some("2026-05-15"));
+
+        let (from, to) = range_bounds("2026-05-10..");
+        assert_eq!(from.as_deref(), Some("2026-05-10"));
+        assert!(to.is_none());
+
+        let (from, to) = range_bounds("..2026-05-15");
+        assert!(from.is_none());
+        assert_eq!(to.as_deref(), Some("2026-05-15"));
+
+        let (from, to) = range_bounds("7d");
+        assert!(from.is_some());
+        assert!(to.is_some());
+
+        let (from, to) = range_bounds("30d");
+        assert!(from.is_some());
+        assert!(to.is_some());
+    }
+
+    #[test]
+    fn replace_usage_facts_clears_previous() {
+        let (mut store, path) = temp_db();
+        let today = crate::date::local_day();
+        store.replace_usage_facts(&[
+            make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
+        ], "now").unwrap();
+        assert_eq!(store.has_usage_facts().unwrap(), true);
+
+        // Replace with new data — old data must be gone
+        store.replace_usage_facts(&[
+            make_item(&today, 11, "codex", "codex_local", "gpt-5", 200),
+        ], "now").unwrap();
+
+        let all = store.all_usage_items().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0]["totalTokens"], 200);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn source_cache_empty_fingerprint_skipped() {
+        let (mut store, path) = temp_db();
+        let item = make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100);
+        let mut cache = HashMap::new();
+        cache.insert("".to_string(), vec![item.clone()]);
+        cache.insert("valid_fp".to_string(), vec![item]);
+
+        store.replace_source_cache(&cache, "now").unwrap();
+        assert!(store.take_cached_source("").is_none());
+        assert!(store.take_cached_source("valid_fp").is_some());
         let _ = std::fs::remove_file(path);
     }
 }

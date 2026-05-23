@@ -88,4 +88,69 @@ mod tests {
         let result = workdir_from_candidate("virtual:a:b:c", "p_test");
         assert_eq!(result.display_name, "c");
     }
+
+    #[test]
+    fn test_virtual_path_hash_deterministic() {
+        let r1 = workdir_from_candidate("virtual:cursor:user@x.com", "p_1");
+        let r2 = workdir_from_candidate("virtual:cursor:user@x.com", "p_1");
+        assert_eq!(r1.workdir_hash, r2.workdir_hash);
+    }
+
+    #[test]
+    fn test_virtual_path_different_participants() {
+        let r1 = workdir_from_candidate("virtual:cursor:user@x.com", "p_1");
+        let r2 = workdir_from_candidate("virtual:cursor:user@x.com", "p_2");
+        assert_ne!(r1.workdir_hash, r2.workdir_hash);
+    }
+
+    #[test]
+    fn test_normalize_path_for_hash_lowercase() {
+        // Use a real temp path that exists so canonicalize works
+        let dir = std::env::temp_dir().join("AtlWorkdirTest");
+        let _ = std::fs::create_dir_all(&dir);
+        let normalized = normalize_path_for_hash(&dir.to_string_lossy());
+        assert_eq!(normalized, normalized.to_lowercase());
+        assert!(!normalized.ends_with('/'));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_normalize_path_for_hash_forward_slashes() {
+        let dir = std::env::temp_dir().join("AtlWorkdirSlashTest");
+        let _ = std::fs::create_dir_all(&dir);
+        let normalized = normalize_path_for_hash(&dir.to_string_lossy());
+        assert!(!normalized.contains('\\'), "backslashes should be converted");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_detect_display_name_extracts_last_component() {
+        let dir = std::env::temp_dir().join("my-test-project-xyz");
+        let _ = std::fs::create_dir_all(&dir);
+        let name = detect_display_name(&dir.to_string_lossy());
+        assert_eq!(name, "my-test-project-xyz");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_workdir_from_candidate_real_path() {
+        let dir = std::env::temp_dir().join("atl-workdir-real-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let result = workdir_from_candidate(&dir.to_string_lossy(), "p_test");
+        assert!(!result.local_path.is_empty());
+        assert_eq!(result.display_name, "atl-workdir-real-test");
+        assert_eq!(result.workdir_hash.len(), 64);
+        assert!(!result.detected_name.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_workdir_hash_consistency() {
+        let dir = std::env::temp_dir().join("atl-hash-consistency");
+        let _ = std::fs::create_dir_all(&dir);
+        let r1 = workdir_from_candidate(&dir.to_string_lossy(), "p_x");
+        let r2 = workdir_from_candidate(&dir.to_string_lossy(), "p_x");
+        assert_eq!(r1.workdir_hash, r2.workdir_hash, "same path+participant must produce same hash");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

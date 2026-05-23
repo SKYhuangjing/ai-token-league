@@ -552,4 +552,325 @@ mod tests {
             std::env::remove_var("HOME");
         }
     }
+
+    // ── sanitize_value tests ──
+
+    #[test]
+    fn sanitize_value_redacts_secret_keys() {
+        let input = json!({
+            "accessToken": "secret-at",
+            "refreshToken": "secret-rt",
+            "password": "hunter2",
+            "identityPrivateKey": "pk-xyz",
+            "normalField": "hello"
+        });
+        let output = sanitize_value(input);
+        assert_eq!(output["accessToken"], REDACTED);
+        assert_eq!(output["refreshToken"], REDACTED);
+        assert_eq!(output["password"], REDACTED);
+        assert_eq!(output["identityPrivateKey"], REDACTED);
+        assert_eq!(output["normalField"], "hello");
+    }
+
+    #[test]
+    fn sanitize_value_redacts_path_keys() {
+        let input = json!({
+            "path": "/Users/sky/secret-project",
+            "configPath": "/home/user/.config",
+            "root": "/opt/data",
+            "directory": "/tmp/work",
+            "name": "normal"
+        });
+        let output = sanitize_value(input);
+        assert_eq!(output["path"], PATH_REDACTED);
+        assert_eq!(output["configPath"], PATH_REDACTED);
+        assert_eq!(output["root"], PATH_REDACTED);
+        assert_eq!(output["directory"], PATH_REDACTED);
+        assert_eq!(output["name"], "normal");
+    }
+
+    #[test]
+    fn sanitize_value_truncates_long_strings() {
+        let long = "x".repeat(2000);
+        let input = json!({ "message": long });
+        let output = sanitize_value(input);
+        let result = output["message"].as_str().unwrap();
+        assert!(result.len() < 2000);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn sanitize_value_handles_nested_structures() {
+        let input = json!({
+            "outer": {
+                "innerToken": "secret",
+                "data": [1, 2, 3]
+            }
+        });
+        let output = sanitize_value(input);
+        assert_eq!(output["outer"]["innerToken"], REDACTED);
+        assert_eq!(output["outer"]["data"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn sanitize_value_limits_array_to_200() {
+        let items: Vec<Value> = (0..300).map(|i| json!(i)).collect();
+        let input = json!({ "items": items });
+        let output = sanitize_value(input);
+        assert_eq!(output["items"].as_array().unwrap().len(), 200);
+    }
+
+    #[test]
+    fn sanitize_value_primitives_unchanged() {
+        assert_eq!(sanitize_value(json!(42)), json!(42));
+        assert_eq!(sanitize_value(json!(true)), json!(true));
+        assert_eq!(sanitize_value(json!(null)), json!(null));
+    }
+
+    // ── summarize_command_args tests ──
+
+    #[test]
+    fn summarize_args_usage_scan() {
+        let result = summarize_command_args("usage:scan", &json!({"force": true}));
+        assert_eq!(result["force"], true);
+    }
+
+    #[test]
+    fn summarize_args_usage_summary() {
+        let result = summarize_command_args("usage:summary", &json!({"range": "7d"}));
+        assert_eq!(result["range"], "7d");
+    }
+
+    #[test]
+    fn summarize_args_api_check() {
+        let result = summarize_command_args("api:check", &json!({"apiBaseUrl": "https://example.com"}));
+        assert_eq!(result["hasApiBaseUrl"], true);
+
+        let result = summarize_command_args("api:check", &json!({"apiBaseUrl": ""}));
+        assert_eq!(result["hasApiBaseUrl"], false);
+    }
+
+    #[test]
+    fn summarize_args_config_update() {
+        let result = summarize_command_args("config:update", &json!({"nickname": "test", "scanInterval": 30}));
+        let keys = result["keys"].as_array().unwrap();
+        assert!(keys.iter().any(|k| k.as_str() == Some("nickname")));
+        assert!(keys.iter().any(|k| k.as_str() == Some("scanInterval")));
+    }
+
+    #[test]
+    fn summarize_args_cursor_token() {
+        let result = summarize_command_args("cursor:add-token", &json!({"accountName": "work"}));
+        assert_eq!(result["accountName"], "work");
+    }
+
+    #[test]
+    fn summarize_args_workdirs_alias() {
+        let result = summarize_command_args("workdirs:set-alias", &json!({"workdirHash": "h1", "alias": "my-project"}));
+        assert_eq!(result["hasWorkdirHash"], true);
+        assert_eq!(result["hasAlias"], true);
+
+        let result = summarize_command_args("workdirs:set-alias", &json!({"workdirHash": "", "alias": "  "}));
+        assert_eq!(result["hasWorkdirHash"], false);
+        assert_eq!(result["hasAlias"], false);
+    }
+
+    // ── summarize_command_result tests ──
+
+    #[test]
+    fn summarize_result_usage_scan() {
+        let result = summarize_command_result("usage:scan", &Ok(json!({
+            "rowCount": 5, "health": [{}], "fromCache": false
+        })));
+        assert_eq!(result["rowCount"], 5);
+        assert_eq!(result["healthCount"], 1);
+        assert_eq!(result["fromCache"], false);
+    }
+
+    #[test]
+    fn summarize_result_usage_sync() {
+        let result = summarize_command_result("usage:sync", &Ok(json!({
+            "accepted": 10, "rejected": 2, "bucketCount": 3,
+            "queuePending": 1, "queueAttempted": 5, "queueUploaded": 4, "queueFailed": 1,
+            "newFailedBucketCount": 0
+        })));
+        assert_eq!(result["accepted"], 10);
+        assert_eq!(result["rejected"], 2);
+    }
+
+    #[test]
+    fn summarize_result_error() {
+        let result = summarize_command_result("usage:scan", &Err("something broke".to_string()));
+        assert!(result["error"].as_str().unwrap().contains("something broke"));
+    }
+
+    #[test]
+    fn summarize_result_error_truncates() {
+        let long_error = "x".repeat(600);
+        let result = summarize_command_result("usage:scan", &Err(long_error));
+        let error = result["error"].as_str().unwrap();
+        assert!(error.len() < 600);
+        assert!(error.ends_with("..."));
+    }
+
+    #[test]
+    fn summarize_result_usage_summary() {
+        let result = summarize_command_result("usage:summary", &Ok(json!({
+            "totals": {"rows": 42, "totalTokens": 5000}
+        })));
+        assert_eq!(result["rows"], 42);
+        assert_eq!(result["totalTokens"], 5000);
+    }
+
+    // ── format/parse log line tests ──
+
+    #[test]
+    fn format_and_parse_roundtrip() {
+        let entry = json!({
+            "ts": "2026-05-22T12:00:00.000Z",
+            "level": "warn",
+            "source": "backend",
+            "event": "upload_failed",
+            "data": {"error": "timeout"}
+        });
+        let line = format_log_line(&entry);
+        let parsed = parse_log_line(&line).unwrap();
+        assert_eq!(parsed["ts"], "2026-05-22T12:00:00.000Z");
+        assert_eq!(parsed["level"], "warn");
+        assert_eq!(parsed["source"], "backend");
+        assert_eq!(parsed["event"], "upload_failed");
+    }
+
+    #[test]
+    fn parse_log_line_json_format() {
+        let line = r#"{"ts":"2026-05-22T00:00:00Z","level":"info","source":"test","event":"ping","data":{}}"#;
+        let parsed = parse_log_line(line).unwrap();
+        assert_eq!(parsed["event"], "ping");
+    }
+
+    #[test]
+    fn parse_log_line_text_format() {
+        let line = "2026-05-22T00:00:00Z INFO [backend] scan_complete {\"rows\":5}";
+        let parsed = parse_log_line(line).unwrap();
+        assert_eq!(parsed["ts"], "2026-05-22T00:00:00Z");
+        assert_eq!(parsed["level"], "info");
+        assert_eq!(parsed["source"], "backend");
+        assert_eq!(parsed["event"], "scan_complete");
+        assert_eq!(parsed["data"]["rows"], 5);
+    }
+
+    #[test]
+    fn parse_log_line_text_with_bad_json() {
+        let line = "2026-05-22T00:00:00Z ERROR [backend] crash not-json-here";
+        let parsed = parse_log_line(line).unwrap();
+        assert_eq!(parsed["data"]["message"], "not-json-here");
+    }
+
+    #[test]
+    fn parse_log_line_empty() {
+        assert!(parse_log_line("").is_none());
+    }
+
+    // ── sanitize_label test ──
+
+    #[test]
+    fn sanitize_label_filters_special_chars() {
+        let result = sanitize_label("hello<script>alert('xss')</script>world");
+        assert!(!result.contains('<'));
+        assert!(!result.contains('>'));
+        assert!(result.contains("hello"));
+        assert!(result.len() <= 80);
+    }
+
+    // ── normalize_level test ──
+
+    #[test]
+    fn normalize_level_known_and_unknown() {
+        assert_eq!(normalize_level("debug"), "debug");
+        assert_eq!(normalize_level("info"), "info");
+        assert_eq!(normalize_level("warn"), "warn");
+        assert_eq!(normalize_level("error"), "error");
+        assert_eq!(normalize_level("trace"), "info");
+        assert_eq!(normalize_level("FATAL"), "info");
+    }
+
+    // ── truncate test ──
+
+    #[test]
+    fn truncate_short_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_with_ellipsis() {
+        let result = truncate("abcdefghij", 5);
+        assert_eq!(result, "abcde...");
+    }
+
+    // ── looks_like_path test ──
+
+    #[test]
+    fn looks_like_path_various() {
+        assert!(looks_like_path("/Users/sky/project"));
+        assert!(looks_like_path("~/code"));
+        assert!(looks_like_path("C:\\Users\\dev"));
+        assert!(looks_like_path("\\Users\\admin\\data"));
+        assert!(!looks_like_path("just-a-string"));
+        assert!(!looks_like_path("relative/path")); // no leading slash or ~
+    }
+
+    // ── diagnostics_status test ──
+
+    #[test]
+    fn diagnostics_status_structure() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+        config::ensure_app_dir();
+
+        let status = diagnostics_status();
+        assert!(status["runtimeLog"].is_object());
+        assert_eq!(status["retention"]["strategy"], "days");
+        assert!(status["retention"]["days"].as_u64().unwrap() >= 1);
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    // ── clear_runtime_log test ──
+
+    #[test]
+    fn clear_runtime_log_removes_files() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+        config::ensure_app_dir();
+        fs::create_dir_all(config::runtime_log_dir()).unwrap();
+
+        // Write a log file
+        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        fs::write(
+            config::runtime_log_path(),
+            format!("{{\"ts\":\"{}\",\"event\":\"test\"}}\n", ts),
+        )
+        .unwrap();
+
+        let result = clear_runtime_log();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["existed"], true);
+        assert_eq!(result["removed"], true);
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
 }

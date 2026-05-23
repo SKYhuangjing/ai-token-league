@@ -15,6 +15,14 @@
     "collector:scan": "cargo run -p atl-collector -- scan",
     "collector:sync": "cargo run -p atl-collector -- sync",
     "test": "node tests/run-tests.js",
+    "test:ui": "vitest run",
+    "test:ui:watch": "vitest",
+    "test:ui:coverage": "vitest run --coverage",
+    "test:ui:bench": "vitest bench",
+    "test:e2e": "playwright test --config=playwright.mock.config.js",
+    "test:e2e:mock": "playwright test --config=playwright.mock.config.js",
+    "test:e2e:mock:headed": "playwright test --config=playwright.mock.config.js --headed",
+    "test:e2e:tauri": "playwright test",
     "smoke": "node tests/run-tests.js && node src/backend/server.js --smoke",
     "verify:ccusage": "node scripts/verify-ccusage.mjs",
     "icons": "node scripts/generate-icons.js && node scripts/generate-tray-icons.js",
@@ -30,8 +38,13 @@
     "node": ">=22.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tauri-apps/cli": "^2.11.1",
-    "lucide-static": "^1.14.0"
+    "@vitest/coverage-v8": "^4.1.7",
+    "c8": "^11.0.0",
+    "jsdom": "^29.1.1",
+    "lucide-static": "^1.14.0",
+    "vitest": "^4.1.7"
   },
   "dependencies": {
     "mysql2": "^3.22.3",

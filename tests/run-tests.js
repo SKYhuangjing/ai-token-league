@@ -6,25 +6,33 @@ import os from "node:os";
 import path from "node:path";
 import { Store } from "../src/backend/store.js";
 import { MySqlStore } from "../src/backend/mysql-store.js";
-import { generateIdentity, newId, signPayload, hmacSha256Hex, verifyPayload, normalizeLegacyEd25519Pem } from "../src/shared/crypto.js";
+import { canonicalJson, sha256Hex, generateIdentity, newId, signPayload, hmacSha256Hex, verifyPayload, normalizeLegacyEd25519Pem } from "../src/shared/crypto.js";
 import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
-import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber } from "../src/shared/schema.js";
-import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, SNAPSHOT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE } from "../src/shared/version.js";
+import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber, cloudNaturalKey, todayLocal, CLOUD_PROVIDER_IDS } from "../src/shared/schema.js";
+import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, SNAPSHOT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE, compareSemver, normalizeClientMetadata, collectNetworkInfo, clientPlatform, clientBuild, packageVersion, productBaseline } from "../src/shared/version.js";
 import {
   buildInstallerMetadataFromGithubRelease,
+  buildLatestYml,
+  buildReleaseManifest,
   buildTauriUpdateJson,
   githubReleaseApiUrl,
   installerMetadataPlatforms,
   releaseConfigFromEnv,
   releaseDistributionFromEnv,
   releasePublicConfig,
+  releasePlatformsFromEnv,
+  selectInstallerArtifact,
+  selectUpdateArtifact,
+  sha512Base64,
   updatePreflightState,
+  updateStateFromManifest,
   validateInstallerMetadata,
   validateReleaseConfig,
+  validateReleaseManifest,
   verifyFileChecksum
 } from "../src/shared/update.js";
 import { parseLatestChangelog, parseChangelogVersion } from "../src/shared/changelog.js";
-import { formatTokenCompact, formatUsd } from "../src/shared/display.js";
+import { formatTokenCompact, formatTokenRaw, formatUsd } from "../src/shared/display.js";
 import {
   compositionRatio, createEmptyComposition, dominantComposition,
   mergeTokenComposition, tokenCompositionSummary, tokenCompositionDetails,
@@ -33,8 +41,8 @@ import {
 import { generateNickname, loadClientNicknames } from "../src/shared/nickname-generator.js";
 import { PRESET_ALLOWED_KEYS, loadBuildPreset } from "../src/shared/preset.js";
 import { hourlyUsageKey, publicUsageItem, assertUsageItem, primaryTokenTotal, SOURCE_QUALITY, FORBIDDEN_UPLOAD_FIELDS } from "../src/shared/schema.js";
-import { createPriceMap, estimateUsageCost, openRouterModelToPrice } from "../src/shared/pricing.js";
-import { addDays, localDay } from "../src/shared/date.js";
+import { createPriceMap, estimateUsageCost, openRouterModelToPrice, aggregateCost, mergeCostQuality, normalizeModelName, priceToPublic, addCostToUsageItem } from "../src/shared/pricing.js";
+import { addDays, localDay, daysBetween, dayToUtcDate, utcDateToDay } from "../src/shared/date.js";
 import { currentBusinessDay } from "../src/backend/day-context.js";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
@@ -3843,7 +3851,1473 @@ function testDeleteParticipantDataClearsHourlySyncState() {
   console.log("  testDeleteParticipantDataClearsHourlySyncState passed");
 }
 
-// i18n completeness tests
+// ─── Crypto edge case tests ─────────────────────────────────────────────────
+
+function testCanonicalJson() {
+  // Primitive values
+  assert.equal(canonicalJson(null), "null");
+  assert.equal(canonicalJson(true), "true");
+  assert.equal(canonicalJson(false), "false");
+  assert.equal(canonicalJson(42), "42");
+  assert.equal(canonicalJson("hello"), '"hello"');
+  assert.equal(canonicalJson(""), '""');
+
+  // Object key sorting
+  assert.equal(canonicalJson({ b: 2, a: 1 }), '{"a":1,"b":2}');
+  assert.equal(canonicalJson({ z: 0, a: 0, m: 0 }), '{"a":0,"m":0,"z":0}');
+
+  // Nested objects
+  assert.equal(
+    canonicalJson({ outer: { d: 4, c: 3 } }),
+    '{"outer":{"c":3,"d":4}}'
+  );
+
+  // Arrays preserve order
+  assert.equal(canonicalJson([3, 1, 2]), "[3,1,2]");
+  assert.equal(canonicalJson([]), "[]");
+
+  // Array of objects
+  assert.equal(
+    canonicalJson([{ b: 2 }, { a: 1 }]),
+    '[{"b":2},{"a":1}]'
+  );
+
+  // Mixed nesting
+  assert.equal(
+    canonicalJson({ items: [{ z: 1 }, { a: 2 }], count: 2 }),
+    '{"count":2,"items":[{"z":1},{"a":2}]}'
+  );
+
+  // Unicode keys
+  assert.ok(canonicalJson({ "中文": 1 }).includes('"中文"'));
+  assert.equal(canonicalJson({ "中文": 1 }), '{"中文":1}');
+
+  // Numeric-looking string keys sort lexicographically
+  assert.equal(canonicalJson({ "10": "a", "2": "b" }), '{"10":"a","2":"b"}');
+
+  // Determinism: same object always produces same output
+  const obj = { c: 3, a: 1, b: 2 };
+  for (let i = 0; i < 10; i++) {
+    assert.equal(canonicalJson(obj), '{"a":1,"b":2,"c":3}');
+  }
+
+  console.log("  testCanonicalJson passed");
+}
+
+function testSha256Hex() {
+  // Basic determinism
+  assert.equal(sha256Hex("hello"), sha256Hex("hello"));
+  assert.ok(sha256Hex("hello").length === 64);
+  assert.ok(/^[a-f0-9]{64}$/.test(sha256Hex("test")));
+
+  // Different inputs produce different hashes
+  assert.notEqual(sha256Hex("a"), sha256Hex("b"));
+
+  // Empty string
+  assert.equal(sha256Hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+  // Long string
+  const long = "x".repeat(100000);
+  assert.ok(sha256Hex(long).length === 64);
+
+  console.log("  testSha256Hex passed");
+}
+
+function testSignVerifyEdgeCases() {
+  const identity = generateIdentity();
+  const payload = { action: "test", value: 42 };
+
+  // Sign and verify round-trip
+  const sig = signPayload(identity.identityPrivateKey, payload);
+  assert.equal(verifyPayload(identity.identityPublicKey, payload, sig), true);
+
+  // Tampered payload fails verification
+  assert.equal(
+    verifyPayload(identity.identityPublicKey, { ...payload, value: 99 }, sig),
+    false
+  );
+
+  // Wrong key fails
+  const other = generateIdentity();
+  assert.equal(
+    verifyPayload(other.identityPublicKey, payload, sig),
+    false
+  );
+
+  // Wrong signature fails
+  assert.equal(
+    verifyPayload(identity.identityPublicKey, payload, "AAAA" + sig.slice(4)),
+    false
+  );
+
+  // Different payload objects with same content verify correctly
+  const payload2 = { value: 42, action: "test" };
+  assert.equal(verifyPayload(identity.identityPublicKey, payload2, sig), true);
+
+  // Empty payload
+  const emptySig = signPayload(identity.identityPrivateKey, {});
+  assert.equal(verifyPayload(identity.identityPublicKey, {}, emptySig), true);
+
+  console.log("  testSignVerifyEdgeCases passed");
+}
+
+function testNewIdUniqueness() {
+  const ids = new Set();
+  for (let i = 0; i < 1000; i++) {
+    ids.add(newId("test"));
+  }
+  assert.equal(ids.size, 1000, "newId should produce unique IDs");
+
+  // Prefix is preserved
+  for (const id of ids) {
+    assert.ok(id.startsWith("test_"), `id ${id} should start with test_`);
+  }
+
+  // Different prefixes
+  const pId = newId("p");
+  const dId = newId("d");
+  assert.ok(pId.startsWith("p_"));
+  assert.ok(dId.startsWith("d_"));
+  assert.notEqual(pId, dId);
+
+  console.log("  testNewIdUniqueness passed");
+}
+
+// ─── Date utility edge case tests ─────────────────────────────────────────────
+
+function testDayToUtcDate() {
+  // Valid date
+  const d = dayToUtcDate("2026-05-14");
+  assert.equal(d.getUTCFullYear(), 2026);
+  assert.equal(d.getUTCMonth(), 4);
+  assert.equal(d.getUTCDate(), 14);
+
+  // Invalid/empty returns epoch fallback
+  const epoch = dayToUtcDate("");
+  assert.equal(epoch.getUTCFullYear(), 1970);
+
+  const nullEpoch = dayToUtcDate(null);
+  assert.equal(nullEpoch.getUTCFullYear(), 1970);
+
+  const undefEpoch = dayToUtcDate(undefined);
+  assert.equal(undefEpoch.getUTCFullYear(), 1970);
+
+  // Month boundary
+  const mar1 = dayToUtcDate("2026-03-01");
+  assert.equal(mar1.getUTCMonth(), 2);
+
+  console.log("  testDayToUtcDate passed");
+}
+
+function testUtcDateToDay() {
+  assert.equal(utcDateToDay(new Date(Date.UTC(2026, 4, 14))), "2026-05-14");
+  assert.equal(utcDateToDay(new Date(Date.UTC(2026, 0, 1))), "2026-01-01");
+  assert.equal(utcDateToDay(new Date(Date.UTC(2026, 11, 31))), "2026-12-31");
+
+  console.log("  testUtcDateToDay passed");
+}
+
+function testAddDaysEdgeCases() {
+  // Zero days
+  assert.equal(addDays("2026-05-14", 0), "2026-05-14");
+
+  // Negative days
+  assert.equal(addDays("2026-05-15", -1), "2026-05-14");
+  assert.equal(addDays("2026-05-01", -1), "2026-04-30");
+
+  // Cross month boundary
+  assert.equal(addDays("2026-01-31", 1), "2026-02-01");
+  assert.equal(addDays("2026-02-28", 1), "2026-03-01");
+
+  // Cross year boundary
+  assert.equal(addDays("2026-12-31", 1), "2027-01-01");
+  assert.equal(addDays("2027-01-01", -1), "2026-12-31");
+
+  // Large offset
+  assert.equal(addDays("2026-01-01", 365), "2027-01-01");
+
+  console.log("  testAddDaysEdgeCases passed");
+}
+
+function testDaysBetweenEdgeCases() {
+  // Same day
+  assert.deepEqual(daysBetween("2026-05-14", "2026-05-14"), ["2026-05-14"]);
+
+  // Consecutive days
+  assert.deepEqual(daysBetween("2026-05-14", "2026-05-15"), ["2026-05-14", "2026-05-15"]);
+
+  // Inverted range returns empty
+  assert.deepEqual(daysBetween("2026-05-15", "2026-05-14"), []);
+
+  // Week span
+  const week = daysBetween("2026-05-14", "2026-05-20");
+  assert.equal(week.length, 7);
+  assert.equal(week[0], "2026-05-14");
+  assert.equal(week[6], "2026-05-20");
+
+  // Cross month
+  const crossMonth = daysBetween("2026-01-30", "2026-02-02");
+  assert.equal(crossMonth.length, 4);
+  assert.equal(crossMonth[0], "2026-01-30");
+  assert.equal(crossMonth[3], "2026-02-02");
+
+  console.log("  testDaysBetweenEdgeCases passed");
+}
+
+function testLocalDayEdgeCases() {
+  // Valid date string
+  const d = localDay("2026-05-14");
+  assert.equal(d, "2026-05-14");
+
+  // Date object
+  const dateObj = localDay(new Date(Date.UTC(2026, 4, 14, 12, 0, 0)));
+  assert.match(dateObj, /^\d{4}-\d{2}-\d{2}$/);
+
+  // Invalid date string falls back to now
+  const fallback = localDay("not-a-date");
+  assert.match(fallback, /^\d{4}-\d{2}-\d{2}$/);
+
+  // Explicit timezone
+  const utcDay = localDay(new Date(Date.UTC(2026, 4, 14, 23, 0, 0)), "UTC");
+  assert.equal(utcDay, "2026-05-14");
+
+  console.log("  testLocalDayEdgeCases passed");
+}
+
+// ─── Pricing edge case tests ─────────────────────────────────────────────────
+
+function testNormalizeModelName() {
+  assert.equal(normalizeModelName("GPT-5"), "gpt-5");
+  assert.equal(normalizeModelName(" OpenAI/gpt-5 "), "openai/gpt-5");
+  assert.equal(normalizeModelName("~anthropic/claude-4"), "anthropic/claude-4");
+  assert.equal(normalizeModelName("openrouter/google/gemini"), "google/gemini");
+  assert.equal(normalizeModelName(""), "");
+  assert.equal(normalizeModelName(null), "");
+  assert.equal(normalizeModelName(undefined), "");
+  assert.equal(normalizeModelName(42), "42");
+  assert.equal(normalizeModelName("MODEL"), "model");
+
+  console.log("  testNormalizeModelName passed");
+}
+
+function testMergeCostQuality() {
+  assert.equal(mergeCostQuality("exact_price", "exact_price"), "exact_price");
+  assert.equal(mergeCostQuality("exact_price", "estimated_price"), "estimated_price");
+  assert.equal(mergeCostQuality("exact_price", "unknown_price"), "unknown_price");
+  assert.equal(mergeCostQuality("estimated_price", "unknown_price"), "unknown_price");
+  assert.equal(mergeCostQuality("estimated_price", "exact_price"), "estimated_price");
+  assert.equal(mergeCostQuality("unknown_price", "exact_price"), "unknown_price");
+
+  // Empty strings
+  assert.equal(mergeCostQuality("", "exact_price"), "exact_price");
+  assert.equal(mergeCostQuality("exact_price", ""), "exact_price");
+  assert.equal(mergeCostQuality("", ""), "");
+
+  // Undefined/null defaults
+  assert.equal(mergeCostQuality(undefined, "exact_price"), "exact_price");
+  assert.equal(mergeCostQuality("exact_price", undefined), "exact_price");
+
+  console.log("  testMergeCostQuality passed");
+}
+
+function testAggregateCost() {
+  // Accumulate costs
+  const target = {};
+  aggregateCost(target, { estimatedCostUsd: 1.5, inputCostUsd: 1.0, outputCostUsd: 0.5, model: "gpt-5", costQuality: "exact_price" });
+  assert.equal(target.estimatedCostUsd, 1.5);
+  assert.equal(target.hasKnownPrice, true);
+  assert.equal(target.costQuality, "exact_price");
+
+  // Accumulate more
+  aggregateCost(target, { estimatedCostUsd: 2.0, inputCostUsd: 1.5, outputCostUsd: 0.5, model: "gpt-5", costQuality: "estimated_price" });
+  assert.equal(target.estimatedCostUsd, 3.5);
+  assert.equal(target.costQuality, "estimated_price");
+
+  // Null cost tracks missing models
+  const target2 = {};
+  aggregateCost(target2, { estimatedCostUsd: null, model: "unknown-model", totalTokens: 500 });
+  assert.equal(target2.hasKnownPrice, undefined);
+  assert.equal(target2.missingPriceModels["unknown-model"], 500);
+  assert.equal(target2.missingPriceTokens, 500);
+  assert.equal(target2.costQuality, "unknown_price");
+
+  // Undefined cost also tracks missing
+  const target3 = {};
+  aggregateCost(target3, { estimatedCostUsd: undefined, model: "missing-model", totalTokens: 100 });
+  assert.equal(target3.missingPriceModels["missing-model"], 100);
+
+  console.log("  testAggregateCost passed");
+}
+
+function testPriceToPublic() {
+  const result = priceToPublic("gpt-5", {
+    input_cost_per_token: 0.000001,
+    output_cost_per_token: 0.000002,
+    cache_read_input_token_cost: 0.0000001,
+    cache_creation_input_token_cost: 0.000001,
+    source: "openrouter",
+    pricingVersion: "v1",
+    updatedAt: "2026-05-14"
+  });
+  assert.equal(result.model, "gpt-5");
+  assert.ok(result.inputCostPerMTok > 0);
+  assert.ok(result.outputCostPerMTok > 0);
+  assert.equal(result.source, "openrouter");
+  assert.equal(result.reasoningCostPerMTok, 0);
+
+  // Missing fields default
+  const sparse = priceToPublic("test", {
+    input_cost_per_token: 0,
+    output_cost_per_token: 0
+  });
+  assert.equal(sparse.model, "test");
+  assert.equal(sparse.inputCostPerMTok, 0);
+  assert.equal(sparse.source, "builtin");
+
+  console.log("  testPriceToPublic passed");
+}
+
+function testAddCostToUsageItem() {
+  const item = { model: "gpt-5", inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+  const priceMap = createPriceMap({}, {
+    "gpt-5": {
+      model: "gpt-5",
+      input_cost_per_token: 0.000001,
+      output_cost_per_token: 0.000002
+    }
+  });
+  const result = addCostToUsageItem(item, priceMap);
+  assert.ok(result.estimatedCostUsd > 0);
+  assert.equal(result.costQuality, "exact_price");
+  // Original item is not mutated (spread)
+  assert.equal(item.estimatedCostUsd, undefined);
+
+  // Unknown model
+  const unknownResult = addCostToUsageItem({ model: "unknown", inputTokens: 100 }, {});
+  assert.equal(unknownResult.costQuality, "unknown_price");
+  assert.equal(unknownResult.estimatedCostUsd, null);
+
+  console.log("  testAddCostToUsageItem passed");
+}
+
+// ─── Schema edge case tests ───────────────────────────────────────────────────
+
+function testCloudNaturalKey() {
+  const item = { day: "2026-05-14", hour: 10, toolCode: "cursor", providerId: "cursor_dashboard_usage", workdirHash: "abc", model: "gpt-5" };
+  const key1 = cloudNaturalKey(item, "p1");
+  assert.ok(key1.includes("2026-05-14"));
+  assert.ok(key1.includes("10"));
+  assert.ok(key1.includes("p1"));
+  assert.ok(key1.includes("cursor"));
+  assert.ok(key1.includes("gpt-5"));
+
+  // Hour defaults to 0
+  const itemNoHour = { day: "2026-05-14", toolCode: "cursor", providerId: "cursor_dashboard_usage", workdirHash: "abc", model: "gpt-5" };
+  const key2 = cloudNaturalKey(itemNoHour, "p1");
+  assert.ok(key2.includes("|0|"));
+
+  // Different participants produce different keys
+  const key3 = cloudNaturalKey(item, "p2");
+  assert.notEqual(key1, key3);
+
+  // Same participant and item produces same key
+  const key4 = cloudNaturalKey(item, "p1");
+  assert.equal(key1, key4);
+
+  console.log("  testCloudNaturalKey passed");
+}
+
+function testTodayLocal() {
+  const result = todayLocal();
+  assert.match(result, /^\d{4}-\d{2}-\d{2}$/, "todayLocal should return YYYY-MM-DD");
+  assert.equal(result, localDay());
+  console.log("  testTodayLocal passed");
+}
+
+function testAssertSnapshotHourlyBounds() {
+  // Valid hour 0
+  assert.doesNotThrow(() => assertSnapshot({
+    mode: "device_day_hour_provider", day: "2026-05-14", hour: 0,
+    providerId: "codex_local", bucketFingerprint: "fp", rowCount: 1, totalTokens: 100
+  }, [{ day: "2026-05-14", hour: 0, providerId: "codex_local" }], "p1", "d1"));
+
+  // Valid hour 23
+  assert.doesNotThrow(() => assertSnapshot({
+    mode: "device_day_hour_provider", day: "2026-05-14", hour: 23,
+    providerId: "codex_local", bucketFingerprint: "fp", rowCount: 1, totalTokens: 100
+  }, [{ day: "2026-05-14", hour: 23, providerId: "codex_local" }], "p1", "d1"));
+
+  // Invalid hour -1
+  assert.throws(() => assertSnapshot({
+    mode: "device_day_hour_provider", day: "2026-05-14", hour: -1,
+    providerId: "codex_local", bucketFingerprint: "fp", rowCount: 1, totalTokens: 100
+  }, [{ day: "2026-05-14", hour: -1, providerId: "codex_local" }], "p1", "d1"), /hour must be 0-23/);
+
+  // Invalid hour 24
+  assert.throws(() => assertSnapshot({
+    mode: "device_day_hour_provider", day: "2026-05-14", hour: 24,
+    providerId: "codex_local", bucketFingerprint: "fp", rowCount: 1, totalTokens: 100
+  }, [{ day: "2026-05-14", hour: 24, providerId: "codex_local" }], "p1", "d1"), /hour must be 0-23/);
+
+  // Hour mismatch between snapshot and items
+  assert.throws(() => assertSnapshot({
+    mode: "device_day_hour_provider", day: "2026-05-14", hour: 5,
+    providerId: "codex_local", bucketFingerprint: "fp", rowCount: 1, totalTokens: 100
+  }, [{ day: "2026-05-14", hour: 10, providerId: "codex_local" }], "p1", "d1"), /hour/);
+
+  // Missing hour in hourly mode
+  assert.throws(() => assertSnapshot({
+    mode: "device_day_hour_provider", day: "2026-05-14",
+    providerId: "codex_local", bucketFingerprint: "fp", rowCount: 1, totalTokens: 100
+  }, [{ day: "2026-05-14", providerId: "codex_local" }], "p1", "d1"), /hour must be 0-23/);
+
+  // Non-integer hour
+  assert.throws(() => assertSnapshot({
+    mode: "device_day_hour_provider", day: "2026-05-14", hour: 5.5,
+    providerId: "codex_local", bucketFingerprint: "fp", rowCount: 1, totalTokens: 100
+  }, [{ day: "2026-05-14", hour: 5.5, providerId: "codex_local" }], "p1", "d1"), /hour must be 0-23/);
+
+  console.log("  testAssertSnapshotHourlyBounds passed");
+}
+
+function testCloudProviderIdsSet() {
+  assert.ok(CLOUD_PROVIDER_IDS.has("cursor_dashboard_usage"));
+  assert.ok(!CLOUD_PROVIDER_IDS.has("codex_local"));
+  assert.ok(!CLOUD_PROVIDER_IDS.has("claude_code_local"));
+  assert.equal(CLOUD_PROVIDER_IDS.size, 1);
+
+  console.log("  testCloudProviderIdsSet passed");
+}
+
+// ─── Version module edge case tests ───────────────────────────────────────────
+
+function testCompareSemver() {
+  // Equal versions
+  assert.equal(compareSemver("1.0.0", "1.0.0"), 0);
+  assert.equal(compareSemver("0.7.0", "0.7.0"), 0);
+
+  // Major comparison
+  assert.equal(compareSemver("2.0.0", "1.0.0"), 1);
+  assert.equal(compareSemver("1.0.0", "2.0.0"), -1);
+
+  // Minor comparison
+  assert.equal(compareSemver("0.8.0", "0.7.0"), 1);
+  assert.equal(compareSemver("0.7.0", "0.8.0"), -1);
+
+  // Patch comparison
+  assert.equal(compareSemver("0.7.1", "0.7.0"), 1);
+  assert.equal(compareSemver("0.7.0", "0.7.1"), -1);
+
+  // All three components
+  assert.equal(compareSemver("1.2.3", "1.2.2"), 1);
+  assert.equal(compareSemver("1.2.3", "1.3.0"), -1);
+  assert.equal(compareSemver("1.2.3", "2.0.0"), -1);
+
+  // Pre-release tags are ignored (parsed as 0.0.0 for non-matching)
+  assert.equal(compareSemver("1.0.0", "invalid"), 1);
+
+  // Empty/null/undefined
+  assert.equal(compareSemver("", ""), 0);
+  assert.equal(compareSemver("0.0.0", ""), 0);
+  assert.equal(compareSemver(null, undefined), 0);
+
+  console.log("  testCompareSemver passed");
+}
+
+function testNormalizeClientMetadata() {
+  // Full metadata
+  const full = normalizeClientMetadata({
+    clientAppVersion: "0.7.0",
+    clientProtocolVersion: 2,
+    clientPlatform: "darwin-arm64",
+    clientBuild: "darwin-arm64-0.7.0"
+  });
+  assert.equal(full.clientAppVersion, "0.7.0");
+  assert.equal(full.clientProtocolVersion, 2);
+  assert.equal(full.clientPlatform, "darwin-arm64");
+  assert.equal(full.clientBuild, "darwin-arm64-0.7.0");
+
+  // Legacy field names
+  const legacy = normalizeClientMetadata({
+    appVersion: "0.6.0",
+    clientProtocolVersion: 1,
+    platform: "win32-x64",
+    build: "win32-x64-0.6.0"
+  });
+  assert.equal(legacy.clientAppVersion, "0.6.0");
+  assert.equal(legacy.clientPlatform, "win32-x64");
+
+  // Missing protocol returns null
+  const noProtocol = normalizeClientMetadata({ clientAppVersion: "0.7.0" });
+  assert.equal(noProtocol.clientProtocolVersion, null);
+
+  // Empty object
+  const empty = normalizeClientMetadata({});
+  assert.equal(empty.clientAppVersion, "");
+  assert.equal(empty.clientProtocolVersion, null);
+
+  // Values are trimmed and truncated to 160 chars
+  const long = "a".repeat(200);
+  const truncated = normalizeClientMetadata({ clientAppVersion: ` ${long} ` });
+  assert.equal(truncated.clientAppVersion.length, 160);
+
+  // null/undefined input defaults to empty
+  const nullInput = normalizeClientMetadata(null ?? {});
+  assert.equal(nullInput.clientAppVersion, "");
+
+  console.log("  testNormalizeClientMetadata passed");
+}
+
+function testClientPlatformVariants() {
+  assert.equal(clientPlatform({ platform: "darwin", arch: "arm64" }), "darwin-arm64");
+  assert.equal(clientPlatform({ platform: "darwin", arch: "x64" }), "darwin-x64");
+  assert.equal(clientPlatform({ platform: "win32", arch: "x64" }), "win32-x64");
+  assert.equal(clientPlatform({ platform: "linux", arch: "x64" }), "linux-x64");
+  // Unknown platform
+  assert.equal(clientPlatform({ platform: "freebsd", arch: "x64" }), "freebsd-x64");
+  console.log("  testClientPlatformVariants passed");
+}
+
+function testCollectNetworkInfo() {
+  const info = collectNetworkInfo();
+  assert.ok(Array.isArray(info.lanIps));
+  // On a real machine, lanIps may or may not have entries, but it should not throw
+  console.log("  testCollectNetworkInfo passed");
+}
+
+function testPackageVersionAndBaseline() {
+  const ver = packageVersion();
+  assert.match(ver, /^\d+\.\d+\.\d+$/);
+
+  const bl = productBaseline();
+  assert.match(bl, /^\d+\.\d+$/);
+
+  console.log("  testPackageVersionAndBaseline passed");
+}
+
+// ─── Display edge case tests ──────────────────────────────────────────────────
+
+function testFormatTokenCompactEdgeCases() {
+  // Zero
+  assert.equal(formatTokenCompact(0), "0");
+
+  // Small numbers under 10000
+  assert.ok(formatTokenCompact(100).length > 0);
+  assert.ok(formatTokenCompact(9999).length > 0);
+
+  // Negative
+  assert.ok(formatTokenCompact(-1000).length > 0);
+
+  // Non-finite
+  assert.equal(formatTokenCompact(Infinity), "0");
+  assert.equal(formatTokenCompact(NaN), "0");
+
+  // null/undefined
+  assert.equal(formatTokenCompact(null), "0");
+  assert.equal(formatTokenCompact(undefined), "0");
+
+  // English locale
+  const en = formatTokenCompact(120000000, "en");
+  assert.ok(en.length > 0);
+  assert.ok(!en.includes("亿"));
+
+  // Very large number
+  const huge = formatTokenCompact(999999999);
+  assert.ok(huge.length > 0);
+
+  console.log("  testFormatTokenCompactEdgeCases passed");
+}
+
+function testFormatTokenRaw() {
+  const result = formatTokenRaw(1234567);
+  assert.ok(result.includes("1,234,567") || result.includes("1234567"));
+  // t("unit.tokens") returns localized token label (e.g. "令牌" or "tokens")
+  assert.ok(result.length > 10);
+
+  // Zero
+  const zero = formatTokenRaw(0);
+  assert.ok(zero.includes("0"));
+
+  console.log("  testFormatTokenRaw passed");
+}
+
+function testFormatUsdEdgeCases() {
+  // Normal values
+  const normal = formatUsd(10.5);
+  assert.ok(normal.includes("$") || normal.includes("10.5"));
+
+  // Zero
+  const zero = formatUsd(0);
+  assert.ok(zero.includes("$") || zero.includes("0"));
+
+  // Negative
+  const neg = formatUsd(-5);
+  assert.ok(neg.includes("$") || neg.includes("5"));
+
+  // Sub-cent positive value
+  const tiny = formatUsd(0.001);
+  assert.ok(tiny.length > 0);
+
+  // null
+  assert.equal(formatUsd(null), "-");
+
+  // undefined
+  assert.equal(formatUsd(undefined), "-");
+
+  // NaN
+  assert.equal(formatUsd(NaN), "-");
+
+  // Infinity
+  assert.equal(formatUsd(Infinity), "-");
+
+  console.log("  testFormatUsdEdgeCases passed");
+}
+
+// ─── Update/release module edge case tests ────────────────────────────────────
+
+function testBuildLatestYml() {
+  const artifacts = [
+    { fileName: "app.tar.gz", sha512: "a".repeat(88), size: 12345 }
+  ];
+  const yml = buildLatestYml("0.7.0", artifacts);
+  assert.ok(yml.includes("version: 0.7.0"));
+  assert.ok(yml.includes("sha512: " + "a".repeat(88)));
+  assert.ok(yml.includes("size: 12345"));
+  assert.ok(yml.includes("path: app.tar.gz"));
+
+  // Multiple artifacts
+  const multi = [
+    { fileName: "app-aarch64.tar.gz", sha512: "a".repeat(88), size: 100 },
+    { fileName: "app-x64.tar.gz", sha512: "b".repeat(88), size: 200 }
+  ];
+  const multiYml = buildLatestYml("0.7.0", multi);
+  assert.ok(multiYml.includes("app-aarch64.tar.gz"));
+  assert.ok(multiYml.includes("app-x64.tar.gz"));
+
+  // Empty artifacts throws
+  assert.throws(() => buildLatestYml("0.7.0", []), /no artifacts/);
+
+  console.log("  testBuildLatestYml passed");
+}
+
+function testSha512Base64() {
+  const tmpFile = path.join(tmp, "sha512-test.txt");
+  fs.writeFileSync(tmpFile, "hello world");
+  const hash = sha512Base64(tmpFile);
+  assert.ok(hash.length > 0);
+  assert.ok(/^[A-Za-z0-9+/]+=*$/.test(hash));
+
+  // Deterministic
+  const hash2 = sha512Base64(tmpFile);
+  assert.equal(hash, hash2);
+
+  // Different content = different hash
+  fs.writeFileSync(tmpFile, "goodbye world");
+  const hash3 = sha512Base64(tmpFile);
+  assert.notEqual(hash, hash3);
+
+  console.log("  testSha512Base64 passed");
+}
+
+function testBuildReleaseManifest() {
+  const publicUrl = "https://releases.example.com";
+  const manifest = buildReleaseManifest({
+    version: "0.7.0",
+    publicBaseUrl: publicUrl,
+    manifestPath: "tauri-releases/latest.json",
+    artifacts: [{
+      platform: "darwin-arm64",
+      fileName: "app.tar.gz",
+      url: `${publicUrl}/app.tar.gz`,
+      sha256: "a".repeat(64),
+      signature: "sig",
+      size: 12345
+    }],
+    installerArtifacts: [{
+      platform: "darwin-arm64",
+      fileName: "app.dmg",
+      url: `${publicUrl}/app.dmg`,
+      sha256: "b".repeat(64),
+      size: 54321,
+      ext: "dmg"
+    }]
+  });
+  assert.equal(manifest.version, "0.7.0");
+  assert.ok(manifest.platforms["darwin-arm64"]);
+  assert.ok(manifest.platforms["darwin-arm64"].installer);
+  assert.equal(manifest.platforms["darwin-arm64"].installer.ext, "dmg");
+
+  // Missing checksum throws
+  assert.throws(() => buildReleaseManifest({
+    version: "0.7.0",
+    publicBaseUrl: publicUrl,
+    manifestPath: "latest.json",
+    artifacts: [{ platform: "darwin-arm64", url: "x", size: 1 }]
+  }), /missing checksum/);
+
+  // Unsupported platform throws
+  assert.throws(() => buildReleaseManifest({
+    version: "0.7.0",
+    publicBaseUrl: publicUrl,
+    manifestPath: "latest.json",
+    artifacts: [{ platform: "android-arm64", sha256: "a".repeat(64), url: "x", size: 1 }]
+  }), /unsupported platform/);
+
+  console.log("  testBuildReleaseManifest passed");
+}
+
+function testValidateReleaseManifest() {
+  const publicUrl = "https://releases.example.com";
+  const valid = {
+    schemaVersion: 1,
+    version: "0.7.0",
+    channel: "stable",
+    protocol: { client: 2, supportedClient: { min: 1, max: 2 } },
+    platforms: {
+      "darwin-arm64": {
+        url: `${publicUrl}/app.tar.gz`,
+        sha256: "a".repeat(64),
+        size: 12345,
+        fileName: "app.tar.gz"
+      }
+    }
+  };
+  const result = validateReleaseManifest(valid, { publicBaseUrl: publicUrl });
+  assert.equal(result.version, "0.7.0");
+
+  // Missing version
+  assert.throws(() => validateReleaseManifest({ ...valid, version: "" }), /missing version/);
+
+  // Missing channel
+  assert.throws(() => validateReleaseManifest({ ...valid, channel: "" }), /missing channel/);
+
+  // Missing protocol
+  assert.throws(() => validateReleaseManifest({ ...valid, protocol: null }), /missing protocol/);
+
+  // URL outside base URL
+  assert.throws(() => validateReleaseManifest({
+    ...valid,
+    platforms: { "darwin-arm64": { url: "https://evil.com/app.tar.gz", sha256: "a".repeat(64) } }
+  }, { publicBaseUrl: publicUrl }), /outside release public base url/);
+
+  // Not an object
+  assert.throws(() => validateReleaseManifest(null), /must be an object/);
+  assert.throws(() => validateReleaseManifest("string"), /must be an object/);
+
+  console.log("  testValidateReleaseManifest passed");
+}
+
+function testSelectUpdateArtifact() {
+  const manifest = {
+    version: "0.7.0",
+    channel: "stable",
+    protocol: { client: 2, supportedClient: { min: 1, max: 2 } },
+    platforms: {
+      "darwin-arm64": { url: "https://example.com/a.tar.gz", sha256: "a".repeat(64) },
+      "win32-x64": { url: "https://example.com/a.exe", sha256: "b".repeat(64) }
+    }
+  };
+  const mac = selectUpdateArtifact(manifest, "darwin-arm64");
+  assert.ok(mac.url.includes("a.tar.gz"));
+
+  const win = selectUpdateArtifact(manifest, "win32-x64");
+  assert.ok(win.url.includes("a.exe"));
+
+  // Missing platform
+  assert.throws(() => selectUpdateArtifact(manifest, "linux-x64"), /does not support/);
+
+  console.log("  testSelectUpdateArtifact passed");
+}
+
+function testSelectInstallerArtifact() {
+  const manifest = {
+    version: "0.7.0",
+    channel: "stable",
+    protocol: { client: 2, supportedClient: { min: 1, max: 2 } },
+    platforms: {
+      "darwin-arm64": {
+        url: "https://example.com/a.tar.gz",
+        sha256: "a".repeat(64),
+        installer: {
+          fileName: "app.dmg",
+          url: "https://example.com/app.dmg",
+          sha256: "c".repeat(64),
+          size: 54321,
+          ext: "dmg"
+        }
+      },
+      "win32-x64": {
+        url: "https://example.com/a.exe",
+        sha256: "b".repeat(64)
+      }
+    }
+  };
+
+  // Platform with installer
+  const dmg = selectInstallerArtifact(manifest, "darwin-arm64");
+  assert.ok(dmg);
+  assert.equal(dmg.ext, "dmg");
+  assert.equal(dmg.platform, "darwin-arm64");
+
+  // Platform without installer
+  const noInstaller = selectInstallerArtifact(manifest, "win32-x64");
+  assert.equal(noInstaller, null);
+
+  console.log("  testSelectInstallerArtifact passed");
+}
+
+function testUpdateStateFromManifest() {
+  const publicUrl = "https://releases.example.com";
+  const manifest = {
+    version: "0.8.0",
+    channel: "stable",
+    protocol: { client: 2, supportedClient: { min: 1, max: 2 } },
+    platforms: {
+      "darwin-arm64": {
+        url: `${publicUrl}/app.tar.gz`,
+        sha256: "a".repeat(64),
+        mandatory: true
+      }
+    }
+  };
+
+  // Older current version => update available
+  const oldResult = updateStateFromManifest(manifest, { currentVersion: "0.7.0", platform: "darwin-arm64" });
+  assert.equal(oldResult.updateAvailable, true);
+  assert.equal(oldResult.currentVersion, "0.7.0");
+  assert.equal(oldResult.latestVersion, "0.8.0");
+  assert.equal(oldResult.mandatory, true);
+
+  // Same version => no update
+  const sameResult = updateStateFromManifest(manifest, { currentVersion: "0.8.0", platform: "darwin-arm64" });
+  assert.equal(sameResult.updateAvailable, false);
+
+  // Newer version => no update
+  const newerResult = updateStateFromManifest(manifest, { currentVersion: "0.9.0", platform: "darwin-arm64" });
+  assert.equal(newerResult.updateAvailable, false);
+
+  console.log("  testUpdateStateFromManifest passed");
+}
+
+function testReleasePlatformsFromEnv() {
+  // Default: all platforms
+  const saved = process.env.RELEASE_REQUIRED_PLATFORMS;
+  delete process.env.RELEASE_REQUIRED_PLATFORMS;
+  const all = releasePlatformsFromEnv();
+  assert.equal(all.length, 4);
+  assert.ok(all.includes("darwin-arm64"));
+
+  // Custom valid platforms
+  process.env.RELEASE_REQUIRED_PLATFORMS = "darwin-arm64,win32-x64";
+  const custom = releasePlatformsFromEnv();
+  assert.equal(custom.length, 2);
+  assert.ok(custom.includes("darwin-arm64"));
+  assert.ok(custom.includes("win32-x64"));
+
+  // Invalid platform throws
+  process.env.RELEASE_REQUIRED_PLATFORMS = "android-arm64";
+  assert.throws(() => releasePlatformsFromEnv(), /unsupported release platform/);
+
+  // Restore
+  if (saved === undefined) delete process.env.RELEASE_REQUIRED_PLATFORMS;
+  else process.env.RELEASE_REQUIRED_PLATFORMS = saved;
+
+  console.log("  testReleasePlatformsFromEnv passed");
+}
+
+// ─── Store-level edge case tests ──────────────────────────────────────────────
+
+function testStoreEmptyDatabase() {
+  const dbPath = path.join(tmp, "db-empty-test.json");
+  const store = new Store(dbPath);
+
+  // Leaderboard on empty DB
+  const board = store.publicLeaderboard({ range: "today" });
+  assert.deepEqual(board, []);
+
+  // Participant detail on missing
+  const detail = store.participantDetail("nonexistent", "today");
+  assert.equal(detail, null);
+
+  // Admin usage on empty DB
+  const usage = store.adminUsage({ range: "today" });
+  assert.ok(typeof usage === "object");
+  assert.ok(Array.isArray(usage.items));
+
+  // Admin quality on empty DB
+  const quality = store.adminQuality();
+  assert.ok(typeof quality === "object");
+
+  console.log("  testStoreEmptyDatabase passed");
+}
+
+function testStoreZeroTokenItems() {
+  const store = new Store(path.join(tmp, "db-zero-tokens.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "zero-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{
+      day: localDay(), toolCode: "codex", providerId: "codex_local",
+      workdirHash: "wd_zero", workdirDisplayName: "zero-project",
+      model: "gpt-5", inputTokens: 0, outputTokens: 0,
+      cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+      totalTokens: 0, sourceQuality: "exact", sourceFingerprint: "sf_zero"
+    }]
+  });
+
+  const board = store.publicLeaderboard({ range: "today" });
+  assert.equal(board.length, 1);
+  assert.equal(board[0].totalTokens, 0);
+
+  console.log("  testStoreZeroTokenItems passed");
+}
+
+function testStoreMultiDayRangeLeaderboard() {
+  const store = new Store(path.join(tmp, "db-multi-day.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "multi-day-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const day1 = "2026-01-10";
+  const day2 = "2026-01-11";
+  const day3 = "2026-01-12";
+
+  // Upload usage for 3 consecutive days
+  for (const day of [day1, day2, day3]) {
+    store.upsertUsageBatch({
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{
+        day, toolCode: "codex", providerId: "codex_local",
+        workdirHash: "wd_multi", workdirDisplayName: "multi-project",
+        model: "gpt-5", inputTokens: 100, outputTokens: 50,
+        cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+        totalTokens: 150, sourceQuality: "exact", sourceFingerprint: `sf_multi_${day}`
+      }]
+    });
+  }
+
+  // "custom" range with startDay/endDay covering all three days
+  const customBoard = store.publicLeaderboard({ range: "custom", startDay: day1, endDay: day3 });
+  assert.equal(customBoard.length, 1);
+  assert.equal(customBoard[0].totalTokens, 450);
+
+  // "custom" range for single day
+  const singleDayBoard = store.publicLeaderboard({ range: "custom", startDay: day1, endDay: day1 });
+  assert.equal(singleDayBoard.length, 1);
+  assert.equal(singleDayBoard[0].totalTokens, 150);
+
+  // "today" range should not show old data
+  const todayBoard = store.publicLeaderboard({ range: "today" });
+  assert.equal(todayBoard.length, 0);
+
+  console.log("  testStoreMultiDayRangeLeaderboard passed");
+}
+
+function testStoreDuplicateDeviceRegistrationSameKey() {
+  const store = new Store(path.join(tmp, "db-dup-device.json"));
+  const identity = generateIdentity();
+  const d1 = newId("d");
+
+  store.registerDevice({
+    participantId: identity.participantId, deviceId: d1,
+    nickname: "dup-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  // Re-register same device with same key should succeed
+  store.registerDevice({
+    participantId: identity.participantId, deviceId: d1,
+    nickname: "dup-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const devices = store.adminDevices();
+  const myDevices = devices.filter(d => d.participantId === identity.participantId);
+  assert.equal(myDevices.length, 1);
+
+  console.log("  testDuplicateDeviceRegistrationSameKey passed");
+}
+
+function testStoreCorruptJsonRecovery() {
+  const dbPath = path.join(tmp, "db-corrupt-test.json");
+  fs.writeFileSync(dbPath, "{ corrupt json !!!");
+
+  // Store throws on corrupt JSON (expected behavior)
+  assert.throws(() => new Store(dbPath), /SyntaxError|JSON/);
+
+  console.log("  testStoreCorruptJsonRecovery passed");
+}
+
+function testStoreLargeTokenValues() {
+  const store = new Store(path.join(tmp, "db-large-tokens.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "large-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  // Very large token counts
+  const largeTokens = Number.MAX_SAFE_INTEGER;
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{
+      day: localDay(), toolCode: "codex", providerId: "codex_local",
+      workdirHash: "wd_large", workdirDisplayName: "large-project",
+      model: "gpt-5", inputTokens: largeTokens, outputTokens: 0,
+      cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+      totalTokens: largeTokens, sourceQuality: "exact", sourceFingerprint: "sf_large"
+    }]
+  });
+
+  const board = store.publicLeaderboard({ range: "today" });
+  assert.equal(board.length, 1);
+  assert.equal(board[0].totalTokens, largeTokens);
+
+  console.log("  testStoreLargeTokenValues passed");
+}
+
+function testStoreWorkdirAliasPersistence() {
+  const store = new Store(path.join(tmp, "db-workdir-persist.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "wd-persist", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  // Upload usage creating a workdir entry
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{
+      day: localDay(), toolCode: "codex", providerId: "codex_local",
+      workdirHash: "wd_persist", workdirDisplayName: "original",
+      model: "gpt-5", inputTokens: 100, outputTokens: 50,
+      cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+      totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_persist"
+    }]
+  });
+
+  // Reload from disk
+  const store2 = new Store(path.join(tmp, "db-workdir-persist.json"));
+  const workdirs = Object.values(store2.db.workdirs).filter(w => w.participantId === identity.participantId);
+  assert.equal(workdirs.length, 1);
+  assert.equal(workdirs[0].workdirHash, "wd_persist");
+
+  console.log("  testStoreWorkdirAliasPersistence passed");
+}
+
+function testStoreParticipantDetailMissingDay() {
+  const store = new Store(path.join(tmp, "db-detail-missing.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "detail-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const detail = store.participantDetail(identity.participantId, "2020-01-01");
+  // Should return null or empty structure, not throw
+  assert.ok(detail === null || detail);
+
+  console.log("  testStoreParticipantDetailMissingDay passed");
+}
+
+function testStoreBoardSummaryEmpty() {
+  const store = new Store(path.join(tmp, "db-summary-empty.json"));
+  const summary = store.boardSummary();
+  assert.ok(summary);
+  assert.equal(summary.totalParticipants || summary.participantCount || 0, 0);
+
+  console.log("  testStoreBoardSummaryEmpty passed");
+}
+
+// ─── HTTP API edge case tests ─────────────────────────────────────────────────
+
+async function testMalformedJsonPayload() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not valid json {{{"
+    });
+    assert.ok(res.status >= 400, `expected error status, got ${res.status}`);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testMalformedJsonPayload passed");
+}
+
+async function testMissingContentTypeHeader() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      body: JSON.stringify({ participantId: "p1", deviceId: "d1", nickname: "test" })
+    });
+    // Should either work or return error, not crash
+    assert.ok(res.status >= 200);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testMissingContentTypeHeader passed");
+}
+
+async function testEmptyBodyPost() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: ""
+    });
+    assert.ok(res.status >= 400, `expected error status, got ${res.status}`);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testEmptyBodyPost passed");
+}
+
+async function testUsageUploadMissingRequiredFields() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+
+    // Register device
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId,
+        nickname: "missing-fields-user",
+        identityPublicKey: identity.identityPublicKey,
+        os: "test", appVersion: APP_VERSION
+      })
+    });
+
+    // Upload with missing required fields
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: "2026-05-14", model: "gpt-5" }] // missing toolCode, providerId, etc.
+    };
+    const sig = signPayload(identity.identityPrivateKey, payload);
+    const res = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Signature": sig },
+      body: JSON.stringify(payload)
+    });
+    assert.ok(res.status >= 400, `expected error for missing fields, got ${res.status}`);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testUsageUploadMissingRequiredFields passed");
+}
+
+async function testDeviceRegistrationWithConflictingKey() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const d1 = newId("d");
+    const d2 = newId("d");
+
+    // First registration
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId: d1,
+        nickname: "user1", identityPublicKey: identity.identityPublicKey,
+        os: "test", appVersion: APP_VERSION
+      })
+    });
+
+    // Second registration with different device but different key should fail
+    const otherIdentity = generateIdentity();
+    const res = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId: d2,
+        nickname: "user2", identityPublicKey: otherIdentity.identityPublicKey,
+        os: "test", appVersion: APP_VERSION
+      })
+    });
+    assert.ok(res.status >= 400, `expected error for conflicting key, got ${res.status}`);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testDeviceRegistrationWithConflictingKey passed");
+}
+
+async function testUsageUploadNegativeTokens() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId,
+        nickname: "neg-user", identityPublicKey: identity.identityPublicKey,
+        os: "test", appVersion: APP_VERSION
+      })
+    });
+
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{
+        day: localDay(), toolCode: "codex", providerId: "codex_local",
+        workdirHash: "wd_neg", workdirDisplayName: "neg",
+        model: "gpt-5", inputTokens: -100, outputTokens: 50,
+        cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+        totalTokens: -50, sourceQuality: "exact", sourceFingerprint: "sf_neg"
+      }]
+    };
+    const sig = signPayload(identity.identityPrivateKey, payload);
+    const res = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Signature": sig },
+      body: JSON.stringify(payload)
+    });
+    assert.ok(res.status >= 400, `expected error for negative tokens, got ${res.status}`);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testUsageUploadNegativeTokens passed");
+}
+
+async function testHealthEndpointDetails() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/health`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.ok(data.serverVersion);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testHealthEndpointDetails passed");
+}
+
+async function testModelPricesPublicEndpointStructure() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/model-prices`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(typeof data === "object" || Array.isArray(data));
+  } finally {
+    await cleanup();
+  }
+  console.log("  testModelPricesPublicEndpointStructure passed");
+}
+
+async function testLeaderboardWithNoData() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/leaderboard`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(Array.isArray(data.items));
+    assert.equal(data.items.length, 0);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testLeaderboardWithNoData passed");
+}
+
+async function testUsageUploadForbiddenFields() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId,
+        nickname: "forbidden-user", identityPublicKey: identity.identityPublicKey,
+        os: "test", appVersion: APP_VERSION
+      })
+    });
+
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{
+        day: localDay(), toolCode: "codex", providerId: "codex_local",
+        workdirHash: "wd_forbidden", workdirDisplayName: "forbidden",
+        model: "gpt-5", inputTokens: 100, outputTokens: 50,
+        cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+        totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf_forbidden",
+        prompt: "this should be rejected",
+        assistantResponse: "this too"
+      }]
+    };
+    const sig = signPayload(identity.identityPrivateKey, payload);
+    const res = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Signature": sig },
+      body: JSON.stringify(payload)
+    });
+    assert.ok(res.status >= 400, `expected error for forbidden fields, got ${res.status}`);
+  } finally {
+    await cleanup();
+  }
+  console.log("  testUsageUploadForbiddenFields passed");
+}
+
+// ─── Changelog and preset edge case tests ─────────────────────────────────────
+
+function testParseChangelogEmptyInput() {
+  assert.equal(parseLatestChangelog(""), null);
+  assert.equal(parseLatestChangelog(null), null);
+  assert.equal(parseLatestChangelog(undefined), null);
+  console.log("  testParseChangelogEmptyInput passed");
+}
+
+function testParseChangelogNoMatchingVersion() {
+  const md = "## [0.5.0] - 2026-01-01\n\n### Features\n- [Desktop] Something\n";
+  assert.equal(parseChangelogVersion(md, "0.99.0"), null);
+  console.log("  testParseChangelogNoMatchingVersion passed");
+}
+
+function testParseChangelogDividerTruncation() {
+  const md = "## [0.7.0] - 2026-05-22\n\n### Features\n- [Desktop] Feature A\n- [Web] Feature B\n\n---\n\n### Internal\n- Internal refactor\n";
+  const result = parseLatestChangelog(md);
+  assert.ok(result);
+  assert.equal(result.version, "0.7.0");
+  // Items after divider should be excluded
+  const allItems = result.sections.flatMap(s => s.items);
+  assert.ok(allItems.some(i => i.text.includes("Feature A")));
+  assert.ok(!allItems.some(i => i.text.includes("Internal refactor")));
+
+  console.log("  testParseChangelogDividerTruncation passed");
+}
+
+function testLoadBuildPresetEdgeCases() {
+  // Nonexistent path returns empty
+  const empty = loadBuildPreset("/nonexistent/path");
+  assert.deepEqual(empty, {});
+
+  // Preset with mixed keys - only allowed keys pass through
+  const appDir = path.join(tmp, "preset-app-mixed");
+  const assetsDir = path.join(appDir, "assets");
+  fs.mkdirSync(assetsDir, { recursive: true });
+  fs.writeFileSync(path.join(assetsDir, "preset.json"), JSON.stringify({
+    apiBaseUrl: "https://example.com",
+    nickname: "test",
+    invalidKey: "should-be-filtered",
+    anotherInvalid: true
+  }));
+  const mixed = loadBuildPreset(appDir);
+  assert.equal(mixed.apiBaseUrl, "https://example.com");
+  assert.equal(mixed.nickname, "test");
+  assert.ok(!mixed.invalidKey);
+  assert.ok(!mixed.anotherInvalid);
+
+  // Empty preset file
+  fs.writeFileSync(path.join(assetsDir, "preset.json"), "{}");
+  const emptyPreset = loadBuildPreset(appDir);
+  assert.deepEqual(emptyPreset, {});
+
+  // Corrupted preset file returns empty
+  fs.writeFileSync(path.join(assetsDir, "preset.json"), "not json!!!");
+  const corrupted = loadBuildPreset(appDir);
+  assert.deepEqual(corrupted, {});
+
+  console.log("  testLoadBuildPresetEdgeCases passed");
+}
+
+function testPresetAllowedKeysContainsExpected() {
+  assert.ok(PRESET_ALLOWED_KEYS.length > 0);
+  assert.ok(PRESET_ALLOWED_KEYS.includes("apiBaseUrl"));
+  assert.ok(PRESET_ALLOWED_KEYS.includes("nickname"));
+  assert.ok(!PRESET_ALLOWED_KEYS.includes("invalidKey"));
+  console.log("  testPresetAllowedKeysContainsExpected passed");
+}
+
+// ─── Composition edge case tests ──────────────────────────────────────────────
+
+function testCompositionAllZero() {
+  const comp = createEmptyComposition();
+  assert.equal(comp.inputTokens, 0);
+  assert.equal(comp.outputTokens, 0);
+  assert.equal(comp.totalTokens, 0);
+
+  // compositionRatio returns a number (0 when total is 0)
+  const ratio = compositionRatio(comp);
+  assert.equal(ratio, 0);
+
+  const summary = tokenCompositionSummary(comp);
+  assert.ok(typeof summary === "string");
+
+  console.log("  testCompositionAllZero passed");
+}
+
+function testCompositionMergeWithZeros() {
+  const a = createEmptyComposition();
+  const b = createEmptyComposition();
+  const merged = mergeTokenComposition(a, b);
+  assert.equal(merged.inputTokens, 0);
+  assert.equal(merged.outputTokens, 0);
+
+  console.log("  testCompositionMergeWithZeros passed");
+}
+
+function testDominantCompositionTie() {
+  const comp = { inputTokens: 100, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+  const result = dominantComposition(comp);
+  assert.ok(result); // Should return some category even on tie
+
+  console.log("  testDominantCompositionTie passed");
+}
+
+// ─── Board anonymizer edge case tests ─────────────────────────────────────────
+
+function testBoardAnonymizerConsistency() {
+  const saltPath = path.join(tmp, "salt-consistency.txt");
+  const salt = loadOrGenerateSalt(saltPath);
+  const anon = new BoardAnonymizer(salt);
+
+  const pid = "p_test_consistency";
+  // Same participant should get consistent public ID
+  const id1 = anon.getPublicId(pid);
+  const id2 = anon.getPublicId(pid);
+  assert.equal(id1, id2);
+
+  // Different participants get different IDs
+  const id3 = anon.getPublicId("p_other");
+  assert.notEqual(id1, id3);
+
+  console.log("  testBoardAnonymizerConsistency passed");
+}
+
+// ─── i18n completeness tests
 testLegacyEd25519PemCompatibility();
 testI18nCompleteness();
 testI18nDataAttributesMatchKeys();
@@ -3869,5 +5343,93 @@ testCursorDedupDailyDerivedCorrectly();
 testSyncStateReturnsMissingAndMatched();
 testSyncStateAfterResetDetectsMissing();
 testDeleteParticipantDataClearsHourlySyncState();
+
+// ─── New edge case tests ────────────────────────────────────────────────────
+
+// Crypto edge cases
+testCanonicalJson();
+testSha256Hex();
+testSignVerifyEdgeCases();
+testNewIdUniqueness();
+
+// Date edge cases
+testDayToUtcDate();
+testUtcDateToDay();
+testAddDaysEdgeCases();
+testDaysBetweenEdgeCases();
+testLocalDayEdgeCases();
+
+// Pricing edge cases
+testNormalizeModelName();
+testMergeCostQuality();
+testAggregateCost();
+testPriceToPublic();
+testAddCostToUsageItem();
+
+// Schema edge cases
+testCloudNaturalKey();
+testTodayLocal();
+testAssertSnapshotHourlyBounds();
+testCloudProviderIdsSet();
+
+// Version edge cases
+testCompareSemver();
+testNormalizeClientMetadata();
+testClientPlatformVariants();
+testCollectNetworkInfo();
+testPackageVersionAndBaseline();
+
+// Display edge cases
+testFormatTokenCompactEdgeCases();
+testFormatTokenRaw();
+testFormatUsdEdgeCases();
+
+// Update/release edge cases
+testBuildLatestYml();
+testSha512Base64();
+testBuildReleaseManifest();
+testValidateReleaseManifest();
+testSelectUpdateArtifact();
+testSelectInstallerArtifact();
+testUpdateStateFromManifest();
+testReleasePlatformsFromEnv();
+
+// Store edge cases
+testStoreEmptyDatabase();
+testStoreZeroTokenItems();
+testStoreMultiDayRangeLeaderboard();
+testStoreDuplicateDeviceRegistrationSameKey();
+testStoreCorruptJsonRecovery();
+testStoreLargeTokenValues();
+testStoreWorkdirAliasPersistence();
+testStoreParticipantDetailMissingDay();
+testStoreBoardSummaryEmpty();
+
+// HTTP API edge cases
+await testMalformedJsonPayload();
+await testMissingContentTypeHeader();
+await testEmptyBodyPost();
+await testUsageUploadMissingRequiredFields();
+await testDeviceRegistrationWithConflictingKey();
+await testUsageUploadNegativeTokens();
+await testHealthEndpointDetails();
+await testModelPricesPublicEndpointStructure();
+await testLeaderboardWithNoData();
+await testUsageUploadForbiddenFields();
+
+// Changelog and preset edge cases
+testParseChangelogEmptyInput();
+testParseChangelogNoMatchingVersion();
+testParseChangelogDividerTruncation();
+testLoadBuildPresetEdgeCases();
+testPresetAllowedKeysContainsExpected();
+
+// Composition edge cases
+testCompositionAllZero();
+testCompositionMergeWithZeros();
+testDominantCompositionTie();
+
+// Board anonymizer edge cases
+testBoardAnonymizerConsistency();
 
 console.log("All tests passed");

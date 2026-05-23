@@ -272,3 +272,250 @@ pub fn extract_jwt_claims(token: &str) -> (Option<String>, Option<String>) {
         None => (None, None),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    #[test]
+    fn test_generate_code_verifier_format() {
+        let v = generate_code_verifier();
+        assert_eq!(v.len(), 43, "base64url(32 bytes) = 43 chars");
+        assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
+
+    #[test]
+    fn test_generate_code_verifier_uniqueness() {
+        let a = generate_code_verifier();
+        let b = generate_code_verifier();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_generate_uuid_format() {
+        let u = generate_uuid();
+        assert_eq!(u.len(), 36, "UUID v4 = 8-4-4-4-12 = 36 chars");
+        let parts: Vec<&str> = u.split('-').collect();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0].len(), 8);
+        assert_eq!(parts[1].len(), 4);
+        assert_eq!(parts[2].len(), 4);
+        assert_eq!(parts[3].len(), 4);
+        assert_eq!(parts[4].len(), 12);
+        // Version nibble
+        assert_eq!(&parts[2][0..1], "4");
+        // Variant nibble
+        let byte8 = u8::from_str_radix(&parts[3][0..2], 16).unwrap();
+        assert_eq!(byte8 & 0xc0, 0x80);
+    }
+
+    #[test]
+    fn test_generate_uuid_uniqueness() {
+        assert_ne!(generate_uuid(), generate_uuid());
+    }
+
+    #[test]
+    fn test_compute_challenge_deterministic() {
+        let verifier = "test-verifier-abc123";
+        let c1 = compute_challenge(verifier);
+        let c2 = compute_challenge(verifier);
+        assert_eq!(c1, c2);
+        // Must be valid base64url
+        assert!(URL_SAFE_NO_PAD.decode(&c1).is_ok());
+    }
+
+    #[test]
+    fn test_compute_challenge_different_verifiers() {
+        assert_ne!(
+            compute_challenge("verifier-a"),
+            compute_challenge("verifier-b")
+        );
+    }
+
+    #[test]
+    fn test_compute_account_hash_deterministic() {
+        let h1 = compute_account_hash("user@example.com", "p_123");
+        let h2 = compute_account_hash("user@example.com", "p_123");
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64);
+    }
+
+    #[test]
+    fn test_compute_account_hash_normalizes_email() {
+        let h1 = compute_account_hash("User@Example.COM", "p_123");
+        let h2 = compute_account_hash("  user@example.com  ", "p_123");
+        assert_eq!(h1, h2, "should normalize case and trim whitespace");
+    }
+
+    #[test]
+    fn test_compute_account_hash_different_participants() {
+        let h1 = compute_account_hash("user@example.com", "p_123");
+        let h2 = compute_account_hash("user@example.com", "p_456");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_decode_jwt_payload_valid() {
+        let header = URL_SAFE_NO_PAD.encode(b"{}");
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"user123","exp":1700000000}"#);
+        let sig = URL_SAFE_NO_PAD.encode(b"sig");
+        let token = format!("{}.{}.{}", header, payload, sig);
+        let decoded = decode_jwt_payload(&token).unwrap();
+        assert_eq!(decoded["sub"].as_str(), Some("user123"));
+        assert_eq!(decoded["exp"].as_i64(), Some(1700000000));
+    }
+
+    #[test]
+    fn test_decode_jwt_payload_invalid_parts() {
+        assert!(decode_jwt_payload("").is_none());
+        assert!(decode_jwt_payload("a.b").is_none());
+        assert!(decode_jwt_payload("a.b.c.d").is_none());
+    }
+
+    #[test]
+    fn test_decode_jwt_payload_invalid_base64() {
+        assert!(decode_jwt_payload("a.!!!.c").is_none());
+    }
+
+    #[test]
+    fn test_extract_jwt_claims_valid() {
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"user42","exp":1700000000}"#);
+        let token = format!("{}.{}.sig", URL_SAFE_NO_PAD.encode(b"{}"), payload);
+        let (sub, exp) = extract_jwt_claims(&token);
+        assert_eq!(sub, Some("user42".to_string()));
+        assert!(exp.is_some());
+        assert!(exp.unwrap().contains("2023"));
+    }
+
+    #[test]
+    fn test_extract_jwt_claims_missing_fields() {
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"iat":1700000000}"#);
+        let token = format!("{}.{}.sig", URL_SAFE_NO_PAD.encode(b"{}"), payload);
+        let (sub, exp) = extract_jwt_claims(&token);
+        assert_eq!(sub, None);
+        assert_eq!(exp, None);
+    }
+
+    #[test]
+    fn test_extract_jwt_claims_invalid_token() {
+        let (sub, exp) = extract_jwt_claims("not-a-jwt");
+        assert_eq!(sub, None);
+        assert_eq!(exp, None);
+    }
+
+    #[test]
+    fn test_token_needs_refresh_no_expiry() {
+        let account = CursorAccount {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            auth_id: "a".into(),
+            sub: String::new(),
+            email: String::new(),
+            account_hash: String::new(),
+            access_token_expires_at: None,
+            last_refresh_at: None,
+            auth_status: "active".into(),
+            ignored: false,
+            added_at: None,
+        };
+        assert!(token_needs_refresh(&account), "no expiry → needs refresh");
+    }
+
+    #[test]
+    fn test_token_needs_refresh_not_active() {
+        let account = CursorAccount {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            auth_id: "a".into(),
+            sub: String::new(),
+            email: String::new(),
+            account_hash: String::new(),
+            access_token_expires_at: None,
+            last_refresh_at: None,
+            auth_status: "disconnected".into(),
+            ignored: false,
+            added_at: None,
+        };
+        assert!(!token_needs_refresh(&account), "non-active → no refresh");
+    }
+
+    #[test]
+    fn test_token_needs_refresh_expired() {
+        let past = (chrono::Utc::now() - chrono::Duration::hours(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let account = CursorAccount {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            auth_id: "a".into(),
+            sub: String::new(),
+            email: String::new(),
+            account_hash: String::new(),
+            access_token_expires_at: Some(past),
+            last_refresh_at: None,
+            auth_status: "active".into(),
+            ignored: false,
+            added_at: None,
+        };
+        assert!(token_needs_refresh(&account), "expired → needs refresh");
+    }
+
+    #[test]
+    fn test_token_needs_refresh_far_future() {
+        let future = (chrono::Utc::now() + chrono::Duration::hours(24))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let account = CursorAccount {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            auth_id: "a".into(),
+            sub: String::new(),
+            email: String::new(),
+            account_hash: String::new(),
+            access_token_expires_at: Some(future),
+            last_refresh_at: None,
+            auth_status: "active".into(),
+            ignored: false,
+            added_at: None,
+        };
+        assert!(!token_needs_refresh(&account), "far future → no refresh");
+    }
+
+    #[test]
+    fn test_token_needs_refresh_unparseable_expiry() {
+        let account = CursorAccount {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            auth_id: "a".into(),
+            sub: String::new(),
+            email: String::new(),
+            account_hash: String::new(),
+            access_token_expires_at: Some("not-a-date".into()),
+            last_refresh_at: None,
+            auth_status: "active".into(),
+            ignored: false,
+            added_at: None,
+        };
+        assert!(token_needs_refresh(&account), "bad expiry string → needs refresh");
+    }
+
+    #[test]
+    fn test_token_needs_refresh_near_expiry_within_5min() {
+        let near = (chrono::Utc::now() + chrono::Duration::minutes(3))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let account = CursorAccount {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            auth_id: "a".into(),
+            sub: String::new(),
+            email: String::new(),
+            account_hash: String::new(),
+            access_token_expires_at: Some(near),
+            last_refresh_at: None,
+            auth_status: "active".into(),
+            ignored: false,
+            added_at: None,
+        };
+        assert!(token_needs_refresh(&account), "within 5 min threshold → needs refresh");
+    }
+}

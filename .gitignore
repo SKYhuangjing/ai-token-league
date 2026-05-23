@@ -52,3 +52,7 @@ src-tauri/.signing-key
 .tmp-cursor-probe.js
 .tmp-cursor-tokens.json
 .claude
+
+# Test artifacts
+tests/output/
+src-tauri/coverage/
