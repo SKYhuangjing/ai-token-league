@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.1] - 2026-05-24
+
+### Added
+
+- [Web] Added admin device-level cloud data reset so one device can be cleared without deleting the participant or other devices.
+- Added local quality-gate coverage for renderer units, mock E2E workflows, performance checks, sidecar integration, scan integration, and shared module behavior.
+
+### Changed
+
+- [Desktop] Improved background scan, refresh, and sync handling to keep reset, startup, range switching, and sync-status updates responsive on larger local datasets.
+- [Desktop] Refined sync-status state handling so server changes, queued uploads, partial syncs, and refresh errors produce clearer desktop status.
+- [Desktop] Registration now reports client LAN IP/network information for admin diagnostics.
+- [Desktop] Updated client release metadata, installer version references, and packaged preset resource handling to `0.7.1`.
+
+### Fixed
+
+- [Desktop] Refreshes cloud health before update checks so updater state does not depend on stale connection status.
+- [Desktop, Web] Kept legacy Ed25519 PEM signatures compatible across client signing and server verification.
+- [Web] Download metadata now renders available installer information even when one platform's installer metadata is incomplete.
+
+---
+
 ## [0.7.0] - 2026-05-22
 
 ### Added

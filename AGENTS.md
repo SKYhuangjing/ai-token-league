@@ -19,7 +19,7 @@ Before changing behavior, identify the real source of truth in code and docs. Do
 
 AI Token League is a local-first AI coding token usage collector plus public leaderboard for Codex, Claude Code, and Cursor.
 
-Current product baseline: `0.7`; client version: `0.7.0` (released 2026-05-22).
+Current product baseline: `0.7`; client version: `0.7.1` (released 2026-05-24).
 Frozen product baseline: `0.6`, tracked by `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`.
 Active product baseline: `0.7`, tracked by `doc/0.7-baseline.md` and `doc/0.7-development-tasks.md`.
 
@@ -251,7 +251,7 @@ The script updates only the files that match the selected mode:
 
 ### Step 2: Manual steps and local release gate
 
-1. For client releases, write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new client version. Tag public-download-page items with `[Desktop]`, `[Web]`, or `[Desktop, Web]` (e.g. `- [Desktop] Source toggle controls now use a switch-style UI`). The public download page latest-updates block renders only tagged items; untagged items (internal API, scripts, migrations, tooling, documentation) remain in the changelog but are not shown in that block.
+1. For client releases, write `CHANGELOG.md` and `CHANGELOG.zh-CN.md` entries for the new client version from the actual commit range being released. First identify the previous release boundary (`v<old-version>` tag when it exists; otherwise the last release commit or version-bump commit), then inspect `git log --oneline <boundary>..HEAD`, `git show --stat <commits>`, and relevant diffs before writing the changelog. Changelog entries must describe shipped user/admin/operator-visible behavior and meaningful test/release-gate changes from those commits; do not use generic placeholders such as "updated release metadata" unless the commit range truly contains only metadata changes. Tag public-download-page items with `[Desktop]`, `[Web]`, or `[Desktop, Web]` (e.g. `- [Desktop] Source toggle controls now use a switch-style UI`). The public download page latest-updates block renders only tagged items; untagged items (internal API, scripts, migrations, tooling, documentation) remain in the changelog but are not shown in that block.
 2. For product baseline changes, create `doc/<baseline>-baseline.md` from current product state.
 3. For product baseline changes, create `doc/<baseline>-development-tasks.md` with task plan.
 4. Run `npm install --package-lock-only` if `package.json` version changed.
