@@ -1,5 +1,6 @@
 import { canonicalJson, sha256Hex } from "./crypto.js";
 import { localDay } from "./date.js";
+export { RAIL_SYNC_STATE, RAIL_SYNC_REASON } from "./sync-status.js";
 
 export const SOURCE_QUALITY = new Set(["exact", "partial", "estimated", "imported", "unknown"]);
 export const STORAGE_SCHEMA_VERSION = 2;

@@ -1,7 +1,9 @@
 use collector_core::config;
 use collector_core::protocol::{Command, SidecarRequest, SidecarResponse};
 use collector_core::scanner;
+use collector_core::sync::SyncOutcome;
 use collector_core::version;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Write};
@@ -94,6 +96,23 @@ struct SidecarRuntime {
     next_scan_task_id: u64,
     tray_estimated_cost_usd: Option<f64>,
     pending_cursor_connect: Option<PendingCursorConnect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanSyncStatus {
+    pub running: bool,
+    pub sync_running: bool,
+    pub phase: Option<collector_core::sync::SyncRunPhase>,
+    pub started: Option<bool>,
+    pub task_id: Option<u64>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub force: Option<bool>,
+    pub error: Option<String>,
+    pub sync_result: Option<serde_json::Value>,
+    pub sync_error: Option<String>,
+    pub snapshot: Option<serde_json::Value>,
 }
 
 async fn handle_command(
@@ -219,6 +238,7 @@ async fn handle_command(
             let status = serde_json::json!({
                 "running": false,
                 "syncRunning": true,
+                "phase": "uploading",
                 "started": true,
                 "taskId": task_id,
                 "startedAt": started_at,
@@ -242,6 +262,7 @@ async fn handle_command(
                         Ok(sync_result) => serde_json::json!({
                             "running": false,
                             "syncRunning": false,
+                            "phase": null,
                             "started": true,
                             "taskId": task_id,
                             "startedAt": started_at,
@@ -255,7 +276,14 @@ async fn handle_command(
                         Err(error) => {
                             let now = chrono::Utc::now()
                                 .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-                            persist_sync_status(&cfg, "failed", &now, &now, None, &error);
+                            persist_sync_status(
+                                &cfg,
+                                SyncOutcome::Failed,
+                                &now,
+                                &now,
+                                None,
+                                &error,
+                            );
                             serde_json::json!({
                                 "running": false,
                                 "syncRunning": false,
@@ -274,7 +302,7 @@ async fn handle_command(
                     Err(error) => {
                         let now =
                             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-                        persist_sync_status(&cfg, "failed", &now, &now, None, &error);
+                        persist_sync_status(&cfg, SyncOutcome::Failed, &now, &now, None, &error);
                         serde_json::json!({
                             "running": false,
                             "syncRunning": false,
@@ -608,6 +636,7 @@ async fn handle_command(
             }
 
             let force = request.args["force"].as_bool().unwrap_or(false);
+            let sync_after = request.args["syncAfter"].as_bool().unwrap_or(false);
             let existing_status = read_scan_status(&runtime.last_scan_status);
             if existing_status
                 .get("running")
@@ -652,18 +681,78 @@ async fn handle_command(
                 let finished_at =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                 let finished_status = match result {
-                    Ok(snapshot) => serde_json::json!({
-                        "running": false,
-                        "syncRunning": false,
-                        "taskId": task_id,
-                        "startedAt": started_at,
-                        "finishedAt": finished_at,
-                        "force": force,
-                        "error": null,
-                        "syncResult": null,
-                        "syncError": null,
-                        "snapshot": snapshot
-                    }),
+                    Ok(snapshot) => {
+                        if sync_after && !cfg.api_base_url.is_empty() {
+                            write_scan_status(
+                                &scan_status,
+                                serde_json::json!({
+                                    "running": false,
+                                    "syncRunning": true,
+                                    "phase": "uploading",
+                                    "started": true,
+                                    "taskId": task_id,
+                                    "startedAt": started_at,
+                                    "finishedAt": null,
+                                    "force": force,
+                                    "error": null,
+                                    "syncResult": null,
+                                    "syncError": null,
+                                    "snapshot": snapshot
+                                }),
+                            );
+                            match sync_snapshot(&cfg, &snapshot).await {
+                                Ok(sync_result) => {
+                                    let sync_finished_at = chrono::Utc::now()
+                                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                                    serde_json::json!({
+                                        "running": false,
+                                        "syncRunning": false,
+                                        "phase": null,
+                                        "started": true,
+                                        "taskId": task_id,
+                                        "startedAt": started_at,
+                                        "finishedAt": sync_finished_at,
+                                        "force": force,
+                                        "error": null,
+                                        "syncResult": sync_result,
+                                        "syncError": null,
+                                        "snapshot": snapshot
+                                    })
+                                }
+                                Err(error) => {
+                                    let sync_finished_at = chrono::Utc::now()
+                                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                                    serde_json::json!({
+                                        "running": false,
+                                        "syncRunning": false,
+                                        "phase": null,
+                                        "started": true,
+                                        "taskId": task_id,
+                                        "startedAt": started_at,
+                                        "finishedAt": sync_finished_at,
+                                        "force": force,
+                                        "error": null,
+                                        "syncResult": null,
+                                        "syncError": error,
+                                        "snapshot": snapshot
+                                    })
+                                }
+                            }
+                        } else {
+                            serde_json::json!({
+                                "running": false,
+                                "syncRunning": false,
+                                "taskId": task_id,
+                                "startedAt": started_at,
+                                "finishedAt": finished_at,
+                                "force": force,
+                                "error": null,
+                                "syncResult": null,
+                                "syncError": null,
+                                "snapshot": snapshot
+                            })
+                        }
+                    }
                     Err(error) => serde_json::json!({
                         "running": false,
                         "syncRunning": false,
@@ -686,14 +775,7 @@ async fn handle_command(
 }
 
 fn default_scan_status() -> serde_json::Value {
-    serde_json::json!({
-        "running": false,
-        "syncRunning": false,
-        "taskId": null,
-        "snapshot": null,
-        "error": null,
-        "syncError": null
-    })
+    serde_json::to_value(ScanSyncStatus::default()).unwrap_or_else(|_| serde_json::json!({}))
 }
 
 fn read_scan_status(status: &Arc<Mutex<Option<serde_json::Value>>>) -> serde_json::Value {
@@ -1194,13 +1276,27 @@ async fn sync_snapshot(
                 "scannedAt": snapshot.get("scannedAt").cloned().unwrap_or(serde_json::Value::Null),
                 "sourceFingerprint": snapshot.get("sourceFingerprint").cloned().unwrap_or(serde_json::Value::Null)
             });
-            persist_sync_status(cfg, "success", &started_at, &finished_at, Some(&result), "");
+            persist_sync_status(
+                cfg,
+                SyncOutcome::Success,
+                &started_at,
+                &finished_at,
+                Some(&result),
+                "",
+            );
             Ok(result)
         }
         Err(error) => {
             let finished_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            persist_sync_status(cfg, "failed", &started_at, &finished_at, None, &error);
+            persist_sync_status(
+                cfg,
+                SyncOutcome::Failed,
+                &started_at,
+                &finished_at,
+                None,
+                &error,
+            );
             Err(error)
         }
     }
@@ -1208,49 +1304,47 @@ async fn sync_snapshot(
 
 fn persist_sync_status(
     cfg: &config::AppConfig,
-    status: &str,
+    status: SyncOutcome,
     started_at: &str,
     finished_at: &str,
     result: Option<&serde_json::Value>,
     error: &str,
 ) {
     let previous = cfg.sync_status.clone();
-    let last_success_at = if status == "success" {
+    let last_success_at = if status == SyncOutcome::Success {
         finished_at.to_string()
     } else {
-        previous
-            .get("lastSuccessAt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
+        previous.last_success_at
     };
-    let last_success_source_fingerprint = if status == "success" {
+    let last_success_source_fingerprint = if status == SyncOutcome::Success {
         result
             .and_then(|v| v.get("sourceFingerprint"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string()
     } else {
-        previous
-            .get("lastSuccessSourceFingerprint")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
+        previous.last_success_source_fingerprint
     };
     let sync_status = serde_json::json!({
         "apiBaseUrl": cfg.api_base_url,
         "lastAttemptAt": started_at,
         "lastFinishedAt": finished_at,
         "lastSuccessAt": last_success_at,
-        "lastStatus": status,
+        "lastStatus": serde_json::to_value(status).unwrap_or(serde_json::Value::String("failed".to_string())),
         "lastError": error,
         "lastSuccessSourceFingerprint": last_success_source_fingerprint,
         "lastResult": result.cloned().unwrap_or(serde_json::Value::Null)
     });
     let mut next = cfg.clone();
-    next.sync_status = sync_status;
+    next.sync_status = serde_json::from_value(sync_status).unwrap_or_default();
     next.last_sync_at = Some(finished_at.to_string());
-    next.last_sync_status = Some(status.to_string());
+    next.last_sync_status = Some(
+        serde_json::to_value(status)
+            .unwrap_or(serde_json::Value::String("failed".to_string()))
+            .as_str()
+            .unwrap_or("failed")
+            .to_string(),
+    );
     next.last_sync_api_base_url = Some(cfg.api_base_url.clone());
     next.last_sync_error = if error.is_empty() {
         None
@@ -1826,7 +1920,7 @@ mod tests {
             local_backup: config::LocalBackupConfig::default(),
             runtime_log_retention_days: 3,
             api_connection: serde_json::json!({}),
-            sync_status: serde_json::json!({}),
+            sync_status: config::SyncStatusRecord::default(),
             workdir_aliases: HashMap::new(),
             provider_roots: HashMap::new(),
             provider_enabled: HashMap::new(),
@@ -1901,9 +1995,11 @@ mod tests {
         assert!(labels[1].starts_with("立即刷新 ("));
         assert_eq!(labels[2], "访问云端 (anon)");
         assert!(labels.iter().any(|label| *label == "📊 今日令牌: 2,000"));
-        assert!(labels
-            .iter()
-            .any(|label| label.starts_with("💰 预估费用: ")));
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.starts_with("💰 预估费用: "))
+        );
         assert!(labels.iter().any(|label| *label == "模型消耗"));
         assert!(labels.iter().any(|label| *label == "  gpt-5  1,500"));
         assert!(labels.iter().any(|label| *label == "来源"));

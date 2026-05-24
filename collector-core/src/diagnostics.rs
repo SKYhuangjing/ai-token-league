@@ -190,7 +190,7 @@ mod tests {
             local_backup: Default::default(),
             runtime_log_retention_days: 3,
             api_connection: Value::Null,
-            sync_status: Value::Null,
+            sync_status: crate::config::SyncStatusRecord::default(),
             workdir_aliases: HashMap::new(),
             provider_roots: HashMap::new(),
             provider_enabled: HashMap::new(),

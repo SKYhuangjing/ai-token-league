@@ -28,11 +28,11 @@
         <div class="rail-bottom">
           <button class="primary-pill teal-button" id="rail-restart-update" type="button" hidden data-i18n="desktop.rail.restartUpdate">Restart to update</button>
           <div class="rail-note">
-            <div id="rail-cloud-status" class="rail-cloud-status" data-state="local">
+            <div id="rail-cloud-status" class="rail-cloud-status" data-state="local_only">
               <span class="rail-status-dot" aria-hidden="true"></span>
-              <span id="rail-cloud-status-text" data-i18n="desktop.rail.cloudLocal">Local</span>
+              <span id="rail-cloud-status-text" data-i18n="desktop.syncStatus.localOnly">Local only</span>
             </div>
-            <span id="rail-last-scan" data-i18n="desktop.renderer.currentScanDash">Current -</span>
+            <span id="rail-last-scan">-</span>
             <small id="rail-next-scan" data-i18n="desktop.renderer.nextScanDash">Next -</small>
           </div>
           <div class="rail-icon-bar">
@@ -248,6 +248,21 @@
               <div class="cloud-compact-status">
                 <span class="badge" id="cloud-status-badge">-</span>
                 <span id="cloud-status-text" class="muted"></span>
+              </div>
+              <div id="cloud-sync-details" class="cloud-sync-details" hidden>
+                <div class="sync-detail-row">
+                  <span id="cloud-sync-status-badge" class="badge">-</span>
+                  <span id="cloud-sync-status-detail" class="muted"></span>
+                </div>
+                <button id="cloud-sync-primary-action" class="outline-button" type="button" hidden></button>
+                <div id="cloud-sync-diagnostics" class="sync-diagnostics" hidden>
+                  <div class="sync-diagnostic-item"><span data-i18n="desktop.syncStatus.diagnostics.apiUrl">API URL</span><strong id="diag-api-url"></strong></div>
+                  <div class="sync-diagnostic-item"><span data-i18n="desktop.syncStatus.diagnostics.connectionStatus">Connection</span><strong id="diag-connection"></strong></div>
+                  <div class="sync-diagnostic-item"><span data-i18n="desktop.syncStatus.diagnostics.lastAttempt">Last attempt</span><strong id="diag-last-attempt"></strong></div>
+                  <div class="sync-diagnostic-item"><span data-i18n="desktop.syncStatus.diagnostics.lastSuccess">Last success</span><strong id="diag-last-success"></strong></div>
+                  <div class="sync-diagnostic-item"><span data-i18n="desktop.syncStatus.diagnostics.queuePending">Queue pending</span><strong id="diag-queue-pending"></strong></div>
+                  <div class="sync-diagnostic-item sync-diagnostic-wide"><span data-i18n="desktop.syncStatus.diagnostics.lastError">Last error</span><strong id="diag-last-error"></strong></div>
+                </div>
               </div>
             </div>
 

@@ -28,6 +28,22 @@ pub struct SyncResult {
     pub new_failed_bucket_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncRunPhase {
+    Idle,
+    Scanning,
+    Uploading,
+    RetryingQueue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncOutcome {
+    Success,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct UploadQueue {

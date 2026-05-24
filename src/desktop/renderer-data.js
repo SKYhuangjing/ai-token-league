@@ -11,6 +11,10 @@ import {
   normalizeUsageWorkdirs, normalizeUsageSummary, normalizeUsageTotal, positiveInteger,
   reconcileHealthWithConfig
 } from "./renderer-helpers.js";
+import {
+  RAIL_SYNC_STATE as S,
+  RAIL_SYNC_REASON as R,
+} from "../shared/sync-status.js";
 
 // ── Internal helpers ──
 
@@ -135,6 +139,239 @@ export function railCloudStatus(config, t = (k) => k) {
     state: "offline",
     label: t("desktop.rail.cloudOffline"),
     title: connection.message || apiBaseUrl
+  };
+}
+
+// ── Sync Status Derivation ──
+
+function isSyncRecordForCurrentServer(config) {
+  const configured = normalizeApiBaseUrl(config?.apiBaseUrl || "");
+  if (!configured) return false;
+  const syncStatus = config?.syncStatus || {};
+  const recorded = normalizeApiBaseUrl(
+    syncStatus.apiBaseUrl || config?.lastSyncApiBaseUrl || ""
+  );
+  return recorded === configured;
+}
+
+function syncDetailLabel(state, reason, t, formatDateTime, lastSuccessAt) {
+  if (state === S.LOCAL_ONLY) return t("desktop.syncStatus.localOnlyDetail");
+  if (state === S.SYNCING) {
+    if (reason === R.SCANNING) return t("desktop.syncStatus.syncingDetail.scanning");
+    if (reason === R.UPLOADING) return t("desktop.syncStatus.syncingDetail.uploading");
+    if (reason === R.RETRYING_QUEUE) return t("desktop.syncStatus.syncingDetail.retryingQueue");
+    return t("desktop.syncStatus.syncingDetail.checkingConnection");
+  }
+  if (state === S.NEEDS_SYNC) {
+    if (reason === R.LOCAL_CHANGED_AFTER_SYNC) return t("desktop.syncStatus.needsSyncDetail.localChangedAfterSync");
+    return t("desktop.syncStatus.needsSyncDetail.neverSyncedCurrentServer");
+  }
+  if (state === S.SYNCED) {
+    return lastSuccessAt ? t("desktop.syncStatus.syncedDetail", { time: formatDateTime(lastSuccessAt) }) : "";
+  }
+  if (state === S.ATTENTION) {
+    if (reason === R.QUEUED_RETRY) return t("desktop.syncStatus.attentionDetail.queuedRetry");
+    if (reason === R.LAST_FAILED) return t("desktop.syncStatus.attentionDetail.lastFailed");
+    if (reason === R.CLOUD_UNREACHABLE) return t("desktop.syncStatus.attentionDetail.cloudUnreachable");
+    if (reason === R.CLOUD_INCOMPATIBLE) return t("desktop.syncStatus.attentionDetail.cloudIncompatible");
+    return t("desktop.syncStatus.attentionDetail.lastFailed");
+  }
+  return "";
+}
+
+function syncActionForState(state, reason) {
+  if (state === S.LOCAL_ONLY) return "configure_cloud";
+  if (state === S.NEEDS_SYNC) return "sync_now";
+  if (state === S.ATTENTION) {
+    if (reason === R.CLOUD_UNREACHABLE) return "check_connection";
+    if (reason === R.CLOUD_INCOMPATIBLE) return "update_client";
+    return "retry_sync";
+  }
+  return null;
+}
+
+function syncActionLabel(action, t) {
+  if (action === "configure_cloud") return t("desktop.syncStatus.action.configureCloud");
+  if (action === "sync_now") return t("desktop.syncStatus.action.syncNow");
+  if (action === "retry_sync") return t("desktop.syncStatus.action.retrySync");
+  if (action === "check_connection") return t("desktop.syncStatus.action.checkConnection");
+  if (action === "update_client") return t("desktop.syncStatus.action.updateClient");
+  if (action === "open_settings") return t("desktop.syncStatus.action.openSettings");
+  return "";
+}
+
+export function deriveRailSyncStatus({
+  config,
+  usageScanStatus = null,
+  backgroundStatus = null,
+  latestLocalSnapshot = null,
+  foregroundSyncRunning = false,
+  t: translate = (k) => k,
+  formatDateTime: fmtDt = (v) => v,
+} = {}) {
+  const cfg = config || {};
+  const apiBaseUrl = normalizeApiBaseUrl(cfg.apiBaseUrl || "");
+  const connection = cfg.apiConnection || {};
+  const syncStatus = cfg.syncStatus || {};
+  const scanStatus = usageScanStatus || {};
+
+  const isRunning = scanStatus.running || scanStatus.syncRunning || foregroundSyncRunning;
+  const bgRunning = backgroundStatus?.running || false;
+  const activelySyncing = isRunning || bgRunning;
+
+  const lastSuccessAt = syncStatus.lastSuccessAt || "";
+  const lastAttemptAt = syncStatus.lastAttemptAt || "";
+  const lastStatus = syncStatus.lastStatus || cfg.lastSyncStatus || "";
+  const lastError = syncStatus.lastError || cfg.lastSyncError || "";
+  const lastResult = syncStatus.lastResult || null;
+  const queuePending = lastResult?.queuePending || 0;
+  const lastSuccessFp = syncStatus.lastSuccessSourceFingerprint || "";
+
+  // 1. local_only / no_api
+  if (!apiBaseUrl) {
+    const reason = R.NO_API;
+    const action = "configure_cloud";
+    return {
+      state: S.LOCAL_ONLY, reason,
+      label: translate("desktop.syncStatus.localOnly"),
+      detail: syncDetailLabel(S.LOCAL_ONLY, reason, translate, fmtDt, ""),
+      title: translate("desktop.syncStatus.localOnlyDetail"),
+      action, actionLabel: syncActionLabel(action, translate),
+      apiBaseUrl: "", lastSuccessAt: "", lastAttemptAt: "", queuePending: 0, lastError: "",
+    };
+  }
+
+  // 2. syncing
+  if (activelySyncing) {
+    let reason;
+    const phase = scanStatus.phase;
+    if (phase === "scanning") reason = R.SCANNING;
+    else if (phase === "uploading") reason = R.UPLOADING;
+    else if (phase === "retrying_queue") reason = R.RETRYING_QUEUE;
+    else if (bgRunning && !isRunning) reason = R.CHECKING_CONNECTION;
+    else if (scanStatus.syncRunning) reason = R.UPLOADING;
+    else reason = R.SCANNING;
+
+    return {
+      state: S.SYNCING, reason,
+      label: translate("desktop.syncStatus.syncing"),
+      detail: syncDetailLabel(S.SYNCING, reason, translate, fmtDt, ""),
+      title: translate("desktop.syncStatus.syncing"),
+      action: null, actionLabel: "",
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  const compatibility = connection.compatibility || {};
+
+  // 3. syncing / checking_connection
+  if (!connection.checkedAt) {
+    const reason = R.CHECKING_CONNECTION;
+    return {
+      state: S.SYNCING, reason,
+      label: translate("desktop.syncStatus.syncing"),
+      detail: syncDetailLabel(S.SYNCING, reason, translate, fmtDt, ""),
+      title: apiBaseUrl,
+      action: null, actionLabel: "",
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  // 4. attention / cloud_incompatible
+  if (connection.status === "reachable" && compatibility.compatible === false) {
+    const reason = R.CLOUD_INCOMPATIBLE;
+    const action = "update_client";
+    return {
+      state: S.ATTENTION, reason,
+      label: translate("desktop.syncStatus.attention"),
+      detail: syncDetailLabel(S.ATTENTION, reason, translate, fmtDt, lastSuccessAt),
+      title: connection.message || compatibility.reason || apiBaseUrl,
+      action, actionLabel: syncActionLabel(action, translate),
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  // 5. attention / cloud_unreachable
+  if (connection.status && connection.status !== "reachable" && connection.status !== "not_configured" && connection.checkedAt) {
+    const reason = R.CLOUD_UNREACHABLE;
+    const action = "check_connection";
+    return {
+      state: S.ATTENTION, reason,
+      label: translate("desktop.syncStatus.attention"),
+      detail: syncDetailLabel(S.ATTENTION, reason, translate, fmtDt, lastSuccessAt),
+      title: connection.message || apiBaseUrl,
+      action, actionLabel: syncActionLabel(action, translate),
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  const syncedForCurrentServer = isSyncRecordForCurrentServer(cfg);
+
+  // 6. needs_sync / never_synced_current_server
+  if (!syncedForCurrentServer || !lastStatus) {
+    const reason = R.NEVER_SYNCED_CURRENT_SERVER;
+    const action = "sync_now";
+    return {
+      state: S.NEEDS_SYNC, reason,
+      label: translate("desktop.syncStatus.needsSync"),
+      detail: syncDetailLabel(S.NEEDS_SYNC, reason, translate, fmtDt, ""),
+      title: translate("desktop.syncStatus.needsSyncDetail.neverSyncedCurrentServer"),
+      action, actionLabel: syncActionLabel(action, translate),
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  // 7. needs_sync / local_changed_after_sync
+  const localFp = latestLocalSnapshot?.sourceFingerprint || "";
+  if (localFp && lastSuccessFp && localFp !== lastSuccessFp) {
+    const reason = R.LOCAL_CHANGED_AFTER_SYNC;
+    const action = "sync_now";
+    return {
+      state: S.NEEDS_SYNC, reason,
+      label: translate("desktop.syncStatus.needsSync"),
+      detail: syncDetailLabel(S.NEEDS_SYNC, reason, translate, fmtDt, lastSuccessAt),
+      title: translate("desktop.syncStatus.needsSyncDetail.localChangedAfterSync"),
+      action, actionLabel: syncActionLabel(action, translate),
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  // 8. attention / queued_retry
+  if (queuePending > 0) {
+    const reason = R.QUEUED_RETRY;
+    const action = "retry_sync";
+    return {
+      state: S.ATTENTION, reason,
+      label: translate("desktop.syncStatus.attention"),
+      detail: syncDetailLabel(S.ATTENTION, reason, translate, fmtDt, lastSuccessAt),
+      title: translate("desktop.syncStatus.attentionDetail.queuedRetry"),
+      action, actionLabel: syncActionLabel(action, translate),
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  // 9. attention / last_failed
+  if (lastStatus === "failed") {
+    const reason = R.LAST_FAILED;
+    const action = "retry_sync";
+    return {
+      state: S.ATTENTION, reason,
+      label: translate("desktop.syncStatus.attention"),
+      detail: syncDetailLabel(S.ATTENTION, reason, translate, fmtDt, lastSuccessAt),
+      title: lastError || translate("desktop.syncStatus.attentionDetail.lastFailed"),
+      action, actionLabel: syncActionLabel(action, translate),
+      apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
+    };
+  }
+
+  // 10. synced
+  return {
+    state: S.SYNCED, reason: null,
+    label: translate("desktop.syncStatus.synced"),
+    detail: syncDetailLabel(S.SYNCED, null, translate, fmtDt, lastSuccessAt),
+    title: lastSuccessAt ? translate("desktop.syncStatus.syncedDetail", { time: fmtDt(lastSuccessAt) }) : translate("desktop.syncStatus.synced"),
+    action: null, actionLabel: "",
+    apiBaseUrl, lastSuccessAt, lastAttemptAt, queuePending, lastError,
   };
 }
 

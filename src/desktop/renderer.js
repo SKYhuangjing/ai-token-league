@@ -39,6 +39,7 @@ import {
   sourceSummary as _sourceSummary, daysForRange as _daysForRange,
   usageForRange as _usageForRange, rangeLabel as _rangeLabel,
   overviewTrendGrain as _overviewTrendGrain, railCloudStatus as _railCloudStatus,
+  deriveRailSyncStatus as _deriveRailSyncStatus,
   groupBy as _groupBy, groupProviders as _groupProviders,
   groupByGrain as _groupByGrain, groupByHour as _groupByHour,
   groupTrend as _groupTrend, groupWorkdirs as _groupWorkdirs,
@@ -143,6 +144,8 @@ let pricingRefreshPromise = null;
 let mandatoryUpdateActive = false;
 let latestTrayCostKey = "";
 let foregroundSyncRunning = false;
+let latestLocalSnapshot = null;
+let latestUsageScanStatus = null;
 let nextVirtualModelDetailId = 1;
 let usageQueryGeneration = 0;
 let usageQueryRefreshRunning = false;
@@ -247,6 +250,38 @@ document.querySelectorAll("[data-sync-now]").forEach((button) => button.addEvent
   logRuntimeEvent("sync_now_click", { location: button.dataset.syncNow || "" });
   run(syncNow);
 }));
+const railCloudStatus = $("#rail-cloud-status");
+if (railCloudStatus) railCloudStatus.addEventListener("click", () => {
+  const syncStatus = currentRailSyncStatus();
+  logRuntimeEvent("rail_sync_status_click", { state: syncStatus.state || "", reason: syncStatus.reason || "" });
+  if (syncStatus.action === "sync_now" || syncStatus.action === "retry_sync") {
+    run(() => loadToday(true));
+    return;
+  }
+  selectSection("settings");
+  const cloudTab = $("[data-settings-tab='cloud']");
+  if (cloudTab) cloudTab.click();
+});
+const syncPrimaryAction = $("#cloud-sync-primary-action");
+if (syncPrimaryAction) syncPrimaryAction.addEventListener("click", () => {
+  const action = syncPrimaryAction.dataset.syncAction;
+  if (action === "configure_cloud" || action === "open_settings") {
+    selectSection("settings");
+    const cloudTab = $("[data-settings-tab='cloud']");
+    if (cloudTab) cloudTab.click();
+  } else if (action === "sync_now" || action === "retry_sync") {
+    run(syncNow);
+  } else if (action === "check_connection") {
+    run(async () => { await refreshApiConnection(); });
+  } else if (action === "update_client") {
+    run(async () => {
+      selectSection("settings");
+      selectSettingsTab("cloud");
+      $("#check-update")?.scrollIntoView({ block: "center", behavior: "smooth" });
+      await checkUpdate({ automatic: false });
+    });
+  }
+});
 $("#wizard-skip").addEventListener("click", (e) => { e.preventDefault(); run(skipWizard); });
 $("#wizard-next-0").addEventListener("click", () => wizardGo(1));
 $("#wizard-back-1").addEventListener("click", () => wizardGo(0));
@@ -631,7 +666,7 @@ async function saveSettings() {
   const apiChanged = apiBaseUrlChanged(previousConfig, payload);
   const nextCycleDirty = dirtyBeforeSave.some((f) => f === "refreshIntervalMinutes");
   setSaveMessage(payload.apiBaseUrl ? t("desktop.renderer.checkingApi") : t("desktop.renderer.savingSettings"), "");
-  if (apiChanged && payload.apiBaseUrl) renderRailCloudStatus({ state: "checking", label: t("desktop.rail.cloudChecking") });
+  if (apiChanged && payload.apiBaseUrl) renderRailSyncStatus({ state: "syncing", reason: "checking_connection", label: t("desktop.syncStatus.syncing"), detail: t("desktop.syncStatus.syncingDetail.checkingConnection"), title: payload.apiBaseUrl, action: null, actionLabel: "", apiBaseUrl: payload.apiBaseUrl, lastSuccessAt: "", lastAttemptAt: "", queuePending: 0, lastError: "" });
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
   renderConfig(config);
@@ -958,16 +993,20 @@ async function boot() {
     if (api.platform === "darwin" && config.hideDockIcon && api.setDockVisible) {
       api.setDockVisible(false);
     }
+    const bootApiBaseUrl = normalizeApiBaseUrl(config.apiBaseUrl || "");
+    const connectionLoad = bootApiBaseUrl
+      ? refreshApiConnectionOnBoot(bootApiBaseUrl)
+      : Promise.resolve(null);
     const initialScan = loadToday();
     const identityLoad = loadMyIdentity();
     startIdentityRefreshTimer();
-    const backgroundLoad = loadBackgroundStatus({ config });
+    const backgroundLoad = loadBackgroundStatus();
     startBackgroundStatusTimer();
     startUpdateCheckTimer();
     const systemLoad = loadSystemStatus();
     const backupLoad = loadBackupStatus();
     const diagnosticsLoad = loadDiagnosticsStatus();
-    const bootResults = await Promise.allSettled([initialScan, identityLoad, backgroundLoad, systemLoad, backupLoad, diagnosticsLoad]);
+    const bootResults = await Promise.allSettled([connectionLoad, initialScan, identityLoad, backgroundLoad, systemLoad, backupLoad, diagnosticsLoad]);
     const failed = bootResults.find((result) => result.status === "rejected");
     if (failed) setStatusMessage(failed.reason?.message || t("desktop.renderer.actionFailed"));
     checkMandatoryFromConfig();
@@ -989,7 +1028,6 @@ function registerRuntimeEventHandlers() {
   if (api.onTrayRefreshStart) {
     api.onTrayRefreshStart(() => {
       setScanState(true);
-      showToast(t("desktop.renderer.scanningLocal"));
     });
   }
   if (api.onTrayRefreshDone) {
@@ -1003,7 +1041,7 @@ function registerRuntimeEventHandlers() {
           setScanState(false);
         }
         showToast(t("desktop.rail.scanComplete"));
-        await loadBackgroundStatus({ refreshConfig: true });
+        await loadBackgroundStatus({ refreshConfig: true, skipScanRefresh: true });
       });
     });
   }
@@ -1067,7 +1105,8 @@ function shouldCheckUpdateOnCloudOpen() {
   if (isApiBaseUrlDirty()) return false;
   if (hasReadyUpdatePackage(latestUpdateState)) return false;
   const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || latestConfig?.apiConnection?.apiBaseUrl || "");
-  return Boolean(apiBaseUrl && latestConfig?.apiConnection?.status === "reachable");
+  const compatibility = latestConfig?.apiConnection?.compatibility;
+  return Boolean(apiBaseUrl && latestConfig?.apiConnection?.status === "reachable" && compatibility?.compatible !== false);
 }
 
 function checkMandatoryFromConfig(config = latestConfig) {
@@ -1107,10 +1146,10 @@ function updateCheckProgress(data) {
   renderSilentUpdateStatus(data, latestConfig);
 }
 
-async function loadToday(force = false) {
+async function loadToday(force = false, { syncAfterRefresh = force } = {}) {
   setScanState(true, force);
   try {
-    const status = await api.startUsageScan({ force });
+    const status = await api.startUsageScan({ force, syncAfter: Boolean(syncAfterRefresh) && shouldSyncAfterRefresh() });
     applyUsageScanStatus(status, { force });
     schedulePricingRefresh();
     await finalizeUsageScanStatus(status, force);
@@ -1174,10 +1213,10 @@ function setScanState(running, force = false) {
   renderRailStatus();
 }
 
-async function loadTrend(force = false) {
+async function loadTrend(force = false, { syncAfterRefresh = force } = {}) {
   setScanState(true, force);
   try {
-    const status = await api.startUsageScan({ force });
+    const status = await api.startUsageScan({ force, syncAfter: Boolean(syncAfterRefresh) && shouldSyncAfterRefresh() });
     applyUsageScanStatus(status, { force });
     schedulePricingRefresh();
     await finalizeUsageScanStatus(status, force);
@@ -1251,7 +1290,7 @@ function startIdentityRefreshTimer() {
     if (currentLocalDay === lastIdentityCheckLocalDay) return;
     lastIdentityCheckLocalDay = currentLocalDay;
     run(async () => {
-      await loadToday();
+      await loadToday(false, { syncAfterRefresh: true });
       await loadMyIdentity();
     });
   }, 60 * 1000);
@@ -1273,6 +1312,7 @@ function startUpdateCheckTimer() {
 
 function applyUsageScanStatus(status, { force = false } = {}) {
   if (status.snapshot) applyUsageSnapshot(status.snapshot);
+  latestUsageScanStatus = status;
   setScanState(Boolean(status.running || status.syncRunning), status.force ?? force);
   if (status.error) {
     $("#workdirs-summary").textContent = t("desktop.renderer.refreshFailed", { error: status.error });
@@ -1291,19 +1331,24 @@ async function refreshForegroundSyncStatus(status) {
     setStatusMessage(t("desktop.renderer.refreshFailed", { error: status.syncError }));
     showToast(t("desktop.renderer.refreshFailed", { error: status.syncError }));
   }
-  await loadBackgroundStatus({ config: latestConfig });
+  await loadBackgroundStatus({ config: latestConfig, refreshConfig: true });
 }
 
 function startForegroundSync(status) {
   if (foregroundSyncRunning) return;
   if (status?.syncResult || status?.syncError) return;
   if (status?.snapshot?.fromCache) return;
+  if (!status?.force) return;
   if (!latestConfig?.apiBaseUrl || !latestConfig?.participantId) return;
+  if (!canStartForegroundSync(latestConfig)) return;
   const syncStart = api.startUsageSync || api.syncUsage;
   foregroundSyncRunning = true;
+  renderRailStatus();
+  renderCloudStatus(latestConfig);
   syncStart()
     .then((result) => {
-      if (result?.running || result?.syncRunning) {
+      if (result?.running || result?.syncRunning || result?.started) {
+        applyUsageScanStatus({ ...result, syncRunning: true, running: false, phase: result?.phase || "uploading" });
         restartUsageScanPoll();
         return null;
       }
@@ -1311,10 +1356,10 @@ function startForegroundSync(status) {
         const error = usageScanTerminalError(result);
         setStatusMessage(t("desktop.renderer.refreshFailed", { error }));
         showToast(t("desktop.renderer.refreshFailed", { error }));
-        return loadBackgroundStatus({ config: latestConfig });
+        return loadBackgroundStatus({ config: latestConfig, refreshConfig: true });
       }
       renderSyncStatus(latestConfig, result);
-      return loadBackgroundStatus({ config: latestConfig });
+      return loadBackgroundStatus({ config: latestConfig, refreshConfig: true });
     })
     .catch((error) => {
       setStatusMessage(t("desktop.renderer.refreshFailed", { error: error.message }));
@@ -1322,7 +1367,20 @@ function startForegroundSync(status) {
     })
     .finally(() => {
       foregroundSyncRunning = false;
+      renderSyncStatus(latestConfig);
     });
+}
+
+function canStartForegroundSync(config = latestConfig) {
+  const connection = config?.apiConnection || {};
+  if (!connection.checkedAt) return false;
+  if (connection.status !== "reachable") return false;
+  if (connection.compatibility?.compatible === false) return false;
+  return true;
+}
+
+function shouldSyncAfterRefresh(config = latestConfig) {
+  return Boolean(config?.apiBaseUrl && config?.participantId && canStartForegroundSync(config));
 }
 
 function applyUsageSnapshot(usage) {
@@ -1330,6 +1388,9 @@ function applyUsageSnapshot(usage) {
   usageQueryState.lastRowCount = Number(usage.rowCount || items.length || 0);
   allUsage = items.length <= FULL_USAGE_RENDER_CACHE_LIMIT ? items : [];
   latestScanAt = usage.scannedAt || latestScanAt;
+  if (usage.sourceFingerprint) {
+    latestLocalSnapshot = { scannedAt: usage.scannedAt || "", sourceFingerprint: usage.sourceFingerprint, rowCount: usage.rowCount || 0 };
+  }
   latestUsage = allUsage.filter((item) => item.day === localDay());
   if (usage.health) latestHealth = reconcileHealthWithConfig(usage.health, latestConfig);
   renderToday();
@@ -1409,32 +1470,34 @@ async function syncNow() {
     button.disabled = true;
   });
   try {
+    if (!(await ensureApiConnectionReadyForSync())) return;
     if (!(await confirmSyncUpload())) {
       setStatusMessage(t("desktop.renderer.syncCanceled"));
       return;
     }
     setStatusMessage(t("desktop.renderer.syncing"));
-    const syncStart = api.startUsageSync || api.syncUsage;
-    const result = await syncStart();
-    if (result?.running || result?.syncRunning) {
-      applyUsageScanStatus(result);
-      restartUsageScanPoll();
-      return;
-    }
-    if (usageScanTerminalError(result)) {
-      setStatusMessage(t("desktop.renderer.refreshFailed", { error: usageScanTerminalError(result) }));
-      showToast(t("desktop.renderer.refreshFailed", { error: usageScanTerminalError(result) }));
-      return;
-    }
-    latestConfig = await api.getConfig();
-    renderSyncStatus(latestConfig, result);
-    await loadToday();
+    await loadToday(true);
     await loadMyIdentity();
   } finally {
     buttons.forEach((button) => {
       button.disabled = false;
     });
   }
+}
+
+async function ensureApiConnectionReadyForSync() {
+  const connection = latestConfig?.apiConnection || {};
+  if (!connection.checkedAt || connection.status !== "reachable") {
+    const checked = await refreshApiConnection();
+    if (!checked || checked.status !== "reachable") return false;
+  }
+  latestConfig = await api.getConfig();
+  const compatibility = latestConfig?.apiConnection?.compatibility || {};
+  if (latestConfig?.apiConnection?.status !== "reachable" || compatibility.compatible === false) {
+    renderSyncStatus(latestConfig);
+    return false;
+  }
+  return true;
 }
 
 async function confirmSyncUpload() {
@@ -1594,7 +1657,18 @@ async function refreshApiConnection(apiBaseUrl = normalizeApiBaseUrl(latestConfi
   const apiConnection = await api.checkApi({ apiBaseUrl });
   latestConfig = await api.updateConfig({ apiBaseUrl, apiConnection });
   renderCloudStatus(latestConfig);
+  renderSystemStatus({ client: latestClientInfo, server: latestConfig?.apiConnection || apiConnection || null, update: latestUpdateState });
   return apiConnection;
+}
+
+async function refreshApiConnectionOnBoot(apiBaseUrl) {
+  latestConfig = {
+    ...(latestConfig || {}),
+    apiBaseUrl,
+    apiConnection: { apiBaseUrl }
+  };
+  renderCloudStatus(latestConfig);
+  return refreshApiConnection(apiBaseUrl);
 }
 
 async function loadSystemStatus() {
@@ -1962,25 +2036,24 @@ function renderUpdateStatusText({ client = latestClientInfo || {}, server = {}, 
 }
 
 function renderCloudStatus(config = latestConfig) {
-  const connection = config?.apiConnection || {};
-  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || connection.apiBaseUrl || "");
+  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || "");
   const badge = $("#cloud-status-badge");
   const text = $("#cloud-status-text");
   if (!badge || !text) return;
-  if (!apiBaseUrl) {
-    badge.textContent = t("desktop.renderer.localOnly");
-    badge.className = "badge";
-    text.textContent = t("desktop.renderer.cloudNotConfigured");
-    text.title = "";
-  } else {
-    const healthy = connection.status === "reachable";
-    badge.textContent = healthy ? "OK" : connection.status || "-";
-    badge.className = healthy ? "badge ok" : "badge warn";
-    const parts = [];
-    if (latestSyncInfo) parts.push(latestSyncInfo);
-    text.textContent = parts.length ? parts.join(" · ") : apiBaseUrl;
-    text.title = connection.message || apiBaseUrl;
-  }
+  const syncStatus = _deriveRailSyncStatus({
+    config,
+    usageScanStatus: latestUsageScanStatus,
+    backgroundStatus: latestBackgroundStatus,
+    latestLocalSnapshot,
+    foregroundSyncRunning,
+    t,
+    formatDateTime,
+  });
+  badge.textContent = syncStatus.label;
+  badge.className = `badge ${syncStatus.state === "synced" ? "ok" : syncStatus.state === "attention" ? "warn" : ""}`.trim();
+  text.textContent = syncStatus.detail || apiBaseUrl;
+  text.title = syncStatus.title || "";
+  renderCloudSyncDetails(syncStatus, config);
   renderRailStatus();
 }
 
@@ -2026,6 +2099,52 @@ function renderSyncStatus(config, result = null) {
   const lastFinishedAt = statusMatchesApi ? status.lastFinishedAt || config?.lastSyncAt || "" : "";
   latestSyncInfo = lastFinishedAt ? t("desktop.renderer.lastSync", { time: formatDateTime(lastFinishedAt) }) : "";
   renderCloudStatus(config);
+}
+
+function renderCloudSyncDetails(syncStatus, config = latestConfig) {
+  const details = $("#cloud-sync-details");
+  if (!details) return;
+  const badge = $("#cloud-sync-status-badge");
+  const detailText = $("#cloud-sync-status-detail");
+  const actionBtn = $("#cloud-sync-primary-action");
+  const diag = $("#cloud-sync-diagnostics");
+
+  details.hidden = false;
+
+  if (badge) {
+    badge.textContent = syncStatus.label;
+    badge.className = `badge ${syncStatus.state === "synced" ? "ok" : syncStatus.state === "attention" ? "warn" : ""}`.trim();
+  }
+  if (detailText) detailText.textContent = t("desktop.syncStatus.diagnostics.title");
+
+  if (actionBtn) {
+    const showContextAction = syncStatus.action === "check_connection" || syncStatus.action === "update_client";
+    if (showContextAction) {
+      actionBtn.hidden = false;
+      actionBtn.textContent = syncStatus.actionLabel;
+      actionBtn.dataset.syncAction = syncStatus.action;
+    } else {
+      actionBtn.hidden = true;
+      delete actionBtn.dataset.syncAction;
+    }
+  }
+
+  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || "");
+  if (diag) {
+    diag.hidden = !apiBaseUrl;
+    const diagUrl = $("#diag-api-url");
+    const diagConn = $("#diag-connection");
+    const diagAttempt = $("#diag-last-attempt");
+    const diagSuccess = $("#diag-last-success");
+    const diagQueue = $("#diag-queue-pending");
+    const diagError = $("#diag-last-error");
+    if (diagUrl) diagUrl.textContent = apiBaseUrl || "-";
+    if (diagConn) diagConn.textContent = config?.apiConnection?.status || "-";
+    if (diagAttempt) diagAttempt.textContent = syncStatus.lastAttemptAt ? formatDateTime(syncStatus.lastAttemptAt) : "-";
+    if (diagSuccess) diagSuccess.textContent = syncStatus.lastSuccessAt ? formatDateTime(syncStatus.lastSuccessAt) : "-";
+    if (diagQueue) diagQueue.textContent = syncStatus.queuePending > 0 ? String(syncStatus.queuePending) : "0";
+    if (diagError) diagError.textContent = syncStatus.lastError || "-";
+  }
 }
 
 function renderToday() {
@@ -2272,14 +2391,8 @@ function formatAxisLabel(row, grain) {
 function renderRailStatus() {
   const update = latestUpdateState?.update || latestUpdateState?.lastResult || null;
   const readyPackage = latestUpdateState?.readyPackage || null;
-  const lastScanAt = latestTimestamp([
-    latestScanAt,
-    latestBackgroundStatus?.cacheScannedAt,
-    latestBackgroundStatus?.lastRunAt
-  ]);
+  renderRailSyncStatus();
   const nextScanAt = latestBackgroundStatus?.nextRunAt || "";
-  renderRailCloudStatus();
-  setTextIfPresent("#rail-last-scan", t("desktop.renderer.currentScan", { time: lastScanAt ? formatDateTime(lastScanAt) : "-" }));
   setTextIfPresent("#rail-next-scan", t("desktop.renderer.nextScan", { time: nextScanAt ? formatDateTime(nextScanAt) : "-" }));
   const restartBtn = $("#rail-restart-update");
   if (restartBtn) restartBtn.hidden = !(readyPackage || latestUpdateState?.status === "downloaded" || update?.status === "downloaded");
@@ -2293,45 +2406,29 @@ function latestTimestamp(values = []) {
     .sort((a, b) => b.time - a.time)[0]?.value || "";
 }
 
-function renderRailCloudStatus(override = null) {
+function renderRailSyncStatus(override = null) {
   const root = $("#rail-cloud-status");
   const text = $("#rail-cloud-status-text");
   if (!root || !text) return;
-  const status = override || railCloudStatus(latestConfig);
+  const status = override || currentRailSyncStatus();
   root.dataset.state = status.state;
+  if (status.reason) root.dataset.reason = status.reason;
+  else delete root.dataset.reason;
   text.textContent = status.label;
   root.title = status.title || status.label;
+  setTextIfPresent("#rail-last-scan", status.detail || "");
 }
 
-function railCloudStatus(config = latestConfig) {
-  const connection = config?.apiConnection || {};
-  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || connection.apiBaseUrl || "");
-  if (!apiBaseUrl) {
-    return { state: "local", label: t("desktop.rail.cloudLocal"), title: t("desktop.renderer.cloudNotConfigured") };
-  }
-  if (!connection.checkedAt) {
-    return { state: "checking", label: t("desktop.rail.cloudChecking"), title: apiBaseUrl };
-  }
-  const compatibility = connection.compatibility || {};
-  if (connection.status === "reachable" && compatibility.compatible === false) {
-    return {
-      state: "unavailable",
-      label: t("desktop.rail.cloudUnavailable"),
-      title: connection.message || compatibility.reason || compatibility.status || apiBaseUrl
-    };
-  }
-  if (connection.status === "reachable") {
-    const version = connection.serverVersion ? `v${connection.serverVersion}` : apiBaseUrl;
-    return { state: "online", label: t("desktop.rail.cloudOnline"), title: version };
-  }
-  if (connection.status === "not_configured") {
-    return { state: "local", label: t("desktop.rail.cloudLocal"), title: t("desktop.renderer.cloudNotConfigured") };
-  }
-  return {
-    state: "offline",
-    label: t("desktop.rail.cloudOffline"),
-    title: connection.message || apiBaseUrl
-  };
+function currentRailSyncStatus() {
+  return _deriveRailSyncStatus({
+    config: latestConfig,
+    usageScanStatus: latestUsageScanStatus,
+    backgroundStatus: latestBackgroundStatus,
+    latestLocalSnapshot,
+    foregroundSyncRunning,
+    t,
+    formatDateTime,
+  });
 }
 
 function renderTrend() {
@@ -2543,28 +2640,34 @@ function mergeBackgroundStatusArgs(left = null, right = {}) {
   return {
     ...(left || {}),
     ...right,
-    refreshConfig: Boolean(left?.refreshConfig || right.refreshConfig)
+    refreshConfig: Boolean(left?.refreshConfig || right.refreshConfig),
+    skipScanRefresh: Boolean(left?.skipScanRefresh || right.skipScanRefresh)
   };
 }
 
-async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = false } = {}) {
+async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = false, skipScanRefresh = false } = {}) {
   const previousCacheScannedAt = latestBackgroundStatus?.cacheScannedAt || "";
   const [status, freshConfig] = await Promise.all([
     api.backgroundStatus(),
     refreshConfig ? api.getConfig() : Promise.resolve(config)
   ]);
-  config = freshConfig || config;
+  config = refreshConfig ? (freshConfig || config) : (latestConfig || config);
   latestBackgroundStatus = status;
   latestUpdateState = status.updateCheck || latestUpdateState;
-  if (config) {
+  if (status.sourceFingerprint && !latestLocalSnapshot) {
+    latestLocalSnapshot = { scannedAt: status.cacheScannedAt || "", sourceFingerprint: status.sourceFingerprint, rowCount: 0, fromCache: true };
+  }
+  if (refreshConfig && config) {
     latestConfig = config;
+    renderSyncStatus(config);
+  } else if (config) {
     renderSyncStatus(config);
   }
   renderSilentUpdateStatus(status.updateCheck, config);
   renderRailStatus();
   checkMandatoryFromConfig(config);
-  if (previousCacheScannedAt && status.cacheScannedAt && status.cacheScannedAt !== previousCacheScannedAt && !status.running && !scanRunning && !scanPollTimer) {
-    const scanStatus = await api.startUsageScan({ force: false });
+  if (!skipScanRefresh && previousCacheScannedAt && status.cacheScannedAt && status.cacheScannedAt !== previousCacheScannedAt && !status.running && !scanRunning && !scanPollTimer) {
+    const scanStatus = await api.startUsageScan({ force: false, syncAfter: shouldSyncAfterRefresh() });
     applyUsageScanStatus(scanStatus);
     if (scanStatus.running || scanStatus.syncRunning) {
       restartUsageScanPoll();

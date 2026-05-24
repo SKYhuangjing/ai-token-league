@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   sourceName, sourceDescription, sourceSummary,
   daysForRange, usageForRange, rangeLabel, overviewTrendGrain,
-  railCloudStatus,
+  railCloudStatus, deriveRailSyncStatus,
   groupBy, groupProviders, groupByGrain, groupByHour,
   groupTrend, groupWorkdirs, groupWorkdirDetails, groupDailyRows,
   aggregateComposition, aggregatePeriodRow,
@@ -192,6 +192,248 @@ describe('railCloudStatus', () => {
     const result = railCloudStatus(config, t);
     expect(result.state).toBe('checking');
     expect(result.title).toBe('https://from-conn.com');
+  });
+});
+
+// ── Sync Status Derivation ──
+
+describe('deriveRailSyncStatus', () => {
+  const t = (k, params) => {
+    const map = {
+      'desktop.syncStatus.localOnly': 'Local only',
+      'desktop.syncStatus.localOnlyDetail': 'Cloud not configured',
+      'desktop.syncStatus.syncing': 'Syncing',
+      'desktop.syncStatus.syncingDetail.scanning': 'Refreshing local usage',
+      'desktop.syncStatus.syncingDetail.uploading': 'Uploading to current cloud',
+      'desktop.syncStatus.syncingDetail.retryingQueue': 'Retrying pending uploads',
+      'desktop.syncStatus.syncingDetail.checkingConnection': 'Checking connection',
+      'desktop.syncStatus.needsSync': 'Cloud update pending',
+      'desktop.syncStatus.needsSyncDetail.neverSyncedCurrentServer': 'Current cloud has no data from this device',
+      'desktop.syncStatus.needsSyncDetail.localChangedAfterSync': 'Local data changed; refresh to sync to cloud',
+      'desktop.syncStatus.synced': 'Synced',
+      'desktop.syncStatus.syncedDetail': params ? `Last sync ${params.time}` : 'Last sync',
+      'desktop.syncStatus.attention': 'Needs attention',
+      'desktop.syncStatus.attentionDetail.queuedRetry': 'Some data is pending retry',
+      'desktop.syncStatus.attentionDetail.lastFailed': 'Last sync failed',
+      'desktop.syncStatus.attentionDetail.cloudUnreachable': 'Cloud is unreachable',
+      'desktop.syncStatus.attentionDetail.cloudIncompatible': 'Client or server version is incompatible',
+      'desktop.syncStatus.action.configureCloud': 'Configure cloud',
+      'desktop.syncStatus.action.syncNow': 'Sync now',
+      'desktop.syncStatus.action.retrySync': 'Retry sync',
+      'desktop.syncStatus.action.checkConnection': 'Check connection',
+      'desktop.syncStatus.action.updateClient': 'Update client',
+    };
+    return map[k] || k;
+  };
+  const fmtDt = (v) => v || '-';
+
+  function makeConfig(overrides = {}) {
+    return {
+      apiBaseUrl: 'https://api.example.com',
+      apiConnection: { checkedAt: '2026-01-01T00:00:00Z', status: 'reachable', compatibility: { compatible: true } },
+      syncStatus: {
+        apiBaseUrl: 'https://api.example.com',
+        lastAttemptAt: '2026-01-01T01:00:00Z',
+        lastFinishedAt: '2026-01-01T01:00:00Z',
+        lastSuccessAt: '2026-01-01T01:00:00Z',
+        lastStatus: 'success',
+        lastError: '',
+        lastSuccessSourceFingerprint: 'fp-abc',
+        lastResult: { queuePending: 0 },
+      },
+      ...overrides,
+    };
+  }
+
+  it('returns local_only / no_api when no apiBaseUrl', () => {
+    const result = deriveRailSyncStatus({ config: { apiBaseUrl: '' }, t, formatDateTime: fmtDt });
+    expect(result.state).toBe('local_only');
+    expect(result.reason).toBe('no_api');
+    expect(result.action).toBe('configure_cloud');
+    expect(result.actionLabel).toBe('Configure cloud');
+  });
+
+  it('returns syncing / scanning when usageScanStatus.running', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      usageScanStatus: { running: true, syncRunning: false },
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('syncing');
+    expect(result.reason).toBe('scanning');
+    expect(result.action).toBeNull();
+  });
+
+  it('returns syncing / uploading when usageScanStatus.syncRunning', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      usageScanStatus: { running: false, syncRunning: true },
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('syncing');
+    expect(result.reason).toBe('uploading');
+  });
+
+  it('returns syncing / uploading when phase is uploading', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      usageScanStatus: { running: true, syncRunning: false, phase: 'uploading' },
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('syncing');
+    expect(result.reason).toBe('uploading');
+  });
+
+  it('returns syncing / retrying_queue when phase is retrying_queue', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      usageScanStatus: { running: true, syncRunning: false, phase: 'retrying_queue' },
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('syncing');
+    expect(result.reason).toBe('retrying_queue');
+  });
+
+  it('returns syncing when foregroundSyncRunning', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      foregroundSyncRunning: true,
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('syncing');
+  });
+
+  it('returns needs_sync / never_synced_current_server when no sync record for current API', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig({ syncStatus: {} }),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('needs_sync');
+    expect(result.reason).toBe('never_synced_current_server');
+    expect(result.action).toBe('sync_now');
+  });
+
+  it('returns syncing / checking_connection when API has not been checked', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig({ apiConnection: {} }),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('syncing');
+    expect(result.reason).toBe('checking_connection');
+    expect(result.action).toBeNull();
+  });
+
+  it('returns needs_sync when old API has record but new API does not', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig({
+        apiBaseUrl: 'https://new-server.com',
+        syncStatus: { apiBaseUrl: 'https://old-server.com', lastStatus: 'success', lastSuccessAt: '2026-01-01T01:00:00Z' },
+      }),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('needs_sync');
+    expect(result.reason).toBe('never_synced_current_server');
+  });
+
+  it('returns needs_sync / local_changed_after_sync when fingerprint differs', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      latestLocalSnapshot: { sourceFingerprint: 'fp-new', scannedAt: '2026-01-02T00:00:00Z' },
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('needs_sync');
+    expect(result.reason).toBe('local_changed_after_sync');
+    expect(result.action).toBe('sync_now');
+  });
+
+  it('returns synced when fingerprint matches and lastStatus is success', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      latestLocalSnapshot: { sourceFingerprint: 'fp-abc', scannedAt: '2026-01-01T00:00:00Z' },
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('synced');
+    expect(result.action).toBeNull();
+    expect(result.detail).toContain('Last sync');
+  });
+
+  it('returns synced without fingerprint (no local snapshot)', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('synced');
+  });
+
+  it('returns attention / queued_retry when queuePending > 0', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig({
+        syncStatus: {
+          apiBaseUrl: 'https://api.example.com',
+          lastStatus: 'success',
+          lastSuccessAt: '2026-01-01T01:00:00Z',
+          lastSuccessSourceFingerprint: 'fp-abc',
+          lastResult: { queuePending: 3 },
+        },
+      }),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('attention');
+    expect(result.reason).toBe('queued_retry');
+    expect(result.action).toBe('retry_sync');
+    expect(result.queuePending).toBe(3);
+  });
+
+  it('returns attention / last_failed when lastStatus is failed', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig({
+        syncStatus: {
+          apiBaseUrl: 'https://api.example.com',
+          lastStatus: 'failed',
+          lastSuccessAt: '',
+          lastSuccessSourceFingerprint: '',
+          lastError: 'connection refused',
+        },
+      }),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('attention');
+    expect(result.reason).toBe('last_failed');
+    expect(result.action).toBe('retry_sync');
+  });
+
+  it('returns attention / cloud_unreachable when API is not reachable', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig({
+        apiConnection: { checkedAt: '2026-01-01T00:00:00Z', status: 'error', message: 'timeout' },
+      }),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('attention');
+    expect(result.reason).toBe('cloud_unreachable');
+    expect(result.action).toBe('check_connection');
+  });
+
+  it('returns attention / cloud_incompatible when server is incompatible', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig({
+        apiConnection: { checkedAt: '2026-01-01T00:00:00Z', status: 'reachable', compatibility: { compatible: false, reason: 'version too old' } },
+      }),
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('attention');
+    expect(result.reason).toBe('cloud_incompatible');
+    expect(result.action).toBe('update_client');
+  });
+
+  it('returns syncing / checking_connection when background is running but not scan', () => {
+    const result = deriveRailSyncStatus({
+      config: makeConfig(),
+      backgroundStatus: { running: true },
+      t, formatDateTime: fmtDt,
+    });
+    expect(result.state).toBe('syncing');
+    expect(result.reason).toBe('checking_connection');
   });
 });
 

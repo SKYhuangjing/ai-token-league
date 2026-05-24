@@ -15,7 +15,15 @@
     emptyData: false,      // true = no usage data (fresh install)
     apiError: false,       // true = checkApi returns error
     largeDataset: 0,       // > 0 = generate N additional usage rows
+    syncDelay: 0,
   }, window.__ATL_E2E_CONFIG__ || {});
+  window.__ATL_E2E_STATE__ = Object.assign(window.__ATL_E2E_STATE__ || {}, {
+    checkApiCount: 0,
+    startUsageScanCount: 0,
+    startUsageSyncCount: 0,
+    checkUpdateCount: 0,
+    lastStartUsageScanArgs: null,
+  });
 
   // Use LOCAL dates (same as renderer's localDay()) to avoid timezone mismatch.
   function localDateStr(d) {
@@ -64,6 +72,52 @@
     syncStatus: null,
     workdirAliases: {},
   };
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  // ── Sync scenario overrides ────────────────────────────────
+  if (cfg.syncConfigured) {
+    const testApiUrl = "https://test.example.com";
+    mockConfig.apiBaseUrl = testApiUrl;
+    mockConfig.apiConnection = {
+      status: "reachable",
+      checkedAt: new Date().toISOString(),
+      serverVersion: "1.0.0",
+      compatibility: { compatible: true },
+    };
+    if (cfg.syncConnectionUnchecked) {
+      mockConfig.apiConnection = { apiBaseUrl: testApiUrl };
+    }
+    if (cfg.syncLastStatus || cfg.syncQueuePending) {
+      mockConfig.syncStatus = {
+        apiBaseUrl: testApiUrl,
+        lastAttemptAt: new Date().toISOString(),
+        lastFinishedAt: new Date().toISOString(),
+        lastSuccessAt: cfg.syncLastStatus === "success" ? new Date().toISOString() : "",
+        lastStatus: cfg.syncLastStatus || "",
+        lastError: cfg.syncLastError || "",
+        lastSuccessSourceFingerprint: cfg.syncLastStatus === "success" ? (cfg.syncLastFingerprint || "mock-fp") : "",
+        lastResult: cfg.syncQueuePending ? { queuePending: cfg.syncQueuePending } : null,
+      };
+    }
+    if (cfg.syncCloudUnreachable) {
+      mockConfig.apiConnection = {
+        status: "error",
+        checkedAt: new Date().toISOString(),
+        message: "Connection refused",
+      };
+    }
+    if (cfg.syncCloudIncompatible) {
+      mockConfig.apiConnection = {
+        status: "reachable",
+        checkedAt: new Date().toISOString(),
+        serverVersion: "0.1.0",
+        compatibility: { compatible: false, reason: "version mismatch" },
+      };
+    }
+  }
 
   // ── Usage items (matches public_usage_item shape) ──────────
   const defaultUsage = [
@@ -235,26 +289,108 @@
   const scanSnapshot = {
     items: mockUsage, health: mockHealth, cacheVersion: 3,
     rowCount: mockUsage.length, scannedAt: new Date().toISOString(),
-    sourceFingerprint: "mock-fp", usageSourceConfigFingerprint: "mock-ucfp", fromCache: false,
+    sourceFingerprint: cfg.syncLocalFingerprint || "mock-fp", usageSourceConfigFingerprint: "mock-ucfp", fromCache: false,
   };
 
   // ── Scan state machine (simulates running → done) ─────────
   let scanState = { running: false, done: false, snapshot: null };
+  let nextTaskId = 1;
 
-  function startScan() {
+  function startScan(force = false, syncAfter = false) {
     const delay = cfg.scanDelay || 0;
+    const taskId = `mock-task-${nextTaskId++}`;
+    const finishScan = () => {
+      if (syncAfter && mockConfig.apiBaseUrl) {
+        window.__ATL_E2E_STATE__.startUsageSyncCount += 1;
+        scanState = {
+          running: false,
+          syncRunning: true,
+          done: false,
+          snapshot: scanSnapshot,
+          taskId,
+          force,
+          phase: "uploading",
+          syncResult: null,
+          syncError: null,
+        };
+        const syncDelay = cfg.syncDelay || 0;
+        if (syncDelay > 0) setTimeout(() => finishSync(taskId, force), syncDelay);
+        else finishSync(taskId, force);
+        return;
+      }
+      scanState = { running: false, syncRunning: false, done: true, snapshot: scanSnapshot, taskId: null, force, phase: null };
+    };
     if (delay > 0) {
-      scanState = { running: true, done: false, snapshot: null, taskId: "mock-task-1" };
-      setTimeout(() => {
-        scanState = { running: false, done: true, snapshot: scanSnapshot, taskId: null };
-      }, delay);
+      scanState = { running: true, syncRunning: false, done: false, snapshot: null, taskId, force, phase: "scanning" };
+      setTimeout(finishScan, delay);
     } else {
-      scanState = { running: false, done: true, snapshot: scanSnapshot, taskId: null };
+      finishScan();
     }
   }
 
+  function finishSync(taskId, force = false) {
+    const nowIso = new Date().toISOString();
+    const result = {
+      synced: true,
+      accepted: mockUsage.length,
+      rejected: 0,
+      bucketCount: mockUsage.length,
+      uploadedBucketCount: mockUsage.length,
+      noopBucketCount: 0,
+      queued: false,
+      queuePending: 0,
+      sourceFingerprint: scanSnapshot.sourceFingerprint,
+      scannedAt: scanSnapshot.scannedAt,
+    };
+    mockConfig.syncStatus = {
+      apiBaseUrl: mockConfig.apiBaseUrl,
+      lastAttemptAt: nowIso,
+      lastFinishedAt: nowIso,
+      lastSuccessAt: nowIso,
+      lastStatus: "success",
+      lastError: "",
+      lastSuccessSourceFingerprint: scanSnapshot.sourceFingerprint,
+      lastResult: result,
+    };
+    mockConfig.lastSyncAt = nowIso;
+    mockConfig.lastSyncStatus = "success";
+    mockConfig.lastSyncApiBaseUrl = mockConfig.apiBaseUrl;
+    mockConfig.lastSyncError = "";
+    scanState = {
+      running: false,
+      syncRunning: false,
+      done: true,
+      snapshot: scanSnapshot,
+      taskId: null,
+      force,
+      phase: null,
+      syncResult: result,
+      syncError: null,
+    };
+  }
+
+  function startSync(force = false) {
+    window.__ATL_E2E_STATE__.startUsageSyncCount += 1;
+    const taskId = `mock-sync-${nextTaskId++}`;
+    scanState = {
+      running: false,
+      syncRunning: true,
+      started: true,
+      snapshot: null,
+      taskId,
+      force,
+      phase: "uploading",
+      syncResult: null,
+      syncError: null,
+    };
+    const delay = cfg.syncDelay || 0;
+    if (delay > 0) setTimeout(() => finishSync(taskId, force), delay);
+    else finishSync(taskId, force);
+    return { ...scanState, started: true, syncRunning: delay > 0, phase: delay > 0 ? "uploading" : null };
+  }
+
   // Start a scan immediately so data is available on boot
-  startScan();
+  startScan(false);
 
   // ── Tauri bridge ───────────────────────────────────────────
   window.__TAURI__ = {
@@ -268,10 +404,15 @@
   };
 
   function applyOverrides(api) {
-    api.getConfig = () => Promise.resolve(mockConfig);
-    api.checkApi = () => cfg.apiError
-      ? Promise.resolve({ status: "error", message: "Connection refused" })
-      : Promise.resolve({ status: "ok" });
+    api.getConfig = () => Promise.resolve(clone(mockConfig));
+    api.checkApi = () => {
+      window.__ATL_E2E_STATE__.checkApiCount += 1;
+      return (cfg.apiError || cfg.syncCloudUnreachable)
+        ? Promise.resolve({ status: "error", checkedAt: new Date().toISOString(), message: "Connection refused" })
+        : cfg.syncCloudIncompatible
+          ? Promise.resolve({ status: "reachable", checkedAt: new Date().toISOString(), serverVersion: "0.1.0", compatibility: { compatible: false, reason: "version mismatch" } })
+        : Promise.resolve({ status: "reachable", checkedAt: new Date().toISOString(), serverVersion: "1.0.0", compatibility: { compatible: true } });
+    };
     api.providerHealth = () => Promise.resolve(mockHealth);
     api.modelPrices = () => Promise.resolve({ custom: [], openrouter: [], aliases: [] });
     api.appVersion = () => Promise.resolve("0.7.0-test");
@@ -282,10 +423,12 @@
     api.enforcementStatus = () => Promise.resolve({ mandatory: false });
 
     api.scanUsage = () => Promise.resolve({ added: mockUsage.length });
-    api.startUsageScan = () => {
+    api.startUsageScan = (args) => {
+      window.__ATL_E2E_STATE__.startUsageScanCount += 1;
+      window.__ATL_E2E_STATE__.lastStartUsageScanArgs = clone(args || {});
       // Real sidecar returns existing status if already running
-      if (scanState.running) return Promise.resolve(scanState);
-      startScan();
+      if (scanState.running || scanState.syncRunning) return Promise.resolve(scanState);
+      startScan(Boolean(args?.force), Boolean(args?.syncAfter));
       return Promise.resolve(scanState);
     };
     api.usageScanStatus = () => Promise.resolve(scanState);
@@ -308,16 +451,16 @@
 
     api.syncUsage = () => cfg.apiError
       ? Promise.reject(new Error("Network error"))
-      : Promise.resolve({ synced: true });
-    api.startUsageSync = () => Promise.resolve({ started: true });
+      : Promise.resolve(startSync(false));
+    api.startUsageSync = () => Promise.resolve(startSync(false));
 
     api.initConfig = (args) => {
       Object.assign(mockConfig, args?.input || args || {});
-      return Promise.resolve(mockConfig);
+      return Promise.resolve(clone(mockConfig));
     };
     api.updateConfig = (args) => {
       Object.assign(mockConfig, args?.input || args || {});
-      return Promise.resolve(mockConfig);
+      return Promise.resolve(clone(mockConfig));
     };
     api.logEvent = () => Promise.resolve(null);
     api.rebuildTrayMenu = () => Promise.resolve(null);
@@ -325,8 +468,8 @@
     api.resetLocalData = () => Promise.resolve(null);
 
     // Provider roots
-    api.addProviderRoot = () => Promise.resolve(mockConfig);
-    api.removeProviderRoot = () => Promise.resolve(mockConfig);
+    api.addProviderRoot = () => Promise.resolve(clone(mockConfig));
+    api.removeProviderRoot = () => Promise.resolve(clone(mockConfig));
 
     // Workdir alias
     api.setWorkdirAlias = () => Promise.resolve(null);
@@ -357,7 +500,10 @@
     api.restoreLocalBackupFile = () => Promise.resolve({ ok: true });
 
     // Updates
-    api.checkUpdate = () => Promise.resolve(null);
+    api.checkUpdate = () => {
+      window.__ATL_E2E_STATE__.checkUpdateCount += 1;
+      return Promise.resolve(null);
+    };
     api.downloadUpdate = () => Promise.resolve(null);
     api.installAndRestartUpdate = () => Promise.resolve(null);
     api.downloadInstaller = () => Promise.resolve(null);

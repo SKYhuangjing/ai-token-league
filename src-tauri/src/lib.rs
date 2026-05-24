@@ -1,15 +1,15 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -485,7 +485,12 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     "refresh" => {
                         let _ = app_handle.emit("tray:refresh-start", ());
-                        match run_sidecar_refresh(&app_handle, false).await {
+                        let config = {
+                            let sidecar = app_handle.state::<SidecarState>();
+                            call_sidecar(&sidecar, "config:get", json!(null)).await.ok()
+                        };
+                        let sync_to_cloud = !background_api_base_url(config.as_ref()).is_empty();
+                        match run_sidecar_refresh(&app_handle, sync_to_cloud).await {
                             Ok(_) => {
                                 rebuild_tray_menu_coalesced(&app_handle).await;
                                 let _ = app_handle.emit("tray:refresh-done", ());
@@ -1044,22 +1049,21 @@ async fn background_status(background: State<'_, BackgroundState>) -> Result<Val
 }
 
 async fn run_sidecar_refresh(app: &AppHandle, sync_to_cloud: bool) -> Result<Value, String> {
-    let command = if sync_to_cloud {
-        "usage:sync-start"
-    } else {
-        "usage:scan-start"
-    };
-    let args = if sync_to_cloud {
-        json!(null)
-    } else {
-        json!({"force": true})
-    };
     let sidecar = app.state::<SidecarState>();
-    let mut status = call_sidecar(&sidecar, command, args).await?;
+    let mut status = call_sidecar(
+        &sidecar,
+        "usage:scan-start",
+        json!({"force": true, "syncAfter": sync_to_cloud}),
+    )
+    .await?;
     for _ in 0..600 {
         if !status_bool(&status, "running") && !status_bool(&status, "syncRunning") {
-            if let Some(error) = status_error(&status) {
-                return Err(error);
+            if status_error(&status).is_some() {
+                if status.get("error").and_then(|v| v.as_str()).is_some() {
+                    return Err(
+                        status_error(&status).unwrap_or_else(|| "refresh failed".to_string())
+                    );
+                }
             }
             return Ok(status);
         }
@@ -1088,6 +1092,7 @@ fn background_refresh_payload<'a>(status: &'a Value, mode: &str) -> &'a Value {
         status
             .get("syncResult")
             .filter(|value| !value.is_null())
+            .or_else(|| status.get("snapshot").filter(|value| !value.is_null()))
             .unwrap_or(status)
     } else {
         status
@@ -1180,7 +1185,13 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                 Ok(value) => {
                     let payload = background_refresh_payload(&value, mode);
                     let count = background_refresh_count(payload);
-                    let text = if mode == "sync" {
+                    let sync_error = value
+                        .get("syncError")
+                        .and_then(|v| v.as_str())
+                        .filter(|v| !v.trim().is_empty());
+                    let text = if sync_error.is_some() {
+                        format!("Refreshed {} rows; cloud sync failed", count)
+                    } else if mode == "sync" {
                         if payload.get("queued").and_then(|v| v.as_bool()) == Some(true) {
                             format!("Queued {} rows", count)
                         } else {
@@ -1193,7 +1204,7 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                         "running": false,
                         "lastMode": mode,
                         "lastResult": text,
-                        "lastError": null,
+                        "lastError": sync_error,
                         "cacheScannedAt": payload.get("scannedAt").cloned().unwrap_or(Value::Null),
                         "sourceFingerprint": payload.get("sourceFingerprint").cloned().unwrap_or(Value::Null),
                         "rowCount": count
@@ -1343,12 +1354,20 @@ mod tests {
             "syncResult": {"scanned": 7, "queued": true},
             "snapshot": {"rowCount": 99}
         });
+        let sync_failed_status = json!({
+            "syncError": "upload failed",
+            "snapshot": {"rowCount": 13}
+        });
         let scan_status = json!({
             "snapshot": {"rowCount": 11}
         });
         assert_eq!(
             background_refresh_count(background_refresh_payload(&sync_status, "sync")),
             7
+        );
+        assert_eq!(
+            background_refresh_count(background_refresh_payload(&sync_failed_status, "sync")),
+            13
         );
         assert_eq!(
             background_refresh_count(background_refresh_payload(&scan_status, "scan")),

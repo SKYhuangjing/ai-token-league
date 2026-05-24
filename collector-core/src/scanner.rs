@@ -596,7 +596,7 @@ mod tests {
             local_backup: config::LocalBackupConfig::default(),
             runtime_log_retention_days: 3,
             api_connection: json!({}),
-            sync_status: json!({}),
+            sync_status: crate::config::SyncStatusRecord::default(),
             workdir_aliases: HashMap::new(),
             provider_roots: HashMap::new(),
             provider_enabled: HashMap::new(),
