@@ -151,7 +151,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          DMG=$(find src-tauri/target -path "*/bundle/dmg/*.dmg" -print | head -1)
+          search_roots=()
+          [[ -d target ]] && search_roots+=(target)
+          [[ -d src-tauri/target ]] && search_roots+=(src-tauri/target)
+          if [[ "${#search_roots[@]}" -eq 0 ]]; then
+            echo "Error: no Tauri target directory found"
+            exit 1
+          fi
+
+          DMG=$(find "${search_roots[@]}" -path "*/bundle/dmg/*.dmg" -print | head -1)
           if [[ -z "$DMG" ]]; then
             echo "Error: no DMG found"
             exit 1
