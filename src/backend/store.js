@@ -1422,26 +1422,36 @@ export class Store {
   }
 
   async refreshOpenRouterPrices({ recalculate = false } = {}) {
+    let prefetched = null;
+    let prefetchError = null;
     try {
-      this.db.modelPriceCache = await fetchOpenRouterModelPrices();
+      prefetched = await fetchOpenRouterModelPrices();
+    } catch (error) {
+      prefetchError = error;
+    }
+    return this.applyOpenRouterPriceFetch(prefetched, prefetchError, { recalculate });
+  }
+
+  applyOpenRouterPriceFetch(prefetched, prefetchError, { recalculate = false } = {}) {
+    if (prefetched) {
+      this.db.modelPriceCache = prefetched;
       this.invalidatePriceMap();
       let recalculated = null;
       if (recalculate) recalculated = this.recalculateCosts();
       this.save();
       return { remote: this.db.modelPriceCache.remote, recalculated };
-    } catch (error) {
-      const previous = this.db.modelPriceCache || structuredClone(DEFAULT_DB.modelPriceCache);
-      previous.remote = {
-        ...(previous.remote || {}),
-        source: "openrouter",
-        status: Object.keys(previous.prices || {}).length ? "stale" : "failed",
-        lastError: error.message
-      };
-      this.db.modelPriceCache = previous;
-      this.invalidatePriceMap();
-      this.save();
-      return { remote: this.db.modelPriceCache.remote, recalculated: null };
     }
+    const previous = this.db.modelPriceCache || structuredClone(DEFAULT_DB.modelPriceCache);
+    previous.remote = {
+      ...(previous.remote || {}),
+      source: "openrouter",
+      status: Object.keys(previous.prices || {}).length ? "stale" : "failed",
+      lastError: prefetchError ? prefetchError.message : "openrouter fetch failed"
+    };
+    this.db.modelPriceCache = previous;
+    this.invalidatePriceMap();
+    this.save();
+    return { remote: this.db.modelPriceCache.remote, recalculated: null };
   }
 
   upsertModelPrice(input) {

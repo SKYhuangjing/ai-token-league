@@ -20,6 +20,7 @@ This directory keeps the project documents after the v0.1 phase freeze.
 - `usage-composition-design.md` - product design and implementation task baseline for token/cost composition accounting.
 - `full-reconcile-design.md` - product and technical design for automatic server/local usage reconciliation, resumable full-history repair, and protocol compatibility.
 - `openrouter-pricing-design.md` - development task baseline for DB-first OpenRouter pricing resolution.
+- `mysql-request-local-write-lock-design.md` - long-term design for replacing global MySQL write locking with request-local writes and scoped locks.
 - `mvp-development-tasks.md` - task execution history through E18.
 - `er-diagram.md` - local and remote storage model diagrams.
 

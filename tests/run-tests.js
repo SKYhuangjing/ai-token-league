@@ -975,11 +975,7 @@ async function testMysqlHourlySnapshotUsesIncrementalSync() {
     nickname: "mysql-hourly", identityPublicKey: "pk_mysql_hourly", os: "test", appVersion: "0.1.0"
   });
 
-  let fullSyncCalled = false;
   let incrementalCalled = false;
-  store.syncAllTables = async () => {
-    fullSyncCalled = true;
-  };
   store.incrementalHourlyBucketSync = async (_input, result) => {
     incrementalCalled = true;
     assert.equal(result.noOp, undefined);
@@ -992,7 +988,8 @@ async function testMysqlHourlySnapshotUsesIncrementalSync() {
   ], pid, did, { day: "2026-05-14", hour: 10, providerId: "codex_local" }));
 
   assert.equal(incrementalCalled, true, "hourly snapshots should use incremental MySQL sync");
-  assert.equal(fullSyncCalled, false, "hourly snapshots must not trigger full-table MySQL sync");
+  assert.equal(typeof store.syncAllTables, "undefined", "syncAllTables full-table flush must not exist on MySqlStore");
+  assert.equal(typeof store.syncUsageDaily, "undefined", "syncUsageDaily full-table flush must not exist on MySqlStore");
   console.log("  testMysqlHourlySnapshotUsesIncrementalSync passed");
 }
 
@@ -1029,6 +1026,227 @@ async function testMysqlUsageWritesAreSerialized() {
   assert.equal(maxActive, 1, "MySQL usage writes must not share mutable in-memory scope concurrently");
   assert.equal(active, 0);
   console.log("  testMysqlUsageWritesAreSerialized passed");
+}
+
+async function testMysqlUsageWritesUseDistributedLock() {
+  const storeA = new MySqlStore({ writeLockName: "atl-test-distributed-lock" });
+  const storeB = new MySqlStore({ writeLockName: "atl-test-distributed-lock" });
+  const pid = "p_mysql_dist_lock", did = "d_mysql_dist_lock";
+  for (const store of [storeA, storeB]) {
+    Store.prototype.registerDevice.call(store, {
+      participantId: pid, deviceId: did,
+      nickname: "mysql-dist-lock", identityPublicKey: "pk_mysql_dist_lock", os: "test", appVersion: "0.7.1"
+    });
+  }
+
+  let dbLocked = false;
+  const waiters = [];
+  const lockEvents = [];
+  const pool = {
+    async getConnection() {
+      return {
+        async query(sql, params = []) {
+          const normalized = String(sql).replace(/\s+/g, " ").trim();
+          if (normalized.startsWith("SELECT GET_LOCK")) {
+            while (dbLocked) {
+              await new Promise((resolve) => waiters.push(resolve));
+            }
+            dbLocked = true;
+            lockEvents.push({ type: "acquire", name: params[0] });
+            return [[{ acquired: 1 }], []];
+          }
+          if (normalized.startsWith("SELECT RELEASE_LOCK")) {
+            dbLocked = false;
+            lockEvents.push({ type: "release", name: params[0] });
+            waiters.shift()?.();
+            return [[{ released: 1 }], []];
+          }
+          throw new Error(`unexpected distributed lock query: ${normalized}`);
+        },
+        release() {}
+      };
+    }
+  };
+
+  let active = 0;
+  let maxActive = 0;
+  for (const store of [storeA, storeB]) {
+    store.pool = pool;
+    store.loadWriteScope = async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    };
+    store.incrementalHourlyBucketSync = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+    };
+  }
+
+  await Promise.all([
+    storeA.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 10, workdirHash: "mysql_dist_lock_a", sourceFingerprint: "mysql_dist_lock_a" })
+    ], pid, did, { day: "2026-05-14", hour: 10, providerId: "codex_local" })),
+    storeB.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 11, workdirHash: "mysql_dist_lock_b", sourceFingerprint: "mysql_dist_lock_b" })
+    ], pid, did, { day: "2026-05-14", hour: 11, providerId: "codex_local" }))
+  ]);
+
+  assert.equal(maxActive, 1, "separate MySqlStore instances must serialize through the MySQL named lock");
+  assert.equal(active, 0);
+  assert.deepEqual(lockEvents.map((event) => event.type), ["acquire", "release", "acquire", "release"]);
+  assert.ok(lockEvents.every((event) => event.name === "atl-test-distributed-lock"));
+  console.log("  testMysqlUsageWritesUseDistributedLock passed");
+}
+
+async function testMysqlWriteLockTimeoutFailsClosed() {
+  const store = new MySqlStore({ writeLockName: "atl-test-timeout-lock", writeLockTimeoutSeconds: 0 });
+  const pid = "p_mysql_timeout_lock", did = "d_mysql_timeout_lock";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-timeout-lock", identityPublicKey: "pk_mysql_timeout_lock", os: "test", appVersion: "0.7.1"
+  });
+  assert.equal(
+    store.config.writeLockTimeoutSeconds,
+    0,
+    "writeLockTimeoutSeconds=0 from config must NOT be replaced by the default"
+  );
+
+  let enteredWriteScope = false;
+  let observedLockParams = null;
+  store.pool = {
+    async getConnection() {
+      return {
+        async query(sql, params) {
+          const normalized = String(sql).replace(/\s+/g, " ").trim();
+          if (normalized.startsWith("SELECT GET_LOCK")) {
+            observedLockParams = params;
+            return [[{ acquired: 0 }], []];
+          }
+          throw new Error(`unexpected timeout lock query: ${normalized}`);
+        },
+        release() {}
+      };
+    }
+  };
+  store.loadWriteScope = async () => {
+    enteredWriteScope = true;
+  };
+
+  await assert.rejects(
+    () => store.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 10, workdirHash: "mysql_timeout_lock", sourceFingerprint: "mysql_timeout_lock" })
+    ], pid, did, { day: "2026-05-14", hour: 10, providerId: "codex_local" })),
+    /Timed out acquiring MySQL write lock/
+  );
+  assert.equal(enteredWriteScope, false, "MySQL writes must fail closed when the distributed lock cannot be acquired");
+  assert.deepEqual(observedLockParams, ["atl-test-timeout-lock", 0], "GET_LOCK must receive the configured timeout verbatim");
+  console.log("  testMysqlWriteLockTimeoutFailsClosed passed");
+}
+
+async function testMysqlConnectionLimitFloorsWhenLockEnabled() {
+  const lockedDefault = new MySqlStore({ writeLockName: "atl-floor-default", connectionLimit: 1 });
+  assert.equal(
+    lockedDefault.config.connectionLimit,
+    2,
+    "connectionLimit must be floored to 2 when the named lock is enabled to avoid deadlock"
+  );
+
+  const lockedEnv = new MySqlStore({ writeLockName: "atl-floor-env", connectionLimit: 0 });
+  // connectionLimit=0 is invalid and is caught by the `|| 8` fallback in the constructor,
+  // so it ends up at the default (8). The hard requirement is "must be >= 2 whenever the
+  // named lock is enabled" — the default already satisfies this, so we assert the floor,
+  // not the exact value, to avoid coupling to the default constant.
+  assert.ok(
+    lockedEnv.config.connectionLimit >= 2,
+    `connectionLimit=0/invalid must still satisfy the >=2 floor, got ${lockedEnv.config.connectionLimit}`
+  );
+
+  const lockedAmple = new MySqlStore({ writeLockName: "atl-floor-ample", connectionLimit: 8 });
+  assert.equal(
+    lockedAmple.config.connectionLimit,
+    8,
+    "connectionLimit must not be lowered when caller already requested >= 2"
+  );
+
+  const lockDisabled = new MySqlStore({ writeLockName: "", connectionLimit: 1 });
+  // writeLockName falls back to the auto-derived name; the floor still applies.
+  assert.ok(
+    lockDisabled.config.writeLockName.length > 0,
+    "writeLockName must default to the auto-derived value"
+  );
+  assert.equal(
+    lockDisabled.config.connectionLimit,
+    2,
+    "auto-derived lock name still triggers the connectionLimit floor"
+  );
+  console.log("  testMysqlConnectionLimitFloorsWhenLockEnabled passed");
+}
+
+async function testMysqlWriteLockResetsUsageWorkingState() {
+  const store = new MySqlStore({});
+  const pid = "p_mysql_reset", did = "d_mysql_reset";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-reset", identityPublicKey: "pk_mysql_reset", os: "test", appVersion: "0.7.1"
+  });
+  store.pool = {};
+  store.loadWriteScope = async () => {
+    store.db.usageDaily = { "scoped|usage": { participantId: pid, deviceId: did } };
+    store.db.usageHourly = { "scoped|usage|hourly": { participantId: pid, deviceId: did } };
+    store.db.usageSyncBuckets = { "scoped|bucket": { participantId: pid, deviceId: did } };
+    store.db.usageSyncBucketsHourly = { "scoped|bucket|hourly": { participantId: pid, deviceId: did } };
+    store.db.uploadBatches = { "scoped|payload": { id: "u1" } };
+  };
+  let observedDuringWrite = null;
+  store.incrementalHourlyBucketSync = async () => {
+    observedDuringWrite = {
+      usageDaily: Object.keys(store.db.usageDaily).length,
+      usageHourly: Object.keys(store.db.usageHourly).length,
+      usageSyncBuckets: Object.keys(store.db.usageSyncBuckets).length,
+      usageSyncBucketsHourly: Object.keys(store.db.usageSyncBucketsHourly).length,
+      uploadBatches: Object.keys(store.db.uploadBatches).length
+    };
+  };
+
+  await store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "mysql_reset_h1", sourceFingerprint: "mysql_reset_h1" })
+  ], pid, did, { day: "2026-05-14", hour: 10, providerId: "codex_local" }));
+
+  assert.ok(observedDuringWrite, "write lambda must run");
+  assert.ok(observedDuringWrite.usageDaily > 0, "loadWriteScope must populate usageDaily during the write");
+  assert.deepEqual(Object.keys(store.db.usageDaily), [], "usageDaily must be reset after writeLock release");
+  assert.deepEqual(Object.keys(store.db.usageHourly), [], "usageHourly must be reset after writeLock release");
+  assert.deepEqual(Object.keys(store.db.usageSyncBuckets), [], "usageSyncBuckets must be reset after writeLock release");
+  assert.deepEqual(Object.keys(store.db.usageSyncBucketsHourly), [], "usageSyncBucketsHourly must be reset after writeLock release");
+  assert.deepEqual(Object.keys(store.db.uploadBatches), [], "uploadBatches must be reset after writeLock release");
+  console.log("  testMysqlWriteLockResetsUsageWorkingState passed");
+}
+
+async function testMysqlWriteLockResetsUsageWorkingStateOnError() {
+  const store = new MySqlStore({});
+  const pid = "p_mysql_reset_err", did = "d_mysql_reset_err";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-reset-err", identityPublicKey: "pk_mysql_reset_err", os: "test", appVersion: "0.7.1"
+  });
+  store.pool = {};
+  store.loadWriteScope = async () => {
+    store.db.usageDaily = { "scoped|usage|err": { participantId: pid, deviceId: did } };
+  };
+  store.load = async () => {};
+  store.incrementalHourlyBucketSync = async () => {
+    throw new Error("synthetic write failure");
+  };
+
+  await assert.rejects(
+    () => store.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 10, workdirHash: "mysql_reset_err_h1", sourceFingerprint: "mysql_reset_err_h1" })
+    ], pid, did, { day: "2026-05-14", hour: 10, providerId: "codex_local" })),
+    /synthetic write failure/
+  );
+  assert.deepEqual(Object.keys(store.db.usageDaily), [], "usageDaily must be reset even when write throws");
+  console.log("  testMysqlWriteLockResetsUsageWorkingStateOnError passed");
 }
 
 async function testMysqlLegacyUploadDoesNotFullTableWipe() {
@@ -2279,6 +2497,181 @@ async function testOpenRouterRefresh() {
   }
 }
 
+async function testOpenRouterRefreshFetchOutsideLockSplit() {
+  // Verifies the split introduced for MySqlStore safety: refreshOpenRouterPrices
+  // performs the external HTTP fetch first (so a slow remote does not hold the
+  // cross-process MySQL named lock), then calls applyOpenRouterPriceFetch synchronously
+  // to mutate cache state. We exercise the split on the JSON Store because
+  // applyOpenRouterPriceFetch lives on the base class and MySqlStore re-uses it.
+  const originalFetch = globalThis.fetch;
+
+  // Case 1: happy path — prefetched applied directly.
+  {
+    const store = new Store(path.join(tmp, "openrouter-split-fresh.json"), { persist: false });
+    const sample = {
+      version: "test-or-fresh",
+      generatedAt: "2026-04-30T00:00:00.000Z",
+      prices: {
+        "openai/gpt-5-test": {
+          model: "openai/gpt-5-test",
+          inputCostPerMTok: 1,
+          outputCostPerMTok: 2,
+          cacheReadCostPerMTok: 0,
+          cacheWriteCostPerMTok: 0,
+          reasoningCostPerMTok: 0,
+          source: "openrouter",
+          notes: "",
+          updatedAt: "2026-04-30T00:00:00.000Z"
+        }
+      },
+      remote: { source: "openrouter", status: "fresh", lastError: "" }
+    };
+    const result = store.applyOpenRouterPriceFetch(sample, null, {});
+    assert.equal(result.remote.status, "fresh");
+    assert.equal(result.recalculated, null);
+    assert.equal(Object.keys(store.db.modelPriceCache.prices).length, 1);
+  }
+
+  // Case 2: fetch failed but prior prices exist → status "stale", prior prices preserved.
+  {
+    const store = new Store(path.join(tmp, "openrouter-split-stale.json"), { persist: false });
+    store.db.modelPriceCache = {
+      version: "preexisting",
+      generatedAt: "2026-04-29T00:00:00.000Z",
+      prices: {
+        "openai/gpt-5-test": {
+          model: "openai/gpt-5-test",
+          inputCostPerMTok: 9,
+          outputCostPerMTok: 9,
+          cacheReadCostPerMTok: 0,
+          cacheWriteCostPerMTok: 0,
+          reasoningCostPerMTok: 0,
+          source: "openrouter",
+          notes: "",
+          updatedAt: "2026-04-29T00:00:00.000Z"
+        }
+      },
+      remote: { source: "openrouter", status: "fresh", lastError: "" }
+    };
+    store.invalidatePriceMap();
+    const result = store.applyOpenRouterPriceFetch(null, new Error("network down"), {});
+    assert.equal(result.remote.status, "stale");
+    assert.equal(result.remote.lastError, "network down");
+    assert.equal(Object.keys(store.db.modelPriceCache.prices).length, 1, "prior prices retained on stale");
+  }
+
+  // Case 3: fetch failed and no prior prices → status "failed".
+  {
+    const store = new Store(path.join(tmp, "openrouter-split-failed.json"), { persist: false });
+    const result = store.applyOpenRouterPriceFetch(null, new Error("dns lookup failed"), {});
+    assert.equal(result.remote.status, "failed");
+    assert.equal(result.remote.lastError, "dns lookup failed");
+  }
+
+  // Case 4: refreshOpenRouterPrices fetches successfully then applies (full path).
+  {
+    const store = new Store(path.join(tmp, "openrouter-split-refresh-ok.json"), { persist: false });
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            id: "openai/gpt-5-split",
+            canonical_slug: "openai/gpt-5-split-20260430",
+            context_length: 128000,
+            pricing: { prompt: "0.000001", completion: "0.000002" }
+          }
+        ]
+      })
+    });
+    try {
+      const refreshed = await store.refreshOpenRouterPrices();
+      assert.equal(refreshed.remote.status, "fresh");
+      assert.equal(Object.keys(store.db.modelPriceCache.prices).length, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  // Case 5: refreshOpenRouterPrices propagates fetch failure to applyOpenRouterPriceFetch
+  // → ends up as "failed" (no prior prices). Proves the wrapper does NOT throw on fetch error.
+  {
+    const store = new Store(path.join(tmp, "openrouter-split-refresh-fail.json"), { persist: false });
+    globalThis.fetch = async () => {
+      throw new Error("simulated http timeout");
+    };
+    try {
+      const refreshed = await store.refreshOpenRouterPrices();
+      assert.equal(refreshed.remote.status, "failed");
+      assert.equal(refreshed.remote.lastError, "simulated http timeout");
+      assert.equal(refreshed.recalculated, null);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  // Case 6: recalculate=true on JSON store triggers cost recalc on existing usage rows.
+  {
+    const store = new Store(path.join(tmp, "openrouter-split-recalc.json"), { persist: false });
+    // Seed one daily row that should be re-costed when prices arrive. recalculateCosts
+    // on the JSON store iterates db.usageDaily, so we seed there.
+    const dailyKey = "2026-04-30|p1|d1|codex|codex_local|wh|openai/gpt-5-recalc";
+    store.db.usageDaily = {
+      [dailyKey]: {
+        usageKey: dailyKey,
+        day: "2026-04-30",
+        participantId: "p1",
+        deviceId: "d1",
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirHash: "wh",
+        workdirDisplayName: "wd",
+        model: "openai/gpt-5-recalc",
+        inputTokens: 1000,
+        outputTokens: 1000,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 2000,
+        estimatedCostUsd: 0,
+        cacheReadCostUsd: 0,
+        cacheWriteCostUsd: 0,
+        reasoningCostUsd: 0,
+        costQuality: "missing_price",
+        pricingSource: "",
+        pricingVersion: "",
+        sourceFingerprint: "sf",
+        ingestedAt: "2026-04-30T00:00:00.000Z",
+        sourceQuality: "auto"
+      }
+    };
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            id: "openai/gpt-5-recalc",
+            canonical_slug: "openai/gpt-5-recalc-20260430",
+            context_length: 128000,
+            pricing: { prompt: "0.000010", completion: "0.000030" }
+          }
+        ]
+      })
+    });
+    try {
+      const refreshed = await store.refreshOpenRouterPrices({ recalculate: true });
+      assert.equal(refreshed.remote.status, "fresh");
+      assert.ok(refreshed.recalculated, "recalculated summary returned");
+      assert.equal(refreshed.recalculated.updated, 1, "exactly one daily row recalculated");
+      assert.equal(store.db.usageDaily[dailyKey].pricingSource, "openrouter");
+      assert.notEqual(store.db.usageDaily[dailyKey].estimatedCostUsd, 0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+}
+
+
 function testHmacSha256Hex() {
   // determinism
   const a = hmacSha256Hex("salt", "data");
@@ -2492,6 +2885,7 @@ await testBuildGithubTauriUpdateJsonUsesReleaseId();
 await testPublishReleaseFinalizeKeepsAllChecksums();
 testDisplayAndPricing();
 await testOpenRouterRefresh();
+await testOpenRouterRefreshFetchOutsideLockSplit();
 // ─── Composition module tests ────────────────────────────────────────────────
 
 function testCompositionRatio() {
@@ -5951,6 +6345,11 @@ testI18nDataAttributesMatchKeys();
 // MySQL incremental sync tests
 await testMysqlHourlySnapshotUsesIncrementalSync();
 await testMysqlUsageWritesAreSerialized();
+await testMysqlUsageWritesUseDistributedLock();
+await testMysqlWriteLockTimeoutFailsClosed();
+await testMysqlConnectionLimitFloorsWhenLockEnabled();
+await testMysqlWriteLockResetsUsageWorkingState();
+await testMysqlWriteLockResetsUsageWorkingStateOnError();
 await testMysqlLegacyUploadDoesNotFullTableWipe();
 await testMysqlHourlyIncrementalSyncScopesDeletes();
 await testMysqlLoadSkipsUsageMirrors();

@@ -46,6 +46,8 @@ if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
 
 const store = await createConfiguredStore();
 
+export { store };
+
 let boardAnonymizer = null;
 if (BOARD_SECURITY_LEVEL === "anonymous") {
   const salt = BOARD_ANONYMIZATION_SALT || loadOrGenerateSalt(BOARD_ANONYMIZATION_SALT_PATH);
@@ -113,11 +115,16 @@ function mysqlWriteMode(snapshot, result) {
   if (store.dbType !== "mysql") return "json";
   if (snapshot?.mode === "device_day_hour_provider") return "incrementalHourly";
   if (snapshot?.mode === "device_day_provider") return "incrementalDaily";
-  return "fullSync";
+  // Legacy upload (no snapshot). Goes through loadUsageMirrorForMaintenance() +
+  // syncLegacyUsageMirror(); this is NOT a full-table flush — only the rows
+  // present in the upload payload are reconciled against the per-day mirror.
+  // The previous label "fullSync" was a holdover from the old global-DELETE
+  // path and is misleading for ops/triage.
+  return "legacyMirrorSync";
 }
 
 function shouldLogUsageUploadSuccess(result, writeMode, durationMs) {
-  return USAGE_UPLOAD_SUCCESS_LOG || writeMode === "fullSync" || (result?.rejected || 0) > 0 || durationMs >= SLOW_USAGE_UPLOAD_LOG_MS;
+  return USAGE_UPLOAD_SUCCESS_LOG || writeMode === "legacyMirrorSync" || (result?.rejected || 0) > 0 || durationMs >= SLOW_USAGE_UPLOAD_LOG_MS;
 }
 
 function transformBoardDetail(detail) {
@@ -389,7 +396,10 @@ async function handleApi(req, res) {
       const durationMs = Date.now() - started;
       const writeMode = mysqlWriteMode(body.snapshot, result);
       if (shouldLogUsageUploadSuccess(result, writeMode, durationMs)) {
-        logServerEvent("usage_upload_processed", writeMode === "fullSync" ? "warn" : "info", {
+        // Legacy mirror sync is the normal fallback path for old clients; it is
+        // no longer the dangerous full-table flush, so log at info. Reserve
+        // higher levels for actual error paths below.
+        logServerEvent("usage_upload_processed", "info", {
           ...baseLog,
           status: 200,
           accepted: result.accepted || 0,

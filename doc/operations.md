@@ -72,9 +72,19 @@ MYSQL_DATABASE=ai_token_league
 MYSQL_USER=<user>
 MYSQL_PASSWORD='<password>'
 MYSQL_AUTO_MIGRATE=true
+# 多实例共享同一个 MySQL 时保持默认开启，防止各实例的请求级写入镜像互相覆盖。
+MYSQL_WRITE_LOCK_NAME=ai-token-league:ai_token_league:write
+# 显式 0 表示 fail-fast；使用 ?? 解析，不会被默认值 30 吞掉。
+MYSQL_WRITE_LOCK_TIMEOUT_SECONDS=30
+# 启用命名锁时实际连接池下限 = 2（构造函数自动 floor）。不要再依赖 1，否则会自死锁。
+MYSQL_CONNECTION_LIMIT=8
 ```
 
 > 注意：密码包含 `>`、`<`、`|`、`&`、`!`、`$` 等 shell 特殊字符时，必须用单引号包裹。Docker Compose 的 `env_file` 不会解释 shell 元字符，但本地 `source` 命令会。
+
+MySQL store 的写路径会先获取 MySQL named lock，再进入 snapshot/legacy/价格/删除等会修改共享写入镜像的逻辑。默认锁名按 `MYSQL_DATABASE` 生成，多个服务副本连接同一库时必须使用同一个 `MYSQL_WRITE_LOCK_NAME`；不同环境或不同库可以使用不同锁名。`MYSQL_WRITE_LOCK_TIMEOUT_SECONDS` 控制获取锁的最长等待时间，超时会让本次写请求失败并由客户端重试；使用 `??` 解析，显式 `0` 表示 fail-fast 立即失败，**不会**被默认值 30 吞掉，可用于熔断或压测。
+
+`MYSQL_CONNECTION_LIMIT` 默认 8。**重要**：MySQL 命名锁在 `MySqlStore` 内部始终启用——即使不设置 `MYSQL_WRITE_LOCK_NAME`，构造函数也会按 `MYSQL_DATABASE` 自动派生默认锁名（不可在 env 层面关闭）。因此构造函数会**始终**把实际下限 floor 到 `2`。命名锁会把一条 pool connection 钉在临界区内整段时间（直到 `RELEASE_LOCK`），紧随其后的写事务又会从同一个 pool 申请第二条 connection；如果只给 1 条，第二次 `getConnection()` 会和锁持有者死锁，把"防数据丢失"变成"写请求卡死"。如果运维以前在某些资源紧张的部署里把 `MYSQL_CONNECTION_LIMIT=1`，请改成 `>= 2`，或者干脆删掉这一行用默认值——实际生效值仍然不会低于 2。
 
 启动：
 

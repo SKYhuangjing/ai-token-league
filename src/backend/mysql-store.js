@@ -7,6 +7,7 @@ import { dominantComposition, tokenCompositionSummary } from "../shared/composit
 import { normalizeModelName } from "../shared/pricing.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { CLOUD_PROVIDER_IDS, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
+import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 const MIGRATION_002_PATH = path.resolve("migrations/002_usage_hourly.sql");
@@ -23,14 +24,34 @@ export class MySqlStore extends Store {
   constructor(config = {}) {
     super("mysql", { persist: false });
     this.dbType = "mysql";
+    const requestedLimit = Number(config.connectionLimit ?? process.env.MYSQL_CONNECTION_LIMIT ?? 8) || 8;
+    const rawLockName = config.writeLockName ?? process.env.MYSQL_WRITE_LOCK_NAME ?? "";
+    const database = config.database || process.env.MYSQL_DATABASE || "ai_token_league";
+    const effectiveLockName = normalizeMysqlLockName(
+      rawLockName || `ai-token-league:${database}:write`
+    );
+    const lockEnabled = effectiveLockName.length > 0;
+    const timeoutSource = config.writeLockTimeoutSeconds ?? process.env.MYSQL_WRITE_LOCK_TIMEOUT_SECONDS;
+    const writeLockTimeoutSeconds = timeoutSource === undefined || timeoutSource === ""
+      ? 30
+      : Math.max(0, Number(timeoutSource) || 0);
     this.config = {
       uri: config.uri || process.env.MYSQL_URL || "",
       host: config.host || process.env.MYSQL_HOST || "127.0.0.1",
       port: Number(config.port || process.env.MYSQL_PORT || 3306),
       user: config.user || process.env.MYSQL_USER || "ai_token",
       password: config.password || process.env.MYSQL_PASSWORD || "ai_token",
-      database: config.database || process.env.MYSQL_DATABASE || "ai_token_league",
-      connectionLimit: Number(config.connectionLimit || process.env.MYSQL_CONNECTION_LIMIT || 8)
+      database,
+      // The named lock pins one pool connection for the entire write critical section.
+      // The actual write transaction then asks the same pool for ANOTHER connection.
+      // With connectionLimit=1 that second getConnection() would deadlock against the
+      // lock holder, so we floor at 2 whenever the named lock is effectively enabled
+      // (including the auto-derived default — runtime always uses the normalized name).
+      connectionLimit: lockEnabled
+        ? Math.max(2, requestedLimit)
+        : Math.max(1, requestedLimit),
+      writeLockName: effectiveLockName,
+      writeLockTimeoutSeconds
     };
     this.writeLock = Promise.resolve();
   }
@@ -199,10 +220,67 @@ export class MySqlStore extends Store {
       release = resolve;
     });
     await previous.catch(() => {});
+    let mysqlLock = null;
     try {
+      mysqlLock = await this.acquireMysqlWriteLock();
       return await fn();
     } finally {
-      release();
+      try {
+        this.resetUsageWorkingState();
+      } catch (resetError) {
+        console.error("[mysql-store] failed to reset usage working state", resetError);
+      }
+      try {
+        await mysqlLock?.release();
+      } finally {
+        release();
+      }
+    }
+  }
+
+  resetUsageWorkingState() {
+    this.db.usageDaily = {};
+    this.db.usageHourly = {};
+    this.db.usageSyncBuckets = {};
+    this.db.usageSyncBucketsHourly = {};
+    this.db.uploadBatches = {};
+    this.invalidateAggregateCache();
+  }
+
+  async acquireMysqlWriteLock() {
+    if (!this.pool?.getConnection || !this.config.writeLockName) return null;
+    const conn = await this.pool.getConnection();
+    let acquired = false;
+    try {
+      const [rows] = await conn.query(
+        "SELECT GET_LOCK(?, ?) AS acquired",
+        [this.config.writeLockName, this.config.writeLockTimeoutSeconds]
+      );
+      if (mysqlLockUnsupported(rows)) {
+        conn.release();
+        return null;
+      }
+      acquired = mysqlLockAcquired(rows);
+      if (!acquired) {
+        throw new Error(`Timed out acquiring MySQL write lock: ${this.config.writeLockName}`);
+      }
+      return {
+        release: async () => {
+          let releaseFailed = false;
+          try {
+            await conn.query("SELECT RELEASE_LOCK(?) AS released", [this.config.writeLockName]);
+          } catch (error) {
+            releaseFailed = true;
+            conn.destroy?.();
+            throw error;
+          } finally {
+            if (!releaseFailed) conn.release();
+          }
+        }
+      };
+    } catch (error) {
+      if (!acquired) conn.release();
+      throw error;
     }
   }
 
@@ -1006,8 +1084,25 @@ export class MySqlStore extends Store {
   }
 
   async refreshOpenRouterPrices(input) {
+    // Fetch external pricing OUTSIDE the named write lock. The HTTP call can be slow,
+    // and holding the cross-process MySQL lock during a remote round-trip would block
+    // every other backend instance's writes (snapshot uploads, registers, etc.) for the
+    // entire duration. We do the network I/O up-front, then enter the lock only to
+    // mutate cache state in MySQL.
+    let prefetched = null;
+    let prefetchError = null;
+    try {
+      prefetched = await fetchOpenRouterModelPrices();
+    } catch (error) {
+      prefetchError = error;
+    }
     return this.withWriteLock(async () => {
-      const result = await Store.prototype.refreshOpenRouterPrices.call(this, { recalculate: false });
+      const result = Store.prototype.applyOpenRouterPriceFetch.call(
+        this,
+        prefetched,
+        prefetchError,
+        { recalculate: false }
+      );
       await this.syncPriceCache();
       if (input?.recalculate && result.remote?.status === "fresh") {
         result.recalculated = await this.recalculateUsageCostsInBatches();
@@ -1242,15 +1337,6 @@ export class MySqlStore extends Store {
     });
   }
 
-  async syncUsageDaily() {
-    await withTransaction(this.pool, async (conn) => {
-      await conn.query("DELETE FROM usage_daily");
-      await conn.query("DELETE FROM usage_hourly").catch(() => {});
-      await insertUsageRows(conn, Object.entries(this.db.usageDaily));
-      await insertUsageHourlyRows(conn, Object.entries(this.db.usageHourly || {}));
-    });
-  }
-
   async syncPriceCache() {
     await withTransaction(this.pool, async (conn) => {
       await replaceModelPriceCache(conn, this.db.modelPriceCache);
@@ -1279,26 +1365,6 @@ export class MySqlStore extends Store {
       await replaceWorkdirs(conn, Object.values(this.db.workdirs));
       await deleteUsageRowsByKeys(conn, removedUsageKeys);
       await upsertUsageRows(conn, Object.entries(currentUsage));
-      await replaceUploadBatches(conn, Object.values(this.db.uploadBatches));
-    });
-  }
-
-  async syncAllTables() {
-    await withTransaction(this.pool, async (conn) => {
-      await conn.query("DELETE FROM usage_daily");
-      await conn.query("DELETE FROM usage_hourly").catch(() => {});
-      await conn.query("DELETE FROM usage_sync_buckets");
-      await conn.query("DELETE FROM usage_sync_buckets_hourly").catch(() => {});
-      await replaceParticipants(conn, Object.values(this.db.participants));
-      await replaceDevices(conn, Object.values(this.db.devices));
-      await replaceWorkdirs(conn, Object.values(this.db.workdirs));
-      await replaceModelPrices(conn, Object.values(this.db.modelPrices));
-      await replaceModelPriceAliases(conn, this.db.modelPriceAliases);
-      await replaceModelPriceCache(conn, this.db.modelPriceCache);
-      await insertUsageRows(conn, Object.entries(this.db.usageDaily));
-      await insertUsageHourlyRows(conn, Object.entries(this.db.usageHourly || {}));
-      await replaceUsageSyncBuckets(conn, Object.values(this.db.usageSyncBuckets || {}));
-      await replaceUsageSyncBucketsHourly(conn, Object.values(this.db.usageSyncBucketsHourly || {}));
       await replaceUploadBatches(conn, Object.values(this.db.uploadBatches));
     });
   }
@@ -1334,6 +1400,23 @@ async function ensureIndex(pool, tableName, indexName, createSql) {
 async function deleteAffected(conn, sql, params = []) {
   const [result] = await conn.query(sql, params).catch(() => [{ affectedRows: 0 }]);
   return Number(result?.affectedRows || 0);
+}
+
+function normalizeMysqlLockName(name) {
+  const normalized = String(name || "").replace(/[^a-zA-Z0-9:_.-]/g, "_");
+  return normalized.slice(0, 64);
+}
+
+function mysqlLockAcquired(rows) {
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  if (!row || typeof row !== "object") return false;
+  const value = Object.hasOwn(row, "acquired") ? row.acquired : Object.values(row)[0];
+  return Number(value) === 1;
+}
+
+function mysqlLockUnsupported(rows) {
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  return Boolean(row && typeof row === "object" && Object.hasOwn(row, "affectedRows") && !Object.hasOwn(row, "acquired"));
 }
 
 async function deleteUsageRowsByKeys(conn, usageKeys = []) {
@@ -1481,69 +1564,6 @@ async function replaceUploadBatches(conn, rows) {
       rejected = VALUES(rejected),
       errorReason = VALUES(errorReason)`,
     [rows.map((row) => [row.id, row.participantId, row.deviceId, row.payloadHash, row.clientGeneratedAt || "", row.receivedAt, row.status, row.accepted || 0, row.rejected || 0, row.errorReason || ""])]
-  );
-}
-
-async function replaceUsageSyncBuckets(conn, rows) {
-  if (!rows.length) return;
-  await conn.query(
-    `INSERT INTO usage_sync_buckets
-      (bucketKey, participantId, deviceId, day, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
-     VALUES ?
-     ON DUPLICATE KEY UPDATE
-      granularity = VALUES(granularity),
-      bucketFingerprint = VALUES(bucketFingerprint),
-      rowCount = VALUES(rowCount),
-      totalTokens = VALUES(totalTokens),
-      clientGeneratedAt = VALUES(clientGeneratedAt),
-      syncedAt = VALUES(syncedAt),
-      updatedAt = VALUES(updatedAt)`,
-    [rows.map((row) => [
-      [row.participantId, row.deviceId, row.day, row.providerId].join("|"),
-      row.participantId,
-      row.deviceId,
-      row.day,
-      row.providerId,
-      row.granularity || "daily",
-      row.bucketFingerprint,
-      row.rowCount || 0,
-      row.totalTokens || 0,
-      row.clientGeneratedAt || "",
-      row.syncedAt || new Date().toISOString(),
-      row.updatedAt || new Date().toISOString()
-    ])]
-  );
-}
-
-async function replaceUsageSyncBucketsHourly(conn, rows) {
-  if (!rows.length) return;
-  await conn.query(
-    `INSERT INTO usage_sync_buckets_hourly
-      (bucketKey, participantId, deviceId, day, hour, providerId, granularity, bucketFingerprint, rowCount, totalTokens, clientGeneratedAt, syncedAt, updatedAt)
-     VALUES ?
-     ON DUPLICATE KEY UPDATE
-      granularity = VALUES(granularity),
-      bucketFingerprint = VALUES(bucketFingerprint),
-      rowCount = VALUES(rowCount),
-      totalTokens = VALUES(totalTokens),
-      clientGeneratedAt = VALUES(clientGeneratedAt),
-      syncedAt = VALUES(syncedAt),
-      updatedAt = VALUES(updatedAt)`,
-    [rows.map((row) => [
-      [row.participantId, row.deviceId, row.day, row.hour ?? 0, row.providerId].join("|"),
-      row.participantId,
-      row.deviceId,
-      row.day,
-      row.hour ?? 0,
-      row.providerId,
-      row.granularity || "hourly",
-      row.bucketFingerprint,
-      row.rowCount || 0,
-      row.totalTokens || 0,
-      row.clientGeneratedAt || "",
-      row.syncedAt || new Date().toISOString(),
-      row.updatedAt || new Date().toISOString()
-    ])]
   );
 }
 
