@@ -13,13 +13,15 @@ The long-term goal is to make MySQL writes request-local and SQL-first, then shr
 ## Success Criteria
 
 - No write path uses `this.db.usageDaily`, `this.db.usageHourly`, `this.db.usageSyncBuckets*`, or `this.db.uploadBatches` as mutable request working state in MySQL mode.
-- Snapshot hourly writes can run concurrently across different `(participantId, deviceId, day, hour, providerId)` buckets.
-- Snapshot daily writes can run concurrently across different `(participantId, deviceId, day, providerId)` buckets.
+- Snapshot hourly writes can run concurrently across different independent scopes. Local providers use day/hour scoped locks; cloud providers use a wider participant/provider lock because current duplicate cleanup can touch multiple devices.
+- Snapshot daily writes can run concurrently across different participants. The first scoped implementation intentionally serializes writes within the same participant through `participant:{participantId}` so admin delete has a clear cross-process exclusion point.
 - Different participants do not block each other for normal usage uploads.
 - Legacy uploads remain safe during compatibility rollout and never trigger table-wide delete or table-wide mirror rewrite.
 - Pricing, admin delete, and maintenance operations keep explicit wider locks because their data impact is wider than one usage bucket.
 - Lock timeout still fails closed. A request that cannot acquire its required scoped lock must fail and rely on client retry, not continue unlocked.
+- Participant parent lock acquired by uploads uses a shorter timeout (default 2s) than the main `MYSQL_WRITE_LOCK_TIMEOUT_SECONDS`, because admin delete is the only legitimate long holder of that lock. `MYSQL_WRITE_LOCK_TIMEOUT_SECONDS=0` keeps its existing fail-fast semantics in scoped mode; the participant parent lock timeout is a separate env (`MYSQL_PARTICIPANT_PARENT_LOCK_TIMEOUT_SECONDS`).
 - The existing global write lock remains available as a rollout fallback until scoped locks have production evidence.
+- A single request never holds an unbounded number of MySQL named locks. The scoped-lock implementation must define and enforce a small lock-count budget.
 
 ## Key Constraint
 
@@ -92,42 +94,102 @@ atl:<database>:usage-hour:<sha256(scope).slice(0, 24)>
 
 Store the unhashed scope string in logs for observability, but send only the bounded lock name to `GET_LOCK`.
 
+The lock-name formatter must enforce the 64-character limit after composing the full prefix and scope. If the composed name is too long, use a uniformly bounded fallback:
+
+```text
+atl:<sha256(fullScope).slice(0, 56)>
+```
+
+The full unhashed scope remains available only in structured logs and test diagnostics.
+
+### Lock Hierarchy And Budget
+
+Do not acquire scoped locks in pure lexical order. Use a hierarchy first, then lexical order only inside the same hierarchy level:
+
+1. Maintenance/global lock, when used.
+2. Participant parent lock: `participant:{participantId}`.
+3. Cloud-provider participant lock: `participant-cloud:{participantId}:{providerId}`.
+4. Usage parent lock: `usage-day:{participantId}:{deviceId}:{day}:{providerId}`.
+5. Usage child lock: `usage-hour:{participantId}:{deviceId}:{day}:{hour}:{providerId}`.
+6. Pricing/admin child locks.
+
+Every request must acquire locks in hierarchy order and release them in reverse order. If any lock cannot be acquired before its timeout, the request must release already-held locks and fail closed. It must not retry with a partial lock set.
+
+The first scoped implementation should cap normal usage-upload requests at:
+
+```text
+maxLocksPerRequest = 3
+```
+
+That budget covers:
+
+- participant parent lock;
+- one usage parent lock or one cloud-provider participant lock;
+- one hourly child lock when needed.
+
+Any operation that appears to need more locks must either use a wider parent lock or stay on the global fallback. It must not enumerate hundreds of bucket locks.
+
+Because each MySQL named lock holds one pool connection and the SQL transaction needs one more connection, the effective minimum pool size for scoped mode is:
+
+```text
+MYSQL_CONNECTION_LIMIT >= maxLocksPerRequest + 1
+```
+
+With `maxLocksPerRequest = 3`, scoped mode requires an effective connection limit of at least `4`. The constructor should floor `MYSQL_CONNECTION_LIMIT` to this value when `MYSQL_WRITE_LOCK_MODE=scoped`.
+
+Participant parent locks use a shorter timeout than child usage locks so admin delete has a deterministic insertion window:
+
+```text
+MYSQL_PARTICIPANT_PARENT_LOCK_TIMEOUT_SECONDS=2
+```
+
+If a participant parent lock times out, the server should return HTTP 503 with `lockTimeout=true` and a `Retry-After` header. This tells clients to retry later instead of treating the response as a semantic upload error.
+
 ### Normal Usage Upload Locks
 
 | Path | Lock Scope | Reason |
 | --- | --- | --- |
-| Hourly snapshot | `usage-day:{participantId}:{deviceId}:{day}:{providerId}` plus `usage-hour:{participantId}:{deviceId}:{day}:{hour}:{providerId}` | Hourly rows are bucket-scoped, but the write also refreshes the derived daily scope for the same participant/device/day/provider. The parent daily lock keeps hourly-vs-daily and same-day multi-hour writes deterministic. |
-| Daily snapshot | `usage-day:{participantId}:{deviceId}:{day}:{providerId}` | Only rows and metadata inside one daily bucket are replaced. |
-| Legacy upload | `legacy-device:{participantId}:{deviceId}` initially | Legacy has no explicit snapshot boundary; device-level is the safe first split. |
-| Device register | `identity:{participantId}` | Participant/device identity rows can conflict with upload-time identity upserts. |
+| Hourly snapshot, local provider | `participant:{participantId}` + `usage-day:{participantId}:{deviceId}:{day}:{providerId}` + `usage-hour:{participantId}:{deviceId}:{day}:{hour}:{providerId}` | Hourly rows are bucket-scoped, but the write also refreshes the derived daily scope for the same participant/device/day/provider. The parent daily lock keeps hourly-vs-daily and same-day multi-hour writes deterministic. |
+| Hourly snapshot, cloud provider | `participant:{participantId}` + `participant-cloud:{participantId}:{providerId}` | Current cloud duplicate cleanup can delete matching hourly rows from other devices and then refresh those devices' daily scopes. Device-scoped daily/hour locks do not cover that write surface. Use the cloud participant lock until the cleanup is redesigned to be strictly device-local. |
+| Daily snapshot | `participant:{participantId}` + `usage-day:{participantId}:{deviceId}:{day}:{providerId}` | Only rows and metadata inside one daily bucket are replaced, but the participant parent lock gives admin delete a deterministic insertion point. |
+| Legacy upload | `participant:{participantId}` + `legacy-device:{participantId}:{deviceId}` initially | Legacy has no explicit snapshot boundary; device-level is the safe first split after the participant parent lock. |
+| Device register | `participant:{participantId}` | Participant/device identity rows can conflict with upload-time identity upserts. |
 
 Legacy can later move to `legacy-day:{participantId}:{deviceId}:{day}:{providerId}` after the builder proves every accepted legacy row has a reliable day/provider scope and all cleanup rules are scope-local.
+
+Cloud-provider hourly writes can later move back to `usage-day` + `usage-hour` only if one of these design changes lands first:
+
+- the cloud duplicate cleanup becomes strictly device-local;
+- cloud providers stop using hourly upload and move to daily snapshots only;
+- the write context can cheaply precompute every affected device and acquire all affected daily locks within the lock-count budget.
 
 ### Wider Operation Locks
 
 | Path | Lock Scope | Reason |
 | --- | --- | --- |
-| `deleteParticipantData` | `participant-admin:{participantId}` plus blocks usage scopes for that participant | Deletes identity, devices, workdirs, usage rows, upload batches, and sync metadata. |
-| `deleteDeviceData` | `device-admin:{deviceId}` plus blocks usage scopes for that device | Deletes device rows and can invalidate cloud duplicate scopes. |
+| `deleteParticipantData` | `participant:{participantId}` | Deletes identity, devices, workdirs, usage rows, upload batches, and sync metadata. Uploads for the same participant must also acquire this parent lock with a short timeout, so delete does not need to enumerate child usage scopes. |
+| `deleteDeviceData` | `participant:{participantId}` + `device-admin:{deviceId}` | Deletes device rows and can invalidate cloud duplicate scopes. Resolve participantId first, then acquire participant parent lock before the device admin lock. This assumes device-to-participant binding is immutable after registration; if that invariant changes, the lookup must move under a wider lock or SQL row lock. |
 | `upsertModelPrice` / `deleteModelPrice` | `pricing-model:{model}` | Recalculates rows for affected model and aliases. |
-| `refreshOpenRouterPrices({ recalculate: true })` | `pricing-global` | Can update price cache and recalculate many models. |
+| `refreshOpenRouterPrices({ recalculate: true })` | `pricing-global` | Can update price cache and recalculate many models. Pricing recalc does not acquire participant usage locks in the first scoped implementation; cost fields are display-only and may use last-writer-wins with concurrent uploads. |
 | Schema migration / maintenance | `maintenance-global` | Cross-table or schema-wide operation. |
 
-If an operation needs multiple locks, acquire them in deterministic lexical order and release in reverse order. This avoids deadlocks between, for example, device deletion and concurrent usage uploads.
+Admin delete operations are rare and correctness-critical. If a future delete flow cannot fit the hierarchy and lock-count budget, it should temporarily use `MYSQL_WRITE_LOCK_MODE=global` or `maintenance-global` rather than enumerating all bucket locks for the participant.
 
 ## Transaction Model
 
 Every bucket write remains one database transaction:
 
-1. Acquire scoped named lock.
-2. Start transaction.
-3. Lock current sync metadata row with `SELECT ... FOR UPDATE` or insert a placeholder row then lock it.
-4. Upsert participant/device/workdir rows relevant to this context.
-5. Upsert accepted usage rows.
-6. Delete stale rows only inside the locked scope.
-7. Upsert sync metadata and upload audit rows.
-8. Commit.
-9. Release named lock.
+1. Derive the full lock set from the request before acquiring any lock.
+2. Reject the request if the lock set exceeds the configured lock-count budget.
+3. Acquire scoped named locks in hierarchy order.
+4. Start transaction.
+5. Lock current sync metadata row with `SELECT ... FOR UPDATE` or insert a placeholder row then lock it.
+6. Upsert participant/device/workdir rows relevant to this context.
+7. Upsert accepted usage rows.
+8. Delete stale rows only inside the locked scope.
+9. Upsert sync metadata and upload audit rows.
+10. Commit.
+11. Release named locks in reverse order.
 
 The named lock serializes work across backend instances. The transaction and row locks protect the actual SQL mutation. Both are needed until all write paths are fully SQL-local and row-level locking has enough production evidence.
 
@@ -139,6 +201,7 @@ Initial long-term implementation:
 
 - Keep legacy upsert-only from the API contract perspective.
 - Do not derive deletes from "missing rows" in a legacy payload.
+- The request envelope's `(participantId, deviceId)` is the legacy upload scope. The builder must reject any row that declares or implies a different deviceId; if old-client compatibility cannot satisfy this, legacy must use only the participant parent lock and skip the device child lock.
 - Allow only narrow cleanup rules already implied by the accepted rows:
   - exact `sourceFingerprint` replacement for the same participant/device/provider/day where the new row supersedes an old duplicate;
   - unknown-model replacement when a known model row for the same natural key arrives.
@@ -154,6 +217,7 @@ After old clients are below an agreed threshold, prefer enforcing snapshot-capab
 - Add context builders for hourly snapshot, daily snapshot, and legacy upload.
 - Builders return normalized rows and affected scopes without mutating `this.db.usage*`.
 - Keep current global `withWriteLock` while builders are introduced.
+- Remove `await this.load()` rollback only on a path-by-path basis, in the same PR that replaces that path's `Store.prototype.upsertUsageBatch.call(this, ...)` or other inherited mutator with request-local SQL helpers. SQL transaction rollback owns database recovery; dropping the request context owns memory cleanup. Keeping full `load()` after a path is request-local would reintroduce table-wide reads into hot write paths, but removing it before the path stops mutating `this.db.*` would leak dirty request state.
 - Verification: existing `npm test`, plus tests that assert MySQL builders leave store-level usage mirrors unchanged.
 
 ### Phase 2: SQL Helper Replacement
@@ -170,7 +234,7 @@ After old clients are below an agreed threshold, prefer enforcing snapshot-capab
   - `lockScopesForUsageUpload(input)`
   - `lockScopesForAdminDelete(input)`
   - `lockScopesForPricing(input)`
-- Implement multi-lock acquisition with deterministic ordering.
+- Implement multi-lock acquisition with hierarchy ordering, lock-count budget enforcement, and fail-closed timeout cleanup.
 - Add env rollout mode:
 
 ```text
@@ -198,14 +262,21 @@ Default remains `global` until scoped mode passes real MySQL soak.
 | --- | --- |
 | Store-level mirror race returns | Unit test that two different scoped writes do not mutate shared `this.db.usageDaily` / `usageHourly`. |
 | Same hourly bucket conflict | Two backend instances upload different payloads for the same hourly bucket; final DB equals last committed bucket and metadata fingerprint. |
-| Different hourly buckets over-serialize | Two backend instances upload different daily parent scopes, such as different participant/device/day/provider combinations; both succeed concurrently and neither waits for unrelated bucket lock. Same participant/device/day/provider intentionally serializes because daily derivation is shared. |
+| Different hourly buckets over-serialize | Two backend instances upload different participants' daily parent scopes; both succeed concurrently and neither waits for unrelated participant or bucket locks. Same-participant writes intentionally serialize in the first scoped implementation because the participant parent lock is the admin-delete exclusion point. |
 | Different participants block each other | Concurrent uploads for different participants complete without sharing a lock name. |
 | Daily vs hourly same day conflict | Daily snapshot and hourly snapshot for same participant/device/day/provider share the `usage-day` parent lock and produce deterministic final daily rows. |
-| Legacy vs snapshot conflict | Legacy device lock plus snapshot bucket lock cannot reintroduce deleted stale rows or remove snapshot rows unexpectedly. |
-| Admin delete vs upload | Participant/device delete and concurrent upload cannot leave orphan rows or resurrect deleted data. |
-| Pricing recalc vs upload | Pricing recalc cannot write stale cost fields over a concurrent upload. |
+| Cloud duplicate cross-device cleanup | For a cloud provider, uploading device A hourly rows deletes duplicate matching device B hourly rows and refreshes device B daily rows under `participant-cloud:{participantId}:{providerId}`. Concurrent device B upload must not race or resurrect deleted rows. |
+| Legacy vs snapshot conflict | Participant parent lock plus legacy device lock and snapshot bucket lock cannot reintroduce deleted stale rows or remove snapshot rows unexpectedly. |
+| Admin delete vs upload | Uploads acquire `participant:{participantId}` before child usage locks; participant/device delete acquires the same participant parent lock before deleting. Concurrent delete/upload cannot leave orphan rows or resurrect deleted data. |
+| Pricing recalc vs upload | Pricing recalc may run concurrently with participant uploads. Assert `totalTokens` and usage identity fields remain stable; cost display fields may be last-writer-wins unless pricing recalc is later promoted to a global write stop. |
 | Lock timeout | Scoped lock timeout fails closed and does not enter SQL mutation. |
-| Multi-lock deadlock | Admin/pricing operations acquire multiple locks in deterministic order; stress test shows no circular wait. |
+| Participant parent lock timeout | If `participant:{participantId}` cannot be acquired within `MYSQL_PARTICIPANT_PARENT_LOCK_TIMEOUT_SECONDS`, the server returns HTTP 503 with `lockTimeout=true` and `Retry-After`; the client retries instead of marking the bucket as a semantic failure. |
+| Lock name length | Very long database names and scope strings are formatted into a final `GET_LOCK` name no longer than 64 characters; logs still include the original unhashed scope for diagnostics. |
+| Multi-lock connection budget | With scoped mode and `maxLocksPerRequest = 3`, effective `MYSQL_CONNECTION_LIMIT` is floored to at least `4`; concurrent uploads above the pool's spare capacity do not self-deadlock or time out acquiring pool connections while holding partial locks. |
+| Pool-limited throughput | With `MYSQL_CONNECTION_LIMIT=4` and scoped mode, 8 different-participant hourly uploads complete in no worse than `singleHourlyDuration * ceil(8 / 3) + epsilon`, proving the pool limits concurrency predictably rather than causing hidden serialization or connection starvation. |
+| Request-local rollback | After every MySQL write path in `MYSQL_WRITE_LOCK_MODE=global`, `Object.keys(store.db.usageDaily).length === 0` and `Object.keys(store.db.usageHourly).length === 0`; request-local paths do not rely on `await this.load()` rollback. |
+| Legacy envelope scope | A legacy upload whose row-level data conflicts with the envelope `(participantId, deviceId)` is rejected by the builder, or legacy falls back to participant-only locking with no device child lock. |
+| Multi-lock long-tail wait | Two backend instances contending on overlapping parent/child locks acquire locks in hierarchy order; P99 lock wait stays below `MYSQL_WRITE_LOCK_TIMEOUT_SECONDS`, and timeout releases all held locks before returning an error. |
 
 ## Metrics And Observability
 
@@ -242,7 +313,7 @@ Rejected unless old-client support must continue indefinitely. Snapshot-capable 
 
 ## Open Decisions
 
-- Whether daily snapshot and hourly snapshot for the same participant/device/day/provider should share a parent `usage-day` lock, or whether SQL transaction rules can make their final state deterministic without it.
+- Whether cloud-provider hourly uploads should stay on `participant-cloud` locks or move to a daily-only upload model after old behavior is retired.
 - The production threshold for switching `MYSQL_WRITE_LOCK_MODE` from `global` to `scoped`.
 - Whether legacy clients should be blocked after a minimum snapshot-capable version, instead of further optimizing legacy concurrency.
-- Whether pricing recalc should become an asynchronous job with progress state rather than running under request/response admin APIs.
+- Whether pricing recalc should become an asynchronous job with progress state rather than running under request/response admin APIs. Until then, cost display fields are allowed to be last-writer-wins with concurrent uploads; ranking token fields are not.
