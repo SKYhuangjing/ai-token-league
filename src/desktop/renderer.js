@@ -2149,14 +2149,21 @@ function renderCloudSyncDetails(syncStatus, config = latestConfig) {
 
 function renderToday() {
   const summary = usageQueryState.summaries.get(overviewRange);
-  const rangeItems = summary ? [] : usageForRange(overviewRange);
+  const localRangeItems = usageForRange(overviewRange);
+  const hasLocalRangeItems = localRangeItems.length > 0;
+  const rangeItems = summary ? [] : localRangeItems;
   const composition = summary?.totals || aggregateComposition(rangeItems);
   const total = summary ? composition.totalTokens : rangeItems.reduce((sum, item) => sum + item.totalTokens, 0);
-  const workdirs = summary?.workdirs || groupBy(rangeItems, "workdirDisplayName");
-  const models = summary?.models || groupBy(rangeItems, "model");
-  const providers = summary?.providers?.map((row) => ({ ...row, name: sourceName(row.name) })) || groupProviders(rangeItems);
-  const cost = summary && !rangeItems.length ? {} : aggregateUsageCost(rangeItems);
-  const showOverviewCost = Boolean(latestConfig?.showEstimatedCost && !summary);
+  const showOverviewCost = Boolean(latestConfig?.showEstimatedCost && (hasLocalRangeItems || !summary));
+  const breakdownItems = showOverviewCost && hasLocalRangeItems ? localRangeItems : rangeItems;
+  const workdirs = breakdownItems.length ? groupBy(breakdownItems, "workdirDisplayName") : summary?.workdirs || [];
+  const models = breakdownItems.length ? groupBy(breakdownItems, "model") : summary?.models || [];
+  const providers = breakdownItems.length
+    ? groupProviders(breakdownItems)
+    : summary?.providers?.map((row) => ({ ...row, name: sourceName(row.name) })) || [];
+  const cost = showOverviewCost && hasLocalRangeItems
+    ? aggregateUsageCost(localRangeItems)
+    : summary && !rangeItems.length ? {} : aggregateUsageCost(rangeItems);
 
   $("#today-total").textContent = formatToken(total);
   $("#today-total").title = formatTokenRaw(total);
@@ -2193,7 +2200,7 @@ function renderToday() {
   $("#model-list").innerHTML = models.length
     ? renderMiniMeters(models, { showCost: showOverviewCost, limit: 3, colorClasses: ["meter-violet", "", "meter-yellow"] })
     : `<div class="empty-state">${t("desktop.renderer.noModelUsage")}</div>`;
-  renderOverviewTrend(rangeItems);
+  renderOverviewTrend(localRangeItems);
   renderRailStatus();
   syncTrayCostState();
 }
@@ -2223,9 +2230,10 @@ function renderWorkdirs() {
 function renderOverviewTrend(items) {
   const grain = overviewTrendGrain();
   const queryTrend = usageQueryState.trends.get(usageQueryKey(overviewRange, grain));
-  const rows = queryTrend?.items || (overviewRange === "today"
+  const localRows = () => overviewRange === "today"
     ? groupByHour(items)
-    : groupByGrain(usageForRange(overviewRange), grain).filter(hasPositiveUsage));
+    : groupByGrain(items.length ? items : usageForRange(overviewRange), grain).filter(hasPositiveUsage);
+  const rows = latestConfig?.showEstimatedCost && items.length ? localRows() : queryTrend?.items || localRows();
   const max = Math.max(...rows.map((row) => row.totalTokens), 1);
   const peakIdx = rows.length ? rows.reduce((best, row, i) => row.totalTokens > rows[best].totalTokens ? i : best, 0) : -1;
 

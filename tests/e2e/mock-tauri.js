@@ -52,7 +52,7 @@
     apiBaseUrl: "",
     language: cfg.language,
     showRawTokens: false,
-    showEstimatedCost: false,
+    showEstimatedCost: Boolean(cfg.showEstimatedCost),
     refreshIntervalMinutes: 15,
     launchAtLogin: false,
     hideDockIcon: false,
@@ -414,7 +414,7 @@
         : Promise.resolve({ status: "reachable", checkedAt: new Date().toISOString(), serverVersion: "1.0.0", compatibility: { compatible: true } });
     };
     api.providerHealth = () => Promise.resolve(mockHealth);
-    api.modelPrices = () => Promise.resolve({ custom: [], openrouter: [], aliases: [] });
+    api.modelPrices = () => Promise.resolve(cfg.modelPrices || { custom: [], openrouter: [], aliases: [] });
     api.appVersion = () => Promise.resolve("0.7.0-test");
     api.getMyIdentity = () => Promise.resolve({ deviceId: "dev_test456", nickname: "Test User", identityMode: "named" });
     api.backgroundStatus = () => Promise.resolve({ running: false });
