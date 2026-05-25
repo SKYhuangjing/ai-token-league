@@ -30,6 +30,7 @@ const mockApi = {
   usageDetailWindow: vi.fn().mockResolvedValue({ items: [], totalRows: 0 }),
   providerHealth: vi.fn().mockResolvedValue([]),
   backgroundStatus: vi.fn().mockResolvedValue({}),
+  fullReconcileStatus: vi.fn().mockResolvedValue({ status: 'idle', running: false }),
   getMyIdentity: vi.fn().mockResolvedValue({ participantId: 'p_test', nickname: 'test' }),
   appVersion: vi.fn().mockResolvedValue({ clientAppVersion: '0.7.0', clientPlatform: 'darwin-arm64', runtime: 'rust-tauri' }),
   checkUpdate: vi.fn().mockResolvedValue(null),

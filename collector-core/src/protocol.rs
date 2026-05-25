@@ -68,6 +68,8 @@ pub enum Command {
     UsageDetailWindow,
     UsageSync,
     UsageSyncStart,
+    UsageFullReconcileStart,
+    UsageFullReconcileStatus,
     MyIdentity,
     AppVersion,
     UpdateDownloadInstaller,
@@ -127,6 +129,8 @@ impl Command {
             "usage:detail-window" => Some(Self::UsageDetailWindow),
             "usage:sync" => Some(Self::UsageSync),
             "usage:sync-start" => Some(Self::UsageSyncStart),
+            "usage:full-reconcile-start" => Some(Self::UsageFullReconcileStart),
+            "usage:full-reconcile-status" => Some(Self::UsageFullReconcileStatus),
             "my-identity" => Some(Self::MyIdentity),
             "app:version" => Some(Self::AppVersion),
             "update:download-installer" => Some(Self::UpdateDownloadInstaller),
@@ -188,18 +192,33 @@ mod tests {
             ("identity:import:apply", Command::IdentityImportApply),
             ("config:export:prepare", Command::ConfigExportPrepare),
             ("config:import:apply", Command::ConfigImportApply),
-            ("diagnostics:export:prepare", Command::DiagnosticsExportPrepare),
+            (
+                "diagnostics:export:prepare",
+                Command::DiagnosticsExportPrepare,
+            ),
             ("diagnostics:status", Command::DiagnosticsStatus),
-            ("diagnostics:clear-runtime-log", Command::DiagnosticsClearRuntimeLog),
-            ("local-backup:export:prepare", Command::LocalBackupExportPrepare),
+            (
+                "diagnostics:clear-runtime-log",
+                Command::DiagnosticsClearRuntimeLog,
+            ),
+            (
+                "local-backup:export:prepare",
+                Command::LocalBackupExportPrepare,
+            ),
             ("local-backup:status", Command::LocalBackupStatus),
             ("local-backup:create", Command::LocalBackupCreate),
             ("local-backup:clear", Command::LocalBackupClear),
             ("local-backup:run-due-auto", Command::LocalBackupRunDueAuto),
             ("local-backup:inspect", Command::LocalBackupInspect),
-            ("local-backup:restore:apply", Command::LocalBackupRestoreApply),
+            (
+                "local-backup:restore:apply",
+                Command::LocalBackupRestoreApply,
+            ),
             ("providers:add-root", Command::ProvidersAddRoot),
-            ("config:remove-provider-root", Command::ConfigRemoveProviderRoot),
+            (
+                "config:remove-provider-root",
+                Command::ConfigRemoveProviderRoot,
+            ),
             ("cursor:add-token", Command::CursorAddToken),
             ("cursor:remove-token", Command::CursorRemoveToken),
             ("cursor:connect:start", Command::CursorConnectStart),
@@ -207,7 +226,10 @@ mod tests {
             ("cursor:connect:cancel", Command::CursorConnectCancel),
             ("cursor:disconnect", Command::CursorDisconnect),
             ("config:ignore-auto-source", Command::ConfigIgnoreAutoSource),
-            ("config:unignore-auto-source", Command::ConfigUnignoreAutoSource),
+            (
+                "config:unignore-auto-source",
+                Command::ConfigUnignoreAutoSource,
+            ),
             ("background:status", Command::BackgroundStatus),
             ("workdirs:set-alias", Command::WorkdirsSetAlias),
             ("providers:health", Command::ProvidersHealth),
@@ -222,10 +244,24 @@ mod tests {
             ("usage:detail-window", Command::UsageDetailWindow),
             ("usage:sync", Command::UsageSync),
             ("usage:sync-start", Command::UsageSyncStart),
+            (
+                "usage:full-reconcile-start",
+                Command::UsageFullReconcileStart,
+            ),
+            (
+                "usage:full-reconcile-status",
+                Command::UsageFullReconcileStatus,
+            ),
             ("my-identity", Command::MyIdentity),
             ("app:version", Command::AppVersion),
-            ("update:download-installer", Command::UpdateDownloadInstaller),
-            ("update:enforcement-status", Command::UpdateEnforcementStatus),
+            (
+                "update:download-installer",
+                Command::UpdateDownloadInstaller,
+            ),
+            (
+                "update:enforcement-status",
+                Command::UpdateEnforcementStatus,
+            ),
             ("app:reset-local-data", Command::AppResetLocalData),
             ("app:reset-with-cloud", Command::AppResetWithCloud),
             ("runtime:log", Command::RuntimeLog),
@@ -236,7 +272,12 @@ mod tests {
             ("ping", Command::Ping),
         ];
         for (s, expected) in &commands {
-            assert_eq!(Command::from_str(s), Some(expected.clone()), "failed for '{}'", s);
+            assert_eq!(
+                Command::from_str(s),
+                Some(expected.clone()),
+                "failed for '{}'",
+                s
+            );
         }
     }
 
@@ -290,7 +331,10 @@ mod tests {
         let err_resp = SidecarResponse::error("r2".into(), "fail");
         let json = serde_json::to_string(&err_resp).unwrap();
         assert!(json.contains("\"ok\":false"));
-        assert!(!json.contains("\"data\""), "data should be skipped when None");
+        assert!(
+            !json.contains("\"data\""),
+            "data should be skipped when None"
+        );
     }
 
     #[test]

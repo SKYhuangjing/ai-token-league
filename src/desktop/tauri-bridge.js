@@ -99,6 +99,8 @@
     // ── Sync ────────────────────────────────────────────────────
     syncUsage:           fwd("usage:sync"),
     startUsageSync:      fwd("usage:sync-start"),
+    startFullReconcile:  fwd("usage:full-reconcile-start"),
+    fullReconcileStatus: fwd("usage:full-reconcile-status"),
 
     // ── Identity ────────────────────────────────────────────────
     getMyIdentity:       fwd("my-identity"),

@@ -417,12 +417,26 @@ async function handleApi(req, res) {
     const body = await readBody(req);
     const participant = store.getParticipant(body.participantId);
     if (!participant) return sendJson(res, 404, { error: "participant is not registered" });
+    const mode = body.mode || "recent";
+    const MAX_SYNC_STATE_BUCKETS = 250;
+    if (!Array.isArray(body.buckets)) {
+      return sendJson(res, 400, { error: "buckets must be an array" });
+    }
+    const bucketCount = body.buckets.length;
+    if (bucketCount > MAX_SYNC_STATE_BUCKETS) {
+      return sendJson(res, 400, {
+        error: `too many buckets: ${bucketCount} exceeds limit ${MAX_SYNC_STATE_BUCKETS}`
+      });
+    }
     const payload = {
       participantId: body.participantId,
       deviceId: body.deviceId,
       clientGeneratedAt: body.clientGeneratedAt,
       buckets: body.buckets
     };
+    if (Object.hasOwn(body, "mode")) {
+      payload.mode = mode;
+    }
     if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
       return sendJson(res, 401, { error: "invalid signature" });
     }

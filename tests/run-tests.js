@@ -8,7 +8,7 @@ import { Store } from "../src/backend/store.js";
 import { MySqlStore } from "../src/backend/mysql-store.js";
 import { canonicalJson, sha256Hex, generateIdentity, newId, signPayload, hmacSha256Hex, verifyPayload, normalizeLegacyEd25519Pem } from "../src/shared/crypto.js";
 import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
-import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber, cloudNaturalKey, todayLocal, CLOUD_PROVIDER_IDS } from "../src/shared/schema.js";
+import { assertNoForbiddenUploadFields, assertSnapshot, BUCKET_FINGERPRINT_FIELDS, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens, USAGE_CACHE_VERSION, usageKey, normalizeTokenNumber, cloudNaturalKey, todayLocal, CLOUD_PROVIDER_IDS } from "../src/shared/schema.js";
 import { compatibilityResult, clientMetadata, CLIENT_PROTOCOL_VERSION, SNAPSHOT_PROTOCOL_VERSION, APP_VERSION, PRODUCT_BASELINE, compareSemver, normalizeClientMetadata, collectNetworkInfo, clientPlatform, clientBuild, packageVersion, productBaseline } from "../src/shared/version.js";
 import {
   buildInstallerMetadataFromGithubRelease,
@@ -777,7 +777,7 @@ function makeSnapshotPayload(items, participantId, deviceId, options = {}) {
       mode: "device_day_provider",
       day: overrideDay,
       providerId: overrideProvider,
-      bucketFingerprint: computeBucketFingerprint(snapshotItems),
+      bucketFingerprint: computeDailyBucketFingerprint(snapshotItems),
       rowCount: snapshotItems.length,
       totalTokens: snapshotItems.reduce((s, i) => s + (i.totalTokens || 0), 0)
     },
@@ -861,7 +861,7 @@ function testSnapshotReplaceSemantics() {
     makeSnapshotItem({ workdirHash: "h3", model: "claude-4" })
   ];
   const staleFingerprintPayload = makeSnapshotPayload(changedItems, pid, did);
-  const serverFingerprint = computeBucketFingerprint(staleFingerprintPayload.items);
+  const serverFingerprint = computeDailyBucketFingerprint(staleFingerprintPayload.items);
   staleFingerprintPayload.snapshot.bucketFingerprint = snapPayload.snapshot.bucketFingerprint;
   staleFingerprintPayload.snapshot.totalTokens = 999999;
   const changedResult = store.upsertSnapshotBatch(staleFingerprintPayload);
@@ -1371,6 +1371,65 @@ async function testMysqlFullPriceRecalculationUsesBatches() {
     "full price recalculation must not load or rewrite the full usage table"
   );
   console.log("  testMysqlFullPriceRecalculationUsesBatches passed");
+}
+
+async function testMysqlFullReconcileDailyFallbackDoesNotRequireHourlyDerivedColumn() {
+  const store = new MySqlStore({});
+  const pid = "p_mysql_fr", did = "d_mysql_fr", day = "2026-03-10", providerId = "codex_local";
+  const usage = {
+    usageKey: "u_mysql_fr",
+    day,
+    hour: 0,
+    participantId: pid,
+    deviceId: did,
+    toolCode: "codex",
+    providerId,
+    workdirId: `${pid}:h1`,
+    workdirHash: "h1",
+    workdirDisplayName: "proj",
+    model: "gpt-5",
+    inputTokens: 100,
+    outputTokens: 50,
+    cacheReadTokens: 25,
+    cacheWriteTokens: 25,
+    reasoningTokens: 0,
+    totalTokens: 200,
+    estimatedCostUsd: null,
+    costQuality: "",
+    pricingVersion: "",
+    pricingModel: "",
+    pricingSource: "",
+    sourceQuality: "exact",
+    rawSourceRef: "",
+    providerVersion: "",
+    parserVersion: "",
+    sourceFingerprint: "sf1",
+    uploadedAt: "2026-03-10T00:00:00.000Z"
+  };
+  const fp = computeDailyBucketFingerprint([usage]);
+  const queries = [];
+  store.pool = {
+    async query(sql) {
+      const normalized = String(sql).replace(/\s+/g, " ").trim();
+      queries.push(normalized);
+      assert.equal(/hourlyDerived/i.test(normalized), false, "MySQL full reconcile must not reference JSON-only hourlyDerived");
+      if (normalized.includes("FROM usage_sync_buckets ")) return [[]];
+      if (normalized.includes("FROM usage_daily")) return [[usage]];
+      if (normalized.includes("FROM app_meta")) return [[{ metaValue: "srv_test" }]];
+      throw new Error(`unexpected query: ${normalized}`);
+    }
+  };
+
+  const result = await store.compareSyncState({
+    participantId: pid,
+    deviceId: did,
+    mode: "full_reconcile",
+    buckets: [{ day, providerId, fingerprint: fp, granularity: "daily" }]
+  });
+  assert.equal(result.matched.length, 1);
+  assert.equal(result.missing.length, 0);
+  assert.equal(queries.some((sql) => sql.includes("FROM usage_daily")), true);
+  console.log("  testMysqlFullReconcileDailyFallbackDoesNotRequireHourlyDerivedColumn passed");
 }
 
 function testBucketMetadataSchema() {
@@ -2799,6 +2858,249 @@ async function testUsageBatchUploadEndpoint() {
   } finally { await cleanup(); }
 }
 
+async function testSyncStateEndpointLimitAndRecentSignatureCompatibility() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const participantId = "p_sync_state_http";
+    const deviceId = "d_sync_state_http";
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId,
+        deviceId,
+        nickname: "sync-state-http",
+        identityPublicKey: identity.identityPublicKey,
+        os: "test",
+        appVersion: "0.1.0"
+      })
+    });
+
+    const recentPayload = {
+      participantId,
+      deviceId,
+      clientGeneratedAt: "2026-05-25T00:00:00.000Z",
+      buckets: [{ day: "2026-05-25", hour: 0, providerId: "codex_local", fingerprint: "fp" }]
+    };
+    const recentRes = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...recentPayload, signature: signPayload(identity.identityPrivateKey, recentPayload) })
+    });
+    assert.equal(recentRes.status, 200, "recent sync-state payloads signed without mode must remain compatible");
+    const recentBody = await recentRes.json();
+    assert.match(recentBody.serverFingerprint || "", /^srv_/, "sync-state should expose stable server fingerprint");
+
+    const explicitRecentPayload = { ...recentPayload, mode: "recent" };
+    const explicitRecentRes = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...explicitRecentPayload,
+        signature: signPayload(identity.identityPrivateKey, explicitRecentPayload)
+      })
+    });
+    assert.equal(explicitRecentRes.status, 200, "recent sync-state payloads signed with explicit mode must be accepted");
+
+    const emptyProbePayload = {
+      participantId,
+      deviceId,
+      clientGeneratedAt: "2026-05-25T00:00:01.000Z",
+      buckets: []
+    };
+    const emptyProbeRes = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...emptyProbePayload,
+        signature: signPayload(identity.identityPrivateKey, emptyProbePayload)
+      })
+    });
+    assert.equal(emptyProbeRes.status, 200, "empty sync-state probes should be allowed for server identity checks");
+    const emptyProbeBody = await emptyProbeRes.json();
+    assert.equal(emptyProbeBody.serverFingerprint, recentBody.serverFingerprint, "server fingerprint should be stable across probes");
+
+    const malformedBucketsPayload = {
+      participantId,
+      deviceId,
+      clientGeneratedAt: "2026-05-25T00:00:01.000Z",
+      buckets: {}
+    };
+    const malformedBucketsRes = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...malformedBucketsPayload,
+        signature: signPayload(identity.identityPrivateKey, malformedBucketsPayload)
+      })
+    });
+    assert.equal(malformedBucketsRes.status, 400, "sync-state should reject non-array buckets with a controlled error");
+
+    const fullPayload = {
+      participantId,
+      deviceId,
+      clientGeneratedAt: "2026-05-25T00:00:00.000Z",
+      mode: "full_reconcile",
+      buckets: Array.from({ length: 251 }, (_, i) => ({
+        day: "2026-05-25",
+        hour: i % 24,
+        providerId: "codex_local",
+        fingerprint: `fp_${i}`,
+        granularity: "hourly"
+      }))
+    };
+    const fullRes = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...fullPayload, signature: signPayload(identity.identityPrivateKey, fullPayload) })
+    });
+    assert.equal(fullRes.status, 400, "full reconcile endpoint must enforce bucket limit");
+
+    const recentTooLargePayload = {
+      participantId,
+      deviceId,
+      clientGeneratedAt: "2026-05-25T00:00:00.000Z",
+      buckets: Array.from({ length: 251 }, (_, i) => ({
+        day: "2026-05-25",
+        hour: i % 24,
+        providerId: "codex_local",
+        fingerprint: `fp_recent_${i}`
+      }))
+    };
+    const recentTooLargeRes = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...recentTooLargePayload,
+        signature: signPayload(identity.identityPrivateKey, recentTooLargePayload)
+      })
+    });
+    assert.equal(recentTooLargeRes.status, 400, "recent sync-state endpoint must enforce bucket limit");
+    console.log("  testSyncStateEndpointLimitAndRecentSignatureCompatibility passed");
+  } finally { await cleanup(); }
+}
+
+async function testFullReconcileHttpCompareRepairFlow() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    const day = "2026-02-10";
+    const hour = 9;
+    const providerId = "codex_local";
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId,
+        deviceId,
+        nickname: "full-reconcile-http",
+        identityPublicKey: identity.identityPublicKey,
+        os: "test",
+        appVersion: APP_VERSION
+      })
+    });
+
+    const upload = makeHourlySnapshotPayload([
+      makeSnapshotItem({
+        day,
+        hour,
+        providerId,
+        workdirHash: "fr_http_h1",
+        sourceFingerprint: "fr_http_sf1",
+        inputTokens: 120,
+        outputTokens: 30,
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+        totalTokens: 165
+      })
+    ], identity.participantId, deviceId, { day, hour, providerId });
+    const bucket = {
+      day,
+      hour,
+      providerId,
+      granularity: "hourly",
+      fingerprint: upload.snapshot.bucketFingerprint,
+      rowCount: upload.snapshot.rowCount,
+      totalTokens: upload.snapshot.totalTokens
+    };
+    const comparePayload = {
+      participantId: identity.participantId,
+      deviceId,
+      clientGeneratedAt: "2026-05-25T00:00:00.000Z",
+      mode: "full_reconcile",
+      buckets: [bucket]
+    };
+
+    const beforeCompare = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...comparePayload,
+        signature: signPayload(identity.identityPrivateKey, comparePayload)
+      })
+    });
+    assert.equal(beforeCompare.status, 200);
+    const beforeBody = await beforeCompare.json();
+    assert.equal(beforeBody.missing.length, 1, "server should report missing historical bucket before repair upload");
+    assert.equal(beforeBody.matched.length, 0);
+
+    const repairPayload = {
+      participantId: identity.participantId,
+      deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      batches: [{ snapshot: upload.snapshot, items: upload.items }]
+    };
+    const repairRes = await fetch(`${baseUrl}/api/usage/daily-batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...repairPayload,
+        signature: signPayload(identity.identityPrivateKey, repairPayload)
+      })
+    });
+    assert.equal(repairRes.status, 200);
+    const repairBody = await repairRes.json();
+    assert.equal(repairBody.accepted, 1);
+    assert.equal(repairBody.rejected, 0);
+
+    const afterCompare = await fetch(`${baseUrl}/api/usage/sync-state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...comparePayload,
+        signature: signPayload(identity.identityPrivateKey, comparePayload)
+      })
+    });
+    assert.equal(afterCompare.status, 200);
+    const afterBody = await afterCompare.json();
+    assert.equal(afterBody.matched.length, 1, "repaired historical bucket should match on the next full compare");
+    assert.equal(afterBody.missing.length, 0);
+    assert.equal(afterBody.different.length, 0);
+
+    const duplicateRes = await fetch(`${baseUrl}/api/usage/daily-batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...repairPayload,
+        signature: signPayload(identity.identityPrivateKey, repairPayload)
+      })
+    });
+    assert.equal(duplicateRes.status, 200);
+    const duplicateBody = await duplicateRes.json();
+    assert.equal(duplicateBody.noOpBucketCount, 1, "repair upload should be idempotent");
+
+    const boardRes = await fetch(`${baseUrl}/api/leaderboard?range=custom&start=${day}&end=${day}`);
+    assert.equal(boardRes.status, 200);
+    const board = await boardRes.json();
+    assert.equal(board.items.length, 1);
+    assert.equal(board.items[0].totalTokens, 165, "repair retry must not inflate public totals");
+
+    console.log("  testFullReconcileHttpCompareRepairFlow passed");
+  } finally { await cleanup(); }
+}
+
 async function testUsageUploadRejectsUnregistered() {
   const { baseUrl, cleanup } = await createTestServer();
   try {
@@ -3276,6 +3578,8 @@ function testDesktopRendererExports() {
   }
   assert.match(renderer, /cursorAuthStatusLabel/);
   assert.match(renderer, /data-disconnect-cursor-account/);
+  assert.match(renderer, /fullReconcileStatus/);
+  assert.match(renderer, /diag-background-sync/);
   console.log("  testDesktopRendererExports passed");
 }
 
@@ -3286,6 +3590,7 @@ function testTauriBridgeExports() {
   assert.match(bridge, /cursor:connect:start/);
   assert.match(bridge, /cursor:connect:poll/);
   assert.match(bridge, /cursor:connect:cancel/);
+  assert.match(bridge, /usage:full-reconcile-status/);
   console.log("  testTauriBridgeExports passed");
 }
 
@@ -3548,6 +3853,8 @@ await testHealthEndpoint();
 await testDeviceRegistrationEndpoint();
 await testUsageUploadEndpointSignatureVerification();
 await testUsageBatchUploadEndpoint();
+await testSyncStateEndpointLimitAndRecentSignatureCompatibility();
+await testFullReconcileHttpCompareRepairFlow();
 await testUsageUploadRejectsUnregistered();
 await testAdminAuthEnforcement();
 await testAdminAuthDisabledWhenNotConfigured();
@@ -3876,6 +4183,182 @@ function testDeleteParticipantDataClearsHourlySyncState() {
 
   if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
   console.log("  testDeleteParticipantDataClearsHourlySyncState passed");
+}
+
+function testFullReconcileModeNoCutoff() {
+  const tmp = path.join(os.tmpdir(), `test-full-reconcile-no-cutoff-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_fr", did = "d_fr";
+  const oldDay = "2026-01-01", providerId = "codex_local";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "FR", identityPublicKey: "pk_fr", os: "test", appVersion: "0.1.0" });
+
+  // Upload an old hourly bucket
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", totalTokens: 100, providerId, day: oldDay, hour: 8 })
+  ], pid, did, { providerId, day: oldDay, hour: 8 }));
+
+  const fp = store.getHourlyBucketSync(pid, did, oldDay, 8, providerId).bucketFingerprint;
+
+  // recent mode would skip this old bucket; full_reconcile should not
+  const recentResult = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day: oldDay, hour: 8, providerId, fingerprint: fp, granularity: "hourly" }],
+    mode: "recent"
+  });
+  assert.equal(recentResult.matched.length, 0, "recent mode should skip old bucket");
+
+  const fullResult = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day: oldDay, hour: 8, providerId, fingerprint: fp, granularity: "hourly" }],
+    mode: "full_reconcile"
+  });
+  assert.equal(fullResult.matched.length, 1, "full_reconcile should not skip old bucket");
+  assert.equal(fullResult.checkedBucketCount, 1, "should report checkedBucketCount");
+  assert.equal(fullResult.unknownLegacy.length, 0, "hourly bucket should not be unknownLegacy");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testFullReconcileModeNoCutoff passed");
+}
+
+function testFullReconcileDailyGranularity() {
+  const tmp = path.join(os.tmpdir(), `test-full-reconcile-daily-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_frd", did = "d_frd";
+  const day = "2026-03-10", providerId = "codex_local";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "FRD", identityPublicKey: "pk_frd", os: "test", appVersion: "0.1.0" });
+
+  // Upload a daily bucket using legacy protocol
+  store.upsertUsageBatch(makeSnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", totalTokens: 200, providerId, day })
+  ], pid, did, { providerId, day }));
+
+  const fp = store.getBucketSync(pid, did, day, providerId).bucketFingerprint;
+
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day, providerId, fingerprint: fp, granularity: "daily" }],
+    mode: "full_reconcile"
+  });
+  assert.equal(result.matched.length, 1, "daily bucket should match via daily sync metadata");
+  assert.equal(result.missing.length, 0);
+
+  // A daily bucket should NOT match hourly metadata
+  const hourlyOnlyResult = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day, hour: 0, providerId, fingerprint: fp, granularity: "hourly" }],
+    mode: "full_reconcile"
+  });
+  assert.equal(hourlyOnlyResult.matched.length, 0, "hourly query should not match daily-only data");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testFullReconcileDailyGranularity passed");
+}
+
+function testFullReconcileDailyFallbackMatchesHourlyDerivedUsageDaily() {
+  const tmp = path.join(os.tmpdir(), `test-full-reconcile-daily-derived-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_frdd", did = "d_frdd";
+  const day = "2026-03-10", providerId = "codex_local";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "FRDD", identityPublicKey: "pk_frdd", os: "test", appVersion: "0.1.0" });
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", totalTokens: 200, providerId, day, hour: 8 })
+  ], pid, did, { providerId, day, hour: 8 }));
+
+  store.db.usageSyncBuckets = {};
+  const dailyRows = Object.values(store.db.usageDaily).filter((item) => {
+    return item.participantId === pid && item.deviceId === did && item.day === day && item.providerId === providerId;
+  });
+  assert.equal(dailyRows.some((item) => item.hourlyDerived), true, "test setup should use hourly-derived daily facts");
+  const fp = computeDailyBucketFingerprint(dailyRows);
+
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day, providerId, fingerprint: fp, granularity: "daily" }],
+    mode: "full_reconcile"
+  });
+  assert.equal(result.matched.length, 1, "daily fallback should use usage_daily facts even when rows are hourly-derived");
+  assert.equal(result.missing.length, 0);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testFullReconcileDailyFallbackMatchesHourlyDerivedUsageDaily passed");
+}
+
+function testFullReconcileDailyFallbackIgnoresHour() {
+  const tmp = path.join(os.tmpdir(), `test-full-reconcile-daily-ignore-hour-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_frdi", did = "d_frdi";
+  const day = "2026-03-10", providerId = "codex_local";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "FRDI", identityPublicKey: "pk_frdi", os: "test", appVersion: "0.1.0" });
+  store.upsertUsageBatch(makeSnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", inputTokens: 50, outputTokens: 50, totalTokens: 100, providerId, day, hour: 8 })
+  ], pid, did, { providerId, day }));
+
+  store.db.usageSyncBuckets = {};
+  const localRowsWithHour = [
+    makeSnapshotItem({ workdirHash: "h1", inputTokens: 50, outputTokens: 50, totalTokens: 100, providerId, day, hour: 8 })
+  ];
+  const fp = computeDailyBucketFingerprint(localRowsWithHour);
+
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day, providerId, fingerprint: fp, granularity: "daily" }],
+    mode: "full_reconcile"
+  });
+  assert.equal(result.matched.length, 1, "daily fallback should ignore hour when metadata is missing");
+  assert.equal(result.different.length, 0);
+  assert.equal(result.missing.length, 0);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testFullReconcileDailyFallbackIgnoresHour passed");
+}
+
+function testFullReconcileUnknownLegacy() {
+  const tmp = path.join(os.tmpdir(), `test-full-reconcile-legacy-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_frl", did = "d_frl";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "FRL", identityPublicKey: "pk_frl", os: "test", appVersion: "0.1.0" });
+
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [
+      { day: "2026-03-01", providerId: "codex_local", fingerprint: "fp1", granularity: "unknown_legacy" },
+      { day: "2026-03-01", hour: 5, providerId: "codex_local", fingerprint: "fp2", granularity: "hourly" }
+    ],
+    mode: "full_reconcile"
+  });
+  assert.equal(result.unknownLegacy.length, 1, "unknown_legacy bucket should be reported");
+  assert.equal(result.missing.length, 1, "hourly bucket with no server data should be missing");
+  assert.equal(result.checkedBucketCount, 2);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testFullReconcileUnknownLegacy passed");
+}
+
+function testFullReconcileBucketLimit() {
+  const tmp = path.join(os.tmpdir(), `test-full-reconcile-limit-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_limit", did = "d_limit";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "LIM", identityPublicKey: "pk_limit", os: "test", appVersion: "0.1.0" });
+
+  // Store-level compare does not enforce the HTTP request limit; the route test covers 250.
+  const buckets251 = Array.from({ length: 251 }, (_, i) => ({
+    day: "2026-03-01", hour: i % 24, providerId: "codex_local", fingerprint: `fp_${i}`, granularity: "hourly"
+  }));
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: buckets251,
+    mode: "full_reconcile"
+  });
+  assert.equal(result.checkedBucketCount, 251);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testFullReconcileBucketLimit passed");
 }
 
 // ─── Crypto edge case tests ─────────────────────────────────────────────────
@@ -5357,6 +5840,7 @@ await testMysqlReadPathUsesRequestScopedRows();
 await testMysqlDeleteDeviceDataClearsCloudSyncScopesFromSql();
 await testMysqlModelPriceRecalculationIsModelScoped();
 await testMysqlFullPriceRecalculationUsesBatches();
+await testMysqlFullReconcileDailyFallbackDoesNotRequireHourlyDerivedColumn();
 
 // Cloud provider dedup tests
 testCursorSameAccountDedupAcrossDevices();
@@ -5371,6 +5855,14 @@ testSyncStateReturnsMissingAndMatched();
 testSyncStateFallsBackToHourlyRowsWhenMetadataMissing();
 testSyncStateAfterResetDetectsMissing();
 testDeleteParticipantDataClearsHourlySyncState();
+
+// Full reconcile tests
+testFullReconcileModeNoCutoff();
+testFullReconcileDailyGranularity();
+testFullReconcileDailyFallbackMatchesHourlyDerivedUsageDaily();
+testFullReconcileDailyFallbackIgnoresHour();
+testFullReconcileUnknownLegacy();
+testFullReconcileBucketLimit();
 
 // ─── New edge case tests ────────────────────────────────────────────────────
 

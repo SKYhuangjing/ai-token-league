@@ -3,13 +3,14 @@ import path from "node:path";
 import { newId, normalizeLegacyEd25519Pem, sha256Hex } from "../shared/crypto.js";
 import { compositionRatio, costQualityLabel, dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, priceToPublic } from "../shared/pricing.js";
-import { STORAGE_SCHEMA_VERSION, CLOUD_PROVIDER_IDS, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, cloudNaturalKey, computeBucketFingerprint, displayTotalTokens, hourlyUsageKey, usageKey } from "../shared/schema.js";
+import { STORAGE_SCHEMA_VERSION, CLOUD_PROVIDER_IDS, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, cloudNaturalKey, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens, hourlyUsageKey, usageKey } from "../shared/schema.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 import { currentBusinessDay } from "./day-context.js";
 
 export const DEFAULT_DB = {
   schemaVersion: STORAGE_SCHEMA_VERSION,
+  serverInstanceId: "",
   participants: {},
   devices: {},
   workdirs: {},
@@ -35,6 +36,10 @@ export class Store {
     this.businessDayProvider = options.businessDayProvider || currentBusinessDay;
     this.db = this.persist && fs.existsSync(dbPath) ? JSON.parse(fs.readFileSync(dbPath, "utf8")) : structuredClone(DEFAULT_DB);
     this.db.schemaVersion ||= STORAGE_SCHEMA_VERSION;
+    if (!this.db.serverInstanceId) {
+      this.db.serverInstanceId = newId("srv");
+      this.save();
+    }
     this.db.aggregateCache = {};
     this.db.modelPrices ||= {};
     this.db.modelPriceAliases ||= {};
@@ -76,6 +81,10 @@ export class Store {
 
   currentBusinessDay() {
     return this.businessDayProvider();
+  }
+
+  serverFingerprint() {
+    return this.db.serverInstanceId || "";
   }
 
   registerDevice(input) {
@@ -390,7 +399,7 @@ export class Store {
     const now = new Date().toISOString();
     const snapshot = input.snapshot;
     assertSnapshot(snapshot, input.items, input.participantId, input.deviceId);
-    const serverBucketFingerprint = computeBucketFingerprint(input.items || []);
+    const serverBucketFingerprint = computeDailyBucketFingerprint(input.items || []);
     const serverBucketTotalTokens = (input.items || []).reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
 
     // Idempotency is based on the server-computed bucket fingerprint, not the client-declared value.
@@ -734,19 +743,58 @@ export class Store {
   }
 
   /// Compare local sync-state bucket list against server sync buckets.
-  /// Returns { missing, different, matched } for hourly buckets within a 35-day window.
-  compareSyncState({ participantId, deviceId, buckets }) {
-    const now = new Date();
-    const cutoff = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000);
-    const cutoffDay = utcDateToDay(cutoff);
+  /// mode="recent": hourly buckets within a 35-day window (default).
+  /// mode="full_reconcile": all buckets with granularity routing, no cutoff.
+  compareSyncState({ participantId, deviceId, buckets, mode }) {
+    const isFullReconcile = mode === "full_reconcile";
+    let cutoffDay = "";
+    if (!isFullReconcile) {
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000);
+      cutoffDay = utcDateToDay(cutoff);
+    }
 
     const missing = [];
     const different = [];
     const matched = [];
+    const unknownLegacy = [];
 
     for (const bucket of buckets || []) {
-      if (bucket.day < cutoffDay) continue;
+      if (!isFullReconcile && bucket.day < cutoffDay) continue;
 
+      const granularity = bucket.granularity || (isFullReconcile ? "unknown_legacy" : "hourly");
+
+      if (granularity === "unknown_legacy") {
+        unknownLegacy.push(bucket);
+        continue;
+      }
+
+      if (granularity === "daily") {
+        const serverBucket = this.getBucketSync(
+          participantId, deviceId, bucket.day, bucket.providerId
+        );
+        const usageRows = Object.values(this.db.usageDaily || {}).filter((item) => {
+          return item.participantId === participantId
+            && item.deviceId === deviceId
+            && item.day === bucket.day
+            && item.providerId === bucket.providerId;
+        });
+        const derivedFingerprint = usageRows.length ? computeDailyBucketFingerprint(usageRows) : "";
+
+        if (!serverBucket && !derivedFingerprint) {
+          missing.push(bucket);
+        } else {
+          const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+          if (serverFingerprint !== bucket.fingerprint) {
+            different.push({ ...bucket, serverFingerprint });
+          } else {
+            matched.push(bucket);
+          }
+        }
+        continue;
+      }
+
+      // hourly (default)
       const serverBucket = this.getHourlyBucketSync(
         participantId, deviceId, bucket.day, bucket.hour, bucket.providerId
       );
@@ -771,7 +819,12 @@ export class Store {
       }
     }
 
-    return { missing, different, matched };
+    const result = { missing, different, matched, serverFingerprint: this.serverFingerprint() };
+    if (isFullReconcile) {
+      result.unknownLegacy = unknownLegacy;
+      result.checkedBucketCount = (buckets || []).length;
+    }
+    return result;
   }
 
   deleteHourlyBucketUsageRows(participantId, deviceId, day, hour, providerId, incomingUsageKeys) {

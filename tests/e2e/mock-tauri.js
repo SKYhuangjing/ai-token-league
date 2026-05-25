@@ -418,6 +418,7 @@
     api.appVersion = () => Promise.resolve("0.7.0-test");
     api.getMyIdentity = () => Promise.resolve({ deviceId: "dev_test456", nickname: "Test User", identityMode: "named" });
     api.backgroundStatus = () => Promise.resolve({ running: false });
+    api.fullReconcileStatus = () => Promise.resolve({ status: "idle", running: false });
     api.diagnosticsStatus = () => Promise.resolve({ runtimeLogPath: "/tmp/test.log" });
     api.localBackupStatus = () => Promise.resolve({ enabled: false });
     api.enforcementStatus = () => Promise.resolve({ mandatory: false });

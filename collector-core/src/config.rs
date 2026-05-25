@@ -1084,6 +1084,12 @@ fn set_cursor_account_ignored(config: &mut AppConfig, source_id: &str, ignored: 
 pub struct SyncManifest {
     pub version: u32,
     pub buckets: HashMap<String, serde_json::Value>,
+    #[serde(default, rename = "fullReconcile")]
+    pub full_reconcile: Option<serde_json::Value>,
+    #[serde(default, rename = "verifiedServerFingerprint")]
+    pub verified_server_fingerprint: Option<String>,
+    #[serde(default, flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1123,6 +1129,9 @@ fn load_sync_state_file() -> SyncStateFile {
 
 fn save_sync_state_file(state: &SyncStateFile) {
     let path = sync_state_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(state).unwrap_or_default();
     if fs::write(&tmp, format!("{}\n", json)).is_ok() {
@@ -1136,6 +1145,9 @@ pub fn load_sync_manifest_for(api_base_url: &str) -> SyncManifest {
     state.states.get(&url).cloned().unwrap_or(SyncManifest {
         version: 1,
         buckets: HashMap::new(),
+        full_reconcile: None,
+        verified_server_fingerprint: None,
+        extra: HashMap::new(),
     })
 }
 
@@ -1375,6 +1387,54 @@ mod tests {
         assert!(!sync_state_path().exists());
         assert!(!queue_path().exists());
         assert!(!usage_cache_path().exists());
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(v) = previous_home {
+            std::env::set_var("HOME", v);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[test]
+    fn save_sync_manifest_preserves_full_reconcile_state() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+        ensure_app_dir();
+
+        let api = "https://api.example.com";
+        let mut manifest = SyncManifest {
+            version: 2,
+            buckets: HashMap::new(),
+            full_reconcile: Some(
+                serde_json::json!({"status": "pending", "checkedBucketCount": 12}),
+            ),
+            verified_server_fingerprint: Some("server-1".to_string()),
+            extra: HashMap::new(),
+        };
+        manifest.buckets.insert(
+            "2026-05-25|0|codex_local".to_string(),
+            serde_json::json!({"fingerprint": "fp"}),
+        );
+        save_sync_manifest_for(api, &manifest);
+
+        let mut next = load_sync_manifest_for(api);
+        next.buckets.insert(
+            "2026-05-25|1|codex_local".to_string(),
+            serde_json::json!({"fingerprint": "fp2"}),
+        );
+        save_sync_manifest_for(api, &next);
+
+        let restored = load_sync_manifest_for(api);
+        let full_reconcile = restored.full_reconcile.unwrap();
+        assert_eq!(full_reconcile["status"], "pending");
+        assert_eq!(full_reconcile["checkedBucketCount"], 12);
+        assert_eq!(
+            restored.verified_server_fingerprint.as_deref(),
+            Some("server-1")
+        );
 
         let _ = fs::remove_dir_all(&home);
         if let Some(v) = previous_home {

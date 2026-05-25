@@ -226,6 +226,12 @@ const translations = {
     "desktop.syncStatus.diagnostics.lastAttempt": "最后尝试",
     "desktop.syncStatus.diagnostics.lastSuccess": "最后成功",
     "desktop.syncStatus.diagnostics.queuePending": "待重试队列",
+    "desktop.syncStatus.diagnostics.backgroundSync": "后台数据同步",
+    "desktop.syncStatus.diagnostics.backgroundSync.running": "进行中",
+    "desktop.syncStatus.diagnostics.backgroundSync.pending": "等待继续",
+    "desktop.syncStatus.diagnostics.backgroundSync.failed": "将自动重试",
+    "desktop.syncStatus.diagnostics.backgroundSync.unrecoverable": "本地历史数据缺失",
+    "desktop.syncStatus.diagnostics.backgroundSync.completed": "已完成",
     "desktop.syncStatus.diagnostics.lastError": "最近错误",
 
     // 桌面端 - 今日面板
@@ -972,6 +978,12 @@ const translations = {
     "desktop.syncStatus.diagnostics.lastAttempt": "Last attempt",
     "desktop.syncStatus.diagnostics.lastSuccess": "Last success",
     "desktop.syncStatus.diagnostics.queuePending": "Queue pending",
+    "desktop.syncStatus.diagnostics.backgroundSync": "Background sync",
+    "desktop.syncStatus.diagnostics.backgroundSync.running": "Running",
+    "desktop.syncStatus.diagnostics.backgroundSync.pending": "Waiting to continue",
+    "desktop.syncStatus.diagnostics.backgroundSync.failed": "Will retry automatically",
+    "desktop.syncStatus.diagnostics.backgroundSync.unrecoverable": "Local history is missing",
+    "desktop.syncStatus.diagnostics.backgroundSync.completed": "Completed",
     "desktop.syncStatus.diagnostics.lastError": "Last error",
 
     // Desktop - Today Panel

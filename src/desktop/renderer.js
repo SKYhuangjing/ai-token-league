@@ -2137,14 +2137,27 @@ function renderCloudSyncDetails(syncStatus, config = latestConfig) {
     const diagAttempt = $("#diag-last-attempt");
     const diagSuccess = $("#diag-last-success");
     const diagQueue = $("#diag-queue-pending");
+    const diagBackgroundSync = $("#diag-background-sync");
     const diagError = $("#diag-last-error");
     if (diagUrl) diagUrl.textContent = apiBaseUrl || "-";
     if (diagConn) diagConn.textContent = config?.apiConnection?.status || "-";
     if (diagAttempt) diagAttempt.textContent = syncStatus.lastAttemptAt ? formatDateTime(syncStatus.lastAttemptAt) : "-";
     if (diagSuccess) diagSuccess.textContent = syncStatus.lastSuccessAt ? formatDateTime(syncStatus.lastSuccessAt) : "-";
     if (diagQueue) diagQueue.textContent = syncStatus.queuePending > 0 ? String(syncStatus.queuePending) : "0";
+    if (diagBackgroundSync) diagBackgroundSync.textContent = fullReconcileStatusLabel(latestBackgroundStatus?.fullReconcile);
     if (diagError) diagError.textContent = syncStatus.lastError || "-";
   }
+}
+
+function fullReconcileStatusLabel(status) {
+  if (!status) return "-";
+  const value = String(status.status || "").toLowerCase();
+  if (status.running || value === "running") return t("desktop.syncStatus.diagnostics.backgroundSync.running");
+  if (value === "pending") return t("desktop.syncStatus.diagnostics.backgroundSync.pending");
+  if (value === "failed") return t("desktop.syncStatus.diagnostics.backgroundSync.failed");
+  if (value === "unrecoverable") return t("desktop.syncStatus.diagnostics.backgroundSync.unrecoverable");
+  if (value === "completed") return t("desktop.syncStatus.diagnostics.backgroundSync.completed");
+  return "-";
 }
 
 function renderToday() {
@@ -2655,12 +2668,16 @@ function mergeBackgroundStatusArgs(left = null, right = {}) {
 
 async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = false, skipScanRefresh = false } = {}) {
   const previousCacheScannedAt = latestBackgroundStatus?.cacheScannedAt || "";
-  const [status, freshConfig] = await Promise.all([
+  const fullReconcileLoad = typeof api.fullReconcileStatus === "function"
+    ? api.fullReconcileStatus().catch(() => null)
+    : Promise.resolve(null);
+  const [status, freshConfig, fullReconcileStatus] = await Promise.all([
     api.backgroundStatus(),
-    refreshConfig ? api.getConfig() : Promise.resolve(config)
+    refreshConfig ? api.getConfig() : Promise.resolve(config),
+    fullReconcileLoad
   ]);
   config = refreshConfig ? (freshConfig || config) : (latestConfig || config);
-  latestBackgroundStatus = status;
+  latestBackgroundStatus = fullReconcileStatus ? { ...status, fullReconcile: fullReconcileStatus } : status;
   latestUpdateState = status.updateCheck || latestUpdateState;
   if (status.sourceFingerprint && !latestLocalSnapshot) {
     latestLocalSnapshot = { scannedAt: status.cacheScannedAt || "", sourceFingerprint: status.sourceFingerprint, rowCount: 0, fromCache: true };

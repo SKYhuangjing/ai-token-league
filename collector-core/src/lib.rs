@@ -7,6 +7,7 @@ pub mod local_usage_store;
 pub mod observability;
 pub mod protocol;
 pub mod provider;
+pub mod reconcile;
 pub mod scanner;
 pub mod schema;
 pub mod sync;

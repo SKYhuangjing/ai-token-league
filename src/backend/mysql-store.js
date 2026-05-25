@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import mysql from "mysql2/promise";
 import { Store } from "./store.js";
+import { newId } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
-import { CLOUD_PROVIDER_IDS, computeBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
+import { CLOUD_PROVIDER_IDS, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 const MIGRATION_002_PATH = path.resolve("migrations/002_usage_hourly.sql");
@@ -88,6 +89,18 @@ export class MySqlStore extends Store {
         updatedAt VARCHAR(40) NOT NULL,
         INDEX idx_model_price_alias_target (targetModel)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS app_meta (
+        metaKey VARCHAR(96) PRIMARY KEY,
+        metaValue VARCHAR(512) NOT NULL,
+        updatedAt VARCHAR(40) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+    const now = new Date().toISOString();
+    await this.pool.query(
+      "INSERT IGNORE INTO app_meta (metaKey, metaValue, updatedAt) VALUES (?, ?, ?)",
+      ["serverInstanceId", newId("srv"), now]
     );
     await this.pool.query(
       `CREATE TABLE IF NOT EXISTS usage_sync_buckets (
@@ -609,50 +622,128 @@ export class MySqlStore extends Store {
     return result;
   }
 
-  async compareSyncState({ participantId, deviceId, buckets }) {
-    const now = new Date();
-    const cutoff = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000);
-    const cutoffDay = utcDateToDay(cutoff);
-    const candidates = (buckets || []).filter((bucket) => bucket.day >= cutoffDay);
-    if (!candidates.length) return { missing: [], different: [], matched: [] };
-    const clauses = candidates.map(() => "(day = ? AND hour = ? AND providerId = ?)").join(" OR ");
-    const params = [participantId, deviceId, ...candidates.flatMap((bucket) => [bucket.day, bucket.hour ?? 0, bucket.providerId || ""])];
-    const [rows] = await this.pool.query(
-      `SELECT day, hour, providerId, bucketFingerprint
-       FROM usage_sync_buckets_hourly
-       WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
-      params
-    ).catch(() => [[]]);
-    const byKey = new Map(rows.map((row) => [[toDayString(row.day), Number(row.hour || 0), row.providerId].join("|"), row]));
-    const [usageRows] = await this.pool.query(
-      `SELECT * FROM usage_hourly
-       WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
-      params
-    ).catch(() => [[]]);
-    const usageByKey = new Map();
-    for (const row of usageRows || []) {
-      const usage = usageFromRow(row);
-      const key = [usage.day, Number(usage.hour || 0), usage.providerId].join("|");
-      const rowsForBucket = usageByKey.get(key) || [];
-      rowsForBucket.push(usage);
-      usageByKey.set(key, rowsForBucket);
+  async compareSyncState({ participantId, deviceId, buckets, mode }) {
+    const isFullReconcile = mode === "full_reconcile";
+    let cutoffDay = "";
+    if (!isFullReconcile) {
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000);
+      cutoffDay = utcDateToDay(cutoff);
     }
+
+    const candidates = (buckets || []).filter((bucket) => isFullReconcile || bucket.day >= cutoffDay);
+    if (!candidates.length) {
+      const empty = { missing: [], different: [], matched: [], serverFingerprint: await this.serverFingerprint() };
+      if (isFullReconcile) { empty.unknownLegacy = []; empty.checkedBucketCount = 0; }
+      return empty;
+    }
+
     const missing = [];
     const different = [];
     const matched = [];
+    const unknownLegacy = [];
+
+    // Separate by granularity for full_reconcile
+    const hourlyBuckets = [];
+    const dailyBuckets = [];
     for (const bucket of candidates) {
-      const key = [bucket.day, Number(bucket.hour || 0), bucket.providerId || ""].join("|");
-      const serverBucket = byKey.get(key);
-      const derivedRows = usageByKey.get(key) || [];
-      const derivedFingerprint = derivedRows.length ? computeBucketFingerprint(derivedRows) : "";
-      if (!serverBucket && !derivedFingerprint) missing.push(bucket);
-      else {
-        const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
-        if (serverFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint });
-        else matched.push(bucket);
+      const granularity = bucket.granularity || (isFullReconcile ? "unknown_legacy" : "hourly");
+      if (granularity === "unknown_legacy") { unknownLegacy.push(bucket); continue; }
+      if (granularity === "daily") { dailyBuckets.push(bucket); continue; }
+      hourlyBuckets.push(bucket);
+    }
+
+    // Hourly comparison
+    if (hourlyBuckets.length) {
+      const clauses = hourlyBuckets.map(() => "(day = ? AND hour = ? AND providerId = ?)").join(" OR ");
+      const params = [participantId, deviceId, ...hourlyBuckets.flatMap((b) => [b.day, b.hour ?? 0, b.providerId || ""])];
+      const [rows] = await this.pool.query(
+        `SELECT day, hour, providerId, bucketFingerprint
+         FROM usage_sync_buckets_hourly
+         WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
+        params
+      );
+      const byKey = new Map(rows.map((row) => [[toDayString(row.day), Number(row.hour || 0), row.providerId].join("|"), row]));
+      const [usageRows] = await this.pool.query(
+        `SELECT * FROM usage_hourly
+         WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
+        params
+      );
+      const usageByKey = new Map();
+      for (const row of usageRows || []) {
+        const usage = usageFromRow(row);
+        const key = [usage.day, Number(usage.hour || 0), usage.providerId].join("|");
+        const rowsForBucket = usageByKey.get(key) || [];
+        rowsForBucket.push(usage);
+        usageByKey.set(key, rowsForBucket);
+      }
+      for (const bucket of hourlyBuckets) {
+        const key = [bucket.day, Number(bucket.hour || 0), bucket.providerId || ""].join("|");
+        const serverBucket = byKey.get(key);
+        const derivedRows = usageByKey.get(key) || [];
+        const derivedFingerprint = derivedRows.length ? computeBucketFingerprint(derivedRows) : "";
+        if (!serverBucket && !derivedFingerprint) missing.push(bucket);
+        else {
+          const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+          if (serverFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint });
+          else matched.push(bucket);
+        }
       }
     }
-    return { missing, different, matched };
+
+    // Daily comparison
+    if (dailyBuckets.length) {
+      const clauses = dailyBuckets.map(() => "(day = ? AND providerId = ?)").join(" OR ");
+      const params = [participantId, deviceId, ...dailyBuckets.flatMap((b) => [b.day, b.providerId || ""])];
+      const [rows] = await this.pool.query(
+        `SELECT day, providerId, bucketFingerprint
+         FROM usage_sync_buckets
+         WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
+        params
+      );
+      const byKey = new Map(rows.map((row) => [`${toDayString(row.day)}|${row.providerId}`, row]));
+      const [usageRows] = await this.pool.query(
+        `SELECT * FROM usage_daily
+         WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
+        params
+      );
+      const usageByKey = new Map();
+      for (const row of usageRows || []) {
+        const usage = usageFromRow(row);
+        const key = [usage.day, usage.providerId].join("|");
+        const rowsForBucket = usageByKey.get(key) || [];
+        rowsForBucket.push(usage);
+        usageByKey.set(key, rowsForBucket);
+      }
+      for (const bucket of dailyBuckets) {
+        const key = [bucket.day, bucket.providerId || ""].join("|");
+        const serverBucket = byKey.get(key);
+        const derivedRows = usageByKey.get(key) || [];
+        const derivedFingerprint = derivedRows.length ? computeDailyBucketFingerprint(derivedRows) : "";
+        if (!serverBucket && !derivedFingerprint) missing.push(bucket);
+        else {
+          const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+          if (serverFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint });
+          else matched.push(bucket);
+        }
+      }
+    }
+
+    const result = { missing, different, matched, serverFingerprint: await this.serverFingerprint() };
+    if (isFullReconcile) {
+      result.unknownLegacy = unknownLegacy;
+      result.checkedBucketCount = (buckets || []).length;
+    }
+    return result;
+  }
+
+  async serverFingerprint() {
+    if (!this.pool) return super.serverFingerprint();
+    const [rows] = await this.pool.query(
+      "SELECT metaValue FROM app_meta WHERE metaKey = ?",
+      ["serverInstanceId"]
+    ).catch(() => [[]]);
+    return rows?.[0]?.metaValue || "";
   }
 
   async upsertUsageBatchSet(input) {

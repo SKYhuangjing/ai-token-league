@@ -91,6 +91,45 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
                 .unwrap()
             );
         }
+        crate::Commands::Reconcile { full } => {
+            let cfg = config::load_config().ok_or("Not initialized")?;
+            if cfg.api_base_url.is_empty() {
+                return Err("API base URL not configured".to_string());
+            }
+            if !full {
+                return Err("reconcile requires --full".to_string());
+            }
+            collector_core::reconcile::mark_full_reconcile_pending(
+                &cfg.api_base_url,
+                collector_core::reconcile::FullReconcileTrigger::ApiBaseUrlChanged,
+            );
+            let cache = std::collections::HashMap::new();
+            let result = scanner::scan_usage_async(&cfg, cache).await;
+            let options = collector_core::reconcile::FullReconcileOptions {
+                resume: true,
+                ..Default::default()
+            };
+            let reconcile_result = collector_core::reconcile::full_reconcile_usage(
+                &cfg,
+                &result.items,
+                &cfg.api_base_url,
+                options,
+            )
+            .await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "status": serde_json::to_value(&reconcile_result.status).unwrap(),
+                    "checked": reconcile_result.checked_bucket_count,
+                    "matched": reconcile_result.matched_bucket_count,
+                    "missing": reconcile_result.missing_bucket_count,
+                    "different": reconcile_result.different_bucket_count,
+                    "repaired": reconcile_result.repair_uploaded_bucket_count,
+                    "queued": reconcile_result.queued_bucket_count
+                }))
+                .unwrap()
+            );
+        }
         crate::Commands::ExportIdentity => {
             let cfg = config::load_config().ok_or("Not initialized")?;
             let identity = config::export_identity(&cfg);

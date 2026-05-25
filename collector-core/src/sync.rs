@@ -12,6 +12,8 @@ use std::net::IpAddr;
 const MAX_QUEUE_DRAIN_PER_RUN: usize = 50;
 const MAX_RETRY_DELAY_MINUTES: i64 = 6 * 60;
 const MAX_BATCH_UPLOAD_BUCKETS: usize = 25;
+const SYNC_STATE_BUCKET_LIMIT: usize = 250;
+const RECENT_SYNC_STATE_WINDOW_DAYS: i64 = 35;
 
 /// Result of a sync operation.
 pub struct SyncResult {
@@ -26,6 +28,7 @@ pub struct SyncResult {
     pub queue_attempted: usize,
     pub queue_failed: usize,
     pub new_failed_bucket_count: usize,
+    pub full_reconcile_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,23 +75,23 @@ struct UploadQueueEntry {
 }
 
 #[derive(Debug, Clone)]
-struct FailedUpload {
-    payload: Value,
-    error: String,
+pub struct FailedUpload {
+    pub payload: Value,
+    pub error: String,
 }
 
 #[derive(Debug, Clone)]
-struct PreparedUpload {
-    bucket_key: String,
-    day: String,
-    hour: i64,
-    provider_id: String,
-    fingerprint: String,
-    row_count: usize,
-    total_tokens: i64,
-    snapshot: Value,
-    items: Vec<Value>,
-    body: Value,
+pub struct PreparedUpload {
+    pub bucket_key: String,
+    pub day: String,
+    pub hour: i64,
+    pub provider_id: String,
+    pub fingerprint: String,
+    pub row_count: usize,
+    pub total_tokens: i64,
+    pub snapshot: Value,
+    pub items: Vec<Value>,
+    pub body: Value,
 }
 
 #[derive(Debug, Default)]
@@ -109,6 +112,7 @@ pub async fn sync_usage(
 
     // Load sync manifest for this server URL
     let mut manifest = load_sync_manifest_for(api_base_url);
+    let should_mark_first_server_reconcile = manifest.full_reconcile.is_none() && !items.is_empty();
 
     // Register device before uploading usage. If registration fails, uploading the signed
     // usage facts would fail or become hard to diagnose on the server side.
@@ -118,7 +122,8 @@ pub async fn sync_usage(
     // Drain upload queue
     let queue_drain = drain_upload_queue(&client, &mut manifest, api_base_url).await;
 
-    reconcile_sync_state(&client, config, api_base_url, &mut manifest, &buckets).await;
+    let recent_reconcile =
+        reconcile_sync_state(&client, config, api_base_url, &mut manifest, &buckets).await;
 
     // Upload dirty buckets
     let mut accepted = 0;
@@ -218,6 +223,23 @@ pub async fn sync_usage(
     // Save manifest
     save_sync_manifest_for(api_base_url, &manifest);
 
+    if recent_reconcile.server_fingerprint_changed {
+        crate::reconcile::mark_full_reconcile_pending(
+            api_base_url,
+            crate::reconcile::FullReconcileTrigger::FirstServerIdentity,
+        );
+    } else if should_mark_first_server_reconcile {
+        crate::reconcile::mark_full_reconcile_pending(
+            api_base_url,
+            crate::reconcile::FullReconcileTrigger::FirstServerIdentity,
+        );
+    } else if recent_reconcile.detected_gap {
+        crate::reconcile::mark_full_reconcile_pending(
+            api_base_url,
+            crate::reconcile::FullReconcileTrigger::MissingHistoryDetected,
+        );
+    }
+
     // Enqueue failed buckets
     let queued = !failed_buckets.is_empty();
     if queued {
@@ -248,6 +270,10 @@ pub async fn sync_usage(
         }),
     );
 
+    let reconcile_state = crate::reconcile::load_full_reconcile_state(api_base_url);
+    let full_reconcile_pending =
+        crate::reconcile::full_reconcile_should_auto_run(reconcile_state.status);
+
     Ok(SyncResult {
         accepted,
         rejected,
@@ -260,10 +286,17 @@ pub async fn sync_usage(
         queue_attempted: queue_drain.attempted,
         queue_failed: queue_drain.failed,
         new_failed_bucket_count: failed_buckets.len(),
+        full_reconcile_pending,
     })
 }
 
-async fn upload_prepared_chunk(
+#[derive(Debug, Default)]
+struct SyncStateReconcileOutcome {
+    detected_gap: bool,
+    server_fingerprint_changed: bool,
+}
+
+pub async fn upload_prepared_chunk(
     client: &reqwest::Client,
     config: &AppConfig,
     api_base_url: &str,
@@ -502,6 +535,11 @@ async fn upload_prepared_single(
 }
 
 fn mark_upload_success(manifest: &mut SyncManifest, upload: &PreparedUpload) {
+    let mode = upload
+        .snapshot
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .unwrap_or("device_day_hour_provider");
     update_manifest_bucket(
         manifest,
         &upload.bucket_key,
@@ -511,6 +549,7 @@ fn mark_upload_success(manifest: &mut SyncManifest, upload: &PreparedUpload) {
         &upload.fingerprint,
         upload.row_count,
         upload.total_tokens,
+        mode,
     );
 }
 
@@ -539,10 +578,11 @@ async fn reconcile_sync_state(
     api_base_url: &str,
     manifest: &mut SyncManifest,
     buckets: &[(String, Value)],
-) {
+) -> SyncStateReconcileOutcome {
     let local_buckets = build_sync_state_buckets(manifest, buckets);
-    if local_buckets.is_empty() {
-        return;
+    let should_probe_server = !manifest.buckets.is_empty();
+    if local_buckets.is_empty() && !should_probe_server {
+        return SyncStateReconcileOutcome::default();
     }
     let client_generated_at =
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -570,32 +610,82 @@ async fn reconcile_sync_state(
         .send()
         .await
     else {
-        return;
+        return SyncStateReconcileOutcome::default();
     };
     if !resp.status().is_success() {
-        return;
+        return SyncStateReconcileOutcome::default();
     }
     let Ok(response_body) = resp.json::<Value>().await else {
-        return;
+        return SyncStateReconcileOutcome::default();
     };
+    let detected_gap = sync_state_response_has_gap(&response_body);
+    let server_fingerprint = response_body
+        .get("serverFingerprint")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| v.to_string());
+    let server_fingerprint_changed =
+        reconcile_server_fingerprint_changed(manifest, server_fingerprint.as_deref());
+    if let Some(fingerprint) = server_fingerprint.as_deref() {
+        manifest.verified_server_fingerprint = Some(fingerprint.to_string());
+    }
     if apply_sync_state_response(manifest, &response_body) {
         save_sync_manifest_for(api_base_url, manifest);
+    } else if server_fingerprint.is_some() {
+        save_sync_manifest_for(api_base_url, manifest);
+    }
+    SyncStateReconcileOutcome {
+        detected_gap,
+        server_fingerprint_changed,
     }
 }
 
+fn reconcile_server_fingerprint_changed(
+    manifest: &SyncManifest,
+    server_fingerprint: Option<&str>,
+) -> bool {
+    let Some(server_fingerprint) = server_fingerprint.filter(|v| !v.trim().is_empty()) else {
+        return false;
+    };
+    let Some(verified) = manifest
+        .verified_server_fingerprint
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return false;
+    };
+    verified != server_fingerprint
+}
+
 fn build_sync_state_buckets(manifest: &SyncManifest, buckets: &[(String, Value)]) -> Vec<Value> {
-    buckets
+    let cutoff_day = (chrono::Utc::now() - chrono::Duration::days(RECENT_SYNC_STATE_WINDOW_DAYS))
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut local_buckets = buckets
         .iter()
         .filter_map(|(bucket_key, bucket)| {
+            let day = bucket["day"].as_str().unwrap_or("");
+            if day < cutoff_day.as_str() {
+                return None;
+            }
             let existing = manifest.buckets.get(bucket_key)?;
             let fingerprint = existing.get("fingerprint")?.as_str()?;
-            Some(json!({
-                "day": bucket["day"].as_str().unwrap_or(""),
-                "hour": bucket.get("hour").and_then(|v| v.as_i64()).unwrap_or(0),
-                "providerId": bucket["providerId"].as_str().unwrap_or(""),
-                "fingerprint": fingerprint,
-            }))
+            Some((
+                bucket_key.clone(),
+                json!({
+                    "day": day,
+                    "hour": bucket.get("hour").and_then(|v| v.as_i64()).unwrap_or(0),
+                    "providerId": bucket["providerId"].as_str().unwrap_or(""),
+                    "fingerprint": fingerprint,
+                }),
+            ))
         })
+        .collect::<Vec<_>>();
+    local_buckets.sort_by(|a, b| b.0.cmp(&a.0));
+    local_buckets
+        .into_iter()
+        .take(SYNC_STATE_BUCKET_LIMIT)
+        .map(|(_, bucket)| bucket)
         .collect()
 }
 
@@ -617,6 +707,16 @@ fn apply_sync_state_response(manifest: &mut SyncManifest, response: &Value) -> b
         }
     }
     changed
+}
+
+fn sync_state_response_has_gap(response: &Value) -> bool {
+    ["missing", "different"].iter().any(|key| {
+        response
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|items| !items.is_empty())
+            .unwrap_or(false)
+    })
 }
 
 pub async fn register_device(
@@ -752,7 +852,7 @@ async fn drain_upload_queue(
     }
 }
 
-fn enqueue_failed_buckets(buckets: &[FailedUpload]) {
+pub fn enqueue_failed_buckets(buckets: &[FailedUpload]) {
     let mut queue = read_upload_queue();
     for failed in buckets {
         let payload = &failed.payload;
@@ -912,6 +1012,10 @@ fn update_manifest_from_payload(manifest: &mut SyncManifest, payload: &Value) {
         &fingerprint,
         row_count,
         total_tokens,
+        snapshot
+            .get("mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or("device_day_hour_provider"),
     );
 }
 
@@ -924,13 +1028,21 @@ fn update_manifest_bucket(
     fingerprint: &str,
     row_count: usize,
     total_tokens: i64,
+    mode: &str,
 ) {
+    let granularity = if mode == "device_day_provider" {
+        "daily"
+    } else {
+        "hourly"
+    };
     manifest.buckets.insert(
         bucket_key.to_string(),
         json!({
             "day": day,
             "hour": hour,
             "providerId": provider_id,
+            "mode": mode,
+            "granularity": granularity,
             "fingerprint": fingerprint,
             "rowCount": row_count,
             "totalTokens": total_tokens,
@@ -1125,6 +1237,9 @@ mod tests {
         let mut manifest = SyncManifest {
             version: 1,
             buckets: HashMap::new(),
+            full_reconcile: None,
+            verified_server_fingerprint: None,
+            extra: HashMap::new(),
         };
         update_manifest_from_payload(&mut manifest, &hourly_payload("2026-05-16T00:00:00.000Z"));
         let row = manifest.buckets.get("2026-05-16|8|codex_local").unwrap();
@@ -1138,6 +1253,9 @@ mod tests {
         let mut manifest = SyncManifest {
             version: 1,
             buckets: HashMap::new(),
+            full_reconcile: None,
+            verified_server_fingerprint: None,
+            extra: HashMap::new(),
         };
         let chunk = vec![
             prepared_upload("2026-05-16|8|codex_local", 1),
@@ -1181,6 +1299,9 @@ mod tests {
         let mut manifest = SyncManifest {
             version: 1,
             buckets: HashMap::new(),
+            full_reconcile: None,
+            verified_server_fingerprint: None,
+            extra: HashMap::new(),
         };
         let chunk = vec![prepared_upload("2026-05-16|8|codex_local", 1)];
         let mut accepted = 0;
@@ -1234,6 +1355,9 @@ mod tests {
                     json!({"fingerprint": "fp3"}),
                 ),
             ]),
+            full_reconcile: None,
+            verified_server_fingerprint: None,
+            extra: HashMap::new(),
         };
         let changed = apply_sync_state_response(
             &mut manifest,
@@ -1251,6 +1375,80 @@ mod tests {
         assert!(manifest
             .buckets
             .contains_key("2026-05-16|10|claude_code_local"));
+    }
+
+    #[test]
+    fn build_sync_state_buckets_caps_recent_request_size() {
+        let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mut manifest = SyncManifest {
+            version: 1,
+            buckets: HashMap::new(),
+            full_reconcile: None,
+            verified_server_fingerprint: None,
+            extra: HashMap::new(),
+        };
+        let mut buckets = Vec::new();
+        for index in 0..300 {
+            let key = format!("{}|{}|codex_local_{}", day, index % 24, index);
+            manifest
+                .buckets
+                .insert(key.clone(), json!({"fingerprint": format!("fp_{}", index)}));
+            buckets.push((
+                key,
+                json!({
+                    "day": day,
+                    "hour": index % 24,
+                    "providerId": format!("codex_local_{}", index),
+                }),
+            ));
+        }
+
+        let local_buckets = build_sync_state_buckets(&manifest, &buckets);
+        assert_eq!(local_buckets.len(), SYNC_STATE_BUCKET_LIMIT);
+    }
+
+    #[test]
+    fn build_sync_state_buckets_skips_old_recent_window_entries() {
+        let old_day = (chrono::Utc::now()
+            - chrono::Duration::days(RECENT_SYNC_STATE_WINDOW_DAYS + 1))
+        .format("%Y-%m-%d")
+        .to_string();
+        let key = format!("{}|8|codex_local", old_day);
+        let manifest = SyncManifest {
+            version: 1,
+            buckets: HashMap::from([(key.clone(), json!({"fingerprint": "fp_old"}))]),
+            full_reconcile: None,
+            verified_server_fingerprint: None,
+            extra: HashMap::new(),
+        };
+        let buckets = vec![(
+            key,
+            json!({"day": old_day, "hour": 8, "providerId": "codex_local"}),
+        )];
+
+        let local_buckets = build_sync_state_buckets(&manifest, &buckets);
+        assert!(local_buckets.is_empty());
+    }
+
+    #[test]
+    fn server_fingerprint_change_detects_rebuilt_same_url_server() {
+        let manifest = SyncManifest {
+            version: 1,
+            buckets: HashMap::new(),
+            full_reconcile: None,
+            verified_server_fingerprint: Some("srv_old".to_string()),
+            extra: HashMap::new(),
+        };
+
+        assert!(reconcile_server_fingerprint_changed(
+            &manifest,
+            Some("srv_new")
+        ));
+        assert!(!reconcile_server_fingerprint_changed(
+            &manifest,
+            Some("srv_old")
+        ));
+        assert!(!reconcile_server_fingerprint_changed(&manifest, None));
     }
 
     #[test]

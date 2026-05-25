@@ -283,7 +283,9 @@ mod tests {
     fn test_generate_code_verifier_format() {
         let v = generate_code_verifier();
         assert_eq!(v.len(), 43, "base64url(32 bytes) = 43 chars");
-        assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(v
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
@@ -496,7 +498,10 @@ mod tests {
             ignored: false,
             added_at: None,
         };
-        assert!(token_needs_refresh(&account), "bad expiry string → needs refresh");
+        assert!(
+            token_needs_refresh(&account),
+            "bad expiry string → needs refresh"
+        );
     }
 
     #[test]
@@ -516,6 +521,9 @@ mod tests {
             ignored: false,
             added_at: None,
         };
-        assert!(token_needs_refresh(&account), "within 5 min threshold → needs refresh");
+        assert!(
+            token_needs_refresh(&account),
+            "within 5 min threshold → needs refresh"
+        );
     }
 }

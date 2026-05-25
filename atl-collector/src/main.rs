@@ -37,6 +37,11 @@ enum Commands {
         #[arg(long)]
         full_resync: bool,
     },
+    /// Run full reconcile against server (diagnostic)
+    Reconcile {
+        #[arg(long)]
+        full: bool,
+    },
     /// Register device with server
     Register,
     /// Export identity to file

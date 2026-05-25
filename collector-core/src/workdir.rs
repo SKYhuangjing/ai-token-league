@@ -119,7 +119,10 @@ mod tests {
         let dir = std::env::temp_dir().join("AtlWorkdirSlashTest");
         let _ = std::fs::create_dir_all(&dir);
         let normalized = normalize_path_for_hash(&dir.to_string_lossy());
-        assert!(!normalized.contains('\\'), "backslashes should be converted");
+        assert!(
+            !normalized.contains('\\'),
+            "backslashes should be converted"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -150,7 +153,10 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let r1 = workdir_from_candidate(&dir.to_string_lossy(), "p_x");
         let r2 = workdir_from_candidate(&dir.to_string_lossy(), "p_x");
-        assert_eq!(r1.workdir_hash, r2.workdir_hash, "same path+participant must produce same hash");
+        assert_eq!(
+            r1.workdir_hash, r2.workdir_hash,
+            "same path+participant must produce same hash"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -61,18 +61,21 @@ impl SidecarProcess {
 
         let mut buf = String::new();
         let mut reader = std::io::BufReader::new(&mut self.stdout);
-        reader
-            .read_line(&mut buf)
-            .expect("failed to read response");
+        reader.read_line(&mut buf).expect("failed to read response");
         let trimmed = buf.trim();
         assert!(!trimmed.is_empty(), "got empty response from sidecar");
-        serde_json::from_str(trimmed).unwrap_or_else(|e| {
-            panic!("failed to parse sidecar response: {}\nraw: {}", e, trimmed)
-        })
+        serde_json::from_str(trimmed)
+            .unwrap_or_else(|e| panic!("failed to parse sidecar response: {}\nraw: {}", e, trimmed))
     }
 
     fn req_id(&self) -> String {
-        format!("req-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())
+        format!(
+            "req-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
     }
 
     fn send_command(&mut self, command: &str, args: serde_json::Value) -> SidecarResponse {
@@ -135,7 +138,10 @@ fn sidecar_config_init_and_get() {
     // Private key should be present (not sanitized in this test env)
     // Actually, sidecar sanitizes config output — verify that
     // The sidecar sanitize_config_value strips private key
-    assert!(data2.get("identityPrivateKey").is_none(), "config:get should strip private key");
+    assert!(
+        data2.get("identityPrivateKey").is_none(),
+        "config:get should strip private key"
+    );
 
     println!("✓ sidecar config init + get works");
 }
@@ -210,7 +216,10 @@ fn sidecar_add_provider_root_and_scan() {
     assert!(resp.ok, "trend should succeed: {:?}", resp.error);
 
     // Query workdirs
-    let resp = sidecar.send_command("usage:workdirs", serde_json::json!({"range": "all", "limit": 10}));
+    let resp = sidecar.send_command(
+        "usage:workdirs",
+        serde_json::json!({"range": "all", "limit": 10}),
+    );
     assert!(resp.ok, "workdirs should succeed: {:?}", resp.error);
 
     // Query detail window
@@ -266,7 +275,10 @@ fn sidecar_multiple_commands_sequence() {
 
     // Simulate a full user session: init → get → add roots → scan → query
     let commands = vec![
-        ("config:init", serde_json::json!({"nickname": "session-test"})),
+        (
+            "config:init",
+            serde_json::json!({"nickname": "session-test"}),
+        ),
         ("config:get", serde_json::json!({})),
         ("app:version", serde_json::json!({})),
         ("ping", serde_json::json!({})),
@@ -274,7 +286,11 @@ fn sidecar_multiple_commands_sequence() {
 
     for (cmd, args) in commands {
         let resp = sidecar.send_command(cmd, args);
-        assert!(resp.ok, "command '{}' should succeed: {:?}", cmd, resp.error);
+        assert!(
+            resp.ok,
+            "command '{}' should succeed: {:?}",
+            cmd, resp.error
+        );
     }
 
     println!("✓ sidecar multi-command session works");
@@ -283,14 +299,20 @@ fn sidecar_multiple_commands_sequence() {
 #[test]
 fn sidecar_providers_health() {
     let mut sidecar = SidecarProcess::new();
-    sidecar.send_command("config:init", serde_json::json!({"nickname": "health-test"}));
+    sidecar.send_command(
+        "config:init",
+        serde_json::json!({"nickname": "health-test"}),
+    );
 
     let resp = sidecar.send_command("providers:health", serde_json::json!({}));
     assert!(resp.ok, "providers:health should succeed: {:?}", resp.error);
     let data = resp.data.unwrap();
     assert!(data.is_array(), "health should return array");
     // At least detect local providers
-    assert!(data.as_array().unwrap().len() >= 1, "should have at least 1 provider");
+    assert!(
+        data.as_array().unwrap().len() >= 1,
+        "should have at least 1 provider"
+    );
 
     println!("✓ sidecar providers:health works");
 }
@@ -298,7 +320,10 @@ fn sidecar_providers_health() {
 #[test]
 fn sidecar_sync_without_api_url_fails_gracefully() {
     let mut sidecar = SidecarProcess::new();
-    sidecar.send_command("config:init", serde_json::json!({"nickname": "no-api", "apiBaseUrl": ""}));
+    sidecar.send_command(
+        "config:init",
+        serde_json::json!({"nickname": "no-api", "apiBaseUrl": ""}),
+    );
 
     let resp = sidecar.send_command("usage:sync", serde_json::json!({}));
     assert!(!resp.ok, "sync without API URL should fail");

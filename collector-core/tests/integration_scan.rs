@@ -47,7 +47,10 @@ impl TestEnv {
             true,
         );
         let codex_path = samples.join("codex").to_string_lossy().to_string();
-        let claude_path = samples.join("claude/projects").to_string_lossy().to_string();
+        let claude_path = samples
+            .join("claude/projects")
+            .to_string_lossy()
+            .to_string();
         let cfg = config::add_provider_root("codex_local", &codex_path, &cfg);
         config::add_provider_root("claude_code_local", &claude_path, &cfg)
     }
@@ -78,15 +81,34 @@ fn scenario_fresh_install_first_scan() {
     assert_eq!(cfg.nickname, "integration-tester");
 
     let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
-    assert!(result.items.len() >= 2, "should find codex + claude items, got {}", result.items.len());
+    assert!(
+        result.items.len() >= 2,
+        "should find codex + claude items, got {}",
+        result.items.len()
+    );
 
-    let codex: Vec<_> = result.items.iter().filter(|i| i["toolCode"] == "codex").collect();
-    let claude: Vec<_> = result.items.iter().filter(|i| i["toolCode"] == "claude_code").collect();
+    let codex: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "codex")
+        .collect();
+    let claude: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "claude_code")
+        .collect();
     assert!(!codex.is_empty());
     assert!(!claude.is_empty());
 
-    let codex_total: i64 = codex.iter().map(|i| i["totalTokens"].as_i64().unwrap_or(0)).sum();
-    assert!(codex_total > 0, "codex should have positive tokens, got {}", codex_total);
+    let codex_total: i64 = codex
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert!(
+        codex_total > 0,
+        "codex should have positive tokens, got {}",
+        codex_total
+    );
 
     let health = scanner::provider_health(&cfg);
     assert!(health.len() >= 2);
@@ -106,7 +128,9 @@ fn scenario_scan_store_query_roundtrip() {
 
     let db_path = config::local_usage_db_path();
     let mut store = LocalUsageStore::open(db_path).unwrap();
-    store.replace_usage_facts(&result.items, "integration-test").unwrap();
+    store
+        .replace_usage_facts(&result.items, "integration-test")
+        .unwrap();
 
     let summary = store.summary("all").unwrap();
     assert!(summary["totals"]["totalTokens"].as_i64().unwrap_or(0) > 0);
@@ -137,7 +161,9 @@ fn scenario_incremental_scan_with_cache() {
     let source_index = result.source_index.clone();
 
     let mut cache = source_index;
-    let result2 = run_async(scanner::scan_usage_async_with_source_cache(&cfg, &mut cache));
+    let result2 = run_async(scanner::scan_usage_async_with_source_cache(
+        &cfg, &mut cache,
+    ));
     assert_eq!(result2.items.len(), result.items.len());
 
     // Source cache should preserve all fingerprints from the first scan
@@ -158,8 +184,14 @@ fn scenario_provider_disabled() {
     cfg.provider_enabled.insert("codex_local".into(), false);
 
     let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
-    assert!(result.items.iter().all(|i| i["providerId"] != "codex_local"));
-    assert!(result.items.iter().any(|i| i["providerId"] == "claude_code_local"));
+    assert!(result
+        .items
+        .iter()
+        .all(|i| i["providerId"] != "codex_local"));
+    assert!(result
+        .items
+        .iter()
+        .any(|i| i["providerId"] == "claude_code_local"));
 }
 
 // ── Scenario 5: Config export is safe ──
@@ -209,8 +241,15 @@ fn scenario_backup_restore() {
     let backup = collector_core::local_backup::export_local_backup();
     assert!(backup.is_ok(), "backup should succeed: {:?}", backup);
     let backup = backup.unwrap();
-    assert!(backup["entries"].is_array(), "backup should have entries, got: {:?}", backup);
-    assert!(backup["backupVersion"].is_number(), "backup should have version");
+    assert!(
+        backup["entries"].is_array(),
+        "backup should have entries, got: {:?}",
+        backup
+    );
+    assert!(
+        backup["backupVersion"].is_number(),
+        "backup should have version"
+    );
 
     // Reset
     config::reset_local_data();
@@ -229,7 +268,10 @@ fn scenario_backup_restore() {
 fn scenario_multi_day_range_queries() {
     let db_path = std::env::temp_dir().join(format!(
         "atl-range-{}.sqlite3",
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     let mut store = LocalUsageStore::open(db_path.clone()).unwrap();
 
@@ -242,10 +284,16 @@ fn scenario_multi_day_range_queries() {
     store.replace_usage_facts(&items, "test").unwrap();
 
     // Single day
-    assert_eq!(store.summary("2026-05-10..2026-05-10").unwrap()["totals"]["totalTokens"], 300);
+    assert_eq!(
+        store.summary("2026-05-10..2026-05-10").unwrap()["totals"]["totalTokens"],
+        300
+    );
 
     // All 3 days
-    assert_eq!(store.summary("2026-05-10..2026-05-12").unwrap()["totals"]["totalTokens"], 1000);
+    assert_eq!(
+        store.summary("2026-05-10..2026-05-12").unwrap()["totals"]["totalTokens"],
+        1000
+    );
 
     // Trend by day
     let trend = store.trend("2026-05-10..2026-05-12", "day").unwrap();
@@ -295,14 +343,25 @@ fn scenario_crypto_identity_cross_validation() {
     let payload = serde_json::json!({"pid": identity.participant_id, "items": [{"tokens": 1000}]});
     let sig = crypto::sign_payload(&identity.identity_private_key, &payload);
 
-    assert!(crypto::verify_payload(&identity.identity_public_key, &payload, &sig));
+    assert!(crypto::verify_payload(
+        &identity.identity_public_key,
+        &payload,
+        &sig
+    ));
 
     let mut tampered = payload.clone();
     tampered["items"][0]["tokens"] = serde_json::json!(9999);
-    assert!(!crypto::verify_payload(&identity.identity_public_key, &tampered, &sig));
+    assert!(!crypto::verify_payload(
+        &identity.identity_public_key,
+        &tampered,
+        &sig
+    ));
 
     // Canonical JSON determinism
-    assert_eq!(crypto::canonical_json(&payload), crypto::canonical_json(&payload));
+    assert_eq!(
+        crypto::canonical_json(&payload),
+        crypto::canonical_json(&payload)
+    );
 }
 
 // ── Scenario 10: Workdir hash stability ──
@@ -339,11 +398,15 @@ fn scenario_runtime_log_lifecycle() {
     let _env = TestEnv::new();
 
     collector_core::observability::append_runtime_event(
-        "sidecar", "command_start", "info",
+        "sidecar",
+        "command_start",
+        "info",
         serde_json::json!({"command": "usage:scan"}),
     );
     collector_core::observability::append_runtime_event(
-        "sidecar", "command_error", "error",
+        "sidecar",
+        "command_error",
+        "error",
         serde_json::json!({"command": "usage:sync", "error": "timeout"}),
     );
 
@@ -412,7 +475,14 @@ impl Drop for SaveHome {
     }
 }
 
-fn make_item(day: &str, hour: i64, tool: &str, provider: &str, model: &str, tokens: i64) -> serde_json::Value {
+fn make_item(
+    day: &str,
+    hour: i64,
+    tool: &str,
+    provider: &str,
+    model: &str,
+    tokens: i64,
+) -> serde_json::Value {
     serde_json::json!({
         "day": day, "hour": hour, "toolCode": tool, "providerId": provider,
         "workdirHash": format!("h_{}", provider), "workdirDisplayName": format!("proj_{}", provider),

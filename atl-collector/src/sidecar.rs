@@ -93,6 +93,8 @@ struct PendingCursorConnect {
 struct SidecarRuntime {
     last_scan_status: Arc<Mutex<Option<serde_json::Value>>>,
     sync_running: Arc<Mutex<bool>>,
+    full_reconcile_running: Arc<Mutex<bool>>,
+    worker_lock: Arc<tokio::sync::Mutex<()>>,
     next_scan_task_id: u64,
     tray_estimated_cost_usd: Option<f64>,
     pending_cursor_connect: Option<PendingCursorConnect>,
@@ -134,12 +136,14 @@ async fn handle_command(
         Command::ConfigInit => {
             let input = prepare_config_input(request.args, None).await;
             let c = config::init_config(input, true);
+            mark_full_reconcile_pending_for_api_change("", &c.api_base_url);
             Ok(sanitize_config_value(&c))
         }
         Command::ConfigUpdate => {
             let current = config::ensure_desktop_config();
             let input = prepare_config_input(request.args, Some(&current)).await;
             let c = config::update_config(input, &current, true);
+            mark_full_reconcile_pending_for_api_change(&current.api_base_url, &c.api_base_url);
             Ok(sanitize_config_value(&c))
         }
         Command::ProvidersAddRoot => {
@@ -206,7 +210,17 @@ async fn handle_command(
                 return Err("API base URL not configured".to_string());
             }
             let snapshot = usage_snapshot(&cfg, false).await?;
-            sync_snapshot(&cfg, &snapshot).await
+            let _worker_guard = runtime.worker_lock.lock().await;
+            let sync_result = sync_snapshot(&cfg, &snapshot).await?;
+            trigger_full_reconcile_if_pending(
+                &sync_result,
+                &cfg,
+                Some(snapshot_items(&snapshot)),
+                &runtime.full_reconcile_running,
+                &runtime.worker_lock,
+                &runtime.sync_running,
+            );
+            Ok(sync_result)
         }
         Command::UsageSyncStart => {
             let existing_status = read_scan_status(&runtime.last_scan_status);
@@ -251,54 +265,69 @@ async fn handle_command(
             });
             write_scan_status(&runtime.last_scan_status, status.clone());
             write_bool_state(&runtime.sync_running, true);
-            let sync_running = Arc::clone(&runtime.sync_running);
             let scan_status = Arc::clone(&runtime.last_scan_status);
+            let reconcile_running = Arc::clone(&runtime.full_reconcile_running);
+            let worker_lock = Arc::clone(&runtime.worker_lock);
+            let sync_running = Arc::clone(&runtime.sync_running);
             tokio::spawn(async move {
                 let snapshot_result = usage_snapshot(&cfg, false).await;
                 let finished_at =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                 let finished_status = match snapshot_result {
-                    Ok(snapshot) => match sync_snapshot(&cfg, &snapshot).await {
-                        Ok(sync_result) => serde_json::json!({
-                            "running": false,
-                            "syncRunning": false,
-                            "phase": null,
-                            "started": true,
-                            "taskId": task_id,
-                            "startedAt": started_at,
-                            "finishedAt": finished_at,
-                            "force": false,
-                            "error": null,
-                            "syncResult": sync_result,
-                            "syncError": null,
-                            "snapshot": snapshot
-                        }),
-                        Err(error) => {
-                            let now = chrono::Utc::now()
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-                            persist_sync_status(
-                                &cfg,
-                                SyncOutcome::Failed,
-                                &now,
-                                &now,
-                                None,
-                                &error,
-                            );
-                            serde_json::json!({
-                                "running": false,
-                                "syncRunning": false,
-                                "started": true,
-                                "taskId": task_id,
-                                "startedAt": started_at,
-                                "finishedAt": finished_at,
-                                "force": false,
-                                "error": null,
-                                "syncResult": null,
-                                "syncError": error,
-                                "snapshot": snapshot
-                            })
+                    Ok(snapshot) => {
+                        let _worker_guard = worker_lock.lock().await;
+                        match sync_snapshot(&cfg, &snapshot).await {
+                            Ok(sync_result) => {
+                                trigger_full_reconcile_if_pending(
+                                    &sync_result,
+                                    &cfg,
+                                    Some(snapshot_items(&snapshot)),
+                                    &reconcile_running,
+                                    &worker_lock,
+                                    &sync_running,
+                                );
+                                serde_json::json!({
+                                    "running": false,
+                                    "syncRunning": false,
+                                    "phase": null,
+                                    "started": true,
+                                    "taskId": task_id,
+                                    "startedAt": started_at,
+                                    "finishedAt": finished_at,
+                                    "force": false,
+                                    "error": null,
+                                    "syncResult": sync_result,
+                                    "syncError": null,
+                                    "snapshot": snapshot
+                                })
+                            }
+                            Err(error) => {
+                                let now = chrono::Utc::now()
+                                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                                persist_sync_status(
+                                    &cfg,
+                                    SyncOutcome::Failed,
+                                    &now,
+                                    &now,
+                                    None,
+                                    &error,
+                                );
+                                serde_json::json!({
+                                    "running": false,
+                                    "syncRunning": false,
+                                    "started": true,
+                                    "taskId": task_id,
+                                    "startedAt": started_at,
+                                    "finishedAt": finished_at,
+                                    "force": false,
+                                    "error": null,
+                                    "syncResult": null,
+                                    "syncError": error,
+                                    "snapshot": snapshot
+                                })
+                            }
                         }
-                    },
+                    }
                     Err(error) => {
                         let now =
                             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -334,6 +363,12 @@ async fn handle_command(
         Command::IdentityImportApply => {
             let current = config::load_config().ok_or("Not initialized")?;
             let c = config::import_identity(request.args, &current, true);
+            if !c.api_base_url.trim().is_empty() {
+                collector_core::reconcile::mark_full_reconcile_pending(
+                    &c.api_base_url,
+                    collector_core::reconcile::FullReconcileTrigger::BackupRestore,
+                );
+            }
             Ok(sanitize_config_value(&c))
         }
         Command::TrayMenuData => {
@@ -432,7 +467,15 @@ async fn handle_command(
         Command::LocalBackupRunDueAuto => collector_core::local_backup::run_due_auto_backup(),
         Command::LocalBackupInspect => collector_core::local_backup::inspect_backup(&request.args),
         Command::LocalBackupRestoreApply => {
-            collector_core::local_backup::restore_local_backup(request.args)
+            let result = collector_core::local_backup::restore_local_backup(request.args)?;
+            let cfg = config::ensure_desktop_config();
+            if !cfg.api_base_url.trim().is_empty() {
+                collector_core::reconcile::mark_full_reconcile_pending(
+                    &cfg.api_base_url,
+                    collector_core::reconcile::FullReconcileTrigger::BackupRestore,
+                );
+            }
+            Ok(result)
         }
         Command::ApiCheck => {
             let url = request.args["apiBaseUrl"]
@@ -588,6 +631,63 @@ async fn handle_command(
             Ok(sanitize_config_value(&next))
         }
         Command::MyIdentity => my_identity().await,
+        Command::UsageFullReconcileStart => {
+            if read_bool_state(&runtime.full_reconcile_running) {
+                return Ok(serde_json::json!({"ok": false, "error": "already running"}));
+            }
+            let cfg = config::ensure_desktop_config();
+            if cfg.api_base_url.is_empty() {
+                return Err("API base URL not configured".to_string());
+            }
+            let trigger = if let Some(trigger_str) = request.args["trigger"].as_str() {
+                match trigger_str {
+                    "api_base_url_changed" => {
+                        collector_core::reconcile::FullReconcileTrigger::ApiBaseUrlChanged
+                    }
+                    "first_server_identity" => {
+                        collector_core::reconcile::FullReconcileTrigger::FirstServerIdentity
+                    }
+                    "backup_restore" => {
+                        collector_core::reconcile::FullReconcileTrigger::BackupRestore
+                    }
+                    "previous_failed" => {
+                        collector_core::reconcile::FullReconcileTrigger::PreviousFailed
+                    }
+                    _ => collector_core::reconcile::FullReconcileTrigger::MissingHistoryDetected,
+                }
+            } else {
+                collector_core::reconcile::FullReconcileTrigger::MissingHistoryDetected
+            };
+            collector_core::reconcile::mark_full_reconcile_pending(&cfg.api_base_url, trigger);
+            let reconcile_running = Arc::clone(&runtime.full_reconcile_running);
+            let worker_lock = Arc::clone(&runtime.worker_lock);
+            let sync_running = Arc::clone(&runtime.sync_running);
+            write_bool_state(&reconcile_running, true);
+            spawn_full_reconcile_job(cfg, None, reconcile_running, worker_lock, sync_running);
+            Ok(serde_json::json!({"ok": true, "status": "started"}))
+        }
+        Command::UsageFullReconcileStatus => {
+            let cfg = config::ensure_desktop_config();
+            let state = collector_core::reconcile::load_full_reconcile_state(&cfg.api_base_url);
+            let running = read_bool_state(&runtime.full_reconcile_running);
+            Ok(serde_json::json!({
+                "status": serde_json::to_value(&state.status).unwrap_or(serde_json::Value::String("idle".to_string())),
+                "trigger": state.trigger.as_ref().map(|t| serde_json::to_value(t).unwrap_or_default()),
+                "startedAt": state.started_at,
+                "updatedAt": state.updated_at,
+                "completedAt": state.completed_at,
+                "checkedBucketCount": state.checked_bucket_count,
+                "totalBucketCount": state.total_bucket_count,
+                "matchedBucketCount": state.matched_bucket_count,
+                "missingBucketCount": state.missing_bucket_count,
+                "differentBucketCount": state.different_bucket_count,
+                "repairUploadedBucketCount": state.repair_uploaded_bucket_count,
+                "queuedBucketCount": state.queued_bucket_count,
+                "unknownLegacyBucketCount": state.unknown_legacy_bucket_count,
+                "lastError": state.last_error,
+                "running": running
+            }))
+        }
         Command::UpdateDownloadInstaller => download_installer().await,
         Command::UpdateEnforcementStatus => {
             Ok(serde_json::json!({"mandatory": false, "compatible": true, "status": "compatible"}))
@@ -676,6 +776,9 @@ async fn handle_command(
             write_scan_status(&runtime.last_scan_status, status.clone());
 
             let scan_status = Arc::clone(&runtime.last_scan_status);
+            let reconcile_running = Arc::clone(&runtime.full_reconcile_running);
+            let worker_lock = Arc::clone(&runtime.worker_lock);
+            let sync_running = Arc::clone(&runtime.sync_running);
             tokio::spawn(async move {
                 let result = usage_snapshot(&cfg, force).await;
                 let finished_at =
@@ -700,8 +803,17 @@ async fn handle_command(
                                     "snapshot": snapshot
                                 }),
                             );
+                            let _worker_guard = worker_lock.lock().await;
                             match sync_snapshot(&cfg, &snapshot).await {
                                 Ok(sync_result) => {
+                                    trigger_full_reconcile_if_pending(
+                                        &sync_result,
+                                        &cfg,
+                                        Some(snapshot_items(&snapshot)),
+                                        &reconcile_running,
+                                        &worker_lock,
+                                        &sync_running,
+                                    );
                                     let sync_finished_at = chrono::Utc::now()
                                         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                                     serde_json::json!({
@@ -772,6 +884,123 @@ async fn handle_command(
         }
         Command::PricingModelPrices => model_prices().await,
     }
+}
+
+fn trigger_full_reconcile_if_pending(
+    sync_result: &serde_json::Value,
+    cfg: &config::AppConfig,
+    items: Option<Vec<serde_json::Value>>,
+    reconcile_running: &Arc<Mutex<bool>>,
+    worker_lock: &Arc<tokio::sync::Mutex<()>>,
+    sync_running: &Arc<Mutex<bool>>,
+) {
+    if sync_result
+        .get("fullReconcilePending")
+        .and_then(|v| v.as_bool())
+        != Some(true)
+    {
+        return;
+    }
+    if read_bool_state(reconcile_running) {
+        return;
+    }
+    write_bool_state(reconcile_running, true);
+    spawn_full_reconcile_job(
+        cfg.clone(),
+        items,
+        Arc::clone(reconcile_running),
+        Arc::clone(worker_lock),
+        Arc::clone(sync_running),
+    );
+}
+
+fn spawn_full_reconcile_job(
+    cfg: config::AppConfig,
+    initial_items: Option<Vec<serde_json::Value>>,
+    reconcile_running: Arc<Mutex<bool>>,
+    worker_lock: Arc<tokio::sync::Mutex<()>>,
+    sync_running: Arc<Mutex<bool>>,
+) {
+    tokio::spawn(async move {
+        let result_items = if let Some(items) = initial_items {
+            items
+        } else {
+            match collector_core::local_usage_store::LocalUsageStore::open_default()
+                .and_then(|store| store.all_usage_items())
+            {
+                Ok(items) => items,
+                Err(error) => {
+                    mark_full_reconcile_failed(
+                        &cfg.api_base_url,
+                        format!(
+                            "cannot load local usage facts for full reconcile: {}",
+                            error
+                        ),
+                    );
+                    write_bool_state(&reconcile_running, false);
+                    return;
+                }
+            }
+        };
+        loop {
+            while read_bool_state(&sync_running) {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            let options = collector_core::reconcile::FullReconcileOptions {
+                resume: true,
+                max_batches_per_run: 1,
+                ..Default::default()
+            };
+            let result = {
+                let _worker_guard = worker_lock.lock().await;
+                collector_core::reconcile::full_reconcile_usage(
+                    &cfg,
+                    &result_items,
+                    &cfg.api_base_url,
+                    options,
+                )
+                .await
+            };
+            match result {
+                Ok(result)
+                    if result.status == collector_core::reconcile::FullReconcileStatus::Pending =>
+                {
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                _ => break,
+            }
+        }
+        write_bool_state(&reconcile_running, false);
+    });
+}
+
+fn snapshot_items(snapshot: &serde_json::Value) -> Vec<serde_json::Value> {
+    snapshot
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn mark_full_reconcile_failed(api_base_url: &str, error: String) {
+    let mut state = collector_core::reconcile::load_full_reconcile_state(api_base_url);
+    state.status = collector_core::reconcile::FullReconcileStatus::Failed;
+    state.last_error = error;
+    state.updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    collector_core::reconcile::save_full_reconcile_state(api_base_url, &state);
+}
+
+fn mark_full_reconcile_pending_for_api_change(previous: &str, next: &str) {
+    let previous = config::normalize_api_base_url(previous);
+    let next = config::normalize_api_base_url(next);
+    if next.is_empty() || previous == next {
+        return;
+    }
+    collector_core::reconcile::mark_full_reconcile_pending(
+        &next,
+        collector_core::reconcile::FullReconcileTrigger::ApiBaseUrlChanged,
+    );
 }
 
 fn default_scan_status() -> serde_json::Value {
@@ -1271,6 +1500,7 @@ async fn sync_snapshot(
                 "queueAttempted": sync_result.queue_attempted,
                 "queueFailed": sync_result.queue_failed,
                 "newFailedBucketCount": sync_result.new_failed_bucket_count,
+                "fullReconcilePending": sync_result.full_reconcile_pending,
                 "scanned": items.len(),
                 "rowCount": items.len(),
                 "scannedAt": snapshot.get("scannedAt").cloned().unwrap_or(serde_json::Value::Null),
@@ -1995,11 +2225,9 @@ mod tests {
         assert!(labels[1].starts_with("立即刷新 ("));
         assert_eq!(labels[2], "访问云端 (anon)");
         assert!(labels.iter().any(|label| *label == "📊 今日令牌: 2,000"));
-        assert!(
-            labels
-                .iter()
-                .any(|label| label.starts_with("💰 预估费用: "))
-        );
+        assert!(labels
+            .iter()
+            .any(|label| label.starts_with("💰 预估费用: ")));
         assert!(labels.iter().any(|label| *label == "模型消耗"));
         assert!(labels.iter().any(|label| *label == "  gpt-5  1,500"));
         assert!(labels.iter().any(|label| *label == "来源"));

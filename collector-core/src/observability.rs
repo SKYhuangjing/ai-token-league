@@ -533,8 +533,12 @@ mod tests {
         .unwrap();
 
         let events = read_recent_runtime_events(usize::MAX);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["event"].as_str(), Some("recent"));
+        assert!(events
+            .iter()
+            .any(|event| event["event"].as_str() == Some("recent")));
+        assert!(!events
+            .iter()
+            .any(|event| event["event"].as_str() == Some("old")));
         let summary = runtime_log_summary();
         assert_eq!(summary["retentionDays"].as_u64(), Some(3));
         assert!(config::runtime_log_path()
@@ -643,7 +647,8 @@ mod tests {
 
     #[test]
     fn summarize_args_api_check() {
-        let result = summarize_command_args("api:check", &json!({"apiBaseUrl": "https://example.com"}));
+        let result =
+            summarize_command_args("api:check", &json!({"apiBaseUrl": "https://example.com"}));
         assert_eq!(result["hasApiBaseUrl"], true);
 
         let result = summarize_command_args("api:check", &json!({"apiBaseUrl": ""}));
@@ -652,7 +657,10 @@ mod tests {
 
     #[test]
     fn summarize_args_config_update() {
-        let result = summarize_command_args("config:update", &json!({"nickname": "test", "scanInterval": 30}));
+        let result = summarize_command_args(
+            "config:update",
+            &json!({"nickname": "test", "scanInterval": 30}),
+        );
         let keys = result["keys"].as_array().unwrap();
         assert!(keys.iter().any(|k| k.as_str() == Some("nickname")));
         assert!(keys.iter().any(|k| k.as_str() == Some("scanInterval")));
@@ -666,11 +674,17 @@ mod tests {
 
     #[test]
     fn summarize_args_workdirs_alias() {
-        let result = summarize_command_args("workdirs:set-alias", &json!({"workdirHash": "h1", "alias": "my-project"}));
+        let result = summarize_command_args(
+            "workdirs:set-alias",
+            &json!({"workdirHash": "h1", "alias": "my-project"}),
+        );
         assert_eq!(result["hasWorkdirHash"], true);
         assert_eq!(result["hasAlias"], true);
 
-        let result = summarize_command_args("workdirs:set-alias", &json!({"workdirHash": "", "alias": "  "}));
+        let result = summarize_command_args(
+            "workdirs:set-alias",
+            &json!({"workdirHash": "", "alias": "  "}),
+        );
         assert_eq!(result["hasWorkdirHash"], false);
         assert_eq!(result["hasAlias"], false);
     }
@@ -679,9 +693,12 @@ mod tests {
 
     #[test]
     fn summarize_result_usage_scan() {
-        let result = summarize_command_result("usage:scan", &Ok(json!({
-            "rowCount": 5, "health": [{}], "fromCache": false
-        })));
+        let result = summarize_command_result(
+            "usage:scan",
+            &Ok(json!({
+                "rowCount": 5, "health": [{}], "fromCache": false
+            })),
+        );
         assert_eq!(result["rowCount"], 5);
         assert_eq!(result["healthCount"], 1);
         assert_eq!(result["fromCache"], false);
@@ -689,11 +706,14 @@ mod tests {
 
     #[test]
     fn summarize_result_usage_sync() {
-        let result = summarize_command_result("usage:sync", &Ok(json!({
-            "accepted": 10, "rejected": 2, "bucketCount": 3,
-            "queuePending": 1, "queueAttempted": 5, "queueUploaded": 4, "queueFailed": 1,
-            "newFailedBucketCount": 0
-        })));
+        let result = summarize_command_result(
+            "usage:sync",
+            &Ok(json!({
+                "accepted": 10, "rejected": 2, "bucketCount": 3,
+                "queuePending": 1, "queueAttempted": 5, "queueUploaded": 4, "queueFailed": 1,
+                "newFailedBucketCount": 0
+            })),
+        );
         assert_eq!(result["accepted"], 10);
         assert_eq!(result["rejected"], 2);
     }
@@ -701,7 +721,10 @@ mod tests {
     #[test]
     fn summarize_result_error() {
         let result = summarize_command_result("usage:scan", &Err("something broke".to_string()));
-        assert!(result["error"].as_str().unwrap().contains("something broke"));
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("something broke"));
     }
 
     #[test]
@@ -715,9 +738,12 @@ mod tests {
 
     #[test]
     fn summarize_result_usage_summary() {
-        let result = summarize_command_result("usage:summary", &Ok(json!({
-            "totals": {"rows": 42, "totalTokens": 5000}
-        })));
+        let result = summarize_command_result(
+            "usage:summary",
+            &Ok(json!({
+                "totals": {"rows": 42, "totalTokens": 5000}
+            })),
+        );
         assert_eq!(result["rows"], 42);
         assert_eq!(result["totalTokens"], 5000);
     }

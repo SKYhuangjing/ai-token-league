@@ -564,7 +564,14 @@ mod tests {
         (store, path)
     }
 
-    fn make_item(day: &str, hour: i64, tool: &str, provider: &str, model: &str, tokens: i64) -> Value {
+    fn make_item(
+        day: &str,
+        hour: i64,
+        tool: &str,
+        provider: &str,
+        model: &str,
+        tokens: i64,
+    ) -> Value {
         json!({
             "day": day,
             "hour": hour,
@@ -641,11 +648,23 @@ mod tests {
     fn summary_aggregates_multiple_providers() {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
-        store.replace_usage_facts(&[
-            make_item(&today, 10, "codex", "codex_local", "codex-1", 100),
-            make_item(&today, 10, "claude_code", "claude_code_local", "claude-3", 200),
-            make_item(&today, 11, "codex", "codex_local", "codex-1", 50),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[
+                    make_item(&today, 10, "codex", "codex_local", "codex-1", 100),
+                    make_item(
+                        &today,
+                        10,
+                        "claude_code",
+                        "claude_code_local",
+                        "claude-3",
+                        200,
+                    ),
+                    make_item(&today, 11, "codex", "codex_local", "codex-1", 50),
+                ],
+                "now",
+            )
+            .unwrap();
 
         let summary = store.summary("today").unwrap();
         assert_eq!(summary["totals"]["totalTokens"], 350);
@@ -663,11 +682,16 @@ mod tests {
     #[test]
     fn trend_daily_grain() {
         let (mut store, path) = temp_db();
-        store.replace_usage_facts(&[
-            make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
-            make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
-            make_item("2026-05-11", 9, "codex", "codex_local", "gpt-5", 200),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[
+                    make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
+                    make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
+                    make_item("2026-05-11", 9, "codex", "codex_local", "gpt-5", 200),
+                ],
+                "now",
+            )
+            .unwrap();
 
         let trend = store.trend("2026-05-10..2026-05-11", "day").unwrap();
         let items = trend["items"].as_array().unwrap();
@@ -680,10 +704,15 @@ mod tests {
     #[test]
     fn trend_hourly_grain() {
         let (mut store, path) = temp_db();
-        store.replace_usage_facts(&[
-            make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
-            make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[
+                    make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
+                    make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
+                ],
+                "now",
+            )
+            .unwrap();
 
         let trend = store.trend("2026-05-10..2026-05-10", "hour").unwrap();
         let items = trend["items"].as_array().unwrap();
@@ -696,11 +725,16 @@ mod tests {
     #[test]
     fn trend_monthly_grain() {
         let (mut store, path) = temp_db();
-        store.replace_usage_facts(&[
-            make_item("2026-05-01", 10, "codex", "codex_local", "gpt-5", 100),
-            make_item("2026-05-15", 10, "codex", "codex_local", "gpt-5", 200),
-            make_item("2026-06-01", 10, "codex", "codex_local", "gpt-5", 300),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[
+                    make_item("2026-05-01", 10, "codex", "codex_local", "gpt-5", 100),
+                    make_item("2026-05-15", 10, "codex", "codex_local", "gpt-5", 200),
+                    make_item("2026-06-01", 10, "codex", "codex_local", "gpt-5", 300),
+                ],
+                "now",
+            )
+            .unwrap();
 
         let trend = store.trend("2026-05-01..2026-06-30", "month").unwrap();
         let items = trend["items"].as_array().unwrap();
@@ -715,11 +749,16 @@ mod tests {
         let (mut store, path) = temp_db();
         // 2026-05-18 is Monday, 2026-05-19 is Tuesday (same week: May 18-24)
         // 2026-05-25 is Monday (next week: May 25-31)
-        store.replace_usage_facts(&[
-            make_item("2026-05-18", 10, "codex", "codex_local", "gpt-5", 100),
-            make_item("2026-05-19", 11, "codex", "codex_local", "gpt-5", 200),
-            make_item("2026-05-25", 9, "codex", "codex_local", "gpt-5", 300),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[
+                    make_item("2026-05-18", 10, "codex", "codex_local", "gpt-5", 100),
+                    make_item("2026-05-19", 11, "codex", "codex_local", "gpt-5", 200),
+                    make_item("2026-05-25", 9, "codex", "codex_local", "gpt-5", 300),
+                ],
+                "now",
+            )
+            .unwrap();
 
         let trend = store.trend("2026-05-18..2026-05-31", "week").unwrap();
         let items = trend["items"].as_array().unwrap();
@@ -739,10 +778,15 @@ mod tests {
     fn workdirs_groups_and_sorts() {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
-        store.replace_usage_facts(&[
-            make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
-            make_item(&today, 11, "codex", "codex_local", "gpt-5", 200),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[
+                    make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
+                    make_item(&today, 11, "codex", "codex_local", "gpt-5", 200),
+                ],
+                "now",
+            )
+            .unwrap();
 
         let w = store.workdirs("today", 10).unwrap();
         let items = w["items"].as_array().unwrap();
@@ -778,9 +822,12 @@ mod tests {
     fn detail_window_clamps_limit() {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
-        store.replace_usage_facts(&[
-            make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[make_item(&today, 10, "codex", "codex_local", "gpt-5", 100)],
+                "now",
+            )
+            .unwrap();
 
         let result = store.detail_window("today", 0, 0).unwrap();
         assert_eq!(result["limit"], 1, "limit 0 should be clamped to 1");
@@ -851,15 +898,21 @@ mod tests {
     fn replace_usage_facts_clears_previous() {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
-        store.replace_usage_facts(&[
-            make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[make_item(&today, 10, "codex", "codex_local", "gpt-5", 100)],
+                "now",
+            )
+            .unwrap();
         assert_eq!(store.has_usage_facts().unwrap(), true);
 
         // Replace with new data — old data must be gone
-        store.replace_usage_facts(&[
-            make_item(&today, 11, "codex", "codex_local", "gpt-5", 200),
-        ], "now").unwrap();
+        store
+            .replace_usage_facts(
+                &[make_item(&today, 11, "codex", "codex_local", "gpt-5", 200)],
+                "now",
+            )
+            .unwrap();
 
         let all = store.all_usage_items().unwrap();
         assert_eq!(all.len(), 1);

@@ -285,6 +285,19 @@ pub fn assert_snapshot(snapshot: &Value, items: &[Value], _participant_id: &str,
 /// Compute bucket fingerprint: extract BUCKET_FINGERPRINT_FIELDS from each item,
 /// sort by canonical JSON, hash the result.
 pub fn compute_bucket_fingerprint(items: &[Value]) -> String {
+    compute_bucket_fingerprint_with_fields(items, BUCKET_FINGERPRINT_FIELDS)
+}
+
+pub fn compute_daily_bucket_fingerprint(items: &[Value]) -> String {
+    let fields = BUCKET_FINGERPRINT_FIELDS
+        .iter()
+        .copied()
+        .filter(|field| *field != "hour")
+        .collect::<Vec<_>>();
+    compute_bucket_fingerprint_with_fields(items, &fields)
+}
+
+fn compute_bucket_fingerprint_with_fields(items: &[Value], fields: &[&str]) -> String {
     if items.is_empty() {
         return sha256_hex("");
     }
@@ -292,7 +305,7 @@ pub fn compute_bucket_fingerprint(items: &[Value]) -> String {
         .iter()
         .map(|item| {
             let mut row = serde_json::Map::new();
-            for &field in BUCKET_FINGERPRINT_FIELDS {
+            for &field in fields {
                 if let Some(v) = item.get(field) {
                     row.insert(field.to_string(), v.clone());
                 }

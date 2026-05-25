@@ -1,15 +1,15 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
-use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -178,7 +178,9 @@ fn sidecar_timeout_for_command(command: &str) -> std::time::Duration {
         | "usage:detail-page"
         | "usage:detail-window"
         | "usage:sync"
-        | "usage:sync-start" => std::time::Duration::from_secs(10 * 60),
+        | "usage:sync-start"
+        | "usage:full-reconcile-start"
+        | "usage:full-reconcile-status" => std::time::Duration::from_secs(10 * 60),
         _ => std::time::Duration::from_secs(30),
     }
 }

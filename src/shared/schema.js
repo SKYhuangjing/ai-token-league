@@ -202,9 +202,19 @@ export function assertSnapshot(snapshot, items, participantId, deviceId) {
 
 export function computeBucketFingerprint(items) {
   if (!items.length) return sha256Hex("");
+  return computeBucketFingerprintForFields(items, BUCKET_FINGERPRINT_FIELDS, false);
+}
+
+export function computeDailyBucketFingerprint(items) {
+  if (!items.length) return sha256Hex("");
+  return computeBucketFingerprintForFields(items, BUCKET_FINGERPRINT_FIELDS.filter((field) => field !== "hour"), true);
+}
+
+function computeBucketFingerprintForFields(items, fields, omitUndefined) {
   const rows = items.map((item) => {
     const row = {};
-    for (const field of BUCKET_FINGERPRINT_FIELDS) {
+    for (const field of fields) {
+      if (omitUndefined && item[field] === undefined) continue;
       row[field] = item[field];
     }
     return row;
