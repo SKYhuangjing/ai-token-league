@@ -171,6 +171,7 @@ async fn handle_command(
             let alias = request.args["alias"].as_str().unwrap_or("");
             let current = config::ensure_desktop_config();
             let c = config::set_workdir_alias(hash, alias, &current);
+            invalidate_usage_caches_after_alias_change()?;
             Ok(sanitize_config_value(&c))
         }
         Command::UsageScan => {
@@ -1296,6 +1297,19 @@ fn write_usage_cache(snapshot: &serde_json::Value) -> Result<(), String> {
     fs::write(config::usage_cache_path(), format!("{}\n", text)).map_err(|e| e.to_string())
 }
 
+fn invalidate_usage_caches_after_alias_change() -> Result<(), String> {
+    match fs::remove_file(config::usage_cache_path()) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    clear_json_source_index_cache();
+    if let Ok(mut store) = collector_core::local_usage_store::LocalUsageStore::open_default() {
+        store.clear_source_cache()?;
+    }
+    Ok(())
+}
+
 fn is_fresh_usage_cache(snapshot: &serde_json::Value, cfg: &config::AppConfig) -> bool {
     if snapshot
         .get("usageSourceConfigFingerprint")
@@ -2124,6 +2138,7 @@ fn sorted_vec_map(input: &HashMap<String, Vec<String>>) -> BTreeMap<String, Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use collector_core::scanner::SourceCache;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2319,6 +2334,56 @@ mod tests {
             source_cache_from_snapshot(Some(&source_index_cache))["fingerprint-c"].len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn workdir_alias_clears_cached_usage_sources() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let previous_home = std::env::var("HOME").ok();
+        let home = temp_home();
+        std::env::set_var("HOME", &home);
+
+        config::init_config(serde_json::json!({}), true);
+        fs::write(config::usage_cache_path(), "{}\n").unwrap();
+        let mut store = collector_core::local_usage_store::LocalUsageStore::open_default().unwrap();
+        store
+            .replace_source_cache(
+                &HashMap::from([(
+                    "source-fingerprint".to_string(),
+                    vec![serde_json::json!({
+                        "day": "2026-05-25",
+                        "workdirHash": "workdir-hash",
+                        "workdirDisplayName": "old-name"
+                    })],
+                )]),
+                "now",
+            )
+            .unwrap();
+        assert!(store.take_cached_source("source-fingerprint").is_some());
+        drop(store);
+
+        let request = SidecarRequest {
+            id: "test".to_string(),
+            command: "workdirs:set-alias".to_string(),
+            args: serde_json::json!({
+                "workdirHash": "workdir-hash",
+                "alias": "new-name"
+            }),
+        };
+        let mut runtime = SidecarRuntime::default();
+        let result = handle_command(request, &mut runtime).await.unwrap();
+
+        assert_eq!(result["workdirAliases"]["workdir-hash"], "new-name");
+        assert!(!config::usage_cache_path().exists());
+        let mut store = collector_core::local_usage_store::LocalUsageStore::open_default().unwrap();
+        assert!(store.take_cached_source("source-fingerprint").is_none());
+
+        let _ = fs::remove_dir_all(&home);
+        if let Some(v) = previous_home {
+            std::env::set_var("HOME", v);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[tokio::test]

@@ -140,6 +140,13 @@ impl LocalUsageStore {
         tx.commit().map_err(|e| e.to_string())
     }
 
+    pub fn clear_source_cache(&mut self) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM source_cache", [])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn replace_usage_facts(&mut self, items: &[Value], scanned_at: &str) -> Result<(), String> {
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM usage_fact", [])
@@ -931,6 +938,26 @@ mod tests {
         store.replace_source_cache(&cache, "now").unwrap();
         assert!(store.take_cached_source("").is_none());
         assert!(store.take_cached_source("valid_fp").is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn clear_source_cache_removes_cached_sources_only() {
+        let (mut store, path) = temp_db();
+        let item = make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100);
+
+        store
+            .replace_source_cache(
+                &HashMap::from([("valid_fp".to_string(), vec![item.clone()])]),
+                "now",
+            )
+            .unwrap();
+        store.replace_usage_facts(&[item], "now").unwrap();
+
+        store.clear_source_cache().unwrap();
+
+        assert!(store.take_cached_source("valid_fp").is_none());
+        assert!(store.has_usage_facts().unwrap());
         let _ = std::fs::remove_file(path);
     }
 }

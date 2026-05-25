@@ -808,6 +808,24 @@ function makeHourlySnapshotPayload(items, participantId, deviceId, options = {})
   };
 }
 
+function makeMysqlUsageRow(item, participantId, deviceId, overrides = {}) {
+  const row = {
+    ...item,
+    participantId,
+    deviceId,
+    workdirId: `${participantId}:${item.workdirHash}`,
+    rawSourceRef: item.rawSourceRef || "",
+    providerVersion: item.providerVersion || "",
+    parserVersion: item.parserVersion || "",
+    uploadedAt: item.uploadedAt || "2026-05-14T00:00:00.000Z",
+    ...overrides
+  };
+  return {
+    usageKey: usageKey(row, participantId, deviceId),
+    ...row
+  };
+}
+
 function testSnapshotReplaceSemantics() {
   const tmp = path.join(os.tmpdir(), `test-snapshot-replace-${Date.now()}.json`);
   const store = new Store(tmp);
@@ -976,6 +994,104 @@ async function testMysqlHourlySnapshotUsesIncrementalSync() {
   assert.equal(incrementalCalled, true, "hourly snapshots should use incremental MySQL sync");
   assert.equal(fullSyncCalled, false, "hourly snapshots must not trigger full-table MySQL sync");
   console.log("  testMysqlHourlySnapshotUsesIncrementalSync passed");
+}
+
+async function testMysqlUsageWritesAreSerialized() {
+  const store = new MySqlStore({});
+  const pid = "p_mysql_lock", did = "d_mysql_lock";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-lock", identityPublicKey: "pk_mysql_lock", os: "test", appVersion: "0.7.1"
+  });
+
+  store.pool = {};
+  let active = 0;
+  let maxActive = 0;
+  store.loadWriteScope = async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  store.incrementalHourlyBucketSync = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    active -= 1;
+  };
+
+  await Promise.all([
+    store.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 10, workdirHash: "mysql_lock_a", sourceFingerprint: "mysql_lock_a" })
+    ], pid, did, { day: "2026-05-14", hour: 10, providerId: "codex_local" })),
+    store.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour: 11, workdirHash: "mysql_lock_b", sourceFingerprint: "mysql_lock_b" })
+    ], pid, did, { day: "2026-05-14", hour: 11, providerId: "codex_local" }))
+  ]);
+
+  assert.equal(maxActive, 1, "MySQL usage writes must not share mutable in-memory scope concurrently");
+  assert.equal(active, 0);
+  console.log("  testMysqlUsageWritesAreSerialized passed");
+}
+
+async function testMysqlLegacyUploadDoesNotFullTableWipe() {
+  const store = new MySqlStore({});
+  const pid = "p_mysql_legacy", did = "d_mysql_legacy";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-legacy", identityPublicKey: "pk_mysql_legacy", os: "test", appVersion: "0.6.1"
+  });
+
+  const unknownExisting = makeMysqlUsageRow(
+    makeSnapshotItem({ workdirHash: "mysql_legacy_h1", model: "unknown", sourceFingerprint: "legacy_unknown" }),
+    pid,
+    did
+  );
+  const otherExisting = makeMysqlUsageRow(
+    makeSnapshotItem({ workdirHash: "mysql_other_h1", sourceFingerprint: "legacy_other" }),
+    "p_mysql_other",
+    "d_mysql_other"
+  );
+  const queries = [];
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async query(sql, params = []) {
+      queries.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
+      return [{ affectedRows: 0 }, []];
+    }
+  };
+  store.pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, " ").trim();
+      queries.push({ sql: normalized, params });
+      if (normalized === "SELECT * FROM usage_daily") return [[unknownExisting, otherExisting]];
+      if (normalized === "SELECT * FROM usage_hourly") return [[]];
+      if (normalized === "SELECT * FROM usage_sync_buckets") return [[]];
+      if (normalized === "SELECT * FROM usage_sync_buckets_hourly") return [[]];
+      if (normalized === "SELECT * FROM upload_batches") return [[]];
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+    getConnection: async () => conn
+  };
+
+  const result = await store.upsertUsageBatch({
+    participantId: pid,
+    deviceId: did,
+    clientGeneratedAt: "2026-05-14T01:00:00.000Z",
+    items: [makeSnapshotItem({ workdirHash: "mysql_legacy_h1", model: "gpt-5", sourceFingerprint: "legacy_known" })]
+  });
+
+  const statements = queries.map((q) => q.sql);
+  assert.equal(result.accepted, 1);
+  assert.equal(statements.some((sql) => sql === "DELETE FROM usage_daily"), false, "legacy MySQL upload must not wipe usage_daily");
+  assert.equal(statements.some((sql) => sql === "DELETE FROM usage_hourly"), false, "legacy MySQL upload must not wipe usage_hourly");
+  assert.equal(statements.some((sql) => sql === "DELETE FROM usage_sync_buckets"), false, "legacy MySQL upload must not wipe sync metadata");
+  assert.equal(statements.some((sql) => sql === "DELETE FROM usage_sync_buckets_hourly"), false, "legacy MySQL upload must not wipe hourly sync metadata");
+  const deleteByKey = queries.find((q) => q.sql.startsWith("DELETE FROM usage_daily WHERE usageKey IN"));
+  assert.deepEqual(deleteByKey?.params, [unknownExisting.usageKey], "legacy cleanup should delete only rows removed by business logic");
+  assert.ok(statements.some((sql) => sql.startsWith("INSERT INTO usage_daily")), "legacy upload should still upsert usage rows");
+  assert.ok(statements.some((sql) => sql.startsWith("INSERT INTO upload_batches")), "legacy upload should still persist upload audit rows");
+  console.log("  testMysqlLegacyUploadDoesNotFullTableWipe passed");
 }
 
 async function testMysqlHourlyIncrementalSyncScopesDeletes() {
@@ -5834,6 +5950,8 @@ testI18nDataAttributesMatchKeys();
 
 // MySQL incremental sync tests
 await testMysqlHourlySnapshotUsesIncrementalSync();
+await testMysqlUsageWritesAreSerialized();
+await testMysqlLegacyUploadDoesNotFullTableWipe();
 await testMysqlHourlyIncrementalSyncScopesDeletes();
 await testMysqlLoadSkipsUsageMirrors();
 await testMysqlReadPathUsesRequestScopedRows();

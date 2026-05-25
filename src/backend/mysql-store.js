@@ -32,6 +32,7 @@ export class MySqlStore extends Store {
       database: config.database || process.env.MYSQL_DATABASE || "ai_token_league",
       connectionLimit: Number(config.connectionLimit || process.env.MYSQL_CONNECTION_LIMIT || 8)
     };
+    this.writeLock = Promise.resolve();
   }
 
   async connect() {
@@ -158,32 +159,51 @@ export class MySqlStore extends Store {
   }
 
   async registerDevice(input) {
-    const result = super.registerDevice(input);
-    await this.syncIdentityTables();
-    return result;
+    return this.withWriteLock(async () => {
+      const result = super.registerDevice(input);
+      await this.syncIdentityTables();
+      return result;
+    });
   }
 
   async upsertUsageBatch(input) {
-    if (input.snapshot?.mode === "device_day_hour_provider") {
-      if (this.pool) await this.loadWriteScope(input.participantId, input.deviceId, input.snapshot);
-      const result = Store.prototype.upsertUsageBatch.call(this, input);
-      if (result.noOp) return result;
-      try {
-        await this.incrementalHourlyBucketSync(input, result);
-      } catch (error) {
-        await this.load();
-        throw error;
+    return this.withWriteLock(async () => {
+      if (input.snapshot?.mode === "device_day_hour_provider") {
+        if (this.pool) await this.loadWriteScope(input.participantId, input.deviceId, input.snapshot);
+        const result = Store.prototype.upsertUsageBatch.call(this, input);
+        if (result.noOp) return result;
+        try {
+          await this.incrementalHourlyBucketSync(input, result);
+        } catch (error) {
+          await this.load();
+          throw error;
+        }
+        return result;
       }
+      if (input.snapshot) {
+        if (this.pool) await this.loadWriteScope(input.participantId, input.deviceId, input.snapshot);
+        return this.upsertSnapshotBatch(input);
+      }
+      if (this.pool) await this.loadUsageMirrorForMaintenance();
+      const previousUsageKeys = new Set(Object.keys(this.db.usageDaily || {}));
+      const result = super.upsertUsageBatch(input);
+      if (!result.duplicate) await this.syncLegacyUsageMirror(previousUsageKeys);
       return result;
+    });
+  }
+
+  async withWriteLock(fn) {
+    const previous = this.writeLock;
+    let release;
+    this.writeLock = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
     }
-    if (input.snapshot) {
-      if (this.pool) await this.loadWriteScope(input.participantId, input.deviceId, input.snapshot);
-      return this.upsertSnapshotBatch(input);
-    }
-    if (this.pool) await this.loadUsageMirrorForMaintenance();
-    const result = super.upsertUsageBatch(input);
-    if (!result.duplicate) await this.syncAllTables();
-    return result;
   }
 
   async loadWriteScope(participantId, deviceId, snapshot = {}) {
@@ -982,16 +1002,18 @@ export class MySqlStore extends Store {
   }
 
   async recalculateCosts(args = {}) {
-    return this.recalculateUsageCostsInBatches(args);
+    return this.withWriteLock(async () => this.recalculateUsageCostsInBatches(args));
   }
 
   async refreshOpenRouterPrices(input) {
-    const result = await Store.prototype.refreshOpenRouterPrices.call(this, { recalculate: false });
-    await this.syncPriceCache();
-    if (input?.recalculate && result.remote?.status === "fresh") {
-      result.recalculated = await this.recalculateUsageCostsInBatches();
-    }
-    return result;
+    return this.withWriteLock(async () => {
+      const result = await Store.prototype.refreshOpenRouterPrices.call(this, { recalculate: false });
+      await this.syncPriceCache();
+      if (input?.recalculate && result.remote?.status === "fresh") {
+        result.recalculated = await this.recalculateUsageCostsInBatches();
+      }
+      return result;
+    });
   }
 
   async recalculateUsageCostsInBatches({ models = null, batchSize = Number(process.env.MYSQL_RECALCULATE_BATCH_SIZE || 1000) } = {}) {
@@ -1028,177 +1050,189 @@ export class MySqlStore extends Store {
   }
 
   async upsertModelPrice(input) {
-    const model = normalizeModelName(input.model || "");
-    if (!model) throw new Error("model is required");
-    const affectedModels = this.affectedModelsForPrice(model);
-    await this.loadUsageDailyForModels(affectedModels);
-    const now = new Date().toISOString();
-    const price = {
-      model,
-      inputCostPerMTok: nonNegativeNumber(input.inputCostPerMTok),
-      outputCostPerMTok: nonNegativeNumber(input.outputCostPerMTok),
-      cacheReadCostPerMTok: nonNegativeNumber(input.cacheReadCostPerMTok),
-      cacheWriteCostPerMTok: nonNegativeNumber(input.cacheWriteCostPerMTok),
-      reasoningCostPerMTok: 0,
-      source: input.source || "custom",
-      notes: input.notes || "",
-      updatedAt: now
-    };
-    this.db.modelPrices[model] = price;
-    this.invalidatePriceMap();
-    const recalculated = Store.prototype.recalculateCosts.call(this, { models: affectedModels });
-    await this.syncPricingTables();
-    await this.syncUsageDailyRows();
-    return { price, recalculated };
+    return this.withWriteLock(async () => {
+      const model = normalizeModelName(input.model || "");
+      if (!model) throw new Error("model is required");
+      const affectedModels = this.affectedModelsForPrice(model);
+      await this.loadUsageDailyForModels(affectedModels);
+      const now = new Date().toISOString();
+      const price = {
+        model,
+        inputCostPerMTok: nonNegativeNumber(input.inputCostPerMTok),
+        outputCostPerMTok: nonNegativeNumber(input.outputCostPerMTok),
+        cacheReadCostPerMTok: nonNegativeNumber(input.cacheReadCostPerMTok),
+        cacheWriteCostPerMTok: nonNegativeNumber(input.cacheWriteCostPerMTok),
+        reasoningCostPerMTok: 0,
+        source: input.source || "custom",
+        notes: input.notes || "",
+        updatedAt: now
+      };
+      this.db.modelPrices[model] = price;
+      this.invalidatePriceMap();
+      const recalculated = Store.prototype.recalculateCosts.call(this, { models: affectedModels });
+      await this.syncPricingTables();
+      await this.syncUsageDailyRows();
+      return { price, recalculated };
+    });
   }
 
   async deleteModelPrice(model) {
-    const normalized = normalizeModelName(model || "");
-    if (!normalized || !this.db.modelPrices[normalized]) return { deleted: false };
-    const affectedModels = this.affectedModelsForPrice(normalized);
-    await this.loadUsageDailyForModels(affectedModels);
-    delete this.db.modelPrices[normalized];
-    for (const [sourceModel, targetModel] of Object.entries(this.db.modelPriceAliases || {})) {
-      if (targetModel === normalized) delete this.db.modelPriceAliases[sourceModel];
-    }
-    this.invalidatePriceMap();
-    const recalculated = Store.prototype.recalculateCosts.call(this, { models: affectedModels });
-    await this.syncPricingTables();
-    await this.syncUsageDailyRows();
-    return { deleted: true, recalculated };
+    return this.withWriteLock(async () => {
+      const normalized = normalizeModelName(model || "");
+      if (!normalized || !this.db.modelPrices[normalized]) return { deleted: false };
+      const affectedModels = this.affectedModelsForPrice(normalized);
+      await this.loadUsageDailyForModels(affectedModels);
+      delete this.db.modelPrices[normalized];
+      for (const [sourceModel, targetModel] of Object.entries(this.db.modelPriceAliases || {})) {
+        if (targetModel === normalized) delete this.db.modelPriceAliases[sourceModel];
+      }
+      this.invalidatePriceMap();
+      const recalculated = Store.prototype.recalculateCosts.call(this, { models: affectedModels });
+      await this.syncPricingTables();
+      await this.syncUsageDailyRows();
+      return { deleted: true, recalculated };
+    });
   }
 
   async upsertModelPriceAlias(input) {
-    const model = normalizeModelName(input.model || input.sourceModel || "");
-    await this.loadUsageDailyForModels(model ? [model] : []);
-    const result = Store.prototype.upsertModelPriceAlias.call(this, input);
-    await this.syncPricingTables();
-    await this.syncUsageDailyRows();
-    return result;
+    return this.withWriteLock(async () => {
+      const model = normalizeModelName(input.model || input.sourceModel || "");
+      await this.loadUsageDailyForModels(model ? [model] : []);
+      const result = Store.prototype.upsertModelPriceAlias.call(this, input);
+      await this.syncPricingTables();
+      await this.syncUsageDailyRows();
+      return result;
+    });
   }
 
   async deleteModelPriceAlias(model) {
-    const normalized = normalizeModelName(model || "");
-    if (!normalized || !this.db.modelPriceAliases[normalized]) return { deleted: false };
-    await this.loadUsageDailyForModels([normalized]);
-    const result = Store.prototype.deleteModelPriceAlias.call(this, model);
-    await this.syncPricingTables();
-    await this.syncUsageDailyRows();
-    return result;
+    return this.withWriteLock(async () => {
+      const normalized = normalizeModelName(model || "");
+      if (!normalized || !this.db.modelPriceAliases[normalized]) return { deleted: false };
+      await this.loadUsageDailyForModels([normalized]);
+      const result = Store.prototype.deleteModelPriceAlias.call(this, model);
+      await this.syncPricingTables();
+      await this.syncUsageDailyRows();
+      return result;
+    });
   }
 
   async deleteParticipantData(participantId) {
-    if (!participantId) throw new Error("participantId is required");
-    const removed = {
-      participants: 0,
-      devices: 0,
-      workdirs: 0,
-      usageDaily: 0,
-      uploadBatches: 0,
-      usageSyncBuckets: 0,
-      usageHourly: 0,
-      usageSyncBucketsHourly: 0
-    };
-    await withTransaction(this.pool, async (conn) => {
-      removed.uploadBatches = await deleteAffected(conn, "DELETE FROM upload_batches WHERE participantId = ?", [participantId]);
-      removed.usageSyncBuckets = await deleteAffected(conn, "DELETE FROM usage_sync_buckets WHERE participantId = ?", [participantId]);
-      removed.usageSyncBucketsHourly = await deleteAffected(conn, "DELETE FROM usage_sync_buckets_hourly WHERE participantId = ?", [participantId]);
-      removed.usageHourly = await deleteAffected(conn, "DELETE FROM usage_hourly WHERE participantId = ?", [participantId]);
-      removed.usageDaily = await deleteAffected(conn, "DELETE FROM usage_daily WHERE participantId = ?", [participantId]);
-      removed.workdirs = await deleteAffected(conn, "DELETE FROM workdirs WHERE participantId = ?", [participantId]);
-      removed.devices = await deleteAffected(conn, "DELETE FROM devices WHERE participantId = ?", [participantId]);
-      removed.participants = await deleteAffected(conn, "DELETE FROM participants WHERE id = ?", [participantId]);
+    return this.withWriteLock(async () => {
+      if (!participantId) throw new Error("participantId is required");
+      const removed = {
+        participants: 0,
+        devices: 0,
+        workdirs: 0,
+        usageDaily: 0,
+        uploadBatches: 0,
+        usageSyncBuckets: 0,
+        usageHourly: 0,
+        usageSyncBucketsHourly: 0
+      };
+      await withTransaction(this.pool, async (conn) => {
+        removed.uploadBatches = await deleteAffected(conn, "DELETE FROM upload_batches WHERE participantId = ?", [participantId]);
+        removed.usageSyncBuckets = await deleteAffected(conn, "DELETE FROM usage_sync_buckets WHERE participantId = ?", [participantId]);
+        removed.usageSyncBucketsHourly = await deleteAffected(conn, "DELETE FROM usage_sync_buckets_hourly WHERE participantId = ?", [participantId]);
+        removed.usageHourly = await deleteAffected(conn, "DELETE FROM usage_hourly WHERE participantId = ?", [participantId]);
+        removed.usageDaily = await deleteAffected(conn, "DELETE FROM usage_daily WHERE participantId = ?", [participantId]);
+        removed.workdirs = await deleteAffected(conn, "DELETE FROM workdirs WHERE participantId = ?", [participantId]);
+        removed.devices = await deleteAffected(conn, "DELETE FROM devices WHERE participantId = ?", [participantId]);
+        removed.participants = await deleteAffected(conn, "DELETE FROM participants WHERE id = ?", [participantId]);
+      });
+      delete this.db.participants[participantId];
+      for (const [id, row] of Object.entries(this.db.devices || {})) {
+        if (row.participantId === participantId) delete this.db.devices[id];
+      }
+      for (const [id, row] of Object.entries(this.db.workdirs || {})) {
+        if (row.participantId === participantId) delete this.db.workdirs[id];
+      }
+      this.db.usageDaily = {};
+      this.db.usageHourly = {};
+      this.db.usageSyncBuckets = {};
+      this.db.usageSyncBucketsHourly = {};
+      this.db.uploadBatches = {};
+      this.invalidateAggregateCache();
+      return {
+        deleted: Object.values(removed).some((count) => count > 0),
+        participantId,
+        removed
+      };
     });
-    delete this.db.participants[participantId];
-    for (const [id, row] of Object.entries(this.db.devices || {})) {
-      if (row.participantId === participantId) delete this.db.devices[id];
-    }
-    for (const [id, row] of Object.entries(this.db.workdirs || {})) {
-      if (row.participantId === participantId) delete this.db.workdirs[id];
-    }
-    this.db.usageDaily = {};
-    this.db.usageHourly = {};
-    this.db.usageSyncBuckets = {};
-    this.db.usageSyncBucketsHourly = {};
-    this.db.uploadBatches = {};
-    this.invalidateAggregateCache();
-    return {
-      deleted: Object.values(removed).some((count) => count > 0),
-      participantId,
-      removed
-    };
   }
 
   async deleteDeviceData(deviceId) {
-    if (!deviceId) throw new Error("deviceId is required");
-    const removed = {
-      devices: 0,
-      usageDaily: 0,
-      uploadBatches: 0,
-      usageSyncBuckets: 0,
-      usageHourly: 0,
-      usageSyncBucketsHourly: 0
-    };
-    let participantId = this.db.devices?.[deviceId]?.participantId || "";
-    let cloudHourlyScopes = [];
-    await withTransaction(this.pool, async (conn) => {
-      if (!participantId) {
-        const [devices] = await conn.query("SELECT participantId FROM devices WHERE id = ?", [deviceId]);
-        participantId = devices?.[0]?.participantId || "";
-      }
-      const [scopeRows] = await conn.query(
-        `SELECT DISTINCT participantId, day, hour, providerId
-         FROM usage_hourly
-         WHERE deviceId = ? AND providerId IN (${[...CLOUD_PROVIDER_IDS].map(() => "?").join(",")})`,
-        [deviceId, ...CLOUD_PROVIDER_IDS]
-      ).catch(() => [[]]);
-      cloudHourlyScopes = (scopeRows || []).map((row) => ({
-        participantId: row.participantId,
-        day: toDayString(row.day),
-        hour: Number(row.hour || 0),
-        providerId: row.providerId
-      }));
+    return this.withWriteLock(async () => {
+      if (!deviceId) throw new Error("deviceId is required");
+      const removed = {
+        devices: 0,
+        usageDaily: 0,
+        uploadBatches: 0,
+        usageSyncBuckets: 0,
+        usageHourly: 0,
+        usageSyncBucketsHourly: 0
+      };
+      let participantId = this.db.devices?.[deviceId]?.participantId || "";
+      let cloudHourlyScopes = [];
+      await withTransaction(this.pool, async (conn) => {
+        if (!participantId) {
+          const [devices] = await conn.query("SELECT participantId FROM devices WHERE id = ?", [deviceId]);
+          participantId = devices?.[0]?.participantId || "";
+        }
+        const [scopeRows] = await conn.query(
+          `SELECT DISTINCT participantId, day, hour, providerId
+           FROM usage_hourly
+           WHERE deviceId = ? AND providerId IN (${[...CLOUD_PROVIDER_IDS].map(() => "?").join(",")})`,
+          [deviceId, ...CLOUD_PROVIDER_IDS]
+        ).catch(() => [[]]);
+        cloudHourlyScopes = (scopeRows || []).map((row) => ({
+          participantId: row.participantId,
+          day: toDayString(row.day),
+          hour: Number(row.hour || 0),
+          providerId: row.providerId
+        }));
 
-      removed.uploadBatches = await deleteAffected(conn, "DELETE FROM upload_batches WHERE deviceId = ?", [deviceId]);
-      removed.usageSyncBuckets = await deleteAffected(conn, "DELETE FROM usage_sync_buckets WHERE deviceId = ?", [deviceId]);
-      removed.usageSyncBucketsHourly = await deleteAffected(conn, "DELETE FROM usage_sync_buckets_hourly WHERE deviceId = ?", [deviceId]);
-      if (cloudHourlyScopes.length) {
-        const clauses = cloudHourlyScopes.map(() => "(participantId = ? AND day = ? AND hour = ? AND providerId = ?)").join(" OR ");
-        const params = cloudHourlyScopes.flatMap((scope) => [scope.participantId, scope.day, scope.hour, scope.providerId]);
-        removed.usageSyncBucketsHourly += await deleteAffected(conn, `DELETE FROM usage_sync_buckets_hourly WHERE ${clauses}`, params);
+        removed.uploadBatches = await deleteAffected(conn, "DELETE FROM upload_batches WHERE deviceId = ?", [deviceId]);
+        removed.usageSyncBuckets = await deleteAffected(conn, "DELETE FROM usage_sync_buckets WHERE deviceId = ?", [deviceId]);
+        removed.usageSyncBucketsHourly = await deleteAffected(conn, "DELETE FROM usage_sync_buckets_hourly WHERE deviceId = ?", [deviceId]);
+        if (cloudHourlyScopes.length) {
+          const clauses = cloudHourlyScopes.map(() => "(participantId = ? AND day = ? AND hour = ? AND providerId = ?)").join(" OR ");
+          const params = cloudHourlyScopes.flatMap((scope) => [scope.participantId, scope.day, scope.hour, scope.providerId]);
+          removed.usageSyncBucketsHourly += await deleteAffected(conn, `DELETE FROM usage_sync_buckets_hourly WHERE ${clauses}`, params);
+        }
+        removed.usageHourly = await deleteAffected(conn, "DELETE FROM usage_hourly WHERE deviceId = ?", [deviceId]);
+        removed.usageDaily = await deleteAffected(conn, "DELETE FROM usage_daily WHERE deviceId = ?", [deviceId]);
+        removed.devices = await deleteAffected(conn, "DELETE FROM devices WHERE id = ?", [deviceId]);
+      });
+      delete this.db.devices[deviceId];
+      for (const [key, row] of Object.entries(this.db.usageDaily || {})) {
+        if (row.deviceId === deviceId) delete this.db.usageDaily[key];
       }
-      removed.usageHourly = await deleteAffected(conn, "DELETE FROM usage_hourly WHERE deviceId = ?", [deviceId]);
-      removed.usageDaily = await deleteAffected(conn, "DELETE FROM usage_daily WHERE deviceId = ?", [deviceId]);
-      removed.devices = await deleteAffected(conn, "DELETE FROM devices WHERE id = ?", [deviceId]);
+      for (const [key, row] of Object.entries(this.db.usageHourly || {})) {
+        if (row.deviceId === deviceId) delete this.db.usageHourly[key];
+      }
+      for (const [key, row] of Object.entries(this.db.usageSyncBuckets || {})) {
+        if (row.deviceId === deviceId) delete this.db.usageSyncBuckets[key];
+      }
+      for (const [key, row] of Object.entries(this.db.usageSyncBucketsHourly || {})) {
+        const sameDevice = row.deviceId === deviceId;
+        const sameCloudScope = cloudHourlyScopes.some((scope) => (
+          row.participantId === scope.participantId &&
+          row.day === scope.day &&
+          Number(row.hour || 0) === scope.hour &&
+          row.providerId === scope.providerId
+        ));
+        if (sameDevice || sameCloudScope) delete this.db.usageSyncBucketsHourly[key];
+      }
+      this.invalidateAggregateCache();
+      return {
+        deleted: Object.values(removed).some((count) => count > 0),
+        participantId,
+        deviceId,
+        cloudHourlyScopes,
+        removed
+      };
     });
-    delete this.db.devices[deviceId];
-    for (const [key, row] of Object.entries(this.db.usageDaily || {})) {
-      if (row.deviceId === deviceId) delete this.db.usageDaily[key];
-    }
-    for (const [key, row] of Object.entries(this.db.usageHourly || {})) {
-      if (row.deviceId === deviceId) delete this.db.usageHourly[key];
-    }
-    for (const [key, row] of Object.entries(this.db.usageSyncBuckets || {})) {
-      if (row.deviceId === deviceId) delete this.db.usageSyncBuckets[key];
-    }
-    for (const [key, row] of Object.entries(this.db.usageSyncBucketsHourly || {})) {
-      const sameDevice = row.deviceId === deviceId;
-      const sameCloudScope = cloudHourlyScopes.some((scope) => (
-        row.participantId === scope.participantId &&
-        row.day === scope.day &&
-        Number(row.hour || 0) === scope.hour &&
-        row.providerId === scope.providerId
-      ));
-      if (sameDevice || sameCloudScope) delete this.db.usageSyncBucketsHourly[key];
-    }
-    this.invalidateAggregateCache();
-    return {
-      deleted: Object.values(removed).some((count) => count > 0),
-      participantId,
-      deviceId,
-      cloudHourlyScopes,
-      removed
-    };
   }
 
   async syncIdentityTables() {
@@ -1233,6 +1267,19 @@ export class MySqlStore extends Store {
   async syncUsageDailyRows(entries = Object.entries(this.db.usageDaily || {})) {
     await withTransaction(this.pool, async (conn) => {
       await upsertUsageRows(conn, entries);
+    });
+  }
+
+  async syncLegacyUsageMirror(previousUsageKeys = new Set()) {
+    const currentUsage = this.db.usageDaily || {};
+    const removedUsageKeys = [...previousUsageKeys].filter((key) => !currentUsage[key]);
+    await withTransaction(this.pool, async (conn) => {
+      await replaceParticipants(conn, Object.values(this.db.participants));
+      await replaceDevices(conn, Object.values(this.db.devices));
+      await replaceWorkdirs(conn, Object.values(this.db.workdirs));
+      await deleteUsageRowsByKeys(conn, removedUsageKeys);
+      await upsertUsageRows(conn, Object.entries(currentUsage));
+      await replaceUploadBatches(conn, Object.values(this.db.uploadBatches));
     });
   }
 
@@ -1287,6 +1334,17 @@ async function ensureIndex(pool, tableName, indexName, createSql) {
 async function deleteAffected(conn, sql, params = []) {
   const [result] = await conn.query(sql, params).catch(() => [{ affectedRows: 0 }]);
   return Number(result?.affectedRows || 0);
+}
+
+async function deleteUsageRowsByKeys(conn, usageKeys = []) {
+  for (let i = 0; i < usageKeys.length; i += 500) {
+    const chunk = usageKeys.slice(i, i + 500);
+    if (!chunk.length) continue;
+    await conn.query(
+      `DELETE FROM usage_daily WHERE usageKey IN (${chunk.map(() => "?").join(",")})`,
+      chunk
+    );
+  }
 }
 
 async function replaceParticipants(conn, rows) {
