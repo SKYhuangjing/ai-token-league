@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.2] - 2026-05-25
+
+### Added
+
+- [Desktop] Added full local/server reconcile support so the collector can compare bucket fingerprints and repair missing or diverged usage data.
+- Added MySQL dual-backend and live lock regression coverage for request-scoped usage writes.
+
+### Changed
+
+- Hardened MySQL usage persistence with request-local write locking and scoped bucket replacement to protect concurrent sync and reconciliation paths from data loss.
+- Expanded operations and design documentation for MySQL request-local write locks and data-loss handoff checks.
+
+### Fixed
+
+- [Desktop] Restored estimated cost display on the overview page.
+- Fixed usage sync state reconciliation so local and cloud bucket state can detect missing, stale, or changed rows correctly.
+
+---
+
 ## [0.7.1] - 2026-05-24
 
 ### Added

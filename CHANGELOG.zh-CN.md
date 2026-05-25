@@ -6,6 +6,25 @@
 
 ---
 
+## [0.7.2] - 2026-05-25
+
+### 新增
+
+- [Desktop] 新增本地/服务端 full reconcile 支持，可对比 bucket 指纹并修复缺失或分歧的 usage 数据。
+- 新增 MySQL dual-backend 与 live lock 回归覆盖，验证请求级 usage 写入保护。
+
+### 变更
+
+- 加固 MySQL usage 持久化：通过 request-local 写锁和按 bucket 范围替换，避免并发 sync / reconcile 路径导致数据丢失。
+- 补充 MySQL request-local 写锁设计、数据丢失交接检查和运维说明。
+
+### 修复
+
+- [Desktop] 恢复 overview 页的 estimated cost 展示。
+- 修复 usage sync state reconciliation，使本地与云端 bucket 状态能正确识别缺失、过期或已变更的数据行。
+
+---
+
 ## [0.7.1] - 2026-05-24
 
 ### 新增
