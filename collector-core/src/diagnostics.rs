@@ -9,6 +9,8 @@ pub fn export_diagnostics(config: &AppConfig) -> Value {
     let upload_queue = read_upload_queue_summary();
     let sync_manifest =
         read_json_file(crate::config::manifest_path()).unwrap_or_else(|| json!(null));
+    let sync_state =
+        read_json_file(crate::config::sync_state_path()).unwrap_or_else(|| json!(null));
     let runtime_log =
         crate::observability::read_recent_runtime_events(DIAGNOSTICS_RUNTIME_LOG_LIMIT);
     json!({
@@ -20,6 +22,7 @@ pub fn export_diagnostics(config: &AppConfig) -> Value {
         "usageCache": usage_cache,
         "uploadQueue": upload_queue,
         "syncManifest": sync_manifest,
+        "syncState": sync_state,
         "runtimeLogSummary": crate::observability::runtime_log_summary(),
         "runtimeLog": runtime_log,
         "runtimeLogLimit": DIAGNOSTICS_RUNTIME_LOG_LIMIT
@@ -152,7 +155,6 @@ fn summarize_payload(payload: &Value) -> Value {
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,7 +236,9 @@ mod tests {
             added_at: None,
         }];
         let sanitized = sanitize_config(&cfg);
-        let tokens = sanitized["cursorDashboardUsage"]["workosSessionTokens"].as_array().unwrap();
+        let tokens = sanitized["cursorDashboardUsage"]["workosSessionTokens"]
+            .as_array()
+            .unwrap();
         assert_eq!(tokens[0]["token"], "[redacted]");
     }
 
@@ -255,7 +259,9 @@ mod tests {
             added_at: None,
         }];
         let sanitized = sanitize_config(&cfg);
-        let accounts = sanitized["cursorDashboardUsage"]["accounts"].as_array().unwrap();
+        let accounts = sanitized["cursorDashboardUsage"]["accounts"]
+            .as_array()
+            .unwrap();
         assert_eq!(accounts[0]["accessToken"], "[redacted]");
         assert_eq!(accounts[0]["refreshToken"], "[redacted]");
         let email = accounts[0]["email"].as_str().unwrap();
@@ -280,7 +286,9 @@ mod tests {
             added_at: None,
         }];
         let sanitized = sanitize_config(&cfg);
-        let email = sanitized["cursorDashboardUsage"]["accounts"][0]["email"].as_str().unwrap();
+        let email = sanitized["cursorDashboardUsage"]["accounts"][0]["email"]
+            .as_str()
+            .unwrap();
         assert_eq!(email, "a***@corp.io");
     }
 
@@ -289,7 +297,10 @@ mod tests {
         let mut cfg = make_config();
         let mut roots = HashMap::new();
         roots.insert("codex_local".into(), vec!["/home/user/codex".into()]);
-        roots.insert("claude_code_local".into(), vec!["/Users/dev/projects".into()]);
+        roots.insert(
+            "claude_code_local".into(),
+            vec!["/Users/dev/projects".into()],
+        );
         cfg.provider_roots = roots;
         let sanitized = sanitize_config(&cfg);
         assert_eq!(sanitized["providerRoots"], "[path-redacted]");
@@ -325,6 +336,11 @@ mod tests {
         let home = temp_home();
         std::env::set_var("HOME", &home);
         config::ensure_app_dir();
+        fs::write(
+            config::sync_state_path(),
+            r#"{"version":1,"states":{"https://example.test":{"version":1,"buckets":{}}}}"#,
+        )
+        .unwrap();
 
         let cfg = make_config();
         let diag = export_diagnostics(&cfg);
@@ -336,6 +352,8 @@ mod tests {
         assert!(diag["config"].is_object());
         assert!(diag["usageCache"].is_object());
         assert!(diag["uploadQueue"].is_object());
+        assert!(diag["syncState"].is_object());
+        assert!(diag["syncState"]["states"]["https://example.test"].is_object());
         assert!(diag["runtimeLogSummary"].is_object());
 
         let _ = fs::remove_dir_all(&home);

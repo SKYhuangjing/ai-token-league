@@ -331,13 +331,24 @@ async fn upload_prepared_chunk(
         .send()
         .await
     {
-        Ok(resp) if resp.status().is_success() => {
-            for upload in chunk {
-                mark_upload_success(manifest, upload);
+        Ok(resp) if resp.status().is_success() => match resp.json::<Value>().await {
+            Ok(body) => apply_batch_upload_response(
+                chunk,
+                manifest,
+                &body,
+                accepted,
+                rejected,
+                uploaded,
+                failed_buckets,
+            ),
+            Err(error) => {
+                let error_text = format!("invalid batch upload response: {}", error);
+                for upload in chunk {
+                    mark_upload_failure(upload, error_text.clone(), None, failed_buckets);
+                    *rejected += 1;
+                }
             }
-            *accepted += chunk.len();
-            *uploaded += chunk.len();
-        }
+        },
         Ok(resp) if matches!(resp.status().as_u16(), 404 | 405 | 501) => {
             for upload in chunk {
                 upload_prepared_single(
@@ -373,6 +384,80 @@ async fn upload_prepared_chunk(
             }
         }
     }
+}
+
+fn apply_batch_upload_response(
+    chunk: &[PreparedUpload],
+    manifest: &mut SyncManifest,
+    body: &Value,
+    accepted: &mut usize,
+    rejected: &mut usize,
+    uploaded: &mut usize,
+    failed_buckets: &mut Vec<FailedUpload>,
+) {
+    let Some(results) = body.get("results").and_then(|value| value.as_array()) else {
+        for upload in chunk {
+            mark_upload_failure(
+                upload,
+                "batch upload response missing results".to_string(),
+                None,
+                failed_buckets,
+            );
+            *rejected += 1;
+        }
+        return;
+    };
+
+    for (index, upload) in chunk.iter().enumerate() {
+        let result = results
+            .iter()
+            .find(|item| item.get("index").and_then(|value| value.as_u64()) == Some(index as u64));
+        if is_bucket_upload_confirmed(upload, result) {
+            mark_upload_success(manifest, upload);
+            *accepted += 1;
+            *uploaded += 1;
+            continue;
+        }
+
+        let error = result
+            .map(|item| {
+                let accepted_rows = item
+                    .get("accepted")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
+                let rejected_rows = item
+                    .get("rejected")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
+                format!(
+                    "batch bucket not fully accepted: accepted={}, rejected={}",
+                    accepted_rows, rejected_rows
+                )
+            })
+            .unwrap_or_else(|| "batch upload response missing bucket result".to_string());
+        mark_upload_failure(upload, error, None, failed_buckets);
+        *rejected += 1;
+    }
+}
+
+fn is_bucket_upload_confirmed(upload: &PreparedUpload, result: Option<&Value>) -> bool {
+    let Some(result) = result else {
+        return false;
+    };
+    if result.get("duplicate").and_then(|value| value.as_bool()) == Some(true)
+        || result.get("noOp").and_then(|value| value.as_bool()) == Some(true)
+    {
+        return true;
+    }
+    let accepted_rows = result
+        .get("accepted")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let rejected_rows = result
+        .get("rejected")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    rejected_rows == 0 && accepted_rows == upload.row_count as u64
 }
 
 async fn upload_prepared_single(
@@ -972,6 +1057,22 @@ mod tests {
         })
     }
 
+    fn prepared_upload(bucket_key: &str, row_count: usize) -> PreparedUpload {
+        let payload = hourly_payload("2026-05-16T00:00:00.000Z");
+        PreparedUpload {
+            bucket_key: bucket_key.to_string(),
+            day: "2026-05-16".to_string(),
+            hour: 8,
+            provider_id: "codex_local".to_string(),
+            fingerprint: format!("fp-{}", bucket_key),
+            row_count,
+            total_tokens: 42,
+            snapshot: payload["snapshot"].clone(),
+            items: payload["items"].as_array().cloned().unwrap_or_default(),
+            body: payload,
+        }
+    }
+
     #[test]
     fn queue_key_is_stable_across_payload_generation_time() {
         assert_eq!(
@@ -1030,6 +1131,78 @@ mod tests {
         assert_eq!(row["fingerprint"], "fp1");
         assert_eq!(row["rowCount"], 1);
         assert_eq!(row["totalTokens"], 42);
+    }
+
+    #[test]
+    fn batch_upload_response_marks_only_confirmed_buckets() {
+        let mut manifest = SyncManifest {
+            version: 1,
+            buckets: HashMap::new(),
+        };
+        let chunk = vec![
+            prepared_upload("2026-05-16|8|codex_local", 1),
+            prepared_upload("2026-05-16|9|codex_local", 2),
+            prepared_upload("2026-05-16|10|codex_local", 1),
+            prepared_upload("2026-05-16|11|codex_local", 1),
+        ];
+        let mut accepted = 0;
+        let mut rejected = 0;
+        let mut uploaded = 0;
+        let mut failed = Vec::new();
+
+        apply_batch_upload_response(
+            &chunk,
+            &mut manifest,
+            &json!({
+                "results": [
+                    {"index": 0, "accepted": 1, "rejected": 0},
+                    {"index": 1, "accepted": 1, "rejected": 1},
+                    {"index": 2, "accepted": 0, "rejected": 0, "noOp": true}
+                ]
+            }),
+            &mut accepted,
+            &mut rejected,
+            &mut uploaded,
+            &mut failed,
+        );
+
+        assert_eq!(accepted, 2);
+        assert_eq!(uploaded, 2);
+        assert_eq!(rejected, 2);
+        assert_eq!(failed.len(), 2);
+        assert!(manifest.buckets.contains_key("2026-05-16|8|codex_local"));
+        assert!(!manifest.buckets.contains_key("2026-05-16|9|codex_local"));
+        assert!(manifest.buckets.contains_key("2026-05-16|10|codex_local"));
+        assert!(!manifest.buckets.contains_key("2026-05-16|11|codex_local"));
+    }
+
+    #[test]
+    fn batch_upload_response_without_results_does_not_mark_success() {
+        let mut manifest = SyncManifest {
+            version: 1,
+            buckets: HashMap::new(),
+        };
+        let chunk = vec![prepared_upload("2026-05-16|8|codex_local", 1)];
+        let mut accepted = 0;
+        let mut rejected = 0;
+        let mut uploaded = 0;
+        let mut failed = Vec::new();
+
+        apply_batch_upload_response(
+            &chunk,
+            &mut manifest,
+            &json!({"accepted": 1}),
+            &mut accepted,
+            &mut rejected,
+            &mut uploaded,
+            &mut failed,
+        );
+
+        assert_eq!(accepted, 0);
+        assert_eq!(uploaded, 0);
+        assert_eq!(rejected, 1);
+        assert_eq!(failed.len(), 1);
+        assert!(manifest.buckets.is_empty());
     }
 
     #[test]

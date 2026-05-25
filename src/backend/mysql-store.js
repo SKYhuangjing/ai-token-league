@@ -5,7 +5,7 @@ import { Store } from "./store.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
-import { CLOUD_PROVIDER_IDS, displayTotalTokens } from "../shared/schema.js";
+import { CLOUD_PROVIDER_IDS, computeBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 const MIGRATION_002_PATH = path.resolve("migrations/002_usage_hourly.sql");
@@ -624,15 +624,33 @@ export class MySqlStore extends Store {
       params
     ).catch(() => [[]]);
     const byKey = new Map(rows.map((row) => [[toDayString(row.day), Number(row.hour || 0), row.providerId].join("|"), row]));
+    const [usageRows] = await this.pool.query(
+      `SELECT * FROM usage_hourly
+       WHERE participantId = ? AND deviceId = ? AND (${clauses})`,
+      params
+    ).catch(() => [[]]);
+    const usageByKey = new Map();
+    for (const row of usageRows || []) {
+      const usage = usageFromRow(row);
+      const key = [usage.day, Number(usage.hour || 0), usage.providerId].join("|");
+      const rowsForBucket = usageByKey.get(key) || [];
+      rowsForBucket.push(usage);
+      usageByKey.set(key, rowsForBucket);
+    }
     const missing = [];
     const different = [];
     const matched = [];
     for (const bucket of candidates) {
       const key = [bucket.day, Number(bucket.hour || 0), bucket.providerId || ""].join("|");
       const serverBucket = byKey.get(key);
-      if (!serverBucket) missing.push(bucket);
-      else if (serverBucket.bucketFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint: serverBucket.bucketFingerprint });
-      else matched.push(bucket);
+      const derivedRows = usageByKey.get(key) || [];
+      const derivedFingerprint = derivedRows.length ? computeBucketFingerprint(derivedRows) : "";
+      if (!serverBucket && !derivedFingerprint) missing.push(bucket);
+      else {
+        const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+        if (serverFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint });
+        else matched.push(bucket);
+      }
     }
     return { missing, different, matched };
   }

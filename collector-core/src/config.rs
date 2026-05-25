@@ -58,7 +58,7 @@ pub fn manifest_path() -> PathBuf {
     app_dir().join("sync-manifest.json")
 }
 
-fn sync_state_path() -> PathBuf {
+pub fn sync_state_path() -> PathBuf {
     app_dir().join("sync-state.json")
 }
 

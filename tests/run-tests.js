@@ -3789,6 +3789,33 @@ function testSyncStateReturnsMissingAndMatched() {
   console.log("  testSyncStateReturnsMissingAndMatched passed");
 }
 
+function testSyncStateFallsBackToHourlyRowsWhenMetadataMissing() {
+  const tmp = path.join(os.tmpdir(), `test-sync-state-hourly-fallback-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_ssh", did = "d_ssh";
+  const day = "2026-05-14", providerId = "codex_local";
+
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "SSH", identityPublicKey: "pk_ssh", os: "test", appVersion: "0.1.0" });
+
+  const payload = makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", totalTokens: 150, providerId, day, hour: 10 })
+  ], pid, did, { providerId, day, hour: 10 });
+  store.upsertUsageBatch(payload);
+  store.db.usageSyncBucketsHourly = {};
+
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did,
+    buckets: [{ day, hour: 10, providerId, fingerprint: payload.snapshot.bucketFingerprint }]
+  });
+
+  assert.equal(result.matched.length, 1, "hourly rows with matching fingerprint should count as matched");
+  assert.equal(result.missing.length, 0, "metadata-only loss should not force retry when facts exist");
+  assert.equal(result.different.length, 0, "matching hourly facts should not be different");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSyncStateFallsBackToHourlyRowsWhenMetadataMissing passed");
+}
+
 function testSyncStateAfterResetDetectsMissing() {
   const tmp = path.join(os.tmpdir(), `test-sync-reset-${Date.now()}.json`);
   const store = new Store(tmp);
@@ -5341,6 +5368,7 @@ testCursorDedupDailyDerivedCorrectly();
 
 // Sync-state tests
 testSyncStateReturnsMissingAndMatched();
+testSyncStateFallsBackToHourlyRowsWhenMetadataMissing();
 testSyncStateAfterResetDetectsMissing();
 testDeleteParticipantDataClearsHourlySyncState();
 

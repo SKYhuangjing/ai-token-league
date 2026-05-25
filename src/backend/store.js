@@ -750,13 +750,24 @@ export class Store {
       const serverBucket = this.getHourlyBucketSync(
         participantId, deviceId, bucket.day, bucket.hour, bucket.providerId
       );
+      const usageRows = Object.values(this.db.usageHourly || {}).filter((item) => {
+        return item.participantId === participantId
+          && item.deviceId === deviceId
+          && item.day === bucket.day
+          && Number(item.hour || 0) === Number(bucket.hour || 0)
+          && item.providerId === bucket.providerId;
+      });
+      const derivedFingerprint = usageRows.length ? computeBucketFingerprint(usageRows) : "";
 
-      if (!serverBucket) {
+      if (!serverBucket && !derivedFingerprint) {
         missing.push(bucket);
-      } else if (serverBucket.bucketFingerprint !== bucket.fingerprint) {
-        different.push({ ...bucket, serverFingerprint: serverBucket.bucketFingerprint });
       } else {
-        matched.push(bucket);
+        const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+        if (serverFingerprint !== bucket.fingerprint) {
+          different.push({ ...bucket, serverFingerprint });
+        } else {
+          matched.push(bucket);
+        }
       }
     }
 
