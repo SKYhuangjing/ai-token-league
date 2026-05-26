@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.3] - 2026-05-26
+
+### Changed
+
+- [Desktop] Cursor dashboard usage now scans the current and previous calendar month by default.
+
+### Fixed
+
+- [Desktop] Fixed Cursor dashboard timestamp parsing for numeric strings, second-based values, and ISO timestamps so usage no longer falls into fabricated current-day midnight buckets.
+
+---
+
 ## [0.7.2] - 2026-05-25
 
 ### Added
