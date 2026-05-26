@@ -183,17 +183,7 @@ impl CursorDashboardProvider {
     pub async fn fetch_usage(&self, cookie: &str) -> Result<Vec<Value>, String> {
         let client = reqwest::Client::new();
         let now = chrono::Utc::now();
-        let start_of_month = {
-            let naive = now.naive_utc();
-            let y = naive.year();
-            let m = naive.month();
-            chrono::NaiveDate::from_ymd_opt(y, m, 1)
-                .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .map(|dt| {
-                    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)
-                })
-                .unwrap_or(now)
-        };
+        let scan_start = cursor_scan_start(now);
 
         let mut all_events = Vec::new();
         let mut page = 1;
@@ -202,7 +192,7 @@ impl CursorDashboardProvider {
         while page <= max_pages {
             let body = json!({
                 "teamId": 0,
-                "startDate": format!("{}", start_of_month.timestamp_millis()),
+                "startDate": format!("{}", scan_start.timestamp_millis()),
                 "endDate": format!("{}", now.timestamp_millis()),
                 "page": page,
                 "pageSize": 100
@@ -271,26 +261,14 @@ impl CursorDashboardProvider {
 
             let model = normalize_cursor_model(event["model"].as_str().unwrap_or(""));
 
-            let timestamp = event["timestamp"].as_i64().unwrap_or(0);
-            let day = if timestamp > 0 {
-                crate::date::local_day_from_timestamp_ms(timestamp)
-            } else {
-                crate::date::local_day()
-            };
-            let hour = if timestamp > 0 {
-                crate::date::local_hour_from_timestamp_ms(timestamp)
-            } else {
-                0u32
-            };
+            let timestamp = parse_event_timestamp(&event["timestamp"]);
+            if timestamp == 0 {
+                continue;
+            }
+            let day = crate::date::local_day_from_timestamp_ms(timestamp);
+            let hour = crate::date::local_hour_from_timestamp_ms(timestamp);
 
-            let session_id = format!(
-                "cursor-{}",
-                if timestamp > 0 {
-                    timestamp.to_string()
-                } else {
-                    "unknown".to_string()
-                }
-            );
+            let session_id = format!("cursor-{}", timestamp);
 
             let workdir_candidate = format!("virtual:cursor-dashboard:Cursor · {}", account_name);
 
@@ -325,6 +303,48 @@ impl CursorDashboardProvider {
 
         items
     }
+}
+
+fn parse_event_timestamp(raw: &Value) -> i64 {
+    if let Some(value) = raw.as_i64() {
+        return timestamp_number_to_millis(value);
+    }
+    if let Some(value) = raw.as_str() {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(value) {
+            return dt.timestamp_millis();
+        }
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f") {
+            return dt.and_utc().timestamp_millis();
+        }
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+            return dt.and_utc().timestamp_millis();
+        }
+        if let Ok(number) = value.parse::<i64>() {
+            return timestamp_number_to_millis(number);
+        }
+    }
+    0
+}
+
+fn timestamp_number_to_millis(value: i64) -> i64 {
+    if value > 1_000_000_000_000 {
+        value
+    } else if value > 1_000_000_000 {
+        value * 1000
+    } else {
+        0
+    }
+}
+
+fn cursor_scan_start(now: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    let naive = now.naive_utc();
+    let y = naive.year();
+    let m = naive.month();
+    let (start_y, start_m) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
+    chrono::NaiveDate::from_ymd_opt(start_y, start_m, 1)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+        .unwrap_or(now)
 }
 
 fn normalize_cursor_model(model: &str) -> String {
@@ -395,6 +415,7 @@ pub struct CursorSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn test_normalize_cursor_model() {
@@ -415,19 +436,41 @@ mod tests {
     #[test]
     fn test_parse_events() {
         let provider = CursorDashboardProvider;
-        let events = vec![json!({
-            "tokenUsage": {
-                "inputTokens": 100,
-                "outputTokens": 50,
-                "cacheReadTokens": 10,
-                "cacheWriteTokens": 5
-            },
-            "model": "claude-3-opus",
-            "timestamp": 1704067200000_i64
-        })];
+        let events = vec![
+            json!({
+                "tokenUsage": {
+                    "inputTokens": 100,
+                    "outputTokens": 50,
+                    "cacheReadTokens": 10,
+                    "cacheWriteTokens": 5
+                },
+                "model": "claude-3-opus",
+                "timestamp": 1704067200000_i64
+            }),
+            json!({
+                "tokenUsage": {
+                    "inputTokens": 200,
+                    "outputTokens": 100,
+                    "cacheReadTokens": 20,
+                    "cacheWriteTokens": 10
+                },
+                "model": "grok-4.3",
+                "timestamp": "1704067200"
+            }),
+            json!({
+                "tokenUsage": {
+                    "inputTokens": 300,
+                    "outputTokens": 150,
+                    "cacheReadTokens": 30,
+                    "cacheWriteTokens": 15
+                },
+                "model": "gpt-4",
+                "timestamp": "2026-05-26T03:22:15.000Z"
+            }),
+        ];
 
         let items = provider.parse_events(&events, "test@example.com");
-        assert_eq!(items.len(), 1);
+        assert_eq!(items.len(), 3);
         assert_eq!(items[0]["inputTokens"], 100);
         assert_eq!(items[0]["totalTokens"], 165);
         assert_eq!(items[0]["model"], "claude-3-opus");
@@ -435,5 +478,79 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("test@example.com"));
+        assert_eq!(
+            items[1]["day"].as_str().unwrap(),
+            crate::date::local_day_from_timestamp_ms(1704067200000)
+        );
+        assert_eq!(
+            items[2]["hour"].as_u64().unwrap(),
+            crate::date::local_hour_from_timestamp_ms(parse_event_timestamp(&json!(
+                "2026-05-26T03:22:15.000Z"
+            ))) as u64
+        );
+    }
+
+    #[test]
+    fn test_parse_events_skips_unparseable_timestamp() {
+        let provider = CursorDashboardProvider;
+        let events = vec![
+            json!({
+                "tokenUsage": { "inputTokens": 100, "outputTokens": 50 },
+                "model": "gpt-4",
+                "timestamp": "not-a-timestamp"
+            }),
+            json!({
+                "tokenUsage": { "inputTokens": 200, "outputTokens": 100 },
+                "model": "claude-3-opus",
+                "timestamp": 1704067200000_i64
+            }),
+        ];
+
+        let items = provider.parse_events(&events, "test@example.com");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["model"], "claude-3-opus");
+    }
+
+    #[test]
+    fn test_parse_event_timestamp() {
+        assert_eq!(
+            parse_event_timestamp(&json!(1704067200000_i64)),
+            1704067200000
+        );
+        assert_eq!(parse_event_timestamp(&json!(1704067200_i64)), 1704067200000);
+        assert_eq!(
+            parse_event_timestamp(&json!("1704067200000")),
+            1704067200000
+        );
+        assert_eq!(parse_event_timestamp(&json!("1704067200")), 1704067200000);
+        assert_eq!(
+            parse_event_timestamp(&json!("2024-01-01T00:00:00Z")),
+            1704067200000
+        );
+        assert_eq!(parse_event_timestamp(&json!("garbage")), 0);
+        assert_eq!(parse_event_timestamp(&json!(null)), 0);
+        assert_eq!(parse_event_timestamp(&json!(999)), 0);
+    }
+
+    #[test]
+    fn test_cursor_scan_start_covers_current_and_previous_calendar_month() {
+        let now = chrono::Utc
+            .with_ymd_and_hms(2026, 5, 26, 12, 30, 0)
+            .single()
+            .unwrap();
+        let scan_start = cursor_scan_start(now);
+
+        assert_eq!(scan_start.to_rfc3339(), "2026-04-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn test_cursor_scan_start_handles_year_boundary() {
+        let now = chrono::Utc
+            .with_ymd_and_hms(2026, 1, 15, 1, 0, 0)
+            .single()
+            .unwrap();
+        let scan_start = cursor_scan_start(now);
+
+        assert_eq!(scan_start.to_rfc3339(), "2025-12-01T00:00:00+00:00");
     }
 }
