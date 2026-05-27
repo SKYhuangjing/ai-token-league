@@ -666,8 +666,33 @@ export class MySqlStore extends Store {
 
   async exportDailyCsv(args = {}) {
     const effectiveArgs = { range: "month", ...args };
-    const rows = await this.usageRowsForQuery(effectiveArgs);
-    return this.withScopedUsageRows(rows, () => Store.prototype.exportDailyCsv.call(this, effectiveArgs));
+    const { whereSql, params } = this.mysqlUsageScope(effectiveArgs);
+    const [rows] = await this.pool.query(
+      `SELECT u.day, u.participantId, u.workdirDisplayName, u.toolCode, u.providerId, u.model,
+              u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.reasoningTokens, u.totalTokens,
+              u.estimatedCostUsd, u.costQuality, u.sourceQuality,
+              p.nickname
+       FROM usage_daily u LEFT JOIN participants p ON p.id = u.participantId${whereSql}
+       ORDER BY u.day, u.participantId`,
+      params
+    );
+    return rows.map((row) => ({
+      day: toDayString(row.day),
+      nickname: row.nickname || row.participantId || "",
+      workdirDisplayName: row.workdirDisplayName || "",
+      toolCode: row.toolCode || "",
+      providerId: row.providerId || "",
+      model: row.model || "",
+      inputTokens: Number(row.inputTokens || 0),
+      outputTokens: Number(row.outputTokens || 0),
+      cacheReadTokens: Number(row.cacheReadTokens || 0),
+      cacheWriteTokens: Number(row.cacheWriteTokens || 0),
+      reasoningTokens: Number(row.reasoningTokens || 0),
+      totalTokens: Number(row.totalTokens || 0),
+      estimatedCostUsd: row.estimatedCostUsd ?? "",
+      costQuality: row.costQuality || "",
+      sourceQuality: row.sourceQuality || ""
+    }));
   }
 
   async missingPriceModels(args = {}) {

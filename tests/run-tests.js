@@ -6793,6 +6793,16 @@ async function testExportCsvEndpoint() {
     const emptyText = await emptyRes.text();
     const emptyLines = emptyText.trim().split("\n");
     assert.equal(emptyLines.length, 1, "empty CSV should have only header");
+
+    // Test range exceeds 90 days
+    const tooLargeRes = await fetch(`${baseUrl}/api/admin/export/csv?range=custom&start=2025-01-01&end=2026-05-27`);
+    assert.equal(tooLargeRes.status, 400, "range >90 days should be rejected");
+    const tooLargeBody = await tooLargeRes.json();
+    assert.ok(tooLargeBody.error, "should return error message");
+
+    // Test range within 90 days is accepted
+    const okRes = await fetch(`${baseUrl}/api/admin/export/csv?range=custom&start=2026-03-01&end=2026-05-27`);
+    assert.equal(okRes.status, 200, "range ≤90 days should be accepted");
   } finally {
     await cleanup();
   }
