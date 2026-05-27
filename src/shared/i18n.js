@@ -632,6 +632,8 @@ const translations = {
     "admin.usage.grainWeek": "周",
     "admin.usage.grainMonth": "月",
     "admin.usage.grainLabel": "{label} · {grain}",
+    "admin.usage.exportCsv": "导出 CSV",
+    "admin.usage.exportingCsv": "导出中...",
 
     // Admin - Detail panel
     "admin.detail.selectNickname": "选择一个昵称",
@@ -756,6 +758,7 @@ const translations = {
     "admin.error.saveAlias": "保存模型别名失败",
     "admin.error.deleteParticipant": "删除参与者数据失败",
     "admin.error.deleteDevice": "重置设备数据失败",
+    "admin.error.exportCsv": "导出 CSV 失败",
     "web.analytics.title": "多维数据分析看板",
     "web.analytics.cacheSavings": "Prompt 缓存节省成本",
     "web.analytics.cacheHitRate": "缓存命中率",
@@ -1415,6 +1418,8 @@ const translations = {
     "admin.usage.grainWeek": "Week",
     "admin.usage.grainMonth": "Month",
     "admin.usage.grainLabel": "{label} · {grain}",
+    "admin.usage.exportCsv": "Export CSV",
+    "admin.usage.exportingCsv": "Exporting...",
 
     // Admin - Detail panel
     "admin.detail.selectNickname": "Select a nickname",
@@ -1539,6 +1544,7 @@ const translations = {
     "admin.error.saveAlias": "failed to save model alias",
     "admin.error.deleteParticipant": "failed to delete participant data",
     "admin.error.deleteDevice": "failed to reset device data",
+    "admin.error.exportCsv": "failed to export CSV",
     "web.analytics.title": "Visual Data Analytics Dashboard",
     "web.analytics.cacheSavings": "Prompt Cache Cost Savings",
     "web.analytics.cacheHitRate": "Cache Hit Rate",

@@ -1315,6 +1315,34 @@ export class Store {
     };
   }
 
+  exportDailyCsv({ range = "month", startDay = "", endDay = "", participantId = "" } = {}) {
+    const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
+    const daySet = new Set(days);
+    const rows = Object.values(this.db.usageDaily).filter((item) => {
+      return daySet.has(item.day) && (!participantId || item.participantId === participantId);
+    });
+    const participants = this.db.participants || {};
+    return rows
+      .sort((a, b) => a.day.localeCompare(b.day) || (a.participantId || "").localeCompare(b.participantId || ""))
+      .map((item) => ({
+        day: item.day,
+        nickname: participants[item.participantId]?.nickname || item.participantId || "",
+        workdirDisplayName: item.workdirDisplayName || "",
+        toolCode: item.toolCode || "",
+        providerId: item.providerId || "",
+        model: item.model || "",
+        inputTokens: item.inputTokens || 0,
+        outputTokens: item.outputTokens || 0,
+        cacheReadTokens: item.cacheReadTokens || 0,
+        cacheWriteTokens: item.cacheWriteTokens || 0,
+        reasoningTokens: item.reasoningTokens || 0,
+        totalTokens: item.totalTokens || 0,
+        estimatedCostUsd: item.estimatedCostUsd ?? "",
+        costQuality: item.costQuality || "",
+        sourceQuality: item.sourceQuality || ""
+      }));
+  }
+
   cachedAggregate(name, args, compute, { dayScoped = false } = {}) {
     const cacheArgs = dayScoped ? { ...args, businessDay: this.currentBusinessDay() } : args;
     const key = `${name}|${STORAGE_SCHEMA_VERSION}|${JSON.stringify(cacheArgs)}`;

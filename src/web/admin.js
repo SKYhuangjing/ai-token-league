@@ -133,6 +133,12 @@ document.querySelector("#show-cost").addEventListener("change", (event) => {
 document.querySelector("#close-admin-detail").addEventListener("click", closeDetail);
 detailBackdrop.addEventListener("click", closeDetail);
 
+document.querySelector("#export-csv").addEventListener("click", () => {
+  exportCsv().catch((error) => {
+    statusEl.textContent = error.message;
+  });
+});
+
 document.querySelector("#pricing-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   pricingStatus.textContent = t("admin.saving");
@@ -166,6 +172,28 @@ async function refreshOpenRouter(recalculate) {
   await loadPricing();
   if (recalculate) await loadUsage();
   else await refreshQualityIfActive();
+}
+
+async function exportCsv() {
+  const btn = document.querySelector("#export-csv");
+  btn.disabled = true;
+  btn.textContent = t("admin.usage.exportingCsv");
+  try {
+    const response = await fetchAdmin(`/api/admin/export/csv?${queryString()}`);
+    if (!response.ok) throw new Error(t("admin.error.exportCsv"));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `usage-daily-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t("admin.usage.exportCsv");
+  }
 }
 
 async function loadUsage() {

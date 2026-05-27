@@ -609,6 +609,140 @@ function testAdminUsageRowRangeFeedsParticipantDetail() {
   }
 }
 
+function testExportDailyCsv() {
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-export-csv.json"));
+  const deviceId = newId("d");
+  const today = localDay();
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "csv-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: "2026-05-07T00:00:00.000Z",
+    items: [
+      {
+        day: today,
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirHash: "wd_csv",
+        workdirDisplayName: "csv-project",
+        model: "gpt-5",
+        inputTokens: 100,
+        outputTokens: 40,
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+        reasoningTokens: 20,
+        totalTokens: 155,
+        sourceQuality: "exact",
+        rawSourceRef: "csv.jsonl",
+        providerVersion: "0.1.0",
+        parserVersion: "0.1.0",
+        sourceFingerprint: "csv-fp-1"
+      }
+    ]
+  });
+
+  const rows = store.exportDailyCsv({ range: "today" });
+  assert.ok(Array.isArray(rows));
+  assert.equal(rows.length, 1);
+  const row = rows[0];
+  assert.equal(row.day, today);
+  assert.equal(row.nickname, "csv-user");
+  assert.equal(row.workdirDisplayName, "csv-project");
+  assert.equal(row.toolCode, "codex");
+  assert.equal(row.providerId, "codex_local");
+  assert.equal(row.model, "gpt-5");
+  assert.equal(row.inputTokens, 100);
+  assert.equal(row.outputTokens, 40);
+  assert.equal(row.cacheReadTokens, 10);
+  assert.equal(row.cacheWriteTokens, 5);
+  assert.equal(row.reasoningTokens, 20);
+  assert.equal(row.totalTokens, 155);
+  assert.equal(row.sourceQuality, "exact");
+  assert.ok(row.costQuality === "" || row.costQuality === "unknown_price", `unexpected costQuality: ${row.costQuality}`);
+}
+
+function testExportDailyCsvWithCost() {
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-export-csv-cost.json"));
+  const deviceId = newId("d");
+  const today = localDay();
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "csv-cost-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+  store.upsertModelPrice({ model: "gpt-5", inputCostPerMTok: 2, outputCostPerMTok: 8, cacheReadCostPerMTok: 0.5, cacheWriteCostPerMTok: 1 });
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: "2026-05-07T00:00:00.000Z",
+    items: [
+      {
+        day: today,
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirHash: "wd_csv_cost",
+        workdirDisplayName: "csv-cost-project",
+        model: "gpt-5",
+        inputTokens: 1000000,
+        outputTokens: 500000,
+        cacheReadTokens: 100000,
+        cacheWriteTokens: 50000,
+        reasoningTokens: 0,
+        totalTokens: 1650000,
+        sourceQuality: "exact",
+        rawSourceRef: "csv-cost.jsonl",
+        providerVersion: "0.1.0",
+        parserVersion: "0.1.0",
+        sourceFingerprint: "csv-cost-fp"
+      }
+    ]
+  });
+
+  const rows = store.exportDailyCsv({ range: "today" });
+  assert.equal(rows.length, 1);
+  const row = rows[0];
+  assert.equal(typeof row.estimatedCostUsd, "number");
+  assert.ok(row.estimatedCostUsd > 0);
+  assert.equal(row.costQuality, "exact_price");
+}
+
+function testExportDailyCsvFiltersByParticipant() {
+  const identity1 = generateIdentity();
+  const identity2 = generateIdentity();
+  const store = new Store(path.join(tmp, "db-export-csv-filter.json"));
+  const today = localDay();
+  store.registerDevice({ participantId: identity1.participantId, deviceId: newId("d"), nickname: "user1", identityPublicKey: identity1.identityPublicKey, os: "test", appVersion: APP_VERSION });
+  store.registerDevice({ participantId: identity2.participantId, deviceId: newId("d"), nickname: "user2", identityPublicKey: identity2.identityPublicKey, os: "test", appVersion: APP_VERSION });
+  store.upsertUsageBatch({ participantId: identity1.participantId, deviceId: newId("d"), clientGeneratedAt: "2026-05-07T00:00:00.000Z", items: [{ day: today, toolCode: "codex", providerId: "codex_local", workdirHash: "wd1", workdirDisplayName: "proj1", model: "gpt-5", inputTokens: 100, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 140, sourceQuality: "exact", rawSourceRef: "a.jsonl", providerVersion: "0.1.0", parserVersion: "0.1.0", sourceFingerprint: "fp-a" }] });
+  store.upsertUsageBatch({ participantId: identity2.participantId, deviceId: newId("d"), clientGeneratedAt: "2026-05-07T00:00:00.000Z", items: [{ day: today, toolCode: "claude", providerId: "claude_code_local", workdirHash: "wd2", workdirDisplayName: "proj2", model: "claude-sonnet-4-20250514", inputTokens: 200, outputTokens: 80, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 280, sourceQuality: "exact", rawSourceRef: "b.jsonl", providerVersion: "0.1.0", parserVersion: "0.1.0", sourceFingerprint: "fp-b" }] });
+
+  const allRows = store.exportDailyCsv({ range: "today" });
+  assert.equal(allRows.length, 2);
+
+  const user1Rows = store.exportDailyCsv({ range: "today", participantId: identity1.participantId });
+  assert.equal(user1Rows.length, 1);
+  assert.equal(user1Rows[0].nickname, "user1");
+}
+
+function testExportDailyCsvEmpty() {
+  const store = new Store(path.join(tmp, "db-export-csv-empty.json"));
+  const rows = store.exportDailyCsv({ range: "today" });
+  assert.ok(Array.isArray(rows));
+  assert.equal(rows.length, 0);
+}
+
 function testSourceFingerprintDedupeKeepsDistinctDays() {
   const identity = generateIdentity();
   const store = new Store(path.join(tmp, "db-source-fingerprint.json"));
@@ -6597,6 +6731,74 @@ async function testUsageUploadForbiddenFields() {
   console.log("  testUsageUploadForbiddenFields passed");
 }
 
+async function testExportCsvEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    const today = localDay();
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId,
+        nickname: "csv-api-user", identityPublicKey: identity.identityPublicKey,
+        os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payload = {
+      participantId: identity.participantId, deviceId,
+      clientGeneratedAt: "2026-05-07T00:00:00.000Z",
+      items: [{
+        day: today, toolCode: "codex", providerId: "codex_local",
+        workdirHash: "wd_csv_api", workdirDisplayName: "csv-api-project",
+        model: "gpt-5", inputTokens: 200, outputTokens: 80,
+        cacheReadTokens: 20, cacheWriteTokens: 10, reasoningTokens: 15,
+        totalTokens: 310, sourceQuality: "exact", sourceFingerprint: "sf_csv_api"
+      }]
+    };
+    const signature = signPayload(identity.identityPrivateKey, payload);
+    const uploadRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, signature })
+    });
+    assert.equal(uploadRes.status, 200, `upload failed: ${await uploadRes.text()}`);
+
+    const res = await fetch(`${baseUrl}/api/admin/export/csv?range=today`);
+    assert.equal(res.status, 200);
+    const contentType = res.headers.get("content-type");
+    assert.ok(contentType.includes("text/csv"), `expected text/csv, got ${contentType}`);
+    const disposition = res.headers.get("content-disposition");
+    assert.ok(disposition.includes("attachment"), `expected attachment disposition, got ${disposition}`);
+    const text = await res.text();
+    assert.ok(text.includes("Date,User,Workdir"), "CSV must have header row");
+    assert.ok(text.includes("csv-api-user"), "CSV must contain the user nickname");
+    assert.ok(text.includes("csv-api-project"), "CSV must contain workdir name");
+    assert.ok(text.includes("gpt-5"), "CSV must contain model name");
+    assert.ok(text.includes("csv-api-user"), `CSV must contain the user nickname, got: ${text.slice(0, 500)}`);
+    assert.ok(text.includes("csv-api-project"), `CSV must contain workdir name, got: ${text.slice(0, 500)}`);
+    assert.ok(text.includes("310"), `CSV must contain total tokens, got: ${text.slice(0, 500)}`);
+
+    // Test with participant filter
+    const filteredRes = await fetch(`${baseUrl}/api/admin/export/csv?range=today&participantId=${identity.participantId}`);
+    assert.equal(filteredRes.status, 200);
+    const filteredText = await filteredRes.text();
+    const filteredLines = filteredText.trim().split("\n");
+    assert.equal(filteredLines.length, 2, "filtered CSV should have header + 1 data row");
+
+    // Test empty result
+    const emptyRes = await fetch(`${baseUrl}/api/admin/export/csv?range=today&participantId=nonexistent`);
+    assert.equal(emptyRes.status, 200);
+    const emptyText = await emptyRes.text();
+    const emptyLines = emptyText.trim().split("\n");
+    assert.equal(emptyLines.length, 1, "empty CSV should have only header");
+  } finally {
+    await cleanup();
+  }
+  console.log("  testExportCsvEndpoint passed");
+}
+
 // ─── Changelog and preset edge case tests ─────────────────────────────────────
 
 function testParseChangelogEmptyInput() {
@@ -6827,6 +7029,10 @@ testStoreLargeTokenValues();
 testStoreWorkdirAliasPersistence();
 testStoreParticipantDetailMissingDay();
 testStoreBoardSummaryEmpty();
+testExportDailyCsv();
+testExportDailyCsvWithCost();
+testExportDailyCsvFiltersByParticipant();
+testExportDailyCsvEmpty();
 
 // HTTP API edge cases
 await testMalformedJsonPayload();
@@ -6839,6 +7045,7 @@ await testHealthEndpointDetails();
 await testModelPricesPublicEndpointStructure();
 await testLeaderboardWithNoData();
 await testUsageUploadForbiddenFields();
+await testExportCsvEndpoint();
 
 // Changelog and preset edge cases
 testParseChangelogEmptyInput();

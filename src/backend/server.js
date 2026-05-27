@@ -177,6 +177,15 @@ function sendJson(res, status, body) {
   res.end(API_PRETTY_JSON ? JSON.stringify(body, null, 2) : JSON.stringify(body));
 }
 
+function csvEscape(value) {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.startsWith("=") || str.startsWith("+") || str.startsWith("-") || str.startsWith("@")) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
 function checkBasicAuth(req, res, { username = ADMIN_USERNAME, password = ADMIN_PASSWORD, realm = "Admin" } = {}) {
   if (!username) return true;
   const header = req.headers.authorization || "";
@@ -578,6 +587,41 @@ async function handleApi(req, res) {
       endDay: url.searchParams.get("end") || "",
       participantId: url.searchParams.get("participantId") || ""
     }));
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/export/csv")) {
+    const url = new URL(req.url, "http://localhost");
+    const rows = await store.exportDailyCsv({
+      range: url.searchParams.get("range") || "month",
+      startDay: url.searchParams.get("start") || "",
+      endDay: url.searchParams.get("end") || "",
+      participantId: url.searchParams.get("participantId") || ""
+    });
+    const csvHeader = "Date,User,Workdir,Tool,Provider,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Write Tokens,Reasoning Tokens,Total Tokens,Estimated Cost USD,Cost Quality,Source Quality";
+    const csvRows = rows.map((row) => [
+      csvEscape(row.day),
+      csvEscape(row.nickname),
+      csvEscape(row.workdirDisplayName),
+      csvEscape(row.toolCode),
+      csvEscape(row.providerId),
+      csvEscape(row.model),
+      row.inputTokens,
+      row.outputTokens,
+      row.cacheReadTokens,
+      row.cacheWriteTokens,
+      row.reasoningTokens,
+      row.totalTokens,
+      row.estimatedCostUsd,
+      csvEscape(row.costQuality),
+      csvEscape(row.sourceQuality)
+    ].join(","));
+    const bom = "﻿";
+    const csv = bom + csvHeader + "\n" + csvRows.join("\n") + "\n";
+    res.writeHead(200, {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="usage-daily-${new Date().toISOString().slice(0, 10)}.csv"`
+    });
+    res.end(csv);
+    return;
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/devices")) {
     return sendJson(res, 200, store.adminDevices());

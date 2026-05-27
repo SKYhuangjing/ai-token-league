@@ -664,6 +664,12 @@ export class MySqlStore extends Store {
     return this.withScopedUsageRows(rows, () => Store.prototype.adminQuality.call(this, effectiveArgs));
   }
 
+  async exportDailyCsv(args = {}) {
+    const effectiveArgs = { range: "month", ...args };
+    const rows = await this.usageRowsForQuery(effectiveArgs);
+    return this.withScopedUsageRows(rows, () => Store.prototype.exportDailyCsv.call(this, effectiveArgs));
+  }
+
   async missingPriceModels(args = {}) {
     const effectiveArgs = { range: "month", ...args };
     const { whereSql, params } = this.mysqlUsageScope(effectiveArgs, "u");

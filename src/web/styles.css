@@ -1351,6 +1351,27 @@ html[lang="en"] .feature-copy strong::after {
   margin: 0;
 }
 
+.export-csv-btn {
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  background: #fffaf0;
+  color: var(--ink);
+  cursor: pointer;
+  font: 700 14px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+
+.export-csv-btn:hover {
+  background: var(--ink);
+  color: #fffaf0;
+}
+
+.export-csv-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .segmented {
   display: inline-flex;
   border: 1px solid var(--ink);
