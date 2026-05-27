@@ -4258,6 +4258,368 @@ function testStoreDeleteModelPrice() {
   console.log("  testStoreDeleteModelPrice passed");
 }
 
+function testStoreAnalytics() {
+  const store = new Store(path.join(tmp, "db-analytics-test.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "analytics-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+  
+  store.upsertModelPrice({
+    model: "claude-3-5-sonnet",
+    inputCostPerMTok: 3,
+    outputCostPerMTok: 15,
+    cacheReadCostPerMTok: 0.3,
+    cacheWriteCostPerMTok: 3.75
+  });
+
+  const day = localDay();
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{
+      day, toolCode: "claude", providerId: "claude_code_local",
+      workdirHash: "wd_analytics", workdirDisplayName: "analytics-project",
+      model: "claude-3-5-sonnet", inputTokens: 100000, outputTokens: 50000,
+      cacheReadTokens: 50000, cacheWriteTokens: 10000, reasoningTokens: 0,
+      totalTokens: 210000, sourceQuality: "exact", sourceFingerprint: "sf_analytics"
+    }]
+  });
+
+  const data = store.analytics({ period: "today", participantId: identity.participantId });
+  assert.equal(data.summary.totalTokens, 210000);
+  assert.equal(data.summary.inputTokens, 100000);
+  assert.equal(data.summary.outputTokens, 50000);
+  assert.equal(data.summary.cacheReadTokens, 50000);
+  assert.equal(data.summary.cacheWriteTokens, 10000);
+  
+  assert.ok(Math.abs(data.summary.cacheSavingsUsd - 0.135) < 0.00001);
+  assert.ok(Math.abs(data.summary.cacheHitRate - 50000 / 150000) < 0.00001);
+  assert.equal(data.models.length, 1);
+  assert.equal(data.models[0].name, "claude-3-5-sonnet");
+  assert.equal(data.providers.length, 1);
+  assert.equal(data.providers[0].name, "claude_code_local");
+  assert.equal(data.timeSeries.length, 1);
+  assert.equal(data.timeGrain, "day");
+  assert.equal(data.timeSeries[0].totalTokens, 210000);
+  assert.equal(data.heatmap.length, 90);
+  assert.equal(data.heatmap.find(h => h.day === day).totalTokens, 210000);
+
+  console.log("  testStoreAnalytics passed");
+}
+
+function testStoreAnalyticsHourly() {
+  const store = new Store(path.join(tmp, "db-analytics-hourly.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "hourly-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const today = localDay();
+  // Write hourly snapshots for hours 9, 10, 11
+  // Note: normalizeUsageTotal recalculates totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+  const hourTokens = { 9: { input: 3000, output: 2000, cacheRead: 5000, cacheWrite: 0 }, 10: { input: 4000, output: 3000, cacheRead: 4000, cacheWrite: 0 }, 11: { input: 2000, output: 1000, cacheRead: 7000, cacheWrite: 0 } };
+  for (const [h, t] of Object.entries(hourTokens)) {
+    const hour = Number(h);
+    const total = t.input + t.output + t.cacheRead + t.cacheWrite;
+    store.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ day: today, hour, workdirHash: "wd_h", inputTokens: t.input, outputTokens: t.output, cacheReadTokens: t.cacheRead, cacheWriteTokens: t.cacheWrite, reasoningTokens: 0, totalTokens: total })
+    ], identity.participantId, deviceId, { day: today, hour }));
+  }
+
+  const data = store.analytics({ period: "today", participantId: identity.participantId });
+  assert.equal(data.timeGrain, "hour", "timeGrain must be 'hour' when hourly data exists");
+  assert.equal(data.timeSeries.length, 24, "timeSeries must have 24 entries for hourly");
+  // Hours 9,10,11 should have tokens; others zero
+  assert.equal(data.timeSeries[9].totalTokens, 10000);
+  assert.equal(data.timeSeries[10].totalTokens, 11000);
+  assert.equal(data.timeSeries[11].totalTokens, 10000);
+  assert.equal(data.timeSeries[0].totalTokens, 0, "hour 0 should be zero");
+  assert.equal(data.timeSeries[9].label, "09:00", "label format must be HH:00");
+  assert.equal(data.timeSeries[9].hour, 9);
+  assert.equal(data.timeSeries[9].day, today);
+  // Summary should include hourly-derived daily total (31000 = 10000+11000+10000)
+  assert.equal(data.summary.totalTokens, 31000, "summary must reflect hourly-derived daily total");
+  assert.equal(data.heatmap.length, 90);
+  assert.equal(data.heatmap.find(hm => hm.day === today).totalTokens, 31000, "heatmap must reflect today total");
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-hourly.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-hourly.json"));
+  console.log("  testStoreAnalyticsHourly passed");
+}
+
+function testStoreAnalyticsHourlyYesterday() {
+  const store = new Store(path.join(tmp, "db-analytics-hourly-y.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "hourly-yesterday", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const yesterday = addDays(localDay(), -1);
+  const yTokens = { 14: 7500, 15: 8000 };
+  for (const [h, tokens] of Object.entries(yTokens)) {
+    const hour = Number(h);
+    store.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ day: yesterday, hour, workdirHash: "wd_hy", inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: tokens })
+    ], identity.participantId, deviceId, { day: yesterday, hour }));
+  }
+
+  const data = store.analytics({ period: "yesterday", participantId: identity.participantId });
+  assert.equal(data.timeGrain, "hour", "yesterday with hourly data must return timeGrain=hour");
+  assert.equal(data.timeSeries.length, 24);
+  assert.equal(data.timeSeries[14].totalTokens, 7500);
+  assert.equal(data.timeSeries[15].totalTokens, 8000);
+  assert.equal(data.summary.totalTokens, 15500);
+  assert.equal(data.period, "yesterday");
+  assert.equal(data.from, yesterday);
+  assert.equal(data.to, yesterday);
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-hourly-y.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-hourly-y.json"));
+  console.log("  testStoreAnalyticsHourlyYesterday passed");
+}
+
+function testStoreAnalyticsDailyFallbackWhenNoHourly() {
+  const store = new Store(path.join(tmp, "db-analytics-daily-fb.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "daily-fb", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const today = localDay();
+  // Write daily-only data (no hourly)
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [makeSnapshotItem({ day: today, workdirHash: "wd_dfb", totalTokens: 5000, inputTokens: 2000, outputTokens: 1000, cacheReadTokens: 1500, cacheWriteTokens: 500, reasoningTokens: 0 })]
+  });
+
+  const data = store.analytics({ period: "today", participantId: identity.participantId });
+  assert.equal(data.timeGrain, "day", "without hourly data, timeGrain must be 'day'");
+  assert.equal(data.timeSeries.length, 1, "daily fallback should produce 1 timeSeries entry");
+  assert.equal(data.timeSeries[0].day, today);
+  assert.equal(data.timeSeries[0].totalTokens, 5000);
+  assert.equal(data.summary.totalTokens, 5000);
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-daily-fb.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-daily-fb.json"));
+  console.log("  testStoreAnalyticsDailyFallbackWhenNoHourly passed");
+}
+
+function testStoreAnalyticsCacheCalculations() {
+  const store = new Store(path.join(tmp, "db-analytics-cache.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "cache-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  store.upsertModelPrice({
+    model: "claude-3-5-sonnet",
+    inputCostPerMTok: 3,
+    outputCostPerMTok: 15,
+    cacheReadCostPerMTok: 0.3,
+    cacheWriteCostPerMTok: 3.75
+  });
+
+  const day = localDay();
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [{
+      day, toolCode: "claude", providerId: "claude_code_local",
+      workdirHash: "wd_cache", workdirDisplayName: "cache-project",
+      model: "claude-3-5-sonnet", inputTokens: 200000, outputTokens: 100000,
+      cacheReadTokens: 600000, cacheWriteTokens: 50000, reasoningTokens: 0,
+      totalTokens: 950000, sourceQuality: "exact", sourceFingerprint: "sf_cache"
+    }]
+  });
+
+  const data = store.analytics({ period: "today", participantId: identity.participantId });
+  // cacheHitRate = cacheRead / (input + cacheRead) = 600000 / (200000 + 600000) = 0.75
+  assert.ok(Math.abs(data.summary.cacheHitRate - 0.75) < 0.00001, "cacheHitRate must be 0.75");
+  // cacheSavingsUsd = cacheRead * (inputPrice - cacheReadPrice) = 600000 * (3e-6 - 0.3e-6) = 600000 * 2.7e-6 = 1.62
+  assert.ok(Math.abs(data.summary.cacheSavingsUsd - 1.62) < 0.0001, "cacheSavingsUsd must be ~1.62");
+  assert.equal(data.summary.inputTokens, 200000);
+  assert.equal(data.summary.outputTokens, 100000);
+  assert.equal(data.summary.cacheReadTokens, 600000);
+  assert.equal(data.summary.cacheWriteTokens, 50000);
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-cache.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-cache.json"));
+  console.log("  testStoreAnalyticsCacheCalculations passed");
+}
+
+function testStoreAnalyticsMultiModel() {
+  const store = new Store(path.join(tmp, "db-analytics-multi.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "multi-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const day = localDay();
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [
+      { day, toolCode: "claude", providerId: "claude_code_local", workdirHash: "wd_m1", workdirDisplayName: "p1", model: "claude-sonnet-4-5", inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 1500, sourceQuality: "exact", sourceFingerprint: "sf_m1" },
+      { day, toolCode: "codex", providerId: "codex_local", workdirHash: "wd_m2", workdirDisplayName: "p2", model: "gpt-5", inputTokens: 2000, outputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 3000, sourceQuality: "exact", sourceFingerprint: "sf_m2" },
+      { day, toolCode: "claude", providerId: "claude_code_local", workdirHash: "wd_m3", workdirDisplayName: "p3", model: "claude-sonnet-4-5", inputTokens: 500, outputTokens: 250, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 750, sourceQuality: "exact", sourceFingerprint: "sf_m3" }
+    ]
+  });
+
+  const data = store.analytics({ period: "today", participantId: identity.participantId });
+  assert.equal(data.summary.totalTokens, 5250);
+  // Models sorted by tokens desc: gpt-5 (3000) > claude-sonnet-4-5 (2250)
+  assert.equal(data.models.length, 2);
+  assert.equal(data.models[0].name, "gpt-5");
+  assert.equal(data.models[0].tokens, 3000);
+  assert.equal(data.models[1].name, "claude-sonnet-4-5");
+  assert.equal(data.models[1].tokens, 2250);
+  // Ratios
+  assert.ok(Math.abs(data.models[0].ratio - 3000 / 5250) < 0.00001);
+  assert.ok(Math.abs(data.models[1].ratio - 2250 / 5250) < 0.00001);
+  // Providers sorted by tokens desc
+  assert.equal(data.providers.length, 2);
+  assert.equal(data.providers[0].name, "codex_local");
+  assert.equal(data.providers[0].tokens, 3000);
+  assert.equal(data.providers[1].name, "claude_code_local");
+  assert.equal(data.providers[1].tokens, 2250);
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-multi.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-multi.json"));
+  console.log("  testStoreAnalyticsMultiModel passed");
+}
+
+function testStoreAnalyticsHeatmap() {
+  const store = new Store(path.join(tmp, "db-analytics-heatmap.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "heatmap-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const today = localDay();
+  const day30 = addDays(today, -30);
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [makeSnapshotItem({ day: today, workdirHash: "wd_hm1", inputTokens: 400, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 100, totalTokens: 1000 })]
+  });
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [makeSnapshotItem({ day: day30, workdirHash: "wd_hm2", inputTokens: 800, outputTokens: 400, cacheReadTokens: 600, cacheWriteTokens: 200, totalTokens: 2000 })]
+  });
+
+  const data = store.analytics({ period: "today", participantId: identity.participantId });
+  assert.equal(data.heatmap.length, 90, "heatmap must always have 90 entries");
+  // Verify continuity
+  for (let i = 1; i < data.heatmap.length; i++) {
+    const prev = new Date(data.heatmap[i - 1].day + "T00:00:00Z");
+    const curr = new Date(data.heatmap[i].day + "T00:00:00Z");
+    const diffMs = curr.getTime() - prev.getTime();
+    assert.equal(diffMs, 86400000, `heatmap gap at index ${i}: ${data.heatmap[i - 1].day} -> ${data.heatmap[i].day}`);
+  }
+  // Verify today's data
+  const todayEntry = data.heatmap.find(h => h.day === today);
+  assert.ok(todayEntry, "heatmap must contain today");
+  assert.equal(todayEntry.totalTokens, 1000);
+  // Verify day-30 data
+  const day30Entry = data.heatmap.find(h => h.day === day30);
+  assert.ok(day30Entry, "heatmap must contain day-30");
+  assert.equal(day30Entry.totalTokens, 2000);
+  // Period change should not affect heatmap length
+  const dataWeek = store.analytics({ period: "this_week", participantId: identity.participantId });
+  assert.equal(dataWeek.heatmap.length, 90, "heatmap must be 90 regardless of period");
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-heatmap.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-heatmap.json"));
+  console.log("  testStoreAnalyticsHeatmap passed");
+}
+
+function testStoreAnalyticsEmptyStore() {
+  const store = new Store(path.join(tmp, "db-analytics-empty.json"));
+  const data = store.analytics({ period: "today" });
+  assert.equal(data.summary.totalTokens, 0);
+  assert.equal(data.models.length, 0);
+  assert.equal(data.providers.length, 0);
+  assert.equal(data.timeGrain, "day");
+  assert.equal(data.timeSeries.length, 1, "empty today should still have 1 timeSeries entry");
+  assert.equal(data.timeSeries[0].totalTokens, 0);
+  assert.equal(data.heatmap.length, 90, "empty store must still return 90 heatmap entries");
+  assert.equal(data.period, "today");
+  assert.ok(data.from, "from must be set");
+  assert.ok(data.to, "to must be set");
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-empty.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-empty.json"));
+  console.log("  testStoreAnalyticsEmptyStore passed");
+}
+
+function testStoreAnalyticsDateRanges() {
+  const store = new Store(path.join(tmp, "db-analytics-ranges.json"));
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId, deviceId,
+    nickname: "range-user", identityPublicKey: identity.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const today = localDay();
+  const yesterday = addDays(today, -1);
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [makeSnapshotItem({ day: today, workdirHash: "wd_r1", inputTokens: 40, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 60 })]
+  });
+  store.upsertUsageBatch({
+    participantId: identity.participantId, deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [makeSnapshotItem({ day: yesterday, workdirHash: "wd_r2", inputTokens: 80, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 120 })]
+  });
+
+  // period=this_week
+  const week = store.analytics({ period: "this_week", participantId: identity.participantId });
+  assert.equal(week.period, "this_week");
+  assert.equal(week.summary.totalTokens, 180);
+
+  // period=this_month
+  const month = store.analytics({ period: "this_month", participantId: identity.participantId });
+  assert.equal(month.period, "this_month");
+  assert.equal(month.summary.totalTokens, 180);
+
+  // range=this_week
+  const rangeWeek = store.analytics({ range: "this_week", participantId: identity.participantId });
+  assert.equal(rangeWeek.summary.totalTokens, 180);
+
+  // custom range
+  const custom = store.analytics({ range: "custom", startDay: today, endDay: today, participantId: identity.participantId });
+  assert.equal(custom.summary.totalTokens, 60, "custom range single day should only include today");
+  assert.equal(custom.from, today);
+  assert.equal(custom.to, today);
+
+  // No participantId = all users
+  const all = store.analytics({ period: "today" });
+  assert.equal(all.summary.totalTokens, 60, "no participantId should aggregate all");
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-ranges.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-ranges.json"));
+  console.log("  testStoreAnalyticsDateRanges passed");
+}
+
 function testNormalizeTokenNumberIntegration() {
   const identity = generateIdentity();
   const store = new Store(path.join(tmp, "db-normalize.json"));
@@ -4396,6 +4758,15 @@ testWorkdirAliasUpdate();
 testStoreAggregateCacheInvalidation();
 testStoreBoardSummary();
 testStoreDeleteModelPrice();
+testStoreAnalytics();
+testStoreAnalyticsHourly();
+testStoreAnalyticsHourlyYesterday();
+testStoreAnalyticsDailyFallbackWhenNoHourly();
+testStoreAnalyticsCacheCalculations();
+testStoreAnalyticsMultiModel();
+testStoreAnalyticsHeatmap();
+testStoreAnalyticsEmptyStore();
+testStoreAnalyticsDateRanges();
 testNormalizeTokenNumberIntegration();
 
 // ── Cloud provider dedup tests ──

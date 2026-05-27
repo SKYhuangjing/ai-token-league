@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Token Analytics</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+  <main class="shell public-shell">
+    <section class="masthead public-masthead">
+      <div class="masthead-copy">
+        <h1 data-i18n="app.name">AI Token League</h1>
+        <span class="identity-pill" data-i18n="web.analytics.title">AI Token Analytics</span>
+      </div>
+      <div class="masthead-side">
+        <div class="masthead-nav">
+          <a href="/" class="nav-link" data-i18n="nav.home">← Home</a>
+          <a href="/leaderboard.html" class="nav-link" data-i18n="web.leaderboard.title"
+            style="margin-left: 12px; font-weight: 700;">社区排行榜</a>
+          <div class="lang-switcher-container" id="lang-switcher-container"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Selector Bar: Period Filter & Participant Filter -->
+    <section class="analytics-selector-row" aria-label="Filters">
+      <div class="segmented" data-filter="period" style="margin-bottom: 0;">
+        <button data-value="today" data-i18n="web.period.today">Today</button>
+        <button data-value="yesterday" data-i18n="web.period.yesterday">Yesterday</button>
+        <button data-value="this_week" data-i18n="web.period.thisWeek">This week</button>
+        <button data-value="last_week" data-i18n="web.period.lastWeek">Last week</button>
+        <button data-value="this_month" class="active" data-i18n="web.period.thisMonth">This month</button>
+        <button data-value="last_month" data-i18n="web.period.lastMonth">Last month</button>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 10px; margin-left: auto;">
+        <label for="participant-select" data-i18n="web.analytics.selectParticipant">选择分析对象</label>
+        <select id="participant-select" class="analytics-select">
+          <option value="" data-i18n="web.analytics.allCommunity">全社区 (合并数据)</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- Loading Overlay -->
+    <div id="analytics-loading" class="analytics-loading" hidden>
+      <div class="analytics-spinner"></div>
+    </div>
+
+    <!-- SECTION 1: Period-Scoped Analytics -->
+    <section class="analytics-block">
+      <h2 class="analytics-section-title">
+        <span data-i18n="web.analytics.periodSection">周期数据分析</span>
+        <span id="period-date-range" class="section-date-range"></span>
+      </h2>
+
+      <!-- KPI Summary Cards -->
+      <div class="analytics-kpi-grid">
+        <article class="kpi-card">
+          <span data-i18n="web.totalTokens">Total Tokens</span>
+          <strong id="kpi-total-tokens">-</strong>
+        </article>
+
+        <article class="kpi-card savings-highlight">
+          <span data-i18n="web.analytics.cacheSavings">Prompt 缓存节省</span>
+          <strong id="kpi-cache-savings" class="cost-amount">-</strong>
+        </article>
+
+        <article class="kpi-card">
+          <span data-i18n="web.analytics.savingsRate">缓存成本节省率</span>
+          <strong id="kpi-savings-rate">-</strong>
+        </article>
+
+        <article class="kpi-card">
+          <span data-i18n="web.estimatedCost">Estimated Cost</span>
+          <strong id="kpi-estimated-cost" class="cost-amount">-</strong>
+        </article>
+      </div>
+
+      <!-- Period Charts Grid -->
+      <div class="analytics-dashboard-grid">
+        <!-- Panel 3: Token Burn Line Chart -->
+        <article class="analytics-card" style="grid-column: span 2;">
+          <h3 data-i18n="web.analytics.burnTrend">Token 燃烧趋势</h3>
+          <p class="subtitle" data-i18n="web.analytics.trendSubtitle">Token 消耗与成本曲线走势（日维度；今日/昨日自动切换为小时粒度，需客户端 v0.6.3+）</p>
+          <div id="trend-chart-container" style="position: relative; width: 100%; height: 200px;">
+            <svg id="trend-chart" viewBox="0 0 800 200" preserveAspectRatio="none" class="chart-svg"
+              style="width: 100%; height: 100%;">
+              <!-- Grid and content will be populated dynamically -->
+            </svg>
+          </div>
+        </article>
+
+        <!-- Panel 1: Caching Speedometer Gauge -->
+        <article class="analytics-card">
+          <h3 data-i18n="web.analytics.cacheSavings">Prompt 缓存节省成本</h3>
+          <p class="subtitle" data-i18n="web.analytics.cachingDesc">由 Prompt Caching 自动节省</p>
+          <div style="display: flex; justify-content: center; align-items: center; padding: 10px 0;">
+            <svg viewBox="0 0 200 120" class="chart-svg" style="max-width: 260px;">
+              <path d="M 20 100 A 80 80 0 0 1 180 100" class="gauge-track" />
+              <path id="gauge-fill" d="M 20 100 A 80 80 0 0 1 180 100" class="gauge-fill" stroke-dasharray="0 251" />
+              <text id="gauge-val" x="100" y="90" class="gauge-text">0%</text>
+              <text id="gauge-label" x="100" y="110" class="gauge-subtext" data-i18n="web.analytics.cacheHitRate">Hit
+                Rate</text>
+            </svg>
+          </div>
+        </article>
+
+        <!-- Panel 4: Model Breakdown -->
+        <article class="analytics-card">
+          <h3 data-i18n="web.analytics.modelShare">模型市场份额</h3>
+          <p class="subtitle" data-i18n="web.analytics.modelsSubtitle">使用过的模型总 Token 占比</p>
+          <div id="model-chart" class="bar-chart-container">
+            <!-- Dynamically populated rows -->
+          </div>
+        </article>
+
+        <!-- Panel 5: Provider Breakdown -->
+        <article class="analytics-card" style="grid-column: span 2;">
+          <h3 data-i18n="web.detail.sources">数据来源</h3>
+          <p class="subtitle" data-i18n="web.analytics.providersSubtitle">数据采集工具的使用分布</p>
+          <div id="provider-chart" class="bar-chart-container">
+            <!-- Dynamically populated rows -->
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- SECTION 2: Long-Term Behavioral Insights -->
+    <section class="analytics-block" style="margin-top: 36px;">
+      <h2 class="analytics-section-title" data-i18n="web.analytics.habitSection">长期行为习惯追踪</h2>
+
+      <article class="analytics-card heatmap-full-width">
+        <h3 data-i18n="web.analytics.activityCalendar">编码活动热力图</h3>
+        <p class="subtitle" data-i18n="web.analytics.heatmapSubtitle">最近 12 周编码 Token 燃烧热度</p>
+
+        <div class="heatmap-container">
+          <div id="heatmap-grid" class="heatmap-grid"></div>
+          <div class="heatmap-legend">
+            <span data-i18n="web.analytics.less">Less</span>
+            <i class="heatmap-legend-cell level-0"></i>
+            <i class="heatmap-legend-cell level-1"></i>
+            <i class="heatmap-legend-cell level-2"></i>
+            <i class="heatmap-legend-cell level-3"></i>
+            <i class="heatmap-legend-cell level-4"></i>
+            <span style="margin-left: 2px;" data-i18n="web.analytics.more">More</span>
+          </div>
+        </div>
+
+        <div class="heatmap-tip-box" data-i18n="web.analytics.habitTip">
+          分析提示：热力图固定展示最近 90 天每日 Token 消耗量。高亮格子代表上方选中的时间区间，虚化格子代表区间外的历史数据，帮助您快速评估短期波动在长期节奏中的比重。
+        </div>
+      </article>
+    </section>
+
+    <!-- Tooltip -->
+    <div id="chart-tooltip" class="chart-tooltip"></div>
+  </main>
+
+  <script type="module" src="/analytics.js"></script>
+</body>
+
+</html>

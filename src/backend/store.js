@@ -1141,6 +1141,158 @@ export class Store {
     };
   }
 
+  analytics({ period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = {}) {
+    const businessDay = this.currentBusinessDay();
+    const days = period 
+      ? daysForPeriod(period, { businessDay }) 
+      : daysForDetailRange(range, { startDay, endDay, businessDay });
+    const daySet = new Set(days);
+    
+    const rows = Object.values(this.db.usageDaily).filter((item) => {
+      const matchesDay = daySet.has(item.day);
+      const matchesParticipant = !participantId || item.participantId === participantId;
+      return matchesDay && matchesParticipant;
+    });
+
+    const priceMap = this.priceMap();
+
+    let totalTokens = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    let reasoningTokens = 0;
+    let estimatedCostUsd = 0;
+    let cacheSavingsUsd = 0;
+
+    const modelBreakdown = {};
+    const providerBreakdown = {};
+
+    const dailySeries = {};
+    for (const day of days) {
+      dailySeries[day] = { day, totalTokens: 0, estimatedCostUsd: 0 };
+    }
+
+    for (const item of rows) {
+      const tokens = item.totalTokens || 0;
+      totalTokens += tokens;
+      const input = item.inputTokens || 0;
+      inputTokens += input;
+      const output = item.outputTokens || 0;
+      outputTokens += output;
+      const cacheRead = item.cacheReadTokens || 0;
+      cacheReadTokens += cacheRead;
+      const cacheWrite = item.cacheWriteTokens || 0;
+      cacheWriteTokens += cacheWrite;
+      const reasoning = item.reasoningTokens || 0;
+      reasoningTokens += reasoning;
+      estimatedCostUsd += item.estimatedCostUsd || 0;
+
+      modelBreakdown[item.model] = (modelBreakdown[item.model] || 0) + tokens;
+      providerBreakdown[item.providerId] = (providerBreakdown[item.providerId] || 0) + tokens;
+
+      if (dailySeries[item.day]) {
+        dailySeries[item.day].totalTokens += tokens;
+        dailySeries[item.day].estimatedCostUsd += item.estimatedCostUsd || 0;
+      }
+
+      const pricing = priceMap[normalizeModelName(item.model)];
+      if (pricing && pricing.input_cost_per_token !== undefined) {
+        const inputPrice = pricing.input_cost_per_token;
+        const cacheReadPrice = pricing.cache_read_input_token_cost !== undefined
+          ? pricing.cache_read_input_token_cost
+          : inputPrice * 0.1;
+        const savings = cacheRead * (inputPrice - cacheReadPrice);
+        if (savings > 0) {
+          cacheSavingsUsd += savings;
+        }
+      } else {
+        const savings = cacheRead * 1.35 / 1e6;
+        cacheSavingsUsd += savings;
+      }
+    }
+
+    const models = Object.entries(modelBreakdown)
+      .map(([name, val]) => ({ name, tokens: val, ratio: totalTokens ? val / totalTokens : 0 }))
+      .sort((a, b) => b.tokens - a.tokens);
+
+    const providers = Object.entries(providerBreakdown)
+      .map(([name, val]) => ({ name, tokens: val, ratio: totalTokens ? val / totalTokens : 0 }))
+      .sort((a, b) => b.tokens - a.tokens);
+
+    const timeSeries = Object.values(dailySeries).sort((a, b) => a.day.localeCompare(b.day));
+
+    // Build hourly time series for today/yesterday
+    let hourlySeries = null;
+    if (period === "today" || period === "yesterday") {
+      const targetDay = days[0];
+      const hourlyRows = Object.values(this.db.usageHourly || {}).filter((item) => {
+        const matchesDay = item.day === targetDay;
+        const matchesParticipant = !participantId || item.participantId === participantId;
+        return matchesDay && matchesParticipant;
+      });
+
+      hourlySeries = [];
+      for (let h = 0; h < 24; h++) {
+        hourlySeries.push({ day: targetDay, hour: h, label: `${String(h).padStart(2, "0")}:00`, totalTokens: 0, estimatedCostUsd: 0 });
+      }
+      for (const item of hourlyRows) {
+        const h = item.hour ?? 0;
+        if (hourlySeries[h]) {
+          hourlySeries[h].totalTokens += item.totalTokens || 0;
+          hourlySeries[h].estimatedCostUsd += item.estimatedCostUsd || 0;
+        }
+      }
+      // Only use hourly series when there is actual hourly data
+      const hasHourlyData = hourlyRows.length > 0;
+      if (!hasHourlyData) hourlySeries = null;
+    }
+    const cacheHitRate = (inputTokens + cacheReadTokens) > 0 
+      ? cacheReadTokens / (inputTokens + cacheReadTokens) 
+      : 0;
+
+    const heatmapDays = trailingDays(90, { businessDay });
+    const heatmapDaySet = new Set(heatmapDays);
+    const heatmapRows = Object.values(this.db.usageDaily).filter((item) => {
+      const matchesDay = heatmapDaySet.has(item.day);
+      const matchesParticipant = !participantId || item.participantId === participantId;
+      return matchesDay && matchesParticipant;
+    });
+
+    const heatmapSeries = {};
+    for (const day of heatmapDays) {
+      heatmapSeries[day] = { day, totalTokens: 0 };
+    }
+    for (const item of heatmapRows) {
+      if (heatmapSeries[item.day]) {
+        heatmapSeries[item.day].totalTokens += item.totalTokens || 0;
+      }
+    }
+    const heatmap = Object.values(heatmapSeries).sort((a, b) => a.day.localeCompare(b.day));
+
+    return {
+      period: period || range,
+      from: days[0] || "",
+      to: days.at(-1) || "",
+      summary: {
+        totalTokens,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        reasoningTokens,
+        estimatedCostUsd,
+        cacheHitRate,
+        cacheSavingsUsd
+      },
+      models,
+      providers,
+      timeSeries: hourlySeries || timeSeries,
+      timeGrain: hourlySeries ? "hour" : "day",
+      heatmap
+    };
+  }
+
   adminUsage({ grain = "day", range = "month", startDay = "", endDay = "", participantId = "", includeCost = false } = {}) {
     const args = { grain, range, startDay, endDay, participantId, includeCost };
     return this.cachedAggregate("adminUsage", args, () => this.computeAdminUsage(args), { dayScoped: isDayScopedRange({ range, startDay, endDay }) });

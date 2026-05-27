@@ -29,6 +29,7 @@
         <button type="button" data-admin-tab="pricing" data-i18n="admin.tab.pricing">Model prices</button>
         <button type="button" data-admin-tab="quality" data-i18n="admin.tab.quality">Quality</button>
         <button type="button" data-admin-tab="devices" data-i18n="admin.tab.devices">Devices</button>
+        <button type="button" data-admin-tab="analytics" data-i18n="admin.tab.analytics">Visual Analytics</button>
       </nav>
 
       <section class="board admin-panel active" data-admin-panel="usage">
@@ -171,6 +172,10 @@
             <tbody id="devices-tbody"></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="board admin-panel" data-admin-panel="analytics" style="padding: 0; overflow: hidden; border: none; box-shadow: none; background: transparent;">
+        <iframe src="/analytics.html" style="width: 100%; height: 600px; border: none; border-radius: 0; box-shadow: none; background: transparent;" id="analytics-iframe"></iframe>
       </section>
 
       <section class="board detail-board" id="detail-board" hidden>

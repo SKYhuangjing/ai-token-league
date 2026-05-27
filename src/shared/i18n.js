@@ -596,6 +596,7 @@ const translations = {
     "admin.tab.pricing": "模型价格",
     "admin.tab.quality": "质量",
     "admin.tab.devices": "设备",
+    "admin.tab.analytics": "可视化看板",
 
     // Admin - Usage panel
     "admin.usage.thisMonth": "本月",
@@ -754,7 +755,31 @@ const translations = {
     "admin.error.refreshOpenRouter": "刷新 OpenRouter 价格失败",
     "admin.error.saveAlias": "保存模型别名失败",
     "admin.error.deleteParticipant": "删除参与者数据失败",
-    "admin.error.deleteDevice": "重置设备数据失败"
+    "admin.error.deleteDevice": "重置设备数据失败",
+    "web.analytics.title": "多维数据分析看板",
+    "web.analytics.cacheSavings": "Prompt 缓存节省成本",
+    "web.analytics.cacheHitRate": "缓存命中率",
+    "web.analytics.savingsRate": "缓存成本节省率",
+    "web.analytics.less": "少",
+    "web.analytics.more": "多",
+    "web.analytics.activityCalendar": "编码活动热力图",
+    "web.analytics.burnTrend": "Token 燃烧趋势",
+    "web.analytics.modelShare": "模型市场份额",
+    "web.analytics.efficiency": "效率指标",
+    "web.analytics.totalSavings": "累计节省",
+    "web.analytics.cachingDesc": "由 Prompt Caching 自动节省",
+    "web.analytics.heatmapSubtitle": "最近 90 天编码 Token 燃烧热度",
+    "web.analytics.trendSubtitle": "Token 消耗与成本曲线走势（日维度；今日/昨日自动切换为小时粒度，需客户端 v0.6.3+）",
+    "web.analytics.modelsSubtitle": "使用过的模型总 Token 占比",
+    "web.analytics.providersSubtitle": "数据采集工具的使用分布",
+    "web.analytics.selectParticipant": "选择分析对象...",
+    "web.analytics.allCommunity": "合并全社区",
+    "web.analytics.individualAnalysis": "成员分析",
+    "web.analytics.noData": "该区间内暂无数据",
+    "web.analytics.periodSection": "周期数据分析",
+    "web.analytics.habitSection": "长期行为习惯追踪",
+    "web.analytics.habitTip": "分析提示：热力图固定展示最近 90 天每日 Token 消耗量。高亮格子代表上方选中的时间区间，虚化格子代表区间外的历史数据，帮助您快速评估短期波动在长期节奏中的比重。",
+    "web.analytics.otherModels": "其他模型"
   },
 
   "en": {
@@ -1346,6 +1371,7 @@ const translations = {
     "admin.tab.pricing": "Model prices",
     "admin.tab.quality": "Quality",
     "admin.tab.devices": "Devices",
+    "admin.tab.analytics": "Visual Analytics",
 
     // Admin - Usage panel
     "admin.usage.thisMonth": "This month",
@@ -1504,7 +1530,31 @@ const translations = {
     "admin.error.refreshOpenRouter": "failed to refresh OpenRouter prices",
     "admin.error.saveAlias": "failed to save model alias",
     "admin.error.deleteParticipant": "failed to delete participant data",
-    "admin.error.deleteDevice": "failed to reset device data"
+    "admin.error.deleteDevice": "failed to reset device data",
+    "web.analytics.title": "Visual Data Analytics Dashboard",
+    "web.analytics.cacheSavings": "Prompt Cache Cost Savings",
+    "web.analytics.cacheHitRate": "Cache Hit Rate",
+    "web.analytics.savingsRate": "Cache Cost Savings Rate",
+    "web.analytics.less": "Less",
+    "web.analytics.more": "More",
+    "web.analytics.activityCalendar": "Coding Activity Heatmap",
+    "web.analytics.burnTrend": "Token Burn Trend",
+    "web.analytics.modelShare": "Model Market Share",
+    "web.analytics.efficiency": "Efficiency Metrics",
+    "web.analytics.totalSavings": "Total Savings",
+    "web.analytics.cachingDesc": "Automatically saved by Prompt Caching",
+    "web.analytics.heatmapSubtitle": "Token burning activity for the last 90 days",
+    "web.analytics.trendSubtitle": "Token usage & cost trajectory (daily; auto-switches to hourly for today/yesterday, requires client v0.6.3+)",
+    "web.analytics.modelsSubtitle": "Total token consumption ratio by model",
+    "web.analytics.providersSubtitle": "Data collection source tool distribution",
+    "web.analytics.selectParticipant": "Select participant...",
+    "web.analytics.allCommunity": "All Community (Combined)",
+    "web.analytics.individualAnalysis": "Individual Analysis",
+    "web.analytics.noData": "No usage data found in this range",
+    "web.analytics.periodSection": "Period-Scoped Analytics",
+    "web.analytics.habitSection": "Long-Term Behavioral Insights",
+    "web.analytics.habitTip": "Analysis Tip: Heatmap tracks daily token usage for the rolling last 90 days. Fully colored cells highlight the active period filter, while desaturated cells represent background history, letting you contextually evaluate short-term productivity against long-term habits.",
+    "web.analytics.otherModels": "Other Models"
   }
 };
 

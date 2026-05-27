@@ -597,6 +597,79 @@ async function handleApi(req, res) {
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
     return sendJson(res, 200, withBusinessDay(transformTrendResult(detail)));
   }
+  if (req.method === "GET" && req.url.startsWith("/api/board/analytics")) {
+    const url = new URL(req.url, "http://localhost");
+    const displayId = url.searchParams.get("participantId") || "";
+    ensureAnonymizerFresh();
+    
+    let realId = "";
+    if (displayId) {
+      realId = BOARD_SECURITY_LEVEL === "anonymous" 
+        ? boardAnonymizer?.resolveParticipantId(displayId) || displayId 
+        : displayId;
+      if (!store.getParticipant(realId)) {
+        return sendJson(res, 404, { error: "participant not found" });
+      }
+    }
+    
+    const period = url.searchParams.get("period") || "";
+    const range = url.searchParams.get("range") || "this_month";
+    const startDay = url.searchParams.get("start") || "";
+    const endDay = url.searchParams.get("end") || "";
+
+    const data = await store.analytics({
+      period,
+      range,
+      startDay,
+      endDay,
+      participantId: realId
+    });
+
+    if (realId && BOARD_SECURITY_LEVEL === "anonymous") {
+      data.displayName = boardAnonymizer.getDisplayName(displayId);
+      data.displayId = displayId;
+    } else if (realId) {
+      const p = store.getParticipant(realId);
+      data.displayName = p ? p.nickname : realId;
+      data.displayId = realId;
+    } else {
+      data.displayName = "Community";
+      data.displayId = "";
+    }
+
+    return sendJson(res, 200, withBusinessDay(data));
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/analytics")) {
+    const url = new URL(req.url, "http://localhost");
+    const realId = url.searchParams.get("participantId") || "";
+    if (realId && !store.getParticipant(realId)) {
+      return sendJson(res, 404, { error: "participant not found" });
+    }
+    
+    const period = url.searchParams.get("period") || "";
+    const range = url.searchParams.get("range") || "this_month";
+    const startDay = url.searchParams.get("start") || "";
+    const endDay = url.searchParams.get("end") || "";
+
+    const data = await store.analytics({
+      period,
+      range,
+      startDay,
+      endDay,
+      participantId: realId
+    });
+
+    if (realId) {
+      const p = store.getParticipant(realId);
+      data.displayName = p ? p.nickname : realId;
+      data.displayId = realId;
+    } else {
+      data.displayName = "Community";
+      data.displayId = "";
+    }
+
+    return sendJson(res, 200, withBusinessDay(data));
+  }
   if (req.method === "GET" && req.url.startsWith("/api/board/participants/")) {
     const url = new URL(req.url, "http://localhost");
     const displayId = decodeURIComponent(url.pathname.replace("/api/board/participants/", ""));

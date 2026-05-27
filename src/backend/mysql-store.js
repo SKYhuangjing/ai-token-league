@@ -582,6 +582,60 @@ export class MySqlStore extends Store {
     };
   }
 
+  async analytics(args = {}) {
+    const businessDay = this.currentBusinessDay();
+    const periodDays = mysqlDaysForQuery(args, { businessDay });
+    const heatmapDays = mysqlTrailingDays(90, { businessDay });
+    const unionDays = [...new Set([...periodDays, ...heatmapDays])];
+
+    if (!unionDays.length) return Store.prototype.analytics.call(this, args);
+
+    let sql = `SELECT * FROM usage_daily WHERE day IN (${unionDays.map(() => "?").join(",")})`;
+    const params = [...unionDays];
+
+    if (args.participantId) {
+      sql += " AND participantId = ?";
+      params.push(args.participantId);
+    }
+
+    const [rows] = await this.pool.query(sql, params);
+    const usageRows = rows.map(usageFromRow);
+
+    // Load hourly rows for today/yesterday to enable hourly trend chart
+    const isHourly = args.period === "today" || args.period === "yesterday";
+    let hourlyRows = [];
+    if (isHourly && periodDays.length) {
+      const targetDay = periodDays[0];
+      let hSql = `SELECT * FROM usage_hourly WHERE day = ?`;
+      const hParams = [targetDay];
+      if (args.participantId) {
+        hSql += " AND participantId = ?";
+        hParams.push(args.participantId);
+      }
+      const [hRows] = await this.pool.query(hSql, hParams);
+      hourlyRows = hRows.map(usageFromRow);
+    }
+
+    return this.withScopedUsageRows(
+      usageRows,
+      () => {
+        if (isHourly && hourlyRows.length) {
+          const previousHourly = this.db.usageHourly;
+          this.db.usageHourly = Object.fromEntries(hourlyRows.map((row, i) => [
+            [row.day, row.hour ?? 0, row.participantId, row.deviceId, row.providerId, row.model, i].join("|"),
+            row
+          ]));
+          try {
+            return Store.prototype.analytics.call(this, args);
+          } finally {
+            this.db.usageHourly = previousHourly;
+          }
+        }
+        return Store.prototype.analytics.call(this, args);
+      }
+    );
+  }
+
   async adminUsage(args = {}) {
     const effectiveArgs = { range: "month", ...args };
     const grain = mysqlNormalizeGrain(effectiveArgs.grain || "day");

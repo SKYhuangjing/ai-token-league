@@ -67,6 +67,17 @@ document.querySelector(".admin-tabs").addEventListener("click", (event) => {
   if (button.dataset.adminTab === "devices") loadDevices().catch((error) => {
     document.querySelector("#devices-status").textContent = error.message;
   });
+  if (button.dataset.adminTab === "analytics") {
+    const iframe = document.querySelector("#analytics-iframe");
+    if (iframe) iframe.src = iframe.src;
+  }
+});
+
+window.addEventListener("message", (event) => {
+  if (event.data?.type === "analytics-resize") {
+    const iframe = document.querySelector("#analytics-iframe");
+    if (iframe) iframe.style.height = event.data.height + "px";
+  }
 });
 
 document.querySelector("[data-filter='quick-range']").addEventListener("click", (event) => {

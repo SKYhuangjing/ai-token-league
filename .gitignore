@@ -56,3 +56,4 @@ src-tauri/.signing-key
 # Test artifacts
 tests/output/
 src-tauri/coverage/
+.codex
