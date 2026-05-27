@@ -1,89 +1,19 @@
 import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
-import { formatTokenCompact, formatUsd } from "/shared/display.js";
+import { formatTokenCompact } from "/shared/display.js";
 import { parseLatestChangelog } from "/shared/changelog.js";
+import {
+  escapeHtml, escapeAttribute, sourceName, formatCost, formatTokenRaw,
+  normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
+  renderModelSegments, renderCost, renderTrendChart, renderGauge,
+  renderBarChart
+} from "/shared/chart-helpers.js";
 
 const currentLang = initI18n();
 
-const downloadActionsEl = document.querySelector("#download-actions");
-const galleryScrollEl = document.querySelector("#gallery-scroll");
-const changelogSectionEl = document.querySelector("#changelog-section");
-const changelogVersionEl = document.querySelector("#changelog-version");
-const changelogBodyEl = document.querySelector("#changelog-body");
+const state = { summaryData: null, analyticsData: null, leaderboardData: null };
 
-const PLATFORM_META = {
-  "win32-x64":   { os: "Windows", arch: "x64",   icon: "win",  desc: () => t("web.download.winDesc"),     ext: ".exe" },
-  "darwin-arm64": { os: "macOS",   arch: "arm64", icon: "mac",  desc: () => t("web.download.macArmDesc"),  ext: ".dmg" },
-  "darwin-x64":   { os: "macOS",   arch: "Intel", icon: "mac",  desc: () => t("web.download.macIntelDesc"), ext: ".dmg" }
-};
-
-const PLATFORM_ICONS = {
-  win: `<svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`,
-  mac: `<svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9"/><path d="M2 20h20"/><path d="M8 20v-1h8v1"/></svg>`
-};
-
-const DOWNLOAD_ICON = `<svg class="lucide" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>`;
-
-async function loadReleaseConfig() {
-  try {
-    const response = await fetch("/api/release/config");
-    const data = await response.json();
-    if (!data.ok) {
-      renderDownloadUnavailable(data.error || "release unavailable");
-      return;
-    }
-    renderPlatformCards(data.release || {});
-  } catch (error) {
-    renderDownloadUnavailable(error.message);
-  }
-}
-
-function renderPlatformCards(release) {
-  const installers = release.installers || {};
-  const platforms = Object.entries(installers)
-    .filter(([, info]) => info?.url)
-    .sort(([a], [b]) => platformSort(a) - platformSort(b));
-  const preferred = preferredPlatform();
-
-  if (!platforms.length) {
-    downloadActionsEl.innerHTML = `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
-    return;
-  }
-
-  downloadActionsEl.innerHTML = platforms.map(([platform, info]) => {
-    const meta = PLATFORM_META[platform] || { os: platform, arch: "", icon: "win", desc: () => "", ext: "" };
-    const isRecommended = platform === preferred;
-    const recommendedBadge = isRecommended ? `<span class="recommend-badge">${t("web.download.recommended")}</span>` : `<span class="dl-arch">${escapeHtml(meta.arch)}</span>`;
-    const cardStyle = isRecommended ? ` style="border-color: var(--blue); border-width: 1.5px;"` : "";
-    return `<div class="dl-card"${cardStyle}>
-      <div class="dl-card-head">
-        <span class="dl-icon">${PLATFORM_ICONS[meta.icon] || ""}</span>
-        <span class="dl-os">${escapeHtml(meta.os)}</span>
-        ${recommendedBadge}
-      </div>
-      <div class="dl-divider"></div>
-      <div class="dl-meta">
-        <span>${escapeHtml(meta.desc())}</span>
-      </div>
-      <a class="dl-btn" href="${escapeAttribute(info.url)}" target="_blank" rel="noreferrer">
-        ${DOWNLOAD_ICON}<span>${t("web.download.downloadBtn")} ${escapeHtml(meta.ext)}</span>
-      </a>
-    </div>`;
-  }).join("");
-}
-
-function renderDownloadUnavailable(reason) {
-  downloadActionsEl.innerHTML = `<span class="download-placeholder">${escapeHtml(reason)}</span>`;
-}
-
-async function loadBoardSummary() {
-  try {
-    const response = await fetch("/api/board/summary");
-    const data = await response.json();
-    renderPreview(data);
-  } catch {
-    const section = document.querySelector("#preview-section");
-    if (section) section.hidden = true;
-  }
+function localeTokenCompact(value) {
+  return formatTokenCompact(value, getCurrentLang());
 }
 
 function tokenSizeClass(value) {
@@ -93,6 +23,13 @@ function tokenSizeClass(value) {
   if (abs >= 1_000_000_000) return "size-10yi";
   return "size-under-yi";
 }
+
+function renderAuthFallback(selector) {
+  const el = document.querySelector(selector);
+  if (el) el.innerHTML = `<div class="meter-empty">${t("web.analytics.noData") || "Data unavailable"}</div>`;
+}
+
+// --- 6 Period Preview Cards (original) ---
 
 function renderPreview(data) {
   const lang = getCurrentLang();
@@ -107,12 +44,8 @@ function renderPreview(data) {
         el.textContent = "--";
       }
     }
-    if (costEl) costEl.textContent = cost != null && cost > 0 ? formatUsd(cost) : "";
+    if (costEl) costEl.textContent = cost != null && cost > 0 ? formatCost(cost) : "";
   };
-
-  const participantsEl = document.querySelector("#preview-participants");
-  if (participantsEl) participantsEl.textContent = data.participantCount ?? "--";
-  renderBoardIdentityCopy(data.identityMode);
 
   setTokens("preview-today-tokens", "preview-today-cost", data.todayTokens, data.todayCost);
   setTokens("preview-yesterday-tokens", "preview-yesterday-cost", data.yesterdayTokens, data.yesterdayCost);
@@ -120,18 +53,140 @@ function renderPreview(data) {
   setTokens("preview-last-week-tokens", "preview-last-week-cost", data.lastWeekTokens, data.lastWeekCost);
   setTokens("preview-month-tokens", "preview-month-cost", data.thisMonthTokens, data.thisMonthCost);
   setTokens("preview-last-month-tokens", "preview-last-month-cost", data.lastMonthTokens, data.lastMonthCost);
+
+  renderDelta("delta-today", data.todayTokens, data.yesterdayTokens);
+  renderDelta("delta-week", data.weekTokens, data.lastWeekTokens);
+  renderDelta("delta-month", data.thisMonthTokens, data.lastMonthTokens);
 }
 
-function renderBoardIdentityCopy(identityMode = "") {
-  const key = {
-    anonymous: "web.landing.featureBoardDescAnonymous",
-    public: "web.landing.featureBoardDescPublic",
-    authenticated: "web.landing.featureBoardDescAuthenticated"
-  }[identityMode] || "web.landing.featureBoardDesc";
-  document.querySelectorAll("[data-board-identity-copy]").forEach((el) => {
-    el.textContent = t(key);
-  });
+function renderDelta(elId, current, previous) {
+  const el = document.querySelector(`#${elId}`);
+  if (!el) return;
+  const cur = Number(current) || 0;
+  const prev = Number(previous) || 0;
+  if (!prev || !cur || cur === prev) { el.hidden = true; return; }
+  const pct = Math.round(((cur - prev) / prev) * 100);
+  const up = pct > 0;
+  el.textContent = `${up ? "+" : ""}${pct}% ${up ? "↑" : "↓"}`;
+  el.className = `preview-delta delta-${up ? "up" : "down"}`;
+  el.hidden = false;
 }
+
+// --- Chart Rendering (delegates to shared) ---
+
+function homeRenderTrendChart() {
+  const svg = document.querySelector("#home-trend-chart");
+  if (!svg) return;
+  const data = state.analyticsData;
+  if (!data) return;
+  const tooltip = document.querySelector("#chart-tooltip");
+  renderTrendChart(svg, data.timeSeries || [], data.timeGrain || "day", tooltip, localeTokenCompact);
+}
+
+function homeRenderGauge() {
+  const data = state.analyticsData;
+  if (!data) return;
+  const summary = data.summary || {};
+  renderGauge(
+    document.querySelector("#home-gauge-fill"),
+    document.querySelector("#home-gauge-val"),
+    summary.cacheHitRate || 0
+  );
+}
+
+function homeRenderBarChart(containerId, items, opts) {
+  const container = document.querySelector(containerId);
+  if (!container) return;
+  renderBarChart(container, items, { localeTokenCompact, ...opts });
+}
+
+// --- Leaderboard Preview ---
+
+function rankIcon(rank) {
+  const trophy = `<svg class="lucide lucide-trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978"/><path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978"/><path d="M18 9h1.5a1 1 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"/><path d="M6 9H4.5a1 1 0 0 1 0-5H6"/></svg>`;
+  const medal = `<svg class="lucide lucide-medal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
+  return rank === 1 ? trophy : medal;
+}
+
+function orderPodium(items) {
+  if (items.length < 3) return items;
+  return [items[1], items[0], items[2]];
+}
+
+function renderTopThree(items) {
+  const el = document.querySelector("#home-top-three");
+  if (!el) return;
+  if (!items.length) {
+    el.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noUsage")}</div>`;
+    return;
+  }
+  el.innerHTML = items
+    .map((item) => `<article class="medal-card medal-rank-${Math.min(item.rank, 3)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+      <span class="medal-icon" aria-hidden="true">${rankIcon(item.rank)}</span>
+      <div class="medal-card-head">
+        <span class="medal-rank">#${item.rank}</span>
+        <span class="participant-link">${escapeHtml(item.displayName)}</span>
+      </div>
+      <strong class="medal-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+      <span class="medal-cost">${renderCost(item)}</span>
+      ${renderModelSegments(item, { className: "composition-strip", title: modelUsageTitle(item, localeTokenCompact) })}
+    </article>`)
+    .join("");
+}
+
+function renderMeterView(items) {
+  const el = document.querySelector("#home-meter-rest");
+  if (!el) return;
+  if (!items.length) {
+    el.innerHTML = "";
+    return;
+  }
+  const max = Math.max(...items.map((item) => item.totalTokens), 1);
+  const colorCycle = ["", "meter-yellow", "meter-violet"];
+  el.innerHTML = items
+    .map((item) => {
+      const pct = Math.max(3, (item.totalTokens / max) * 100);
+      const colorClass = colorCycle[(item.rank - 1) % colorCycle.length];
+      return `<div class="meter-row" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+        <span class="meter-name">
+          <span class="rank">#${item.rank}</span>
+          <span class="participant-link">${escapeHtml(item.displayName)}</span>
+        </span>
+        <div class="meter-bar ${colorClass}">
+          <div class="meter-fill" style="width:${pct}%">
+            ${renderModelSegmentItems(item)}
+          </div>
+        </div>
+        <span class="meter-value">
+          <strong title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+          <span class="cost-amount">${renderCost(item)}</span>
+        </span>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderLeaderboardPreview(items) {
+  const top = orderPodium(items.slice(0, 3));
+  const rest = items.slice(3, 5);
+  renderTopThree(top);
+  renderMeterView(rest);
+}
+
+// --- Download Cards ---
+
+const PLATFORM_META = {
+  "win32-x64":   { os: "Windows", arch: "x64",   icon: "win",  desc: () => t("web.download.winDesc"),     ext: ".exe" },
+  "darwin-arm64": { os: "macOS",   arch: "arm64", icon: "mac",  desc: () => t("web.download.macArmDesc"),  ext: ".dmg" },
+  "darwin-x64":   { os: "macOS",   arch: "Intel", icon: "mac",  desc: () => t("web.download.macIntelDesc"), ext: ".dmg" }
+};
+
+const PLATFORM_ICONS = {
+  win: `<svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`,
+  mac: `<svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9"/><path d="M2 20h20"/><path d="M8 20v-1h8v1"/></svg>`
+};
+
+const DOWNLOAD_ICON = `<svg class="lucide" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>`;
 
 function platformSort(platform) {
   return { "darwin-arm64": 1, "darwin-x64": 2, "win32-x64": 3 }[platform] || 99;
@@ -154,12 +209,56 @@ function preferredPlatform() {
   return "";
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+async function loadReleaseConfig() {
+  const el = document.querySelector("#download-actions");
+  if (!el) return;
+  try {
+    const response = await fetch("/api/release/config");
+    const data = await response.json();
+    if (!data.ok) {
+      el.innerHTML = `<span class="download-placeholder">${escapeHtml(data.error || "release unavailable")}</span>`;
+      return;
+    }
+    renderPlatformCards(data.release || {});
+  } catch (error) {
+    el.innerHTML = `<span class="download-placeholder">${escapeHtml(error.message)}</span>`;
+  }
 }
 
-function escapeAttribute(value) {
-  return escapeHtml(value);
+function renderPlatformCards(release) {
+  const el = document.querySelector("#download-actions");
+  if (!el) return;
+  const installers = release.installers || {};
+  const platforms = Object.entries(installers)
+    .filter(([, info]) => info?.url)
+    .sort(([a], [b]) => platformSort(a) - platformSort(b));
+  const preferred = preferredPlatform();
+
+  if (!platforms.length) {
+    el.innerHTML = `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
+    return;
+  }
+
+  el.innerHTML = platforms.map(([platform, info]) => {
+    const meta = PLATFORM_META[platform] || { os: platform, arch: "", icon: "win", desc: () => "", ext: "" };
+    const isRecommended = platform === preferred;
+    const recommendedBadge = isRecommended ? `<span class="recommend-badge">${t("web.download.recommended")}</span>` : `<span class="dl-arch">${escapeHtml(meta.arch)}</span>`;
+    const cardStyle = isRecommended ? ` style="border-color: var(--blue); border-width: 1.5px;"` : "";
+    return `<div class="dl-card"${cardStyle}>
+      <div class="dl-card-head">
+        <span class="dl-icon">${PLATFORM_ICONS[meta.icon] || ""}</span>
+        <span class="dl-os">${escapeHtml(meta.os)}</span>
+        ${recommendedBadge}
+      </div>
+      <div class="dl-divider"></div>
+      <div class="dl-meta">
+        <span>${escapeHtml(meta.desc())}</span>
+      </div>
+      <a class="dl-btn" href="${escapeAttribute(info.url)}" target="_blank" rel="noreferrer">
+        ${DOWNLOAD_ICON}<span>${t("web.download.downloadBtn")} ${escapeHtml(meta.ext)}</span>
+      </a>
+    </div>`;
+  }).join("");
 }
 
 // --- Screenshots gallery ---
@@ -173,6 +272,7 @@ let activeScreenshotIndex = 0;
 let galleryTimer = null;
 
 function renderGallery() {
+  const galleryScrollEl = document.querySelector("#gallery-scroll");
   if (!galleryScrollEl) return;
   const current = SCREENSHOTS[activeScreenshotIndex] || SCREENSHOTS[0];
   galleryScrollEl.innerHTML = `<div class="gallery-stage">
@@ -225,6 +325,10 @@ function openLightbox(src, alt) {
 
 // --- Changelog ---
 
+const changelogSectionEl = document.querySelector("#changelog-section");
+const changelogVersionEl = document.querySelector("#changelog-version");
+const changelogBodyEl = document.querySelector("#changelog-body");
+
 async function fetchAndRenderChangelog() {
   if (!changelogBodyEl) return;
   const lang = getCurrentLang();
@@ -261,16 +365,79 @@ function badgeClass(tag) {
   return "both";
 }
 
+// --- Data Loading ---
+
+async function loadSummary() {
+  try {
+    const response = await fetch("/api/board/summary");
+    const data = await response.json();
+    state.summaryData = data;
+    renderPreview(data);
+  } catch {
+    const section = document.querySelector("#preview-section");
+    if (section) section.hidden = true;
+  }
+}
+
+async function loadAnalytics() {
+  try {
+    const params = new URLSearchParams({ period: "this_month" });
+    const response = await fetch(`/api/board/analytics?${params.toString()}`);
+    if (!response.ok) {
+      renderAuthFallback("#home-trend-chart");
+      renderAuthFallback("#home-model-chart");
+      renderAuthFallback("#home-provider-chart");
+      return;
+    }
+    const data = await response.json();
+    state.analyticsData = data;
+    homeRenderTrendChart();
+    homeRenderGauge();
+    homeRenderBarChart("#home-model-chart", data.models, { collapseAfter: 4 });
+    homeRenderBarChart("#home-provider-chart", (data.providers || []).map(p => ({ ...p, name: sourceName(p.name) })));
+  } catch {
+    renderAuthFallback("#home-trend-chart");
+    renderAuthFallback("#home-model-chart");
+    renderAuthFallback("#home-provider-chart");
+  }
+}
+
+async function loadLeaderboard() {
+  try {
+    const params = new URLSearchParams({ period: "today", includeCost: "1" });
+    const response = await fetch(`/api/board/leaderboard?${params.toString()}`);
+    if (!response.ok) {
+      renderAuthFallback("#home-top-three");
+      return;
+    }
+    const data = await response.json();
+    state.leaderboardData = data;
+    renderLeaderboardPreview(data.items || []);
+  } catch {
+    renderAuthFallback("#home-top-three");
+  }
+}
+
+// --- Boot ---
+
 const langContainer = document.querySelector("#lang-switcher-container");
 if (langContainer) {
   langContainer.innerHTML = createLangSwitcher();
-  bindLangSwitcher("lang-switcher", () => {
-    window.location.reload();
-  });
+  bindLangSwitcher("lang-switcher", () => { window.location.reload(); });
+}
+updatePageTranslations();
+
+async function init() {
+  await Promise.allSettled([
+    loadSummary(),
+    loadAnalytics(),
+    loadLeaderboard()
+  ]);
+  await Promise.allSettled([
+    loadReleaseConfig(),
+    fetchAndRenderChangelog()
+  ]);
+  renderGallery();
 }
 
-updatePageTranslations();
-loadReleaseConfig();
-loadBoardSummary();
-renderGallery();
-fetchAndRenderChangelog();
+init().catch(err => console.error("Init failed:", err));

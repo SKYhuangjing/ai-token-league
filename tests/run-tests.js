@@ -4072,8 +4072,23 @@ function testWebAdminStructure() {
 function testWebDownloadStructure() {
   const html = fs.readFileSync("src/web/download.html", "utf8");
   const js = fs.readFileSync("src/web/download.js", "utf8");
-  assert.match(html, /download/i);
+  const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
   assert.match(html, /download-actions/);
+  assert.match(html, /home-hero-grid/);
+  assert.match(html, /home-trend-chart/);
+  assert.match(html, /home-top-three/);
+  assert.match(html, /home-model-chart/);
+  assert.match(html, /home-provider-chart/);
+  assert.match(js, /loadSummary/);
+  assert.match(js, /loadAnalytics/);
+  assert.match(js, /loadLeaderboard/);
+  assert.match(js, /from\s+["']\/shared\/chart-helpers\.js["']/);
+  assert.match(shared, /export function renderTrendChart/);
+  assert.match(shared, /export function renderBarChart/);
+  assert.match(shared, /export function renderGauge/);
+  assert.match(shared, /export function formatCost/);
+  assert.match(shared, /export function sourceName/);
+  assert.match(shared, /export function normalizeModelSegments/);
   assert.match(js, /darwin|windows|platform/i);
   console.log("  testWebDownloadStructure passed");
 }

@@ -8,75 +8,135 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="global-top-bar">
-      <div class="lang-switcher-container" id="lang-switcher-container"></div>
-    </div>
     <main class="shell landing-shell">
-      <section class="masthead landing-masthead">
+      <section class="masthead public-masthead">
         <div class="masthead-copy">
           <h1 data-i18n="app.name">AI Token League</h1>
-          <div class="masthead-tagline-row">
-            <p class="summary" data-i18n="web.landing.featureBoardDescAnonymous">Anonymous token usage ranking</p>
-            <span class="landing-participant-badge" id="landing-participant-badge">
-              <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg>
-              <span class="lpb-count" id="preview-participants">--</span>
-              <span class="lpb-label" data-i18n="web.landing.participants">Participants</span>
-            </span>
-          </div>
-          <div class="hero-cta-row">
-            <a href="#download-actions" class="btn-primary" data-i18n="web.download.pageTitle">Download the desktop client</a>
-          </div>
+          <span class="identity-pill" data-i18n="web.home.communityIntelligence">Community Intelligence</span>
         </div>
         <div class="masthead-side">
-          <img src="/screenshots/desktop-client.png" class="hero-shot" alt="App Preview" loading="lazy" />
+          <div class="masthead-nav">
+            <a href="/leaderboard.html" class="nav-link" data-i18n="web.leaderboard.title">Leaderboard</a>
+            <a href="/analytics.html" class="nav-link" data-i18n="web.analytics.title">Analytics</a>
+            <div class="lang-switcher-container" id="lang-switcher-container"></div>
+          </div>
         </div>
       </section>
 
-      <section class="preview-section" id="preview-section">
-        <div class="preview-grid" id="board-preview">
-          <div class="preview-metric period-today">
-            <span class="preview-value" id="preview-today-tokens">--</span>
-            <span class="preview-cost" id="preview-today-cost">--</span>
-            <span class="preview-label" data-i18n="web.period.today">Today</span>
-          </div>
-          <div class="preview-metric period-yesterday">
-            <span class="preview-value" id="preview-yesterday-tokens">--</span>
-            <span class="preview-cost" id="preview-yesterday-cost">--</span>
-            <span class="preview-label" data-i18n="web.period.yesterday">Yesterday</span>
-          </div>
-          <div class="preview-metric period-week">
-            <span class="preview-value" id="preview-week-tokens">--</span>
-            <span class="preview-cost" id="preview-week-cost">--</span>
-            <span class="preview-label" data-i18n="web.period.thisWeek">This week</span>
-          </div>
-          <div class="preview-metric period-last-week">
-            <span class="preview-value" id="preview-last-week-tokens">--</span>
-            <span class="preview-cost" id="preview-last-week-cost">--</span>
-            <span class="preview-label" data-i18n="web.period.lastWeek">Last week</span>
-          </div>
-          <div class="preview-metric period-month">
-            <span class="preview-value" id="preview-month-tokens">--</span>
-            <span class="preview-cost" id="preview-month-cost">--</span>
-            <span class="preview-label" data-i18n="web.period.thisMonth">This month</span>
-          </div>
-          <div class="preview-metric period-last-month">
-            <span class="preview-value" id="preview-last-month-tokens">--</span>
-            <span class="preview-cost" id="preview-last-month-cost">--</span>
-            <span class="preview-label" data-i18n="web.period.lastMonth">Last month</span>
+      <section class="home-hero-grid" id="home-hero-grid">
+        <div class="home-hero-left">
+          <div class="preview-grid" id="board-preview">
+            <div class="preview-metric period-today">
+              <div class="preview-row-top">
+                <span class="preview-value" id="preview-today-tokens">--</span>
+                <span class="preview-delta" id="delta-today" hidden></span>
+              </div>
+              <div class="preview-row-bottom">
+                <span class="preview-label" data-i18n="web.period.today">Today</span>
+                <span class="preview-cost" id="preview-today-cost">--</span>
+              </div>
+            </div>
+            <div class="preview-metric period-yesterday">
+              <div class="preview-row-top">
+                <span class="preview-value" id="preview-yesterday-tokens">--</span>
+              </div>
+              <div class="preview-row-bottom">
+                <span class="preview-label" data-i18n="web.period.yesterday">Yesterday</span>
+                <span class="preview-cost" id="preview-yesterday-cost">--</span>
+              </div>
+            </div>
+            <div class="preview-metric period-week">
+              <div class="preview-row-top">
+                <span class="preview-value" id="preview-week-tokens">--</span>
+                <span class="preview-delta" id="delta-week" hidden></span>
+              </div>
+              <div class="preview-row-bottom">
+                <span class="preview-label" data-i18n="web.period.thisWeek">This week</span>
+                <span class="preview-cost" id="preview-week-cost">--</span>
+              </div>
+            </div>
+            <div class="preview-metric period-last-week">
+              <div class="preview-row-top">
+                <span class="preview-value" id="preview-last-week-tokens">--</span>
+              </div>
+              <div class="preview-row-bottom">
+                <span class="preview-label" data-i18n="web.period.lastWeek">Last week</span>
+                <span class="preview-cost" id="preview-last-week-cost">--</span>
+              </div>
+            </div>
+            <div class="preview-metric period-month">
+              <div class="preview-row-top">
+                <span class="preview-value" id="preview-month-tokens">--</span>
+                <span class="preview-delta" id="delta-month" hidden></span>
+              </div>
+              <div class="preview-row-bottom">
+                <span class="preview-label" data-i18n="web.period.thisMonth">This month</span>
+                <span class="preview-cost" id="preview-month-cost">--</span>
+              </div>
+            </div>
+            <div class="preview-metric period-last-month">
+              <div class="preview-row-top">
+                <span class="preview-value" id="preview-last-month-tokens">--</span>
+              </div>
+              <div class="preview-row-bottom">
+                <span class="preview-label" data-i18n="web.period.lastMonth">Last month</span>
+                <span class="preview-cost" id="preview-last-month-cost">--</span>
+              </div>
+            </div>
           </div>
         </div>
-        <a href="/leaderboard.html" class="board-link" data-i18n="web.landing.viewLeaderboard">View community leaderboard</a>
+        <article class="analytics-card home-trend-card">
+          <h3 data-i18n="web.home.monthTrend">Monthly Community Trend</h3>
+          <div style="position: relative; flex: 1; min-height: 0;">
+            <svg id="home-trend-chart" viewBox="0 0 800 200" preserveAspectRatio="none" class="chart-svg" style="width: 100%; height: 100%;"></svg>
+          </div>
+        </article>
+      </section>
+
+      <section class="home-section" id="home-leaderboard-section">
+        <div class="home-section-header">
+          <h2 data-i18n="web.home.topToday">Top Today</h2>
+          <a href="/leaderboard.html" class="board-link" data-i18n="web.landing.viewLeaderboard">View full leaderboard</a>
+        </div>
+        <div id="home-top-three" class="top-three-grid"></div>
+        <div id="home-meter-rest" class="meter-stack"></div>
+      </section>
+
+      <section class="home-section" id="home-analytics-section">
+        <div class="home-section-header">
+          <h2 data-i18n="web.home.monthAnalytics">This Month Analytics</h2>
+          <a href="/analytics.html" class="board-link" data-i18n="web.home.viewFullAnalytics">View full analytics</a>
+        </div>
+        <div class="analytics-dashboard-grid">
+          <article class="analytics-card">
+            <h3 data-i18n="web.analytics.modelShare">Model Market Share</h3>
+            <div id="home-model-chart" class="bar-chart-container"></div>
+          </article>
+          <article class="analytics-card">
+            <h3 data-i18n="web.analytics.cacheSavings">Cache Savings</h3>
+            <div style="display: flex; justify-content: center; align-items: center; padding: 10px 0;">
+              <svg viewBox="0 0 200 120" class="chart-svg" style="max-width: 260px;">
+                <path d="M 20 100 A 80 80 0 0 1 180 100" class="gauge-track" />
+                <path id="home-gauge-fill" d="M 20 100 A 80 80 0 0 1 180 100" class="gauge-fill" stroke-dasharray="0 251" />
+                <text id="home-gauge-val" x="100" y="90" class="gauge-text">0%</text>
+                <text x="100" y="110" class="gauge-subtext" data-i18n="web.analytics.cacheHitRate">Hit Rate</text>
+              </svg>
+            </div>
+          </article>
+          <article class="analytics-card" style="grid-column: span 2;">
+            <h3 data-i18n="web.detail.sources">Sources</h3>
+            <div id="home-provider-chart" class="bar-chart-container"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="home-cta-section" id="home-cta-section">
+        <h2 data-i18n="web.home.getStarted">Get Started</h2>
+        <div class="dl-grid" id="download-actions"></div>
       </section>
 
       <section class="release-showcase-section">
         <div class="release-showcase-main">
-          <section class="dl-section" id="download-actions-section">
-            <div class="dl-header">
-              <h2 data-i18n="web.download.pageTitle">Download the desktop client</h2>
-            </div>
-            <div class="dl-grid" id="download-actions"></div>
-          </section>
-
           <section class="gallery-section">
             <div class="gallery-scroll" id="gallery-scroll"></div>
           </section>
@@ -88,67 +148,8 @@
           <div class="changelog-body" id="changelog-body"></div>
         </section>
       </section>
-
-      <section class="landing-section features-section">
-        <h2 data-i18n="web.landing.features">Features</h2>
-        <ul class="feature-list">
-          <li class="feature-item">
-            <div class="feature-content">
-              <span class="feature-icon" aria-hidden="true">
-                <svg viewBox="0 0 16 16" focusable="false">
-                  <rect x="3" y="3" width="4" height="4" rx="1"></rect>
-                  <rect x="9" y="3" width="4" height="4" rx="1"></rect>
-                  <rect x="3" y="9" width="4" height="4" rx="1"></rect>
-                  <rect x="9" y="9" width="4" height="4" rx="1"></rect>
-                </svg>
-              </span>
-              <span class="feature-copy">
-                <strong data-i18n="web.landing.featureLocalTitle">Local-first</strong>
-                <span data-i18n="web.landing.featureLocalDesc">Data stays on your device</span>
-              </span>
-            </div>
-            <div class="feature-code-hover">
-              <code>$ cat ~/.ai-token-league/db.json</code>
-            </div>
-          </li>
-          <li class="feature-item">
-            <div class="feature-content">
-              <span class="feature-icon" aria-hidden="true">
-                <svg viewBox="0 0 16 16" focusable="false">
-                  <path d="M2 8h2.2l1.4-3.8L8.7 12l1.6-4H14"></path>
-                </svg>
-              </span>
-              <span class="feature-copy">
-                <strong data-i18n="web.landing.featureMultiTitle">Multi-source</strong>
-                <span data-i18n="web.landing.featureMultiDesc">Claude Code / Codex / Cursor</span>
-              </span>
-            </div>
-            <div class="feature-code-hover">
-              <code>$ tail -f ~/.claude.jsonl</code>
-            </div>
-          </li>
-          <li class="feature-item">
-            <div class="feature-content">
-              <span class="feature-icon" aria-hidden="true">
-                <svg viewBox="0 0 16 16" focusable="false">
-                  <circle cx="6" cy="5" r="2"></circle>
-                  <path d="M2.5 13c.4-2.4 1.6-3.7 3.5-3.7s3.1 1.3 3.5 3.7"></path>
-                  <circle cx="11.5" cy="6.2" r="1.5"></circle>
-                  <path d="M10 10.2c1.8.1 2.9 1 3.3 2.8"></path>
-                </svg>
-              </span>
-              <span class="feature-copy">
-                <strong data-i18n="web.landing.featureBoardTitle">Community leaderboard</strong>
-                <span data-i18n="web.landing.featureBoardDesc" data-board-identity-copy>Token usage ranking</span>
-              </span>
-            </div>
-            <div class="feature-code-hover">
-              <code>SELECT * FROM rankings LIMIT 10</code>
-            </div>
-          </li>
-        </ul>
-      </section>
     </main>
+    <div id="chart-tooltip" class="chart-tooltip"></div>
     <script type="module" src="/download.js"></script>
   </body>
 </html>

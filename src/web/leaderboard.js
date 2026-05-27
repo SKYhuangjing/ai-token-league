@@ -1,6 +1,11 @@
 import { dominantComposition, tokenCompositionDetails } from "/shared/composition.js";
 import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
 import { formatTokenCompact } from "/shared/display.js";
+import {
+  escapeHtml, sourceName, formatCost, formatTokenRaw,
+  normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
+  renderModelSegments, renderCost
+} from "/shared/chart-helpers.js";
 
 function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
@@ -157,7 +162,7 @@ function renderTopThree(items) {
     return;
   }
   topThree.innerHTML = items
-    .map((item) => `<article class="medal-card medal-rank-${item.rank}" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item))}">
+    .map((item) => `<article class="medal-card medal-rank-${item.rank}" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
       <span class="medal-icon" aria-hidden="true">${rankIcon(item.rank)}</span>
       <div class="medal-card-head">
         <span class="medal-rank">#${item.rank}</span>
@@ -165,7 +170,7 @@ function renderTopThree(items) {
       </div>
       <strong class="medal-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
       ${state.showCost ? `<span class="medal-cost">${renderCost(item)}</span>` : ""}
-      ${renderModelSegments(item, { className: "composition-strip", title: modelUsageTitle(item) })}
+      ${renderModelSegments(item, { className: "composition-strip", title: modelUsageTitle(item, localeTokenCompact) })}
     </article>`)
     .join("");
   topThree.querySelectorAll(".medal-card[data-display-id]").forEach((el) => {
@@ -185,7 +190,7 @@ function renderMeterView(items) {
     .map((item) => {
       const pct = Math.max(3, (item.totalTokens / max) * 100);
       const colorClass = colorCycle[(item.rank - 1) % colorCycle.length];
-      return `<div class="meter-row" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item))}">
+      return `<div class="meter-row" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
         <span class="meter-name">
           <span class="rank">#${item.rank}</span>
           <button class="link-button participant-link" type="button">${renderDisplayName(item.displayName)}</button>
@@ -453,40 +458,6 @@ function renderCompositionBlock(item, { showCost = false } = {}) {
   return `<div class="detail-summary composition-grid">${rows}</div>${footer}`;
 }
 
-function renderModelSegments(item, { className, title }) {
-  return `<div class="${className}" title="${escapeHtml(title)}">
-    ${renderModelSegmentItems(item)}
-  </div>`;
-}
-
-function renderModelSegmentItems(item) {
-  const models = normalizeModelSegments(item);
-  if (!models.length) return `<i class="model-segment model-segment-empty" style="width:100%"></i>`;
-  return models
-    .map((model, index) => `<i class="model-segment model-segment-${(index % 5) + 1}" style="width:${model.ratio}%"></i>`)
-    .join("");
-}
-
-function normalizeModelSegments(item) {
-  const total = Number(item.totalTokens || 0);
-  if (!total) return [];
-  return (item.models || [])
-    .filter((model) => Number(model.totalTokens || 0) > 0)
-    .map((model) => ({
-      name: model.name,
-      totalTokens: Number(model.totalTokens || 0),
-      ratio: Math.max(2, (Number(model.totalTokens || 0) / total) * 100)
-    }));
-}
-
-function modelUsageTitle(item) {
-  const models = normalizeModelSegments(item);
-  if (!models.length) return t("web.detail.noUsageSlice");
-  return models
-    .map((model) => `${model.name}: ${localeTokenCompact(model.totalTokens)} (${Math.round((model.totalTokens / Number(item.totalTokens || 1)) * 100)}%)`)
-    .join("\n");
-}
-
 function renderAccountingToken(tokens, cost) {
   const costLine = state.showCost ? `<small><span class="cost-amount">${escapeHtml(formatCost(cost))}</span></small>` : "";
   return `<span class="token-accounting">${localeTokenCompact(tokens || 0)}${costLine}</span>`;
@@ -558,13 +529,6 @@ function historyLabel(view) {
   return t("web.detail.dailyHistory");
 }
 
-function sourceName(providerId) {
-  if (providerId === "codex_local") return t("source.codex");
-  if (providerId === "claude_code_local") return t("source.claude");
-  if (providerId === "cursor_dashboard_usage") return t("source.cursor");
-  return providerId;
-}
-
 function hydratePreferences() {
   state.showCost = readBooleanPreference(storageKeys.showCost, false);
   const savedViewMode = readStringPreference(storageKeys.viewMode, "meter");
@@ -619,21 +583,6 @@ function readStringPreference(key, fallback) {
   }
 }
 
-function formatNumber(value) {
-  return new Intl.NumberFormat().format(value || 0);
-}
-
-function formatTokenRaw(value) {
-  return `${formatNumber(value)} ${t("unit.tokens")}`;
-}
-
-function formatCost(value) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "-";
-  const n = Number(value);
-  if (n > 0 && n < 0.01) return t("common.lessThanCost");
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
-}
-
 function costTitle(item) {
   const missing = normalizeMissingPriceModels(item.missingPriceModels).map((model) => `${model.name} ${formatTokenRaw(model.totalTokens)}`).join(", ");
   return `${localizedCostQualityLabel(item.costQuality)} · ${item.pricingVersion || t("web.cost.noPricingVersion")}${missing ? ` · ${t("web.cost.missingModels")}: ${missing}` : ""}`;
@@ -644,12 +593,6 @@ function normalizeMissingPriceModels(value) {
   return Object.entries(value || {})
     .sort((a, b) => b[1] - a[1])
     .map(([name, totalTokens]) => ({ name, totalTokens }));
-}
-
-function renderCost(item) {
-  const value = formatCost(item.estimatedCostUsd);
-  if (value === "-") return value;
-  return `<span class="cost-amount">${escapeHtml(value)}</span>${item.missingPriceTokens ? `<sup title="${escapeHtml(t("web.cost.missingModelPrices"))}">*</sup>` : ""}`;
 }
 
 function localizedCostQualityLabel(value = "") {
@@ -697,10 +640,6 @@ function humanDominant(value = "") {
 function trendItemTitle(item) {
   const cost = state.showCost ? ` · ${t("common.cost")} ${renderCost(item).replace(/<[^>]+>/g, "")}` : "";
   return `${formatPeriod(item)} · ${formatTokenRaw(item.totalTokens)}${cost}`;
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
 
 function escapeAttribute(value) {

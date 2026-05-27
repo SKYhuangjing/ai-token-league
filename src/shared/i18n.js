@@ -779,7 +779,15 @@ const translations = {
     "web.analytics.periodSection": "周期数据分析",
     "web.analytics.habitSection": "长期行为习惯追踪",
     "web.analytics.habitTip": "分析提示：热力图固定展示最近 90 天每日 Token 消耗量。高亮格子代表上方选中的时间区间，虚化格子代表区间外的历史数据，帮助您快速评估短期波动在长期节奏中的比重。",
-    "web.analytics.otherModels": "其他模型"
+    "web.analytics.otherModels": "其他模型",
+
+    // Web 端 - 社区智能首页
+    "web.home.communityIntelligence": "社区智能数据",
+    "web.home.monthTrend": "本月社区趋势",
+    "web.home.topToday": "今日排行榜",
+    "web.home.monthAnalytics": "本月数据分析",
+    "web.home.viewFullAnalytics": "查看完整分析",
+    "web.home.getStarted": "开始使用"
   },
 
   "en": {
@@ -1554,7 +1562,15 @@ const translations = {
     "web.analytics.periodSection": "Period-Scoped Analytics",
     "web.analytics.habitSection": "Long-Term Behavioral Insights",
     "web.analytics.habitTip": "Analysis Tip: Heatmap tracks daily token usage for the rolling last 90 days. Fully colored cells highlight the active period filter, while desaturated cells represent background history, letting you contextually evaluate short-term productivity against long-term habits.",
-    "web.analytics.otherModels": "Other Models"
+    "web.analytics.otherModels": "Other Models",
+
+    // Web - Community Intelligence Home
+    "web.home.communityIntelligence": "Community Intelligence",
+    "web.home.monthTrend": "Monthly Community Trend",
+    "web.home.topToday": "Top Today",
+    "web.home.monthAnalytics": "This Month Analytics",
+    "web.home.viewFullAnalytics": "View full analytics",
+    "web.home.getStarted": "Get Started"
   }
 };
 

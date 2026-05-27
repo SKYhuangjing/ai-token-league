@@ -716,12 +716,12 @@ html[lang="en"] .feature-copy strong::after {
 .preview-metric {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 10px;
   border: 2px solid var(--ink);
   border-radius: 8px;
   background: var(--paper);
-  padding: 24px 16px;
+  padding: 14px 16px;
   min-width: 0;
   box-shadow: 4px 4px 0 var(--ink);
   transition: transform 0.2s, box-shadow 0.2s;
@@ -735,11 +735,9 @@ html[lang="en"] .feature-copy strong::after {
 .preview-metric.period-today {
   overflow: hidden;
   position: relative;
-  background:
-    radial-gradient(circle at 78% 36%, rgba(0, 109, 119, 0.2), transparent 38%),
-    linear-gradient(135deg, #fffaf0 0%, #eef7f1 100%);
-  border-color: var(--blue);
-  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(0, 109, 119, 0.14);
+  background: linear-gradient(135deg, #f0f9f4 0%, #e8f5ef 100%);
+  border-color: #8bbfa5;
+  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(0, 109, 119, 0.1);
 }
 
 .preview-metric.period-today .preview-value,
@@ -751,7 +749,7 @@ html[lang="en"] .feature-copy strong::after {
 }
 
 .preview-metric.period-today .preview-cost {
-  color: #f1b24a;
+  color: #c4963a;
 }
 
 .preview-metric.period-today .preview-label {
@@ -759,43 +757,33 @@ html[lang="en"] .feature-copy strong::after {
 }
 
 .preview-metric.period-yesterday {
-  background:
-    radial-gradient(circle at 28% 30%, rgba(182, 120, 16, 0.16), transparent 36%),
-    linear-gradient(135deg, #fffaf0 0%, #f7efe0 100%);
-  border-color: #b78a35;
-  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(182, 120, 16, 0.12);
+  background: #fafaf8;
+  border-color: #d4d0c8;
+  box-shadow: 4px 4px 0 var(--ink);
 }
 
 .preview-metric.period-week {
-  background:
-    radial-gradient(circle at 78% 36%, rgba(37, 99, 235, 0.18), transparent 38%),
-    linear-gradient(135deg, #fffaf0 0%, #edf4ff 100%);
-  border-color: #2563eb;
-  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(37, 99, 235, 0.12);
+  background: linear-gradient(135deg, #f2f6fc 0%, #e9eff9 100%);
+  border-color: #a3b8d6;
+  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(37, 99, 235, 0.08);
 }
 
 .preview-metric.period-last-week {
-  background:
-    radial-gradient(circle at 24% 36%, rgba(28, 124, 84, 0.16), transparent 38%),
-    linear-gradient(135deg, #fffaf0 0%, #edf8ef 100%);
-  border-color: var(--green);
-  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(28, 124, 84, 0.12);
+  background: #fafaf8;
+  border-color: #d4d0c8;
+  box-shadow: 4px 4px 0 var(--ink);
 }
 
 .preview-metric.period-month {
-  background:
-    radial-gradient(circle at 78% 36%, rgba(0, 109, 119, 0.15), transparent 38%),
-    linear-gradient(135deg, #fffaf0 0%, #eef7f6 100%);
-  border-color: #0f8b8d;
-  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(0, 109, 119, 0.11);
+  background: linear-gradient(135deg, #f0f6f6 0%, #e6efef 100%);
+  border-color: #9bbab8;
+  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(0, 109, 119, 0.08);
 }
 
 .preview-metric.period-last-month {
-  background:
-    radial-gradient(circle at 26% 32%, rgba(220, 38, 38, 0.16), transparent 38%),
-    linear-gradient(135deg, #fffaf0 0%, #fff0ee 100%);
-  border-color: #dc2626;
-  box-shadow: 4px 4px 0 var(--ink), inset 0 0 0 1px rgba(220, 38, 38, 0.12);
+  background: #fafaf8;
+  border-color: #d4d0c8;
+  box-shadow: 4px 4px 0 var(--ink);
 }
 
 .preview-metric.type-people {
@@ -814,8 +802,22 @@ html[lang="en"] .feature-copy strong::after {
   color: #3b82f6;
 }
 
+.preview-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.preview-row-bottom {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
 .preview-value {
-  font-size: 42px;
+  font-size: 28px;
   font-weight: 800;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   line-height: 1;
@@ -841,8 +843,8 @@ html[lang="en"] .feature-copy strong::after {
 }
 
 .preview-cost {
-  font-size: 18px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 700;
   line-height: 1.15;
   color: var(--cost-accent);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -850,7 +852,7 @@ html[lang="en"] .feature-copy strong::after {
 }
 
 .preview-label {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   line-height: 1.15;
   color: var(--muted);
@@ -858,6 +860,26 @@ html[lang="en"] .feature-copy strong::after {
   letter-spacing: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: nowrap;
+}
+
+.preview-delta {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+
+.preview-delta.delta-up {
+  color: #15803d;
+  background: rgba(22, 163, 74, 0.1);
+}
+
+.preview-delta.delta-down {
+  color: #b91c1c;
+  background: rgba(220, 38, 38, 0.08);
 }
 
 /* Release proof */
@@ -1585,12 +1607,25 @@ td {
 .medal-rank-1 {
   min-height: 154px;
   padding-top: 22px;
-  border-color: rgba(182, 120, 16, 0.38);
+  border-color: var(--gold);
   border-left-color: var(--gold);
   background:
     radial-gradient(circle at 85% 12%, rgba(244, 176, 0, 0.34), transparent 36%),
     linear-gradient(135deg, #fff0b8, #fff7df 52%, #efe3bc);
   box-shadow: inset 0 0 0 1px rgba(182, 120, 16, 0.18), 0 14px 28px rgba(182, 120, 16, 0.16);
+  
+  /* UX Optimization: Champion Podium Elevation */
+  transform: translateY(-8px);
+  border-width: 1.5px;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s, border-color 0.25s;
+}
+
+.medal-card.medal-rank-1:hover {
+  transform: translateY(-13px) scale(1.015);
+  border-color: var(--yellow);
+  box-shadow: 
+    inset 0 0 0 1px rgba(182, 120, 16, 0.18), 
+    0 20px 38px rgba(182, 120, 16, 0.24);
 }
 
 .medal-rank-1 .medal-icon { color: var(--gold); }
@@ -3163,5 +3198,102 @@ body.is-embedded .analytics-card {
   border: 1px solid var(--ink-10, rgba(0,0,0,0.06)) !important;
 }
 
+/* ============================================================
+   Community Intelligence Home — download.html redesign
+   ============================================================ */
 
+.home-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.65fr) minmax(0, 1.35fr);
+  gap: 28px;
+  align-items: stretch;
+  padding: 24px 0 36px;
+}
+
+.home-hero-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  justify-content: center;
+}
+
+.home-hero-left .preview-grid {
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 8px;
+}
+.home-hero-left .preview-metric {
+  padding: 14px 14px;
+  gap: 8px;
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.home-hero-left .preview-metric:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.home-hero-left .preview-value {
+  font-size: 24px;
+  line-height: 1;
+}
+.home-hero-left .preview-cost {
+  font-size: 13px;
+  line-height: 1;
+}
+.home-hero-left .preview-label {
+  font-size: 12px;
+  line-height: 1;
+}
+.home-hero-left .preview-delta {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.home-hero-left .preview-metric.period-today {
+  box-shadow: 3px 3px 0 var(--ink), inset 0 0 0 1px rgba(0, 109, 119, 0.1);
+}
+.home-hero-left .preview-metric.period-yesterday,
+.home-hero-left .preview-metric.period-last-week,
+.home-hero-left .preview-metric.period-last-month {
+  background: #fcfcfb;
+  border-color: #dcdad4;
+}
+
+@media (max-width: 820px) {
+  .home-hero-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.home-trend-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.home-section {
+  padding: 24px 0;
+}
+
+.home-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 10px;
+}
+
+.home-section-header h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.home-cta-section {
+  padding: 28px 0;
+  border-top: 1px solid var(--line);
+}
+
+.home-cta-section h2 {
+  font-size: 21px;
+  font-weight: 700;
+  margin: 0 0 14px;
+}
 
