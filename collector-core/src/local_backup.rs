@@ -123,12 +123,10 @@ pub fn export_local_backup() -> Result<Value, String> {
 }
 
 pub fn default_backup_directory() -> String {
-    let base = dirs::home_dir()
-        .map(|home| home.join(".ai-token-league"))
-        .or_else(dirs::document_dir)
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("backup").to_string_lossy().to_string()
+    config::app_dir()
+        .join("backup")
+        .to_string_lossy()
+        .to_string()
 }
 
 pub fn backup_status() -> Value {
@@ -510,12 +508,39 @@ mod tests {
         std::env::temp_dir().join(format!("atl-backup-test-{}", suffix))
     }
 
+    /// RAII guard: sets ATL_HOME to a temp directory, restores on drop.
+    struct AtlHomeGuard {
+        previous: Option<String>,
+        home: PathBuf,
+    }
+
+    impl AtlHomeGuard {
+        fn new(home: &PathBuf) -> Self {
+            let previous = std::env::var("ATL_HOME").ok();
+            std::env::set_var("ATL_HOME", home);
+            Self {
+                previous,
+                home: home.clone(),
+            }
+        }
+    }
+
+    impl Drop for AtlHomeGuard {
+        fn drop(&mut self) {
+            if let Some(ref v) = self.previous {
+                std::env::set_var("ATL_HOME", v);
+            } else {
+                std::env::remove_var("ATL_HOME");
+            }
+            let _ = fs::remove_dir_all(&self.home);
+        }
+    }
+
     #[test]
     fn backup_and_restore_client_files() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
         let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _atl = AtlHomeGuard::new(&home);
 
         config::ensure_app_dir();
         fs::write(
@@ -542,21 +567,13 @@ mod tests {
         let queue_content = fs::read_to_string(config::queue_path()).unwrap();
         assert!(config_content.contains("\"p1\""));
         assert_eq!(queue_content, "[]\n");
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn backup_and_restore_strip_cursor_credentials() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
         let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _atl = AtlHomeGuard::new(&home);
 
         config::ensure_app_dir();
         fs::write(
@@ -607,21 +624,14 @@ mod tests {
         assert!(!restored_config.contains("secret-rt"));
         assert!(!restored_config.contains("legacy-secret"));
         assert!(restored_config.contains("\"accounts\": []"));
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn restore_rejects_hash_mismatch() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
         let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _atl = AtlHomeGuard::new(&home);
+
         let backup = json!({
             "backupVersion": BACKUP_VERSION,
             "scope": "client-local-data",
@@ -633,24 +643,17 @@ mod tests {
         });
         let err = restore_local_backup(backup).unwrap_err();
         assert!(err.contains("sha256 mismatch"));
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn backup_defaults_to_app_backup_dir_and_clears_files() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
         let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _atl = AtlHomeGuard::new(&home);
 
         assert_eq!(
             default_backup_directory(),
-            home.join(".ai-token-league")
+            config::app_dir()
                 .join("backup")
                 .to_string_lossy()
                 .to_string()
@@ -662,21 +665,14 @@ mod tests {
         let cleared = clear_configured_backups().unwrap();
         assert_eq!(cleared["removed"].as_u64(), Some(1));
         assert_eq!(cleared["backups"].as_array().unwrap().len(), 0);
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn backup_retention_removes_files_older_than_days() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
         let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _atl = AtlHomeGuard::new(&home);
+
         let dir = home.join("backups");
         fs::create_dir_all(&dir).unwrap();
         let old_path = dir.join("ai-token-league-backup-20260501-000000-000.json");
@@ -707,12 +703,5 @@ mod tests {
         enforce_retention_by_days(&dir, 7).unwrap();
         assert!(!old_path.exists());
         assert!(recent_path.exists());
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 }
