@@ -517,8 +517,8 @@ async function handleApi(req, res) {
   }
   if (req.method === "DELETE" && req.url === "/api/participant/data") {
     const body = await readBody(req);
-    if (!body.participantId || !body.timestamp || !body.signature) {
-      return sendJson(res, 400, { error: "participantId, timestamp, and signature are required" });
+    if (!body.participantId || !body.deviceId || !body.timestamp || !body.signature) {
+      return sendJson(res, 400, { error: "participantId, deviceId, timestamp, and signature are required" });
     }
     const ageMs = Date.now() - new Date(body.timestamp).getTime();
     if (!Number.isFinite(ageMs) || Math.abs(ageMs) > 5 * 60 * 1000) {
@@ -526,11 +526,21 @@ async function handleApi(req, res) {
     }
     const participant = store.getParticipant(body.participantId);
     if (!participant) return sendJson(res, 200, await store.deleteParticipantData(body.participantId));
-    const payload = { participantId: body.participantId, timestamp: body.timestamp };
+    const payload = { participantId: body.participantId, deviceId: body.deviceId, timestamp: body.timestamp };
     if (!verifyPayload(participant.identityPublicKey, payload, body.signature)) {
       return sendJson(res, 401, { error: "invalid signature" });
     }
-    const result = await store.deleteParticipantData(body.participantId);
+    const device = await store.getDeviceById(body.deviceId);
+    if (!device || device.participantId !== body.participantId) {
+      return sendJson(res, 403, { error: "deviceId does not belong to this participant" });
+    }
+    const deviceCount = await store.countDevicesByParticipant(body.participantId);
+    let result;
+    if (deviceCount <= 1) {
+      result = await store.deleteParticipantData(body.participantId);
+    } else {
+      result = await store.deleteDeviceData(body.deviceId);
+    }
     if (boardAnonymizer) boardAnonymizer.markDirty();
     return sendJson(res, 200, result);
   }

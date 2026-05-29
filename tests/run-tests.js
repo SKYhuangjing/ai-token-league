@@ -384,6 +384,7 @@ async function testParticipantDataDeleteMissingIsNoop() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         participantId: "p_missing",
+        deviceId: "d_missing",
         timestamp: new Date().toISOString(),
         signature: "missing-participant-signature"
       })
@@ -3896,7 +3897,7 @@ async function testSelfServiceDeletionReplayProtection() {
     });
 
     const freshTs = new Date().toISOString();
-    const delPayload = { participantId: identity.participantId, timestamp: freshTs };
+    const delPayload = { participantId: identity.participantId, deviceId, timestamp: freshTs };
     const delSig = signPayload(identity.identityPrivateKey, delPayload);
     const delRes = await fetch(`${baseUrl}/api/participant/data`, {
       method: "DELETE",
@@ -3907,7 +3908,7 @@ async function testSelfServiceDeletionReplayProtection() {
     assert.equal((await delRes.json()).deleted, true);
 
     const oldTs = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const oldPayload = { participantId: identity.participantId, timestamp: oldTs };
+    const oldPayload = { participantId: identity.participantId, deviceId, timestamp: oldTs };
     const oldSig = signPayload(identity.identityPrivateKey, oldPayload);
     const oldRes = await fetch(`${baseUrl}/api/participant/data`, {
       method: "DELETE",
@@ -3924,6 +3925,242 @@ async function testSelfServiceDeletionReplayProtection() {
     });
     assert.equal(missingFields.status, 400);
     console.log("  testSelfServiceDeletionReplayProtection passed");
+  } finally { await cleanup(); }
+}
+
+async function testSelfServiceDeletionMultiDevice() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceIdA = newId("d");
+    const deviceIdB = newId("d");
+    // Register participant with two devices
+    for (const did of [deviceIdA, deviceIdB]) {
+      await fetch(`${baseUrl}/api/devices/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          participantId: identity.participantId, deviceId: did, nickname: "multi-del",
+          identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+        })
+      });
+    }
+    // Upload usage for device A
+    const payloadA = { participantId: identity.participantId, deviceId: deviceIdA,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "hA", workdirDisplayName: "pA", model: "gpt-5", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sfA" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payloadA, signature: signPayload(identity.identityPrivateKey, payloadA) })
+    });
+    // Upload usage for device B
+    const payloadB = { participantId: identity.participantId, deviceId: deviceIdB,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "hB", workdirDisplayName: "pB", model: "gpt-5", inputTokens: 200, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 300, sourceQuality: "exact", sourceFingerprint: "sfB" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payloadB, signature: signPayload(identity.identityPrivateKey, payloadB) })
+    });
+
+    // Delete device A's cloud data
+    const freshTs = new Date().toISOString();
+    const delPayload = { participantId: identity.participantId, deviceId: deviceIdA, timestamp: freshTs };
+    const delSig = signPayload(identity.identityPrivateKey, delPayload);
+    const delRes = await fetch(`${baseUrl}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...delPayload, signature: delSig })
+    });
+    assert.equal(delRes.status, 200);
+    const delBody = await delRes.json();
+    assert.equal(delBody.deviceId, deviceIdA);
+    assert.equal(delBody.removed.devices, 1);
+    assert.ok(delBody.removed.usageDaily >= 1);
+
+    // Verify device B's data is still intact via leaderboard
+    const lbRes = await fetch(`${baseUrl}/api/leaderboard?range=today&tool=all`);
+    const lbBody = await lbRes.json();
+    const entry = lbBody.items.find(i => i.participantId === identity.participantId);
+    assert.ok(entry, "participant should still exist on leaderboard after single-device delete");
+    assert.equal(entry.totalTokens, 300, "device B tokens should remain");
+
+    console.log("  testSelfServiceDeletionMultiDevice passed");
+  } finally { await cleanup(); }
+}
+
+async function testSelfServiceDeletionSingleDeviceWipesAll() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "single-del",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payload = { participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "gpt-5", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+    });
+
+    const freshTs = new Date().toISOString();
+    const delPayload = { participantId: identity.participantId, deviceId, timestamp: freshTs };
+    const delSig = signPayload(identity.identityPrivateKey, delPayload);
+    const delRes = await fetch(`${baseUrl}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...delPayload, signature: delSig })
+    });
+    assert.equal(delRes.status, 200);
+    const delBody = await delRes.json();
+    assert.equal(delBody.deleted, true);
+    assert.equal(delBody.participantId, identity.participantId);
+
+    // Participant should be fully gone from leaderboard
+    const lbRes = await fetch(`${baseUrl}/api/leaderboard?range=today&tool=all`);
+    const lbBody = await lbRes.json();
+    const entry = lbBody.items.find(i => i.participantId === identity.participantId);
+    assert.equal(entry, undefined, "single-device participant should be fully deleted");
+
+    console.log("  testSelfServiceDeletionSingleDeviceWipesAll passed");
+  } finally { await cleanup(); }
+}
+
+async function testSelfServiceDeletionRejectsCrossParticipantDevice() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    // Participant A: two devices
+    const identityA = generateIdentity();
+    const deviceIdA1 = newId("d");
+    const deviceIdA2 = newId("d");
+    for (const did of [deviceIdA1, deviceIdA2]) {
+      await fetch(`${baseUrl}/api/devices/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          participantId: identityA.participantId, deviceId: did, nickname: "cross-a",
+          identityPublicKey: identityA.identityPublicKey, os: "test", appVersion: APP_VERSION
+        })
+      });
+    }
+    // Upload usage for A's devices
+    for (const [did, tokens] of [[deviceIdA1, 100], [deviceIdA2, 200]]) {
+      const p = { participantId: identityA.participantId, deviceId: did,
+        clientGeneratedAt: new Date().toISOString(),
+        items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "h" + did, workdirDisplayName: "p" + did, model: "gpt-5", inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: tokens, sourceQuality: "exact", sourceFingerprint: "sf" + did }]
+      };
+      await fetch(`${baseUrl}/api/usage/daily-batch`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...p, signature: signPayload(identityA.identityPrivateKey, p) })
+      });
+    }
+
+    // Participant B: one device
+    const identityB = generateIdentity();
+    const deviceIdB = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identityB.participantId, deviceId: deviceIdB, nickname: "cross-b",
+        identityPublicKey: identityB.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payloadB = { participantId: identityB.participantId, deviceId: deviceIdB,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "hB", workdirDisplayName: "pB", model: "gpt-5", inputTokens: 500, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 500, sourceQuality: "exact", sourceFingerprint: "sfB" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payloadB, signature: signPayload(identityB.identityPrivateKey, payloadB) })
+    });
+
+    // A signs a request targeting B's deviceId — must be rejected
+    const freshTs = new Date().toISOString();
+    const delPayload = { participantId: identityA.participantId, deviceId: deviceIdB, timestamp: freshTs };
+    const delSig = signPayload(identityA.identityPrivateKey, delPayload);
+    const delRes = await fetch(`${baseUrl}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...delPayload, signature: delSig })
+    });
+    assert.equal(delRes.status, 403, "cross-participant device delete must be rejected");
+
+    // B's data must remain intact
+    const lbRes = await fetch(`${baseUrl}/api/leaderboard?range=today&tool=all`);
+    const lbBody = await lbRes.json();
+    const entryB = lbBody.items.find(i => i.participantId === identityB.participantId);
+    assert.ok(entryB, "participant B should still exist on leaderboard");
+    assert.equal(entryB.totalTokens, 500, "participant B tokens must be unchanged");
+
+    // A's data must also remain intact (nothing was deleted)
+    const entryA = lbBody.items.find(i => i.participantId === identityA.participantId);
+    assert.ok(entryA, "participant A should still exist on leaderboard");
+    assert.equal(entryA.totalTokens, 300, "participant A tokens must be unchanged");
+
+    console.log("  testSelfServiceDeletionRejectsCrossParticipantDevice passed");
+  } finally { await cleanup(); }
+}
+
+async function testSelfServiceDeletionRejectsInvalidSignature() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId, deviceId, nickname: "sig-test",
+        identityPublicKey: identity.identityPublicKey, os: "test", appVersion: APP_VERSION
+      })
+    });
+    const payload = { participantId: identity.participantId, deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{ day: localDay(), toolCode: "codex", providerId: "codex_local", workdirHash: "h", workdirDisplayName: "p", model: "gpt-5", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 150, sourceQuality: "exact", sourceFingerprint: "sf" }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+    });
+
+    // Send DELETE with valid participantId + deviceId + fresh timestamp but forged signature
+    const freshTs = new Date().toISOString();
+    const delRes = await fetch(`${baseUrl}/api/participant/data`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId,
+        deviceId,
+        timestamp: freshTs,
+        signature: "forged-signature-not-signed-by-owner"
+      })
+    });
+    assert.equal(delRes.status, 401, "invalid signature must be rejected");
+
+    // Data must remain intact
+    const lbRes = await fetch(`${baseUrl}/api/leaderboard?range=today&tool=all`);
+    const lbBody = await lbRes.json();
+    const entry = lbBody.items.find(i => i.participantId === identity.participantId);
+    assert.ok(entry, "participant should still exist after rejected invalid signature");
+    assert.equal(entry.totalTokens, 150, "tokens must be unchanged");
+
+    console.log("  testSelfServiceDeletionRejectsInvalidSignature passed");
   } finally { await cleanup(); }
 }
 
@@ -4882,6 +5119,10 @@ await testAdminAuthDisabledWhenNotConfigured();
 await testBoardPublicMode();
 await testBoardAuthenticatedMode();
 await testSelfServiceDeletionReplayProtection();
+await testSelfServiceDeletionMultiDevice();
+await testSelfServiceDeletionSingleDeviceWipesAll();
+await testSelfServiceDeletionRejectsCrossParticipantDevice();
+await testSelfServiceDeletionRejectsInvalidSignature();
 await testLeaderboardEndpoint();
 await testBoardParticipantDetailAndTrend();
 await testModelPricesPublicEndpoint();
