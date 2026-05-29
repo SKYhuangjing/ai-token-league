@@ -334,11 +334,26 @@ fn atomic_write_file(path: &PathBuf, content: &str) -> io::Result<()> {
         let _ = fs::remove_file(&tmp);
         return Err(err);
     }
-    if let Err(err) = fs::rename(&tmp, path) {
+    if let Err(err) = replace_with_tmp(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(err);
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn replace_with_tmp(tmp: &PathBuf, path: &PathBuf) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    fs::rename(tmp, path)
+}
+
+#[cfg(not(windows))]
+fn replace_with_tmp(tmp: &PathBuf, path: &PathBuf) -> io::Result<()> {
+    fs::rename(tmp, path)
 }
 
 fn atomic_tmp_path(path: &PathBuf) -> io::Result<PathBuf> {
@@ -461,10 +476,18 @@ pub fn save_config(config: &AppConfig) {
     let path = config_path();
     let bak = config_bak_path();
 
-    // Atomic write: write temp file, then rename over destination.
-    //    On Windows, std::fs::rename uses MoveFileExW(MOVEFILE_REPLACE_EXISTING)
-    //    which replaces the existing file. If rename fails we clean up tmp and
-    //    leave the old file untouched — never fall back to a non-atomic write.
+    if !bak.exists() {
+        if let Ok(current_content) = fs::read_to_string(&path) {
+            if !current_content.trim().is_empty() {
+                let _ = atomic_write_file(&bak, &current_content);
+            }
+        }
+    }
+
+    // Write temp file first, then replace the destination. Windows cannot
+    // rename over an existing file with std::fs::rename, so the replacement
+    // path is platform-specific; the .bak keeps recovery available if the
+    // primary file disappears during a crash window.
     if atomic_write_file(&path, &content).is_ok() {
         // .bak is the latest known-good config, not the previous config.
         // This preserves completed onboarding state when the primary file is lost.

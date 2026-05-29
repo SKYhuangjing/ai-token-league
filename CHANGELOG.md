@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.4] - 2026-05-29
+
+### Added
+
+- [Web] Added the Community Intelligence analytics page with hourly activity trends, model/provider breakdowns, and embeddable public widgets.
+- [Web] Added admin CSV export for usage daily data, with streaming output optimized for large datasets.
+
+### Changed
+
+- [Web] Redesigned the public download and community intelligence pages for clearer release, installer, and usage insight presentation.
+- Release scripts now default to the faster current-platform local build path for routine iteration.
+- [Desktop] macOS DMGs now include a visible "已损坏修复" helper and Finder layout to guide users through quarantine repair after dragging the app into Applications.
+
+### Fixed
+
+- [Desktop] Config saves now use crash-resilient writes plus `.bak` recovery so interrupted Windows restarts do not recreate identity or show onboarding again.
+- [Desktop, Web] Self-service cloud reset is now device-aware: a multi-device participant clears only the requesting device, while single-device participants still remove all cloud data.
+
 ## [0.7.3] - 2026-05-26
 
 ### Changed

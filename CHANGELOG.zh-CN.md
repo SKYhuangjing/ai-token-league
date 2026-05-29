@@ -6,6 +6,24 @@
 
 ---
 
+## [0.7.4] - 2026-05-29
+
+### 新增
+
+- [Web] 新增 Community Intelligence 分析页，展示小时级活跃趋势、模型/Provider 分布和可嵌入公开组件。
+- [Web] 新增 admin usage daily CSV 导出，并针对大数据量采用流式输出优化。
+
+### 变更
+
+- [Web] 重设计公开下载页和 Community Intelligence 页面，使 release、安装包和用量洞察信息更清晰。
+- release 脚本默认使用更快的当前平台本地构建路径，便于日常迭代。
+- [Desktop] macOS DMG 现在包含可见的“已损坏修复”工具和 Finder 布局，引导用户拖入“应用程序”后修复 quarantine 隔离属性。
+
+### 修复
+
+- [Desktop] 配置保存改为抗崩溃写入并提供 `.bak` 恢复，避免 Windows 重启中断后重建身份或重新出现 onboarding。
+- [Desktop, Web] 自助云端重置改为按设备处理：多设备参与者只清理当前请求设备，单设备参与者仍清理全部云端数据。
+
 ## [0.7.3] - 2026-05-26
 
 ### 变更
