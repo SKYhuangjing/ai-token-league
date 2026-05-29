@@ -1415,6 +1415,24 @@ export class MySqlStore extends Store {
     });
   }
 
+  async countDevicesByParticipant(participantId) {
+    if (!participantId) return 0;
+    const [rows] = await this.pool.query(
+      "SELECT COUNT(*) AS count FROM devices WHERE participantId = ?",
+      [participantId]
+    );
+    return Number(rows?.[0]?.count || 0);
+  }
+
+  async getDeviceById(deviceId) {
+    if (!deviceId) return null;
+    const [rows] = await this.pool.query(
+      "SELECT * FROM devices WHERE id = ? LIMIT 1",
+      [deviceId]
+    );
+    return rows?.[0] || null;
+  }
+
   async syncIdentityTables() {
     await withTransaction(this.pool, async (conn) => {
       await replaceParticipants(conn, Object.values(this.db.participants));

@@ -705,6 +705,7 @@ async fn handle_command(
             let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let payload = serde_json::json!({
                 "participantId": cfg.participant_id,
+                "deviceId": cfg.device_id,
                 "timestamp": timestamp
             });
             let signature =
@@ -712,6 +713,7 @@ async fn handle_command(
             let client = reqwest::Client::new();
             let body = serde_json::json!({
                 "participantId": cfg.participant_id,
+                "deviceId": cfg.device_id,
                 "timestamp": timestamp,
                 "signature": signature
             });

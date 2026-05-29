@@ -255,6 +255,20 @@ export class Store {
     };
   }
 
+  countDevicesByParticipant(participantId) {
+    if (!participantId) return 0;
+    let count = 0;
+    for (const row of Object.values(this.db.devices || {})) {
+      if (row.participantId === participantId) count += 1;
+    }
+    return count;
+  }
+
+  getDeviceById(deviceId) {
+    if (!deviceId) return null;
+    return this.db.devices?.[deviceId] || null;
+  }
+
   upsertUsageBatch(input) {
     if (input.snapshot?.mode === "device_day_hour_provider") return this.upsertHourlySnapshotBatch(input);
     if (input.snapshot) return this.upsertSnapshotBatch(input);
