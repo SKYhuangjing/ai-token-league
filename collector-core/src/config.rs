@@ -3,6 +3,7 @@ use crate::sync::SyncOutcome;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 
 #[cfg(test)]
@@ -12,7 +13,13 @@ pub const DEFAULT_AUTO_REFRESH_ENABLED: bool = true;
 pub const DEFAULT_SILENT_UPDATE_MODE: &str = "auto_download";
 pub const SILENT_UPDATE_MODES: &[&str] = &["notify", "auto_download", "auto_apply_on_idle"];
 
-fn app_dir() -> PathBuf {
+pub fn app_dir() -> PathBuf {
+    // ATL_HOME overrides the default data directory (used by tests).
+    if let Ok(custom) = std::env::var("ATL_HOME") {
+        if !custom.trim().is_empty() {
+            return PathBuf::from(custom);
+        }
+    }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".ai-token-league")
 }
@@ -291,17 +298,59 @@ pub fn normalize_silent_update_mode(value: &str) -> &str {
     }
 }
 
-pub fn load_config() -> Option<AppConfig> {
-    let path = config_path();
+pub fn config_bak_path() -> PathBuf {
+    config_path().with_extension("json.bak")
+}
+
+/// Try to parse a config file at the given path. Returns None if the file
+/// is missing, empty, or contains invalid JSON.
+fn try_parse_config(path: &PathBuf) -> Option<AppConfig> {
     if !path.exists() {
         return None;
     }
-    let content = fs::read_to_string(&path).ok()?;
+    let content = fs::read_to_string(path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
     let mut config: AppConfig = serde_json::from_str(&content).ok()?;
-    // Fix runtime fields
     config.auto_refresh_enabled = DEFAULT_AUTO_REFRESH_ENABLED;
     config.silent_update_mode = DEFAULT_SILENT_UPDATE_MODE.to_string();
     Some(config)
+}
+
+pub fn load_config() -> Option<AppConfig> {
+    let path = config_path();
+    if let Some(config) = try_parse_config(&path) {
+        return Some(config);
+    }
+    // Primary config missing or corrupted — try .bak fallback
+    try_parse_config(&config_bak_path())
+}
+
+fn atomic_write_file(path: &PathBuf, content: &str) -> io::Result<()> {
+    let tmp = atomic_tmp_path(path)?;
+
+    if let Err(err) = fs::write(&tmp, content) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn atomic_tmp_path(path: &PathBuf) -> io::Result<PathBuf> {
+    let Some(file_name) = path.file_name() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "target path has no file name",
+        ));
+    };
+    let mut tmp_name = file_name.to_os_string();
+    tmp_name.push(".tmp");
+    Ok(path.with_file_name(tmp_name))
 }
 
 fn merge_object_values(
@@ -407,7 +456,20 @@ pub fn save_config(config: &AppConfig) {
     fixed.silent_update_mode = DEFAULT_SILENT_UPDATE_MODE.to_string();
     cleanup_deprecated_cursor_sources(&mut fixed);
     let json = serde_json::to_string_pretty(&fixed).unwrap_or_default();
-    let _ = fs::write(config_path(), format!("{}\n", json));
+    let content = format!("{}\n", json);
+
+    let path = config_path();
+    let bak = config_bak_path();
+
+    // Atomic write: write temp file, then rename over destination.
+    //    On Windows, std::fs::rename uses MoveFileExW(MOVEFILE_REPLACE_EXISTING)
+    //    which replaces the existing file. If rename fails we clean up tmp and
+    //    leave the old file untouched — never fall back to a non-atomic write.
+    if atomic_write_file(&path, &content).is_ok() {
+        // .bak is the latest known-good config, not the previous config.
+        // This preserves completed onboarding state when the primary file is lost.
+        let _ = atomic_write_file(&bak, &content);
+    }
 }
 
 pub fn init_config(input: serde_json::Value, persist: bool) -> AppConfig {
@@ -848,6 +910,13 @@ fn cleanup_deprecated_cursor_sources(config: &mut AppConfig) -> bool {
 
 pub fn reset_local_data() {
     let _ = fs::remove_file(config_path());
+    let _ = fs::remove_file(config_bak_path());
+    if let Ok(path) = atomic_tmp_path(&config_path()) {
+        let _ = fs::remove_file(path);
+    }
+    if let Ok(path) = atomic_tmp_path(&config_bak_path()) {
+        let _ = fs::remove_file(path);
+    }
     let _ = fs::remove_file(queue_path());
     let _ = fs::remove_file(manifest_path());
     let _ = fs::remove_file(usage_cache_path());
@@ -1484,6 +1553,225 @@ mod tests {
                 .unwrap()
                 .len(),
             0
+        );
+    }
+
+    // ── Crash recovery tests ──
+
+    /// RAII guard: sets ATL_HOME to a temp directory, restores on drop.
+    /// All config file operations are sandboxed — never touches real user data.
+    struct AtlHomeGuard {
+        previous: Option<String>,
+        home: PathBuf,
+    }
+
+    impl AtlHomeGuard {
+        fn new(home: &PathBuf) -> Self {
+            let previous = std::env::var("ATL_HOME").ok();
+            std::env::set_var("ATL_HOME", home);
+            Self {
+                previous,
+                home: home.clone(),
+            }
+        }
+    }
+
+    impl Drop for AtlHomeGuard {
+        fn drop(&mut self) {
+            if let Some(ref v) = self.previous {
+                std::env::set_var("ATL_HOME", v);
+            } else {
+                std::env::remove_var("ATL_HOME");
+            }
+            let _ = fs::remove_dir_all(&self.home);
+        }
+    }
+
+    /// Create config and establish a .bak recovery file.
+    fn create_config_with_bak() -> AppConfig {
+        init_config(serde_json::json!({"desktopAutoInitialized": false}), true)
+    }
+
+    #[test]
+    fn save_config_creates_bak_with_latest_content() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+
+        // First save creates both config.json and the latest-known-good .bak.
+        let mut cfg = init_config(serde_json::json!({"nickname": "first"}), true);
+        let first_pid = cfg.participant_id.clone();
+        assert!(config_bak_path().exists(), ".bak exists after first save");
+
+        let initial_bak_content = fs::read_to_string(config_bak_path()).unwrap();
+        let initial_bak_json: serde_json::Value =
+            serde_json::from_str(&initial_bak_content).unwrap();
+        assert_eq!(initial_bak_json["nickname"].as_str(), Some("first"));
+
+        // Second save — .bak should track the latest successful config.
+        cfg.nickname = "second".to_string();
+        save_config(&cfg);
+
+        let bak_content = fs::read_to_string(config_bak_path()).unwrap();
+        assert!(
+            bak_content.contains(&first_pid),
+            ".bak should contain previous config"
+        );
+        let bak_json: serde_json::Value =
+            serde_json::from_str(&bak_content).expect(".bak must be valid JSON");
+        assert_eq!(bak_json["nickname"].as_str(), Some("second"));
+
+        let main_content = fs::read_to_string(config_path()).unwrap();
+        let main_json: serde_json::Value = serde_json::from_str(&main_content).unwrap();
+        assert_eq!(main_json["nickname"].as_str(), Some("second"));
+    }
+
+    #[test]
+    fn save_config_atomic_write_replaces_existing_file() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+
+        let mut cfg = init_config(serde_json::json!({"nickname": "before"}), true);
+        assert!(
+            config_path().exists(),
+            "config.json must exist after first save"
+        );
+
+        cfg.nickname = "after".to_string();
+        save_config(&cfg);
+
+        let content = fs::read_to_string(config_path()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["nickname"].as_str(), Some("after"));
+        assert!(
+            !atomic_tmp_path(&config_path()).unwrap().exists(),
+            "temp file must be cleaned up after successful save"
+        );
+    }
+
+    #[test]
+    fn completed_onboarding_state_recovers_from_bak() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+
+        let initial = ensure_desktop_config();
+        assert!(
+            initial.desktop_auto_initialized,
+            "first desktop launch should create onboarding config"
+        );
+
+        let completed = update_config(
+            serde_json::json!({"desktopAutoInitialized": false}),
+            &initial,
+            true,
+        );
+        assert!(
+            !completed.desktop_auto_initialized,
+            "onboarding completion should be saved"
+        );
+
+        fs::write(config_path(), "{\"desktopAutoInitialized\":").unwrap();
+
+        let recovered = ensure_desktop_config();
+        assert_eq!(recovered.participant_id, completed.participant_id);
+        assert_eq!(recovered.device_id, completed.device_id);
+        assert!(
+            !recovered.desktop_auto_initialized,
+            "bak recovery must not resurrect the onboarding wizard"
+        );
+    }
+
+    #[test]
+    fn load_config_recovers_from_corrupted_main_file_via_bak() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+
+        let cfg = create_config_with_bak();
+        let expected_pid = cfg.participant_id.clone();
+
+        // Corrupt the main config.json (simulates interrupted write)
+        fs::write(
+            config_path(),
+            "{\n  \"participantId\": \"p-survivor\",\n  \"nick",
+        )
+        .unwrap();
+
+        // load_config should fall back to .bak
+        let recovered = load_config().expect("should recover from .bak");
+        assert_eq!(
+            recovered.participant_id, expected_pid,
+            "identity preserved via .bak"
+        );
+        assert!(
+            !recovered.desktop_auto_initialized,
+            "wizard state preserved via .bak"
+        );
+    }
+
+    #[test]
+    fn load_config_recovers_from_empty_main_file_via_bak() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+
+        let cfg = create_config_with_bak();
+        let expected_pid = cfg.participant_id.clone();
+        let expected_device = cfg.device_id.clone();
+
+        // Empty main file (simulates truncated write)
+        fs::write(config_path(), "").unwrap();
+
+        let recovered = load_config().expect("should recover from .bak");
+        assert_eq!(recovered.participant_id, expected_pid);
+        assert_eq!(recovered.device_id, expected_device);
+    }
+
+    #[test]
+    fn load_config_returns_none_when_both_corrupted() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+
+        ensure_app_dir();
+        fs::write(config_path(), "CORRUPTED{{{{").unwrap();
+        fs::write(config_bak_path(), "ALSO-BAD}}}}").unwrap();
+
+        assert!(
+            load_config().is_none(),
+            "should return None when both files are bad"
+        );
+    }
+
+    #[test]
+    fn ensure_desktop_config_reuses_bak_instead_of_reinitializing() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+
+        // Setup: create config with wizard completed, establish .bak chain
+        let cfg = create_config_with_bak();
+        let expected_pid = cfg.participant_id.clone();
+        let expected_device = cfg.device_id.clone();
+
+        // Corrupt main config — simulate Windows restart crash
+        fs::write(config_path(), "{\"participantId\":").unwrap();
+
+        // ensure_desktop_config should recover from .bak, NOT create new identity
+        let recovered = ensure_desktop_config();
+        assert_eq!(
+            recovered.participant_id, expected_pid,
+            "should recover existing participantId from .bak"
+        );
+        assert_eq!(
+            recovered.device_id, expected_device,
+            "should recover existing deviceId from .bak"
+        );
+        assert!(
+            !recovered.desktop_auto_initialized,
+            "wizard should remain dismissed after .bak recovery"
         );
     }
 }
