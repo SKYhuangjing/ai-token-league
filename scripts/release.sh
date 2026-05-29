@@ -478,8 +478,8 @@ collect_mac_artifacts() {
   dmg=$(find "$dmg_dir" -name "*.dmg" 2>/dev/null | head -1)
   if [[ -n "$dmg" ]]; then
     cp "$dmg" "dist/AI Token League${suffix}.dmg"
-    if ! scripts/patch-dmg-readme.sh --dmg "dist/AI Token League${suffix}.dmg"; then
-      echo "Error: failed to inject mac-install-readme.txt into dist/AI Token League${suffix}.dmg"
+    if ! scripts/patch-dmg-layout.sh --dmg "dist/AI Token League${suffix}.dmg"; then
+      echo "Error: failed to prepare installer layout in dist/AI Token League${suffix}.dmg"
       exit 1
     fi
   fi

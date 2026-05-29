@@ -53,7 +53,7 @@ jobs:
           node --check scripts/check-release-version.js
           node --check scripts/prepare-github-release.js
           node --check scripts/upload-github-release-asset.js
-          bash -n scripts/patch-dmg-readme.sh
+          bash -n scripts/patch-dmg-layout.sh
       - id: release-body
         shell: bash
         run: |
@@ -144,7 +144,7 @@ jobs:
           updaterJsonPreferNsis: true
           assetNamePattern: "AI Token League_[version]_[platform]_[arch][setup][ext]"
           args: ${{ matrix.args }}
-      - name: Inject install readme into macOS DMG
+      - name: Prepare macOS DMG layout
         if: startsWith(matrix.os, 'macos')
         shell: bash
         env:
@@ -159,13 +159,13 @@ jobs:
             exit 1
           fi
 
-          DMG=$(find "${search_roots[@]}" -path "*/bundle/dmg/*.dmg" -print | head -1)
+          DMG=$(find "${search_roots[@]}" -path "*/bundle/dmg/*.dmg" -print -quit)
           if [[ -z "$DMG" ]]; then
             echo "Error: no DMG found"
             exit 1
           fi
 
-          scripts/patch-dmg-readme.sh --dmg "$DMG"
+          scripts/patch-dmg-layout.sh --dmg "$DMG"
 
           REL_ID="${{ needs.prepare-release.outputs.release_id }}"
           REPO="${{ github.repository }}"
