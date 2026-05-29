@@ -23,7 +23,7 @@ Without flags, runs in interactive mode with prompts.
 
 Options:
   --version VER     Version to release (default: current from package.json)
-  --platform PLAT   Platform: current | mac-arm64 | mac-intel | mac-all | win | linux | all (default: all)
+  --platform PLAT   Platform: current | mac-arm64 | mac-intel | mac-all | win | linux | all (default: current)
   --env FILE        Env file for presets and upload credentials
   --upload          Upload artifacts to OSS after build. Single-platform builds publish platform parts; all-platform builds publish final metadata.
   --yes             Skip confirmation prompt
@@ -204,7 +204,7 @@ if [[ -z "$PLATFORM" ]]; then
   echo "    6) All platforms"
   echo "    7) Current machine"
   echo ""
-  prompt PLATFORM "Select platform [6]: " "6"
+  prompt PLATFORM "Select platform [7]: " "7"
 fi
 
 case "$PLATFORM" in
@@ -230,7 +230,7 @@ if [[ -z "$ENV_FILE" ]]; then
   echo "    2) env.local"
   echo "    3) Custom path"
   echo ""
-  prompt ENV_CHOICE "Select [1]: " "1"
+  prompt ENV_CHOICE "Select [2]: " "2"
   case "$ENV_CHOICE" in
     2) ENV_FILE="env.local" ;;
     3) read -rp "  Env file path: " ENV_FILE ;;
@@ -250,7 +250,7 @@ fi
 
 # --- step 4: upload ---
 if [[ -z "$UPLOAD" ]]; then
-  prompt_yn UPLOAD "  Upload to OSS after build? [y/N] " "no"
+  prompt_yn UPLOAD "  Upload to OSS after build? " "no"
 fi
 
 if [[ "$UPLOAD" == "yes" && -z "$ENV_FILE" ]]; then
