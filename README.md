@@ -156,11 +156,7 @@ reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
 
 ### macOS 提示无法打开或应用已损坏？
 
-如果 macOS 提示应用来自未验证开发者、无法打开，或提示“应用已损坏”，可在“系统设置 > 隐私与安全性”中选择仍要打开。必要时可在终端移除 quarantine 标记：
-
-```bash
-sudo xattr -rd com.apple.quarantine "/Applications/AI Token League.app"
-```
+如果 macOS 提示应用来自未验证开发者、无法打开，或提示“应用已损坏”，请先把应用拖入“应用程序”，再运行 DMG 内的“已损坏修复”工具。也可以在“系统设置 > 隐私与安全性”中选择仍要打开。
 
 ---
 

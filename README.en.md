@@ -156,11 +156,7 @@ You can also download and run zip packages:
 
 ### macOS Cannot Open The App Or Says It Is Damaged?
 
-If macOS blocks the app as coming from an unidentified developer, refuses to open it, or says the app is damaged, open it from System Settings > Privacy & Security. If needed, remove the quarantine flag:
-
-```bash
-sudo xattr -rd com.apple.quarantine "/Applications/AI Token League.app"
-```
+If macOS blocks the app as coming from an unidentified developer, refuses to open it, or says the app is damaged, drag the app into Applications first, then run the "已损坏修复" helper inside the DMG. You can also allow the app from System Settings > Privacy & Security.
 
 ---
 
