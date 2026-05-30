@@ -126,6 +126,9 @@ let backgroundStatusTimer = null;
 let backgroundStatusInFlight = null;
 let backgroundStatusQueuedArgs = null;
 let latestUpdateState = null;
+let updateDownloadedPersisted = false;
+let updateInstallRunning = false;
+let downloadedEventReceived = false;
 let latestBackgroundStatus = null;
 let latestBackupStatus = null;
 let latestDiagnosticsStatus = null;
@@ -239,8 +242,7 @@ $("#brand-refresh").addEventListener("click", () => {
 
 $("#rail-restart-update").addEventListener("click", () => run(async () => {
   logRuntimeEvent("update_restart_click");
-  $("#rail-restart-update").disabled = true;
-  await api.installAndRestartUpdate();
+  await installAndRestartUpdate();
 }));
 $("#refresh-health").addEventListener("click", () => run(async () => {
   logRuntimeEvent("source_health_refresh_click");
@@ -1055,7 +1057,7 @@ function registerRuntimeEventHandlers() {
 
 function hasReadyUpdatePackage(state = latestUpdateState) {
   const update = state?.update || state?.lastResult || null;
-  return Boolean(state?.readyPackage || state?.status === "downloaded" || update?.status === "downloaded");
+  return Boolean(state?.readyPackage || state?.status === "downloaded" || update?.status === "downloaded" || updateDownloadedPersisted);
 }
 
 function hasUpdateAvailable(state = latestUpdateState) {
@@ -1078,7 +1080,7 @@ function renderUpdateActions(state = latestUpdateState) {
   installerButton.hidden = !(failed && !ready);
   installerButton.disabled = installerButton.hidden;
   if (enforcementButton) {
-    enforcementButton.disabled = isUpdateDownloading(state);
+    enforcementButton.disabled = isUpdateDownloading(state) || updateInstallRunning;
     enforcementButton.dataset.updateAction = ready ? "install" : "download";
     enforcementButton.textContent = ready
       ? t("desktop.rail.restartUpdate")
@@ -1127,23 +1129,33 @@ function checkMandatoryFromConfig(config = latestConfig) {
 }
 
 function updateCheckProgress(data) {
-  latestUpdateState = data || latestUpdateState;
-  if (data.downloadProgress) {
+  const merged = { ...(latestUpdateState || {}), ...(data || {}) };
+  if (data.status === "downloaded" && !updateDownloadedPersisted) {
+    merged.status = "downloading";
+    delete merged.downloadProgress;
+    delete merged.downloadRunning;
+  }
+  latestUpdateState = merged;
+  if (data.downloadProgress && !downloadedEventReceived) {
     const pct = data.downloadProgress.percent;
     const speed = data.downloadProgress.bytesPerSecond > 0
       ? `${Math.round(data.downloadProgress.bytesPerSecond / 1024)} KB/s`
       : "";
-    $("#update-message").textContent = speed
+    const msg = speed
       ? `${t("desktop.renderer.downloading")} ${pct}% (${speed})`
       : `${t("desktop.renderer.downloading")} ${pct}%`;
+    $("#update-message").textContent = msg;
   }
-  if (data.status === "downloaded") {
-    $("#update-message").textContent = t("desktop.renderer.downloadedReady");
+  if (data.status === "downloaded" && !updateDownloadedPersisted) {
+    // Show "preparing" instead of "ready" — PendingUpdate may not exist yet.
+    // "ready" is shown by downloadUpdate() after the promise resolves.
+    downloadedEventReceived = true;
+    $("#update-message").textContent = t("desktop.renderer.downloadedPreparing");
   }
   if (data.status === "failed" && data.lastError) {
     $("#update-message").textContent = data.lastError;
   }
-  renderSilentUpdateStatus(data, latestConfig);
+  renderSilentUpdateStatus(latestUpdateState, latestConfig);
 }
 
 async function loadToday(force = false, { syncAfterRefresh = force } = {}) {
@@ -1184,6 +1196,9 @@ async function loadMyIdentity() {
 async function refreshCloudDependentState() {
   serverPriceMap = null;
   latestUpdateState = null;
+  updateDownloadedPersisted = false;
+  updateInstallRunning = false;
+  downloadedEventReceived = false;
   latestIdentityBusinessDay = "";
   await Promise.allSettled([
     loadMyIdentity(),
@@ -1731,24 +1746,48 @@ async function downloadUpdate({ restart = false } = {}) {
   $("#download-update").hidden = false;
   $("#download-update").disabled = true;
   $("#enforcement-download-update").disabled = true;
+  downloadedEventReceived = false;
+  latestUpdateState = { ...(latestUpdateState || {}), downloadRunning: true };
+  renderSilentUpdateStatus(latestUpdateState, latestConfig);
   $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
     await api.downloadUpdate();
+    updateDownloadedPersisted = true;
     latestUpdateState = { ...(latestUpdateState || {}), status: "downloaded" };
+    delete latestUpdateState.downloadProgress;
+    delete latestUpdateState.downloadRunning;
+    $("#update-message").textContent = t("desktop.renderer.downloadedReady");
+    renderSilentUpdateStatus(latestUpdateState, latestConfig);
     renderUpdateActions(latestUpdateState);
     renderRailStatus();
     if (restart) await installAndRestartUpdate();
   } catch (error) {
+    latestUpdateState = {
+      ...(latestUpdateState || {}),
+      status: "failed",
+      lastError: error.message || t("desktop.renderer.downloadFailed")
+    };
+    delete latestUpdateState.downloadProgress;
+    delete latestUpdateState.downloadRunning;
     $("#update-message").textContent = error.message || t("desktop.renderer.downloadFailed");
-    $("#download-update").disabled = false;
-    $("#enforcement-download-update").disabled = false;
+    renderUpdateActions(latestUpdateState);
+    renderRailStatus();
   }
 }
 
 async function installAndRestartUpdate() {
-  $("#download-update").disabled = true;
+  updateInstallRunning = true;
+  renderRailStatus();
+  renderUpdateActions(latestUpdateState);
   $("#update-message").textContent = t("desktop.renderer.downloadedInstalling");
-  await api.installAndRestartUpdate();
+  try {
+    await api.installAndRestartUpdate();
+  } catch (error) {
+    updateInstallRunning = false;
+    renderRailStatus();
+    renderUpdateActions(latestUpdateState);
+    throw error;
+  }
 }
 
 async function downloadInstaller() {
@@ -2416,7 +2455,11 @@ function renderRailStatus() {
   const nextScanAt = latestBackgroundStatus?.nextRunAt || "";
   setTextIfPresent("#rail-next-scan", t("desktop.renderer.nextScan", { time: nextScanAt ? formatDateTime(nextScanAt) : "-" }));
   const restartBtn = $("#rail-restart-update");
-  if (restartBtn) restartBtn.hidden = !(readyPackage || latestUpdateState?.status === "downloaded" || update?.status === "downloaded");
+  if (restartBtn) {
+    const shouldShow = readyPackage || latestUpdateState?.status === "downloaded" || update?.status === "downloaded" || updateDownloadedPersisted;
+    restartBtn.hidden = !shouldShow;
+    restartBtn.disabled = updateInstallRunning;
+  }
 }
 
 function latestTimestamp(values = []) {
@@ -2678,7 +2721,13 @@ async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = f
   ]);
   config = refreshConfig ? (freshConfig || config) : (latestConfig || config);
   latestBackgroundStatus = fullReconcileStatus ? { ...status, fullReconcile: fullReconcileStatus } : status;
-  latestUpdateState = status.updateCheck || latestUpdateState;
+  if (status.updateCheck) {
+    latestUpdateState = {
+      ...(latestUpdateState || {}),
+      ...status.updateCheck
+    };
+    if (updateDownloadedPersisted) latestUpdateState.status = "downloaded";
+  }
   if (status.sourceFingerprint && !latestLocalSnapshot) {
     latestLocalSnapshot = { scannedAt: status.cacheScannedAt || "", sourceFingerprint: status.sourceFingerprint, rowCount: 0, fromCache: true };
   }
@@ -2688,7 +2737,7 @@ async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = f
   } else if (config) {
     renderSyncStatus(config);
   }
-  renderSilentUpdateStatus(status.updateCheck, config);
+  renderSilentUpdateStatus(latestUpdateState, config);
   renderRailStatus();
   checkMandatoryFromConfig(config);
   if (!skipScanRefresh && previousCacheScannedAt && status.cacheScannedAt && status.cacheScannedAt !== previousCacheScannedAt && !status.running && !scanRunning && !scanPollTimer) {
@@ -2703,29 +2752,23 @@ async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = f
 }
 
 function renderSilentUpdateStatus(updateCheck = {}, config = latestConfig) {
-  const parts = [];
-  if (updateCheck?.status && updateCheck.status !== "idle") parts.push(updateCheck.status.replaceAll("_", " "));
-  if (updateCheck?.downloadProgress) parts.push(`${updateCheck.downloadProgress.percent}%`);
+  const statusParts = [];
   if (updateCheck?.lastResult?.latestVersion && updateCheck?.status === "downloaded") {
-    parts.push(t("desktop.renderer.ready", { version: updateCheck.lastResult.latestVersion }));
+    statusParts.push(t("desktop.renderer.ready", { version: updateCheck.lastResult.latestVersion }));
   }
-  if (updateCheck?.nextCheckAt) parts.push(t("desktop.renderer.next", { time: formatTime(updateCheck.nextCheckAt) }));
-  if (updateCheck?.lastError) parts.push(t("desktop.renderer.error", { error: updateCheck.lastError }));
-  const statusText = parts.join(" · ");
-  renderUpdateStatusText({ server: config?.apiConnection || latestConfig?.apiConnection || {}, update: updateCheck?.update || updateCheck?.lastResult || null, statusText });
+  if (updateCheck?.nextCheckAt) statusParts.push(t("desktop.renderer.next", { time: formatTime(updateCheck.nextCheckAt) }));
+  if (updateCheck?.lastError) statusParts.push(t("desktop.renderer.error", { error: updateCheck.lastError }));
+  renderUpdateStatusText({ server: config?.apiConnection || latestConfig?.apiConnection || {}, update: updateCheck?.update || updateCheck?.lastResult || null, statusText: statusParts.join(" · ") });
   const badge = $("#update-badge");
   if (badge) {
     const ready = hasReadyUpdatePackage(updateCheck);
     const downloading = isUpdateDownloading(updateCheck);
     const available = hasUpdateAvailable(updateCheck);
-    const hasUpdate = available || ready || downloading;
-    badge.hidden = !hasUpdate;
+    badge.hidden = downloading || (!available && !ready);
     badge.textContent = ready
       ? t("desktop.about.readyToRestart")
-      : downloading
-        ? t("desktop.renderer.downloading")
-        : available ? t("desktop.renderer.updateAvailable") : "";
-    badge.className = ready ? "badge ok" : hasUpdate ? "badge" : "badge";
+      : available ? t("desktop.renderer.updateAvailable") : "";
+    badge.className = ready ? "badge ok" : available ? "badge" : "badge";
   }
   renderUpdateActions(updateCheck);
 }
