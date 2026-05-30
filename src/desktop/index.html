@@ -11,23 +11,22 @@
     <main class="layout">
       <aside class="rail">
         <div>
+          <img class="rail-brand-logo" id="rail-brand-logo" alt="" />
           <div class="brand">
-            <div class="mono" data-i18n="app.name">AI Token League</div>
-            <h2 data-i18n="desktop.nav.overview">Overview</h2>
-          </div>
-          <div id="my-identity-block" class="identity" hidden>
-            <span class="identity-dot"></span>
-            <span class="mono" id="my-identity-name"></span>
-          </div>
-          <nav aria-label="Main navigation">
+              <div class="mono" data-i18n="app.name">AI Token League</div>
+            </div>
+            <div id="my-identity-block" class="identity" hidden>
+              <span class="identity-dot"></span>
+              <span class="mono" id="my-identity-name"></span>
+            </div>
+            <nav aria-label="Main navigation">
             <button data-section="overview" class="active"><span class="nav-icon icon" style="--icon: url('./icons/layout-dashboard.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.overview">Overview</span></button>
             <button data-section="workdirs"><span class="nav-icon icon" style="--icon: url('./icons/folder-code.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.workdirs">Workdirs</span></button>
             <button data-section="sources"><span class="nav-icon icon" style="--icon: url('./icons/database.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.sources">Sources</span></button>
           </nav>
         </div>
-        <button class="primary-pill teal-button" id="rail-restart-update" type="button" hidden data-i18n="desktop.rail.restartUpdate">Restart to update</button>
-        <img class="rail-brand-logo" id="rail-brand-logo" alt="" />
         <div class="rail-bottom">
+          <button class="primary-pill teal-button" id="rail-restart-update" type="button" hidden data-i18n="desktop.rail.restartUpdate">Restart to update</button>
           <div class="rail-note">
             <div id="rail-cloud-status" class="rail-cloud-status" data-state="local_only">
               <span class="rail-status-dot" aria-hidden="true"></span>
@@ -47,7 +46,7 @@
             </button>
           </div>
         </div>
-      </aside>
+        </aside>
 
       <section class="workspace">
         <section id="overview" class="screen active">
