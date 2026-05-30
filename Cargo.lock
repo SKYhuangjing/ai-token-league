@@ -309,6 +309,7 @@ dependencies = [
 name = "atl-collector"
 version = "0.7.5"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "clap",
  "collector-core",

@@ -6575,6 +6575,19 @@ function testReleasePlatformsFromEnv() {
   console.log("  testReleasePlatformsFromEnv passed");
 }
 
+function testDesktopCspAllowsBrandLogoDataImages() {
+  const configPath = path.join(process.cwd(), "src-tauri", "tauri.conf.json");
+  const tauriConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const csp = tauriConfig?.app?.security?.csp || "";
+  const imgSrc = csp.match(/(?:^|;)\s*img-src\s+([^;]+)/)?.[1] || "";
+
+  assert.ok(imgSrc, "desktop CSP must define img-src explicitly");
+  assert.ok(imgSrc.split(/\s+/).includes("data:"), "desktop CSP img-src must allow data: brand logo images");
+  assert.ok(imgSrc.split(/\s+/).includes("https:"), "desktop CSP img-src must allow https: brand logo sources");
+
+  console.log("  testDesktopCspAllowsBrandLogoDataImages passed");
+}
+
 // ─── Store-level edge case tests ──────────────────────────────────────────────
 
 function testStoreEmptyDatabase() {
@@ -7365,6 +7378,7 @@ testSelectUpdateArtifact();
 testSelectInstallerArtifact();
 testUpdateStateFromManifest();
 testReleasePlatformsFromEnv();
+testDesktopCspAllowsBrandLogoDataImages();
 
 // Store edge cases
 testStoreEmptyDatabase();

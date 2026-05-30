@@ -86,6 +86,7 @@
 
     // ── Provider health / pricing ───────────────────────────────
     providerHealth:      fwd("providers:health"),
+    brandLogo:           fwd("brand:logo"),
     modelPrices:         fwd("pricing:model-prices"),
 
     // ── Usage scanning ──────────────────────────────────────────

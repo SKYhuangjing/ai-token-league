@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use collector_core::config;
 use collector_core::protocol::{Command, SidecarRequest, SidecarResponse};
 use collector_core::scanner;
@@ -885,6 +886,7 @@ async fn handle_command(
             });
             Ok(status)
         }
+        Command::BrandLogo => brand_logo().await,
         Command::PricingModelPrices => model_prices().await,
     }
 }
@@ -1970,6 +1972,75 @@ async fn model_prices() -> Result<serde_json::Value, String> {
         return Ok(serde_json::Value::Null);
     }
     get_json(&format!("{}/api/model-prices", cfg.api_base_url)).await
+}
+
+async fn brand_logo() -> Result<serde_json::Value, String> {
+    const LOGO_FETCH_TIMEOUT_SECS: u64 = 5;
+    const LOGO_MAX_BYTES: usize = 512 * 1024;
+
+    let cfg = config::ensure_desktop_config();
+    if cfg.api_base_url.is_empty() {
+        return Ok(serde_json::json!({"logoUrl": null, "dataUrl": null}));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(LOGO_FETCH_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let brand_url = format!("{}/api/brand/logo", cfg.api_base_url);
+    let brand_resp = client
+        .get(&brand_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let brand_status = brand_resp.status();
+    if !brand_status.is_success() {
+        return Err(format!(
+            "brand logo endpoint returned {}",
+            brand_status.as_u16()
+        ));
+    }
+    let body: serde_json::Value = brand_resp.json().await.map_err(|e| e.to_string())?;
+    let Some(logo_url) = body
+        .get("logoUrl")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok(serde_json::json!({"logoUrl": null, "dataUrl": null}));
+    };
+
+    let image_resp = client
+        .get(logo_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let image_status = image_resp.status();
+    if !image_status.is_success() {
+        return Err(format!(
+            "brand logo image returned {}",
+            image_status.as_u16()
+        ));
+    }
+    let content_type = image_resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    if !content_type.starts_with("image/") {
+        return Err(format!("brand logo image content type is {}", content_type));
+    }
+    let bytes = image_resp.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > LOGO_MAX_BYTES {
+        return Err(format!("brand logo image too large: {} bytes", bytes.len()));
+    }
+    let encoded = general_purpose::STANDARD.encode(&bytes);
+    Ok(serde_json::json!({
+        "logoUrl": logo_url,
+        "contentType": content_type,
+        "byteLength": bytes.len(),
+        "dataUrl": format!("data:{};base64,{}", content_type, encoded)
+    }))
 }
 
 async fn my_identity() -> Result<serde_json::Value, String> {

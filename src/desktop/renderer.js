@@ -1612,6 +1612,30 @@ async function fetchCloudShareData(range, config) {
 async function fetchBrandLogo() {
   const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "");
   if (!apiBaseUrl) { latestBrandLogoUrl = null; updateWorkspaceLogo(); return; }
+  if (api?.brandLogo) {
+    try {
+      const result = await api.brandLogo();
+      latestBrandLogoUrl = result?.dataUrl || null;
+      updateWorkspaceLogo();
+      logRuntimeEvent("brand_logo_fetch", {
+        ok: Boolean(latestBrandLogoUrl),
+        source: "sidecar",
+        hasLogoUrl: Boolean(result?.logoUrl),
+        byteLength: result?.byteLength || 0,
+        contentType: result?.contentType || ""
+      }, latestBrandLogoUrl ? "info" : "warn");
+      return;
+    } catch (error) {
+      latestBrandLogoUrl = null;
+      updateWorkspaceLogo();
+      logRuntimeEvent("brand_logo_fetch", {
+        ok: false,
+        source: "sidecar",
+        error: error?.message || String(error)
+      }, "warn");
+      return;
+    }
+  }
   const LOGO_FETCH_TIMEOUT_MS = 5_000;
   const LOGO_MAX_BYTES = 512 * 1024;
   try {
