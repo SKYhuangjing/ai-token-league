@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.5] - 2026-05-31
+
+### Added
+
+- [Desktop] Added an overview share card that can capture recent usage as a branded PNG for sharing.
+- [Desktop] Added brand logo display in the desktop sidebar and share-card output.
+- Added backend and storage support for participant brand/logo metadata used by share-card rendering.
+
+### Fixed
+
+- [Desktop] Kept the restart/install update action clickable after an update package finishes downloading.
+- [Desktop] Adjusted sidebar layout so the restart-update button and brand logo no longer overlap.
+
 ## [0.7.4] - 2026-05-29
 
 ### Added
