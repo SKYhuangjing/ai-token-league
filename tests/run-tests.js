@@ -3287,7 +3287,7 @@ function testSchemaForbiddenFields() {
 async function createTestServer(envOverrides = {}) {
   const dbPath = path.join(tmp, `db-api-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
   const saved = {};
-  const envKeys = ["DB_PATH", "ADMIN_USERNAME", "ADMIN_PASSWORD", "BOARD_SECURITY_LEVEL", "BOARD_ANONYMIZATION_SALT", "PUBLIC_BOARD_AUTH_USERNAME", "PUBLIC_BOARD_AUTH_PASSWORD", "OPENROUTER_PRICING_AUTO_REFRESH"];
+  const envKeys = ["DB_PATH", "ADMIN_USERNAME", "ADMIN_PASSWORD", "BOARD_SECURITY_LEVEL", "BOARD_ANONYMIZATION_SALT", "PUBLIC_BOARD_AUTH_USERNAME", "PUBLIC_BOARD_AUTH_PASSWORD", "OPENROUTER_PRICING_AUTO_REFRESH", "BRAND_LOGO_URL"];
   for (const key of envKeys) saved[key] = process.env[key];
   process.env.DB_PATH = dbPath;
   process.env.OPENROUTER_PRICING_AUTO_REFRESH = "false";
@@ -3303,6 +3303,8 @@ async function createTestServer(envOverrides = {}) {
   else delete process.env.PUBLIC_BOARD_AUTH_USERNAME;
   if (envOverrides.PUBLIC_BOARD_AUTH_PASSWORD) process.env.PUBLIC_BOARD_AUTH_PASSWORD = envOverrides.PUBLIC_BOARD_AUTH_PASSWORD;
   else delete process.env.PUBLIC_BOARD_AUTH_PASSWORD;
+  if (envOverrides.BRAND_LOGO_URL !== undefined) process.env.BRAND_LOGO_URL = envOverrides.BRAND_LOGO_URL;
+  else delete process.env.BRAND_LOGO_URL;
   const nonce = Date.now();
   const { createServer } = await import(`../src/backend/server.js?api-test-${nonce}=${nonce}`);
   const server = createServer();
@@ -3324,6 +3326,7 @@ async function testHealthEndpoint() {
   try {
     const res = await fetch(`${baseUrl}/api/health`);
     assert.equal(res.status, 200);
+    assert.equal(res.headers.get("access-control-allow-origin"), "*");
     const body = await res.json();
     assert.equal(body.ok, true);
     assert.ok(body.serverVersion);
@@ -3331,6 +3334,9 @@ async function testHealthEndpoint() {
     assert.ok(body.serverTime);
     assert.ok(body.compatibility);
     assert.ok(body.compatibility.status);
+    const optionsRes = await fetch(`${baseUrl}/api/health`, { method: "OPTIONS" });
+    assert.equal(optionsRes.status, 204);
+    assert.equal(optionsRes.headers.get("access-control-allow-origin"), "*");
     console.log("  testHealthEndpoint passed");
   } finally { await cleanup(); }
 }
@@ -4396,6 +4402,11 @@ function testDesktopHtmlSections() {
   assert.match(html, /id="wizard-overlay"/, "missing wizard overlay");
   assert.match(html, /id="onboarding-wizard"/, "missing onboarding wizard");
   assert.match(html, /id="trend-drawer"/, "missing trend drawer");
+  assert.match(html, /id="open-share-card"/, "missing share card entry");
+  assert.match(html, /id="share-card-modal"/, "missing share card modal");
+  for (const chart of ["auto", "trend", "heatmap"]) {
+    // Chart style buttons removed in overview-based share card redesign
+  }
   assert.match(html, /data-section="overview"/);
   assert.match(html, /data-section="workdirs"/);
   assert.match(html, /data-section="sources"/);
@@ -4483,6 +4494,8 @@ function testTauriBridgeExports() {
   const bridge = fs.readFileSync("src/desktop/tauri-bridge.js", "utf8");
   assert.match(bridge, /forwardToSidecar|forward_to_sidecar/);
   assert.match(bridge, /export/);
+  assert.match(bridge, /saveShareImage/);
+  assert.match(bridge, /save_share_image_dialog/);
   assert.match(bridge, /cursor:connect:start/);
   assert.match(bridge, /cursor:connect:poll/);
   assert.match(bridge, /cursor:connect:cancel/);
@@ -5006,6 +5019,57 @@ function testStoreAnalyticsDateRanges() {
   console.log("  testStoreAnalyticsDateRanges passed");
 }
 
+function testStoreAnalyticsRankStats() {
+  const store = new Store(path.join(tmp, "db-analytics-rank-stats.json"));
+  const identityA = generateIdentity();
+  const identityB = generateIdentity();
+  const deviceA = newId("d");
+  const deviceB = newId("d");
+  store.registerDevice({
+    participantId: identityA.participantId, deviceId: deviceA,
+    nickname: "rank-a", identityPublicKey: identityA.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+  store.registerDevice({
+    participantId: identityB.participantId, deviceId: deviceB,
+    nickname: "rank-b", identityPublicKey: identityB.identityPublicKey,
+    os: "test", appVersion: APP_VERSION
+  });
+
+  const today = localDay();
+  const yesterday = addDays(today, -1);
+  store.upsertUsageBatch({
+    participantId: identityA.participantId, deviceId: deviceA,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [
+      makeSnapshotItem({ day: yesterday, workdirHash: "rank_a_y", inputTokens: 300, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 300 }),
+      makeSnapshotItem({ day: today, workdirHash: "rank_a_t", inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 100 })
+    ]
+  });
+  store.upsertUsageBatch({
+    participantId: identityB.participantId, deviceId: deviceB,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [
+      makeSnapshotItem({ day: yesterday, workdirHash: "rank_b_y", inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 100 }),
+      makeSnapshotItem({ day: today, workdirHash: "rank_b_t", inputTokens: 200, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 200 })
+    ]
+  });
+
+  const data = store.analytics({
+    range: "custom",
+    startDay: yesterday,
+    endDay: today,
+    participantId: identityA.participantId
+  });
+  assert.equal(data.rankStats.rank, 1);
+  assert.equal(data.rankStats.participantCount, 2);
+  assert.equal(data.rankStats.leaderDays, 1);
+  assert.equal(data.rankStats.isLeaderToday, false);
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-rank-stats.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-rank-stats.json"));
+  console.log("  testStoreAnalyticsRankStats passed");
+}
+
 function testNormalizeTokenNumberIntegration() {
   const identity = generateIdentity();
   const store = new Store(path.join(tmp, "db-normalize.json"));
@@ -5157,6 +5221,7 @@ testStoreAnalyticsMultiModel();
 testStoreAnalyticsHeatmap();
 testStoreAnalyticsEmptyStore();
 testStoreAnalyticsDateRanges();
+testStoreAnalyticsRankStats();
 testNormalizeTokenNumberIntegration();
 
 // ── Cloud provider dedup tests ──
@@ -6904,6 +6969,33 @@ async function testHealthEndpointDetails() {
   console.log("  testHealthEndpointDetails passed");
 }
 
+async function testBrandLogoEndpoint() {
+  // Without BRAND_LOGO_URL: logoUrl should be null
+  {
+    const { baseUrl, cleanup } = await createTestServer();
+    try {
+      const res = await fetch(`${baseUrl}/api/brand/logo`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.logoUrl, null);
+    } finally { await cleanup(); }
+  }
+  // With BRAND_LOGO_URL: logoUrl should match
+  {
+    const logoUrl = "https://example.com/logo.png";
+    const { baseUrl, cleanup } = await createTestServer({ BRAND_LOGO_URL: logoUrl });
+    try {
+      const res = await fetch(`${baseUrl}/api/brand/logo`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.logoUrl, logoUrl);
+      // CORS headers present
+      assert.equal(res.headers.get("access-control-allow-origin"), "*");
+    } finally { await cleanup(); }
+  }
+  console.log("  testBrandLogoEndpoint passed");
+}
+
 async function testModelPricesPublicEndpointStructure() {
   const { baseUrl, cleanup } = await createTestServer();
   try {
@@ -7297,6 +7389,7 @@ await testModelPricesPublicEndpointStructure();
 await testLeaderboardWithNoData();
 await testUsageUploadForbiddenFields();
 await testExportCsvEndpoint();
+await testBrandLogoEndpoint();
 
 // Changelog and preset edge cases
 testParseChangelogEmptyInput();

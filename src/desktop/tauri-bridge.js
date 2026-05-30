@@ -44,6 +44,8 @@
     exportIdentity:      () => invoke("export_identity_dialog"),
     exportConfig:        () => invoke("export_config_dialog"),
     exportDiagnostics:   () => invoke("export_diagnostics_dialog"),
+    saveShareImage:      (input) => invoke("save_share_image_dialog", { input }),
+    writeImageToClipboard: (base64Png) => invoke("write_image_to_clipboard", { base64Png }),
     diagnosticsStatus:   fwd("diagnostics:status"),
     clearRuntimeLog:     fwd("diagnostics:clear-runtime-log"),
     revealRuntimeLogDirectory: () => invoke("reveal_runtime_log_directory"),

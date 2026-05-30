@@ -25,8 +25,9 @@
             <button data-section="sources"><span class="nav-icon icon" style="--icon: url('./icons/database.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.sources">Sources</span></button>
           </nav>
         </div>
+        <button class="primary-pill teal-button" id="rail-restart-update" type="button" hidden data-i18n="desktop.rail.restartUpdate">Restart to update</button>
+        <img class="rail-brand-logo" id="rail-brand-logo" alt="" />
         <div class="rail-bottom">
-          <button class="primary-pill teal-button" id="rail-restart-update" type="button" hidden data-i18n="desktop.rail.restartUpdate">Restart to update</button>
           <div class="rail-note">
             <div id="rail-cloud-status" class="rail-cloud-status" data-state="local_only">
               <span class="rail-status-dot" aria-hidden="true"></span>
@@ -55,6 +56,7 @@
               <h3 data-i18n="desktop.nav.overview">Overview</h3>
             </div>
             <div class="actions">
+              <button class="outline-button" id="open-share-card" type="button" data-i18n="desktop.share.open">Share</button>
               <div class="segmented" id="overview-range" aria-label="Overview range">
                 <button type="button" data-range="today" class="active" data-i18n="desktop.range.today">Today</button>
                 <button type="button" data-range="7d" data-i18n="desktop.range.7d">7D</button>
@@ -540,6 +542,50 @@
           <button id="reset-local-only" type="button" data-i18n="desktop.reset.localOnly">Local only</button>
           <button id="reset-with-cloud" type="button" class="danger-button" data-i18n="desktop.reset.localAndCloud">Local + Cloud</button>
         </div>
+      </section>
+    </div>
+
+    <div id="share-card-modal" class="modal-backdrop" hidden>
+      <div id="polaroid-flash" class="polaroid-flash"></div>
+      <section class="polaroid-stage" role="dialog" aria-modal="true" aria-labelledby="share-card-title">
+        <div class="polaroid-container">
+          <div id="polaroid-stack" class="polaroid-stack">
+            <div id="polaroid-card" class="polaroid-card">
+              <div class="polaroid-image-area">
+                <div id="share-card-preview" class="share-card-preview"></div>
+                <div class="polaroid-develop-overlay"></div>
+                <div id="polaroid-loading" class="polaroid-loading">
+                  <div class="polaroid-spinner"></div>
+                </div>
+              </div>
+              <div class="polaroid-white-border">
+                <span id="polaroid-caption" class="polaroid-caption"></span>
+              </div>
+            </div>
+          </div>
+          <div id="polaroid-actions" class="polaroid-actions">
+            <button id="close-share-card" type="button" class="polaroid-action-btn close-btn" title="Close" data-i18n-title="close">
+              <svg class="lucide lucide-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+            <button id="copy-share-card" type="button" class="polaroid-action-btn copy-btn" title="Copy Image" data-i18n-title="desktop.share.copyImage">
+              <svg class="lucide lucide-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+            <button id="save-share-card" type="button" class="polaroid-action-btn save-btn" title="Save PNG" data-i18n-title="desktop.share.savePng">
+              <svg class="lucide lucide-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <p id="share-card-status" class="polaroid-status" aria-live="polite"></p>
       </section>
     </div>
 

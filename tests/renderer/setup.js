@@ -48,6 +48,7 @@ const mockApi = {
   exportIdentity: vi.fn(),
   importIdentity: vi.fn(),
   exportDiagnostics: vi.fn(),
+  saveShareImage: vi.fn().mockResolvedValue({ canceled: false, filePath: '/tmp/share.png' }),
   clearRuntimeLog: vi.fn(),
   revealRuntimeLogDirectory: vi.fn(),
   createLocalBackup: vi.fn(),

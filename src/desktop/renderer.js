@@ -64,6 +64,26 @@ import {
   renderTrendDetailBreakdown as _renderTrendDetailBreakdown
 } from "./renderer-components.js";
 
+import {
+  SHARE_CARD_HEIGHT,
+  SHARE_CARD_WIDTH,
+  POLAROID_EXPORT_WIDTH,
+  POLAROID_EXPORT_HEIGHT,
+  normalizeCloudShareData,
+  normalizeLocalShareData,
+  polaroidExportCss,
+  randomShareQuoteIndex,
+  renderExportPolaroidHtml,
+  renderShareCardHtml,
+  shareCardCss,
+  sharePeriodBounds,
+  shareRangeForPeriod,
+  shareTrendGrain,
+  withCloudPending
+} from "./share-card.js";
+
+import html2canvas from "./vendor/html2canvas.js";
+
 // 初始化多语言
 const currentLang = initI18n();
 
@@ -126,6 +146,7 @@ let backgroundStatusTimer = null;
 let backgroundStatusInFlight = null;
 let backgroundStatusQueuedArgs = null;
 let latestUpdateState = null;
+let updateDownloadedPersisted = false;
 let latestBackgroundStatus = null;
 let latestBackupStatus = null;
 let latestDiagnosticsStatus = null;
@@ -138,6 +159,7 @@ let updateCheckInFlight = null;
 let runtimeEventHandlersRegistered = false;
 let overviewRange = "today";
 let workdirsRange = "today";
+let latestShareData = null;
 let sourcesProviderTab = "claude_code_local";
 let latestSyncInfo = "";
 let pricingRefreshPromise = null;
@@ -146,6 +168,7 @@ let latestTrayCostKey = "";
 let foregroundSyncRunning = false;
 let latestLocalSnapshot = null;
 let latestUsageScanStatus = null;
+let latestBrandLogoUrl = null;
 let nextVirtualModelDetailId = 1;
 let usageQueryGeneration = 0;
 let usageQueryRefreshRunning = false;
@@ -332,6 +355,9 @@ $("#cursor-connect-modal").addEventListener("click", (event) => {
 $("#reset-confirm-modal").addEventListener("click", (event) => {
   if (event.target.id === "reset-confirm-modal" || event.target.closest("#reset-cancel")) closeResetConfirmModal();
 });
+$("#share-card-modal").addEventListener("click", (event) => {
+  if (event.target.id === "share-card-modal" || event.target.closest("#close-share-card")) closeShareCardModal();
+});
 $("#app-confirm-modal").addEventListener("click", (event) => {
   if (event.target.id === "app-confirm-modal" || event.target.closest("#app-confirm-cancel")) closeConfirmDialog(false);
   if (event.target.closest("#app-confirm-ok")) closeConfirmDialog(true);
@@ -342,6 +368,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#cursor-token-modal").hidden) closeCursorTokenModal();
   if (event.key === "Escape" && !$("#cursor-connect-modal").hidden) run(cancelCursorConnect);
   if (event.key === "Escape" && !$("#reset-confirm-modal").hidden) closeResetConfirmModal();
+  if (event.key === "Escape" && !$("#share-card-modal").hidden) closeShareCardModal();
   if (event.key === "Escape" && !$("#app-confirm-modal").hidden) closeConfirmDialog(false);
   if (event.key === "Escape" && !$("#trend-drawer").hidden) closeTrendDrawer();
 });
@@ -367,6 +394,14 @@ $("#overview-range").addEventListener("click", (event) => {
   renderToday();
   refreshUsageQuerySurfaces().catch(console.error);
 });
+$("#open-share-card").addEventListener("click", () => {
+  if (scanRunning) return showToast(t("desktop.renderer.scanningLocal"));
+  const total = getOverviewTotalTokens();
+  if (!total) return;
+  run(openShareCardModal);
+});
+$("#copy-share-card").addEventListener("click", () => run(copyShareCardImage));
+$("#save-share-card").addEventListener("click", () => run(() => saveShareCardImage()));
 $("#workdirs-range").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-range]");
   if (!button) return;
@@ -1006,7 +1041,9 @@ async function boot() {
     const systemLoad = loadSystemStatus();
     const backupLoad = loadBackupStatus();
     const diagnosticsLoad = loadDiagnosticsStatus();
-    const bootResults = await Promise.allSettled([connectionLoad, initialScan, identityLoad, backgroundLoad, systemLoad, backupLoad, diagnosticsLoad]);
+    const logoLoad = fetchBrandLogo();
+    startBrandLogoTimer();
+    const bootResults = await Promise.allSettled([connectionLoad, initialScan, identityLoad, backgroundLoad, systemLoad, backupLoad, diagnosticsLoad, logoLoad]);
     const failed = bootResults.find((result) => result.status === "rejected");
     if (failed) setStatusMessage(failed.reason?.message || t("desktop.renderer.actionFailed"));
     checkMandatoryFromConfig();
@@ -1055,7 +1092,7 @@ function registerRuntimeEventHandlers() {
 
 function hasReadyUpdatePackage(state = latestUpdateState) {
   const update = state?.update || state?.lastResult || null;
-  return Boolean(state?.readyPackage || state?.status === "downloaded" || update?.status === "downloaded");
+  return Boolean(state?.readyPackage || state?.status === "downloaded" || update?.status === "downloaded" || updateDownloadedPersisted);
 }
 
 function hasUpdateAvailable(state = latestUpdateState) {
@@ -1127,7 +1164,7 @@ function checkMandatoryFromConfig(config = latestConfig) {
 }
 
 function updateCheckProgress(data) {
-  latestUpdateState = data || latestUpdateState;
+  latestUpdateState = { ...(latestUpdateState || {}), ...(data || {}) };
   if (data.downloadProgress) {
     const pct = data.downloadProgress.percent;
     const speed = data.downloadProgress.bytesPerSecond > 0
@@ -1138,12 +1175,13 @@ function updateCheckProgress(data) {
       : `${t("desktop.renderer.downloading")} ${pct}%`;
   }
   if (data.status === "downloaded") {
+    updateDownloadedPersisted = true;
     $("#update-message").textContent = t("desktop.renderer.downloadedReady");
   }
   if (data.status === "failed" && data.lastError) {
     $("#update-message").textContent = data.lastError;
   }
-  renderSilentUpdateStatus(data, latestConfig);
+  renderSilentUpdateStatus(latestUpdateState, latestConfig);
 }
 
 async function loadToday(force = false, { syncAfterRefresh = force } = {}) {
@@ -1184,10 +1222,13 @@ async function loadMyIdentity() {
 async function refreshCloudDependentState() {
   serverPriceMap = null;
   latestUpdateState = null;
+  updateDownloadedPersisted = false;
   latestIdentityBusinessDay = "";
+  latestBrandLogoUrl = null;
   await Promise.allSettled([
     loadMyIdentity(),
-    refreshPricing({ renderOnComplete: true })
+    refreshPricing({ renderOnComplete: true }),
+    fetchBrandLogo()
   ]);
   renderInstantPreferenceViews();
   await Promise.allSettled([
@@ -1209,8 +1250,17 @@ function setScanState(running, force = false) {
   if (running && !wasRunning) {
     showToast(t("desktop.renderer.scanningLocal"));
   }
+  updateShareButtonState();
   renderWizard();
   renderRailStatus();
+}
+
+function updateShareButtonState() {
+  const btn = $("#open-share-card");
+  if (!btn) return;
+  const disabled = scanRunning || !getOverviewTotalTokens();
+  btn.disabled = disabled;
+  btn.setAttribute("aria-disabled", disabled ? "true" : "false");
 }
 
 async function loadTrend(force = false, { syncAfterRefresh = force } = {}) {
@@ -1296,6 +1346,480 @@ function startIdentityRefreshTimer() {
   }, 60 * 1000);
 }
 
+async function openShareCardModal() {
+  const modal = $("#share-card-modal");
+  const flash = $("#polaroid-flash");
+  const stage = $(".polaroid-stage");
+  const card = $("#polaroid-card");
+  const actions = $("#polaroid-actions");
+  const loading = $("#polaroid-loading");
+  if (!modal || !flash || !stage || !card || !actions) return;
+
+  // Reset state
+  modal.hidden = false;
+  card.classList.remove("ejecting", "settled", "developing", "shaking");
+  actions.classList.remove("visible");
+  if (loading) loading.classList.remove("hidden");
+  setShareStatus("");
+
+  // Build data and render preview
+  try {
+    const data = await buildOverviewShareData(overviewRange);
+    latestShareData = data;
+    await renderShareCardPreview();
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const caption = `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+    const captionEl = $("#polaroid-caption");
+    if (captionEl) captionEl.textContent = caption;
+  } catch (error) {
+    latestShareData = null;
+    $("#share-card-preview").innerHTML = `<div class="empty-state">${escapeHtml(t("desktop.share.exportFailed"))}</div>`;
+    setShareStatus(error.message || t("desktop.share.exportFailed"), "error");
+  }
+
+  // Hide loading spinner once data is ready
+  if (loading) loading.classList.add("hidden");
+
+  // Phase 1: Flash
+  flash.classList.add("active");
+  flash.addEventListener("animationend", () => flash.classList.remove("active"), { once: true });
+
+  // Phase 2: Show stage + eject card (after flash peak ≈35ms)
+  setTimeout(() => {
+    stage.classList.add("visible");
+    card.classList.add("ejecting");
+  }, 35);
+
+  // Phase 3: Start development after eject settles (≈400ms)
+  setTimeout(() => {
+    card.classList.remove("ejecting");
+    card.classList.add("settled", "developing");
+  }, 400);
+
+  // Phase 4: Show action bar after development (≈700ms)
+  setTimeout(() => {
+    actions.classList.add("visible");
+  }, 700);
+}
+
+function closeShareCardModal() {
+  const stage = $(".polaroid-stage");
+  const card = $("#polaroid-card");
+  const actions = $("#polaroid-actions");
+  const loading = $("#polaroid-loading");
+  if (actions) actions.classList.remove("visible");
+  if (card) {
+    card.classList.remove("ejecting", "settled", "developing", "shaking");
+    card.classList.add("dismissing");
+  }
+  setTimeout(() => {
+    if (stage) stage.classList.remove("visible");
+    if (card) card.classList.remove("dismissing");
+    if (loading) loading.classList.remove("hidden");
+    const modal = $("#share-card-modal");
+    if (modal) modal.hidden = true;
+    setShareStatus("");
+  }, 400);
+}
+
+function setShareStatus(message = "", kind = "") {
+  const el = $("#share-card-status");
+  if (!el) return;
+  el.textContent = message;
+  el.dataset.kind = kind;
+}
+
+function setShareChartActive() {}
+function setSharePeriodActive() {}
+
+async function refreshShareCardPreview() {
+  setShareStatus(t("loading"));
+  try {
+    const data = await buildOverviewShareData(overviewRange);
+    latestShareData = data;
+    await renderShareCardPreview();
+    setShareStatus(data.mode === "cloud_pending" ? t("desktop.share.cloudPending") : "");
+  } catch (error) {
+    latestShareData = null;
+    $("#share-card-preview").innerHTML = `<div class="empty-state">${escapeHtml(t("desktop.share.exportFailed"))}</div>`;
+    setShareStatus(error.message || t("desktop.share.exportFailed"), "error");
+  }
+}
+
+async function buildOverviewShareData(range) {
+  const businessDay = localDay();
+  const grain = overviewTrendGrain();
+
+  // Mirror renderToday() data pipeline
+  const summary = usageQueryState.summaries.get(range);
+  const localRangeItems = usageForRange(range);
+  const hasLocalRangeItems = localRangeItems.length > 0;
+  const rangeItems = summary ? [] : localRangeItems;
+  const composition = summary?.totals || aggregateComposition(rangeItems);
+  const breakdownItems = hasLocalRangeItems ? localRangeItems : rangeItems;
+  const providers = breakdownItems.length
+    ? groupProviders(breakdownItems)
+    : summary?.providers?.map((row) => ({ ...row, name: sourceName(row.name) })) || [];
+  const models = breakdownItems.length
+    ? groupBy(breakdownItems, "model")
+    : summary?.models || [];
+  const workdirs = breakdownItems.length
+    ? groupBy(breakdownItems, "workdirDisplayName")
+    : summary?.workdirs || [];
+
+  // Trend rows for spark bars
+  const trendQuery = usageQueryState.trends.get(usageQueryKey(range, grain));
+  const trendRows = trendQuery?.items || (range === "today"
+    ? groupByHour(localRangeItems)
+    : groupByGrain(localRangeItems.length ? localRangeItems : usageForRange(range), grain).filter(hasPositiveUsage));
+
+  // Provider/model/workdir ratios
+  const providerTotal = providers.reduce((s, p) => s + (p.totalTokens || 0), 0) || 1;
+  const modelTotal = models.reduce((s, m) => s + (m.totalTokens || 0), 0) || 1;
+  const workdirTotal = workdirs.reduce((s, w) => s + (w.totalTokens || 0), 0) || 1;
+
+  // Compute local cost aggregates
+  const localCost = breakdownItems.length
+    ? aggregateUsageCost(breakdownItems)
+    : (summary ? {} : aggregateUsageCost(rangeItems));
+
+  const data = {
+    range,
+    from: sharePeriodBounds(range === "today" ? "today" : range === "7d" ? "this_week" : range === "30d" ? "this_month" : "today", businessDay).from,
+    to: businessDay,
+    businessDay,
+    identity: {
+      displayName: latestConfig?.nickname || t("app.name"),
+      nickname: latestConfig?.nickname || ""
+    },
+    mode: "local",
+    rankStats: null,
+    totals: {
+      totalTokens: composition.totalTokens || 0,
+      inputTokens: composition.inputTokens || 0,
+      outputTokens: composition.outputTokens || 0,
+      cacheReadTokens: composition.cacheReadTokens || 0,
+      cacheWriteTokens: composition.cacheWriteTokens || 0,
+      estimatedCostUsd: composition.estimatedCostUsd ?? localCost.estimatedCostUsd ?? 0,
+      inputCostUsd: composition.inputCostUsd ?? localCost.inputCostUsd ?? 0,
+      outputCostUsd: composition.outputCostUsd ?? localCost.outputCostUsd ?? 0,
+      cacheReadCostUsd: composition.cacheReadCostUsd ?? localCost.cacheReadCostUsd ?? 0,
+      cacheWriteCostUsd: composition.cacheWriteCostUsd ?? localCost.cacheWriteCostUsd ?? 0,
+      missingPriceTokens: composition.missingPriceTokens ?? localCost.missingPriceTokens ?? 0,
+      costQuality: composition.costQuality ?? localCost.costQuality ?? ""
+    },
+    providers: providers.slice(0, 5).map((p) => ({
+      name: p.name || "Unknown",
+      tokens: p.totalTokens || 0,
+      ratio: Math.round((p.totalTokens || 0) / providerTotal * 10000) / 10000,
+      estimatedCostUsd: p.estimatedCostUsd ?? 0,
+      missingPriceTokens: p.missingPriceTokens ?? 0
+    })),
+    models: models.slice(0, 5).map((m) => ({
+      name: m.name || "Unknown",
+      tokens: m.totalTokens || 0,
+      ratio: Math.round((m.totalTokens || 0) / modelTotal * 10000) / 10000,
+      estimatedCostUsd: m.estimatedCostUsd ?? 0,
+      missingPriceTokens: m.missingPriceTokens ?? 0
+    })),
+    workdirs: workdirs.slice(0, 5).map((w) => ({
+      name: w.name || "Unknown",
+      tokens: w.totalTokens || 0,
+      ratio: Math.round((w.totalTokens || 0) / workdirTotal * 10000) / 10000,
+      estimatedCostUsd: w.estimatedCostUsd ?? 0,
+      missingPriceTokens: w.missingPriceTokens ?? 0
+    })),
+    trendRows: trendRows.map((r) => ({
+      ...r,
+      label: r.label || (r.hour != null ? `${r.hour}:00` : (r.day || "").slice(5) || ""),
+      totalTokens: r.totalTokens || 0,
+      estimatedCostUsd: r.estimatedCostUsd ?? 0,
+      missingPriceTokens: r.missingPriceTokens ?? 0
+    })),
+    trendGrain: grain,
+    estimatedCostUsd: null,
+    quoteIndex: randomShareQuoteIndex()
+  };
+
+  // Try cloud enrichment (skip for "all" — cloud API has no all-time period,
+  // and mapping to "today" would show a misleading ranking for all-time totals)
+  if (range !== "all" && hasConfiguredApiBaseUrl(latestConfig) && latestConfig?.participantId) {
+    try {
+      const cloudData = await fetchCloudShareData(range, latestConfig);
+      if (cloudData) {
+        return { ...data, mode: cloudData.mode, rankStats: cloudData.rankStats, identity: { ...data.identity, ...cloudData.identity }, estimatedCostUsd: cloudData.estimatedCostUsd };
+      }
+    } catch (error) {
+      console.warn("Share cloud data unavailable", error);
+      return withCloudPending(data);
+    }
+  }
+
+  return data;
+}
+
+async function fetchCloudShareData(range, config) {
+  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || "");
+  if (!apiBaseUrl || !config?.participantId) return null;
+
+  const periodMap = { today: "today", "7d": "this_week", "30d": "this_month" };
+  const period = periodMap[range] || "today";
+
+  const identityUrl = new URL("/api/board/my-identity", apiBaseUrl);
+  identityUrl.searchParams.set("participantId", config.participantId);
+  const identityResponse = await fetch(identityUrl.toString());
+  if (!identityResponse.ok) throw new Error(`Identity ${identityResponse.status}`);
+  const identity = await identityResponse.json();
+
+  const queryId = identity.identityMode === "anonymous" && identity.publicId ? identity.publicId : config.participantId;
+  const analyticsUrl = new URL("/api/board/analytics", apiBaseUrl);
+  analyticsUrl.searchParams.set("period", period);
+  analyticsUrl.searchParams.set("participantId", queryId);
+  const analyticsResponse = await fetch(analyticsUrl.toString());
+  if (!analyticsResponse.ok) throw new Error(`Analytics ${analyticsResponse.status}`);
+  const analytics = await analyticsResponse.json();
+
+  const isAnon = identity.identityMode === "anonymous";
+  return {
+    mode: isAnon ? "cloud_anonymous" : "cloud_public",
+    rankStats: analytics.rankStats || null,
+    identity: {
+      displayName: isAnon ? identity.displayName : (config?.nickname || identity.displayName),
+      anonymousName: isAnon ? identity.displayName : undefined,
+      displayId: identity.publicId || identity.displayId
+    },
+    estimatedCostUsd: analytics.summary?.estimatedCostUsd ?? null
+  };
+}
+
+async function fetchBrandLogo() {
+  const apiBaseUrl = normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "");
+  if (!apiBaseUrl) { latestBrandLogoUrl = null; updateWorkspaceLogo(); return; }
+  const LOGO_FETCH_TIMEOUT_MS = 5_000;
+  const LOGO_MAX_BYTES = 512 * 1024;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), LOGO_FETCH_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(new URL("/api/brand/logo", apiBaseUrl).toString(), { signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) { latestBrandLogoUrl = null; updateWorkspaceLogo(); return; }
+    const body = await res.json();
+    const url = body.logoUrl || null;
+    if (!url) { latestBrandLogoUrl = null; updateWorkspaceLogo(); return; }
+    try {
+      const imgCtrl = new AbortController();
+      const imgTimer = setTimeout(() => imgCtrl.abort(), LOGO_FETCH_TIMEOUT_MS);
+      let imgRes;
+      try {
+        imgRes = await fetch(url, { signal: imgCtrl.signal });
+      } finally {
+        clearTimeout(imgTimer);
+      }
+      if (!imgRes.ok) { latestBrandLogoUrl = null; updateWorkspaceLogo(); return; }
+      const ct = imgRes.headers.get("content-type") || "";
+      if (!ct.startsWith("image/")) { latestBrandLogoUrl = null; updateWorkspaceLogo(); return; }
+      const blob = await imgRes.blob();
+      if (blob.size > LOGO_MAX_BYTES) { latestBrandLogoUrl = null; updateWorkspaceLogo(); return; }
+      latestBrandLogoUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+      updateWorkspaceLogo();
+    } catch {
+      // timeout, CORS, or network error — treat as no logo
+      latestBrandLogoUrl = null;
+      updateWorkspaceLogo();
+    }
+  } catch {
+    // keep previous value on transient failure
+  }
+}
+
+function updateWorkspaceLogo() {
+  const el = $("#rail-brand-logo");
+  if (!el) return;
+  if (latestBrandLogoUrl) {
+    el.src = latestBrandLogoUrl;
+  } else {
+    el.removeAttribute("src");
+  }
+}
+
+async function renderShareCardPreview() {
+  const preview = $("#share-card-preview");
+  if (!preview || !latestShareData) return;
+
+  try {
+    const cardHtml = renderShareCardHtml(latestShareData, { ...shareCardRenderOptions(), cloudUrl: normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "") });
+    preview.innerHTML = `<style>${shareCardCss()}</style>${cardHtml}`;
+    const root = preview.querySelector(".sc-root");
+    if (root) {
+      const containerWidth = preview.offsetWidth || 860;
+      const scale = containerWidth / SHARE_CARD_WIDTH;
+      root.style.zoom = String(scale);
+      preview.style.height = `${Math.round(SHARE_CARD_HEIGHT * scale)}px`;
+    }
+  } catch (err) {
+    console.error("Preview render failed:", err);
+    preview.innerHTML = `<div class="empty-state">${escapeHtml(t("desktop.share.exportFailed"))}</div>`;
+  }
+}
+
+function shareCardRenderOptions() {
+  return {
+    t,
+    formatToken,
+    formatUsd,
+    sourceName,
+    formatAxisLabel,
+    logoUrl: latestBrandLogoUrl
+  };
+}
+
+async function exportShareCardBlob() {
+  if (!latestShareData) await refreshShareCardPreview();
+
+  // Build timestamp caption
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  const caption = `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+
+  // Render share card content
+  const cardHtml = renderShareCardHtml(latestShareData, { ...shareCardRenderOptions(), cloudUrl: normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "") });
+  // Wrap in Polaroid frame
+  const polaroidHtml = renderExportPolaroidHtml(cardHtml, caption);
+
+  const w = POLAROID_EXPORT_WIDTH;
+  const h = POLAROID_EXPORT_HEIGHT;
+
+  const container = document.createElement("div");
+  container.style.cssText = `position:fixed;left:-9999px;top:0;width:${w}px;height:${h}px;overflow:hidden;pointer-events:none;z-index:-1`;
+  container.innerHTML = `<style>${shareCardCss()}${polaroidExportCss()}</style>${polaroidHtml}`;
+  document.body.appendChild(container);
+
+  const target = container.querySelector(".pe-frame");
+  if (!target) {
+    document.body.removeChild(container);
+    throw new Error("Polaroid export frame not found");
+  }
+
+  try {
+    const canvas = await html2canvas(target, {
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("PNG export failed")), "image/png");
+    });
+  } finally {
+    document.body.removeChild(container);
+  }
+}
+
+function triggerPolaroidFlashSuccess() {
+  const card = $("#polaroid-card");
+  if (!card) return;
+  card.classList.remove("flash-success");
+  void card.offsetWidth;
+  card.classList.add("flash-success");
+  card.addEventListener("animationend", () => card.classList.remove("flash-success"), { once: true });
+}
+
+async function copyShareCardImage() {
+  triggerPolaroidFlashSuccess();
+  const blob = await exportShareCardBlob();
+
+  // Try Tauri Native Clipboard Manager first as it is 100% reliable and bypasses WebView sandbox constraints!
+  if (window.tokenLeague?.writeImageToClipboard) {
+    try {
+      const base64Png = await blobToBase64(blob);
+      await window.tokenLeague.writeImageToClipboard(base64Png);
+      setShareStatus(t("desktop.share.copySuccess"), "success");
+      showToast(t("desktop.share.copySuccess"));
+      closeShareCardModal();
+      return;
+    } catch (error) {
+      console.warn("Tauri native clipboard write failed, trying webview clipboard fallback", error);
+    }
+  }
+
+  // Fallback 1: Webview browser clipboard API
+  if (navigator.clipboard?.write && window.ClipboardItem) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      setShareStatus(t("desktop.share.copySuccess"), "success");
+      showToast(t("desktop.share.copySuccess"));
+      closeShareCardModal();
+      return;
+    } catch (error) {
+      console.warn("WebView clipboard write failed", error);
+    }
+  }
+
+  // Fallback 2: Disk saving dialog
+  await saveShareCardImage(blob);
+  setShareStatus(t("desktop.share.copyFallback"), "success");
+  showToast(t("desktop.share.copyFallback"));
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const split = reader.result.split(",");
+      resolve(split.length > 1 ? split[1] : "");
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function saveShareCardImage(blob = null) {
+  triggerPolaroidFlashSuccess();
+  const imageBlob = blob || await exportShareCardBlob();
+  const fileName = `ai-token-league-share-${overviewRange}-${localDay()}.png`;
+  if (api.saveShareImage) {
+    const base64 = await blobToBase64(imageBlob);
+    const result = await api.saveShareImage({ fileName, base64Png: base64 });
+    if (result?.canceled) {
+      setShareStatus(t("desktop.share.exportCanceled"));
+      return;
+    }
+    setShareStatus(t("desktop.share.saveSuccess"), "success");
+    showToast(t("desktop.share.saveSuccess"));
+    closeShareCardModal();
+    return;
+  }
+  const url = URL.createObjectURL(imageBlob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    setShareStatus(t("desktop.share.saveSuccess"), "success");
+    showToast(t("desktop.share.saveSuccess"));
+    closeShareCardModal();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
 function startBackgroundStatusTimer() {
   if (backgroundStatusTimer) return;
   backgroundStatusTimer = setInterval(() => {
@@ -1308,6 +1832,12 @@ function startUpdateCheckTimer() {
   updateCheckTimer = setInterval(() => {
     if (shouldCheckUpdateOnCloudOpen()) checkUpdate({ automatic: true }).catch(() => {});
   }, UPDATE_CHECK_INTERVAL_MS);
+}
+
+let brandLogoTimer = null;
+function startBrandLogoTimer() {
+  if (brandLogoTimer) return;
+  brandLogoTimer = setInterval(() => { fetchBrandLogo().catch(() => {}); }, 30 * 60 * 1000);
 }
 
 function applyUsageScanStatus(status, { force = false } = {}) {
@@ -1734,6 +2264,7 @@ async function downloadUpdate({ restart = false } = {}) {
   $("#update-message").textContent = t("desktop.renderer.downloading");
   try {
     await api.downloadUpdate();
+    updateDownloadedPersisted = true;
     latestUpdateState = { ...(latestUpdateState || {}), status: "downloaded" };
     renderUpdateActions(latestUpdateState);
     renderRailStatus();
@@ -2160,6 +2691,14 @@ function fullReconcileStatusLabel(status) {
   return "-";
 }
 
+function getOverviewTotalTokens() {
+  const summary = usageQueryState.summaries.get(overviewRange);
+  const localRangeItems = usageForRange(overviewRange);
+  const rangeItems = summary ? [] : localRangeItems;
+  const composition = summary?.totals || aggregateComposition(rangeItems);
+  return summary ? composition.totalTokens : rangeItems.reduce((sum, item) => sum + item.totalTokens, 0);
+}
+
 function renderToday() {
   const summary = usageQueryState.summaries.get(overviewRange);
   const localRangeItems = usageForRange(overviewRange);
@@ -2216,6 +2755,7 @@ function renderToday() {
   renderOverviewTrend(localRangeItems);
   renderRailStatus();
   syncTrayCostState();
+  updateShareButtonState();
 }
 
 function renderWorkdirs() {
@@ -2416,7 +2956,11 @@ function renderRailStatus() {
   const nextScanAt = latestBackgroundStatus?.nextRunAt || "";
   setTextIfPresent("#rail-next-scan", t("desktop.renderer.nextScan", { time: nextScanAt ? formatDateTime(nextScanAt) : "-" }));
   const restartBtn = $("#rail-restart-update");
-  if (restartBtn) restartBtn.hidden = !(readyPackage || latestUpdateState?.status === "downloaded" || update?.status === "downloaded");
+  if (restartBtn) {
+    const shouldShow = readyPackage || latestUpdateState?.status === "downloaded" || update?.status === "downloaded" || updateDownloadedPersisted;
+    restartBtn.hidden = !shouldShow;
+    if (shouldShow) restartBtn.disabled = false;
+  }
 }
 
 function latestTimestamp(values = []) {
@@ -2678,7 +3222,10 @@ async function doLoadBackgroundStatus({ config = latestConfig, refreshConfig = f
   ]);
   config = refreshConfig ? (freshConfig || config) : (latestConfig || config);
   latestBackgroundStatus = fullReconcileStatus ? { ...status, fullReconcile: fullReconcileStatus } : status;
-  latestUpdateState = status.updateCheck || latestUpdateState;
+  if (status.updateCheck) {
+    latestUpdateState = { ...status.updateCheck };
+    if (updateDownloadedPersisted) latestUpdateState.status = "downloaded";
+  }
   if (status.sourceFingerprint && !latestLocalSnapshot) {
     latestLocalSnapshot = { scannedAt: status.cacheScannedAt || "", sourceFingerprint: status.sourceFingerprint, rowCount: 0, fromCache: true };
   }

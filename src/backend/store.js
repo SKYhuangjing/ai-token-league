@@ -1284,7 +1284,7 @@ export class Store {
     }
     const heatmap = Object.values(heatmapSeries).sort((a, b) => a.day.localeCompare(b.day));
 
-    return {
+    const result = {
       period: period || range,
       from: days[0] || "",
       to: days.at(-1) || "",
@@ -1304,6 +1304,32 @@ export class Store {
       timeSeries: hourlySeries || timeSeries,
       timeGrain: hourlySeries ? "hour" : "day",
       heatmap
+    };
+    if (participantId) {
+      result.rankStats = this.analyticsRankStats(participantId, days, { businessDay });
+    }
+    return result;
+  }
+
+  analyticsRankStats(participantId, days = [], { businessDay = this.currentBusinessDay() } = {}) {
+    if (!participantId || !days.length) {
+      return { rank: null, participantCount: 0, leaderDays: 0, isLeaderToday: false };
+    }
+    const periodRankings = rankParticipantsForRows(Object.values(this.db.usageDaily || {}).filter((item) => days.includes(item.day)), this.db.participants);
+    const periodRank = periodRankings.find((item) => item.participantId === participantId)?.rank || null;
+    let leaderDays = 0;
+    let isLeaderToday = false;
+    for (const day of days) {
+      const dayRankings = rankParticipantsForRows(Object.values(this.db.usageDaily || {}).filter((item) => item.day === day), this.db.participants);
+      const row = dayRankings.find((item) => item.participantId === participantId);
+      if (row?.rank === 1) leaderDays += 1;
+      if (day === businessDay && row?.rank === 1) isLeaderToday = true;
+    }
+    return {
+      rank: periodRank,
+      participantCount: periodRankings.length,
+      leaderDays,
+      isLeaderToday
     };
   }
 
@@ -1741,6 +1767,23 @@ function buildLegacyUsageIndexes(usageDaily = {}) {
     }
   }
   return { sourceFingerprint, cursorDisplay };
+}
+
+function rankParticipantsForRows(rows = [], participants = {}) {
+  const byParticipant = new Map();
+  for (const item of rows || []) {
+    if (!participants[item.participantId]) continue;
+    const current = byParticipant.get(item.participantId) || {
+      participantId: item.participantId,
+      totalTokens: 0
+    };
+    current.totalTokens += item.totalTokens || 0;
+    byParticipant.set(item.participantId, current);
+  }
+  return [...byParticipant.values()]
+    .filter((item) => item.totalTokens > 0)
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .map((item, index) => ({ ...item, rank: index + 1 }));
 }
 
 function mapPush(map, key, value) {

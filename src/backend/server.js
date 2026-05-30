@@ -38,6 +38,7 @@ const MIN_CLIENT_ENFORCE = String(process.env.MIN_CLIENT_ENFORCE || "").toLowerC
 const USAGE_UPLOAD_SUCCESS_LOG = String(process.env.USAGE_UPLOAD_SUCCESS_LOG || "").toLowerCase() === "true";
 const SLOW_USAGE_UPLOAD_LOG_MS = Number(process.env.SLOW_USAGE_UPLOAD_LOG_MS || 1000);
 const API_PRETTY_JSON = String(process.env.API_PRETTY_JSON || "").toLowerCase() === "true";
+const BRAND_LOGO_URL = process.env.BRAND_LOGO_URL || "";
 
 if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
   console.error("FATAL: BOARD_SECURITY_LEVEL=authenticated requires PUBLIC_BOARD_AUTH_USERNAME to be set");
@@ -173,8 +174,19 @@ function transformTrendResult(trend) {
 }
 
 function sendJson(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.writeHead(status, {
+    ...corsHeaders(),
+    "content-type": "application/json; charset=utf-8"
+  });
   res.end(API_PRETTY_JSON ? JSON.stringify(body, null, 2) : JSON.stringify(body));
+}
+
+function corsHeaders() {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type,authorization"
+  };
 }
 
 function csvEscape(value) {
@@ -767,6 +779,9 @@ async function handleApi(req, res) {
   if (req.method === "GET" && req.url.startsWith("/api/tauri/update.json")) {
     return sendJson(res, 200, await tauriUpdateBody());
   }
+  if (req.method === "GET" && req.url === "/api/brand/logo") {
+    return sendJson(res, 200, { logoUrl: BRAND_LOGO_URL || null });
+  }
   return sendJson(res, 404, { error: "not found" });
 }
 
@@ -1021,6 +1036,11 @@ async function warmOpenRouterPrices(targetStore) {
 }
 
 async function handle(req, res) {
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, corsHeaders());
+    res.end();
+    return;
+  }
   if (req.url.startsWith("/api/")) return handleApi(req, res);
   return serveStatic(req, res);
 }

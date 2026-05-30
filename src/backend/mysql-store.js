@@ -616,7 +616,7 @@ export class MySqlStore extends Store {
       hourlyRows = hRows.map(usageFromRow);
     }
 
-    return this.withScopedUsageRows(
+    const result = await this.withScopedUsageRows(
       usageRows,
       () => {
         if (isHourly && hourlyRows.length) {
@@ -633,6 +633,24 @@ export class MySqlStore extends Store {
         }
         return Store.prototype.analytics.call(this, args);
       }
+    );
+    if (args.participantId && periodDays.length) {
+      result.rankStats = await this.mysqlAnalyticsRankStats(args.participantId, periodDays, { businessDay });
+    }
+    return result;
+  }
+
+  async mysqlAnalyticsRankStats(participantId, days = [], { businessDay = this.currentBusinessDay() } = {}) {
+    if (!participantId || !days.length) {
+      return { rank: null, participantCount: 0, leaderDays: 0, isLeaderToday: false };
+    }
+    const [rows] = await this.pool.query(
+      `SELECT * FROM usage_daily WHERE day IN (${days.map(() => "?").join(",")})`,
+      days
+    );
+    return this.withScopedUsageRows(
+      rows.map(usageFromRow),
+      () => Store.prototype.analyticsRankStats.call(this, participantId, days, { businessDay })
     );
   }
 

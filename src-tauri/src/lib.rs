@@ -681,6 +681,57 @@ async fn export_diagnostics_dialog(
 }
 
 #[tauri::command]
+async fn save_share_image_dialog(app: AppHandle, input: Value) -> Result<Value, String> {
+    use base64::Engine;
+    use tauri_plugin_dialog::DialogExt;
+
+    let file_name = input
+        .get("fileName")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("ai-token-league-share.png");
+    let base64_png = input
+        .get("base64Png")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "image payload required".to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_png)
+        .map_err(|e| e.to_string())?;
+    let file_path = app
+        .dialog()
+        .file()
+        .set_title("Save AI Token League Share Image")
+        .set_file_name(file_name)
+        .add_filter("PNG", &["png"])
+        .blocking_save_file();
+    match file_path {
+        Some(path) => {
+            let p = path.into_path().map_err(|e| e.to_string())?;
+            std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+            Ok(json!({"canceled": false, "filePath": p.to_string_lossy()}))
+        }
+        None => Ok(json!({"canceled": true})),
+    }
+}
+
+#[tauri::command]
+async fn write_image_to_clipboard(app: AppHandle, base64_png: String) -> Result<(), String> {
+    use base64::Engine;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&base64_png)
+        .map_err(|e| e.to_string())?;
+
+    let image = tauri::image::Image::from_bytes(&bytes).map_err(|e| e.to_string())?;
+
+    app.clipboard().write_image(&image).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn reveal_runtime_log_directory() -> Result<(), String> {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let dir = home.join(".ai-token-league").join("log");
@@ -1406,6 +1457,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let state = spawn_sidecar(app.handle().clone())?;
             app.manage(state);
@@ -1450,6 +1502,8 @@ pub fn run() {
             export_identity_dialog,
             export_config_dialog,
             export_diagnostics_dialog,
+            save_share_image_dialog,
+            write_image_to_clipboard,
             reveal_runtime_log_directory,
             export_local_backup_dialog,
             import_identity_dialog,

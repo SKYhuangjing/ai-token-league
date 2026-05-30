@@ -185,6 +185,10 @@
   // ── Pre-computed aggregates ────────────────────────────────
   function filterByRange(items, range) {
     if (range === "today") return items.filter(u => u.day === today);
+    if (/^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/.test(range || "")) {
+      const [from, to] = range.split("..");
+      return items.filter(u => u.day >= from && u.day <= to);
+    }
     if (range === "7d") return items.filter(u => {
       const d = new Date(u.day + "T00:00:00");
       const cutoff = new Date(now.getTime() - 7 * 86400000);
@@ -521,6 +525,10 @@
     // Usage detail
     api.usageDetailPage = () => Promise.resolve({ items: [], totalRows: 0 });
     api.usageDetailWindow = () => Promise.resolve({ items: [], totalRows: 0 });
+    api.saveShareImage = (input) => {
+      window.__ATL_E2E_STATE__.lastShareImageSave = clone(input || {});
+      return Promise.resolve({ canceled: false, filePath: "/tmp/ai-token-league-share.png" });
+    };
   }
 
   let _tokenLeague;

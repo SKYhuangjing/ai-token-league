@@ -344,6 +344,20 @@ button:disabled {
   overflow-x: hidden;
   overflow-y: auto;
   padding: 14px 26px 26px;
+  position: relative;
+}
+.rail-brand-logo {
+  display: none;
+  height: 16px;
+  width: auto;
+  object-fit: contain;
+  pointer-events: none;
+  margin: auto auto 10px;
+  opacity: 0.9;
+  filter: grayscale(0.2);
+}
+.rail-brand-logo[src] {
+  display: block;
 }
 
 .screen { display: none; }
@@ -1569,6 +1583,350 @@ label {
 .modal-panel textarea { min-height: 150px; resize: vertical; }
 .modal-actions { justify-content: flex-end; }
 
+/* ── Polaroid Share Card ── */
+
+/* Flash overlay */
+.polaroid-flash {
+  position: fixed;
+  inset: 0;
+  background: #fff;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+}
+.polaroid-flash.active {
+  animation: polaroidFlash 0.12s ease-out forwards;
+}
+@keyframes polaroidFlash {
+  0% { opacity: 0.92; }
+  100% { opacity: 0; }
+}
+
+/* Stage — full viewport overlay */
+.polaroid-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(22, 21, 18, 0.65);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.polaroid-stage.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.polaroid-container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  position: relative;
+  max-width: 100vw;
+  box-sizing: border-box;
+}
+
+/* Stack — holds multiple polaroid cards */
+.polaroid-stack {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 40px 20px 20px 20px;
+}
+
+/* Polaroid card */
+.polaroid-card {
+  position: relative;
+  background: #fff;
+  padding: 12px 12px 24px 12px;
+  border-radius: 6px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.22),
+    0 2px 8px rgba(0, 0, 0, 0.12);
+  transform-origin: top center;
+  opacity: 0;
+  transform: translateY(-100%) scale(0.98);
+  width: min(94vw, 900px);
+  box-sizing: border-box;
+}
+.polaroid-card.ejecting {
+  animation: polaroidPrint 0.4s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+.polaroid-card.settled {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  box-shadow:
+    0 12px 48px rgba(0, 0, 0, 0.3),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes polaroidPrint {
+  0% {
+    transform: translateY(-100%) scale(0.98);
+    opacity: 0;
+    box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+    box-shadow:
+      0 12px 48px rgba(0, 0, 0, 0.3),
+      0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+}
+.polaroid-card.dismissing {
+  animation: polaroidDismiss 0.4s cubic-bezier(0.55, 0, 1, 0.45) forwards;
+  pointer-events: none;
+}
+@keyframes polaroidDismiss {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateY(-80%) scale(0.95);
+    opacity: 0;
+  }
+}
+
+/* Image area inside polaroid */
+.polaroid-image-area {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #1a1a1a;
+}
+.polaroid-image-area::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.09);
+  pointer-events: none;
+  border-radius: 4px;
+  z-index: 2;
+}
+
+/* Loading spinner overlay */
+.polaroid-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.65);
+  z-index: 3;
+  opacity: 1;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.polaroid-loading.hidden {
+  opacity: 0;
+}
+.polaroid-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(16, 17, 15, 0.15);
+  border-top-color: #10110f;
+  border-radius: 50%;
+  animation: polaroidSpin 0.7s linear infinite;
+}
+@keyframes polaroidSpin {
+  to { transform: rotate(360deg); }
+}
+
+.share-card-preview {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  display: block;
+}
+
+.share-card-preview .sc-root {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 1200px;
+  height: 720px;
+  transform-origin: top left;
+}
+
+/* Develop overlay — overexposed filter */
+.polaroid-develop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.95);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.9s cubic-bezier(0.25, 1, 0.5, 1);
+  z-index: 1;
+}
+.polaroid-card.developing .polaroid-develop-overlay {
+  opacity: 0;
+}
+
+/* Content fade-in */
+.polaroid-card .share-card-preview {
+  opacity: 0;
+  transition: opacity 0.6s ease 0.2s;
+}
+.polaroid-card.developing .share-card-preview {
+  opacity: 1;
+}
+
+/* White border bottom (Polaroid caption area) */
+.polaroid-white-border {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+}
+
+.polaroid-caption {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #999;
+  letter-spacing: 0.03em;
+}
+
+/* Action bar */
+.polaroid-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  opacity: 0;
+  transform: translateX(30px);
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 10;
+}
+.polaroid-actions.visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Premium circular button styling */
+.polaroid-action-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+  position: relative;
+}
+
+.polaroid-action-btn svg {
+  width: 22px;
+  height: 22px;
+  transition: transform 0.25s ease;
+}
+
+.polaroid-action-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #fff;
+  transform: scale(1.08);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.polaroid-action-btn:hover svg {
+  transform: scale(1.1);
+}
+
+.polaroid-action-btn:active {
+  transform: scale(0.95);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Highlight the close button on hover with our signature red color */
+.polaroid-action-btn.close-btn:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+/* Status text */
+.polaroid-status {
+  min-height: 20px;
+  margin-top: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(245, 239, 227, 0.7);
+  text-align: center;
+}
+.polaroid-status[data-kind="success"] {
+  color: #5ecfb1;
+}
+
+/* Tactile capture success animation */
+@keyframes polaroidFlashSuccess {
+  0% {
+    transform: scale(1);
+    box-shadow:
+      0 12px 48px rgba(0, 0, 0, 0.3),
+      0 4px 12px rgba(0, 0, 0, 0.15),
+      0 0 0 0px rgba(5, 143, 126, 0);
+  }
+  15% {
+    transform: scale(0.975);
+    box-shadow:
+      0 4px 16px rgba(0, 0, 0, 0.2),
+      0 2px 6px rgba(0, 0, 0, 0.1),
+      0 0 0 4px rgba(5, 143, 126, 0.2);
+  }
+  35% {
+    transform: scale(1.015);
+    box-shadow:
+      0 20px 60px rgba(5, 143, 126, 0.45),
+      0 8px 24px rgba(5, 143, 126, 0.2),
+      0 0 0 16px rgba(5, 143, 126, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow:
+      0 12px 48px rgba(0, 0, 0, 0.3),
+      0 4px 12px rgba(0, 0, 0, 0.15),
+      0 0 0 0px rgba(5, 143, 126, 0);
+  }
+}
+.polaroid-card.flash-success {
+  animation: polaroidFlashSuccess 0.65s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+/* Multi-photo stacking */
+.polaroid-card.stacked {
+  position: absolute;
+}
+
+@media (max-width: 880px) {
+  .share-card-preview {
+    width: min(560px, calc(100vw - 80px));
+    height: min(350px, calc((100vw - 80px) * 0.625));
+  }
+}
+
 .app-confirm-panel { max-width: 460px; }
 .import-mode-panel { max-width: 560px; padding: 22px; }
 .import-mode-title {
@@ -2640,4 +2998,18 @@ label {
     flex-wrap: wrap;
   }
   .drawer { width: 100vw; }
+}
+
+@media (max-width: 768px) {
+  .polaroid-container {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .polaroid-actions {
+    flex-direction: row;
+    transform: translateY(20px);
+  }
+  .polaroid-actions.visible {
+    transform: translateY(0);
+  }
 }
