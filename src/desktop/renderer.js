@@ -1576,25 +1576,15 @@ async function buildOverviewShareData(range) {
 }
 
 async function fetchCloudShareData(range, config) {
-  const apiBaseUrl = normalizeApiBaseUrl(config?.apiBaseUrl || "");
-  if (!apiBaseUrl || !config?.participantId) return null;
+  if (!config?.participantId) return null;
 
   const periodMap = { today: "today", "7d": "this_week", "30d": "this_month" };
   const period = periodMap[range] || "today";
 
-  const identityUrl = new URL("/api/board/my-identity", apiBaseUrl);
-  identityUrl.searchParams.set("participantId", config.participantId);
-  const identityResponse = await fetch(identityUrl.toString());
-  if (!identityResponse.ok) throw new Error(`Identity ${identityResponse.status}`);
-  const identity = await identityResponse.json();
+  const identity = await api.getMyIdentity();
 
   const queryId = identity.identityMode === "anonymous" && identity.publicId ? identity.publicId : config.participantId;
-  const analyticsUrl = new URL("/api/board/analytics", apiBaseUrl);
-  analyticsUrl.searchParams.set("period", period);
-  analyticsUrl.searchParams.set("participantId", queryId);
-  const analyticsResponse = await fetch(analyticsUrl.toString());
-  if (!analyticsResponse.ok) throw new Error(`Analytics ${analyticsResponse.status}`);
-  const analytics = await analyticsResponse.json();
+  const analytics = await api.boardAnalytics({ period, participantId: queryId });
 
   const isAnon = identity.identityMode === "anonymous";
   return {

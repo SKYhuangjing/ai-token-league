@@ -107,6 +107,7 @@
 
     // ── Identity ────────────────────────────────────────────────
     getMyIdentity:       fwd("my-identity"),
+    boardAnalytics:      fwd("board:analytics"),
 
     // ── App ─────────────────────────────────────────────────────
     appVersion:          fwd("app:version"),

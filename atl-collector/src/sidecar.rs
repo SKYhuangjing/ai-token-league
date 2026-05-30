@@ -633,6 +633,7 @@ async fn handle_command(
             Ok(sanitize_config_value(&next))
         }
         Command::MyIdentity => my_identity().await,
+        Command::BoardAnalytics => board_analytics(&request.args).await,
         Command::UsageFullReconcileStart => {
             if read_bool_state(&runtime.full_reconcile_running) {
                 return Ok(serde_json::json!({"ok": false, "error": "already running"}));
@@ -2057,6 +2058,28 @@ async fn my_identity() -> Result<serde_json::Value, String> {
         Ok(v) => Ok(v),
         Err(_) => Ok(serde_json::json!({"identityMode": "public", "displayName": ""})),
     }
+}
+
+async fn board_analytics(args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let cfg = config::ensure_desktop_config();
+    if cfg.api_base_url.is_empty() {
+        return Err("API base URL not configured".to_string());
+    }
+    let period = args["period"].as_str().unwrap_or("today");
+    let participant_id = args["participantId"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&cfg.participant_id);
+    if participant_id.is_empty() {
+        return Err("participantId required".to_string());
+    }
+    let url = format!(
+        "{}/api/board/analytics?period={}&participantId={}",
+        cfg.api_base_url,
+        urlencoding::encode(period),
+        urlencoding::encode(participant_id)
+    );
+    get_json(&url).await
 }
 
 async fn download_installer() -> Result<serde_json::Value, String> {

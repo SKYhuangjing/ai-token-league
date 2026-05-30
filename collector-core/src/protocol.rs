@@ -72,6 +72,7 @@ pub enum Command {
     UsageFullReconcileStart,
     UsageFullReconcileStatus,
     MyIdentity,
+    BoardAnalytics,
     AppVersion,
     UpdateDownloadInstaller,
     UpdateEnforcementStatus,
@@ -134,6 +135,7 @@ impl Command {
             "usage:full-reconcile-start" => Some(Self::UsageFullReconcileStart),
             "usage:full-reconcile-status" => Some(Self::UsageFullReconcileStatus),
             "my-identity" => Some(Self::MyIdentity),
+            "board:analytics" => Some(Self::BoardAnalytics),
             "app:version" => Some(Self::AppVersion),
             "update:download-installer" => Some(Self::UpdateDownloadInstaller),
             "update:enforcement-status" => Some(Self::UpdateEnforcementStatus),
@@ -256,6 +258,7 @@ mod tests {
                 Command::UsageFullReconcileStatus,
             ),
             ("my-identity", Command::MyIdentity),
+            ("board:analytics", Command::BoardAnalytics),
             ("app:version", Command::AppVersion),
             (
                 "update:download-installer",
