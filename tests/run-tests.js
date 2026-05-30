@@ -48,6 +48,10 @@ import { currentBusinessDay } from "../src/backend/day-context.js";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-token-league-test-"));
 process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
 
+if (!process.env.APP_TIME_ZONE && !process.env.TZ) {
+  process.env.APP_TIME_ZONE = "Asia/Shanghai";
+}
+
 function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
