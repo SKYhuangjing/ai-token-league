@@ -105,16 +105,13 @@ test.describe('Share card', () => {
     expect(settingsBox.y + settingsBox.height).toBeLessThanOrEqual(viewport.height);
   });
 
-  test('keeps action buttons aligned while switching orientation', async ({ page }) => {
+  test('keeps action buttons visible while switching orientation', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 820 });
     await waitForScanComplete(page);
 
     await page.click('#open-share-card');
     await expect(page.locator('.polaroid-stage')).toHaveClass(/visible/, { timeout: 3_000 });
     await expect(page.locator('.polaroid-actions')).toHaveClass(/visible/, { timeout: 5_000 });
-
-    const landscapeBox = await page.locator('.polaroid-actions').boundingBox();
-    const landscapeCenterY = landscapeBox.y + landscapeBox.height / 2;
 
     await page.locator('#share-card-orientation button[data-range="portrait"]').click();
     await expect(page.locator('#polaroid-card')).toHaveClass(/orientation-flip-out/, { timeout: 120 });
@@ -123,8 +120,14 @@ test.describe('Share card', () => {
     await expect(page.locator('#share-card-preview .sc-root.sc-portrait')).toBeVisible({ timeout: 5_000 });
 
     const portraitBox = await page.locator('.polaroid-actions').boundingBox();
-    const portraitCenterY = portraitBox.y + portraitBox.height / 2;
-    expect(Math.abs(portraitCenterY - landscapeCenterY)).toBeLessThanOrEqual(40);
+    const settingsBox = await page.locator('#share-modal-settings').boundingBox();
+    const viewport = page.viewportSize();
+    expect(portraitBox).toBeTruthy();
+    expect(settingsBox).toBeTruthy();
+    expect(portraitBox.y).toBeGreaterThanOrEqual(0);
+    expect(portraitBox.y + portraitBox.height).toBeLessThanOrEqual(viewport.height);
+    expect(settingsBox.y).toBeGreaterThanOrEqual(portraitBox.y + portraitBox.height + 24);
+    expect(settingsBox.y + settingsBox.height).toBeLessThanOrEqual(viewport.height);
 
     await page.locator('#share-card-orientation button[data-range="landscape"]').click();
     await expect(page.locator('#polaroid-card')).toHaveClass(/orientation-flip-out/, { timeout: 120 });

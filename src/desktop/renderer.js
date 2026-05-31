@@ -1784,7 +1784,7 @@ async function buildOverviewShareData(range, { skipCloud = false } = {}) {
 async function fetchCloudShareData(range, config) {
   if (!config?.participantId) return null;
 
-  const periodMap = { today: "today", "7d": "this_week", "30d": "this_month", this_week: "this_week", this_month: "this_month", all: "all" };
+  const periodMap = { today: "today", "7d": "this_week", "30d": "this_month", this_week: "this_week", last_week: "last_week", this_month: "this_month", last_month: "last_month", all: "all" };
   const period = periodMap[range] || "today";
 
   const identity = await api.getMyIdentity();
@@ -3711,6 +3711,28 @@ function daysForRange(range) {
     }
     return new Set(days);
   }
+  if (range === "last_week") {
+    const today = utcToday();
+    const monday = startOfUtcWeek(today);
+    monday.setUTCDate(monday.getUTCDate() - 7);
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setUTCDate(monday.getUTCDate() + i);
+      days.push(toDay(d));
+    }
+    return new Set(days);
+  }
+  if (range === "last_month") {
+    const today = utcToday();
+    const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+    const last = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+    const days = [];
+    for (const d = new Date(first); d <= last; d.setUTCDate(d.getUTCDate() + 1)) {
+      days.push(toDay(d));
+    }
+    return new Set(days);
+  }
   return new Set([localDay()]);
 }
 
@@ -3718,6 +3740,10 @@ function rangeLabel(range) {
   if (range === "7d") return t("desktop.range.7d");
   if (range === "30d") return t("desktop.range.30d");
   if (range === "all") return t("desktop.range.all");
+  if (range === "this_week") return t("desktop.share.period.this_week");
+  if (range === "last_week") return t("desktop.share.period.last_week");
+  if (range === "this_month") return t("desktop.share.period.this_month");
+  if (range === "last_month") return t("desktop.share.period.last_month");
   return t("desktop.range.today");
 }
 

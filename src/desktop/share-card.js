@@ -58,6 +58,22 @@ export function sharePeriodBounds(period, businessDay) {
     return { from, to: day };
   }
   if (period === "this_month") return { from: day.slice(0, 8) + "01", to: day };
+  if (period === "last_week") {
+    const d = new Date(day + "T00:00:00Z");
+    const dow = d.getUTCDay();
+    const mondayOffset = dow === 0 ? -6 : 1 - dow;
+    const monday = new Date(d);
+    monday.setUTCDate(d.getUTCDate() + mondayOffset - 7);
+    const sunday = new Date(monday);
+    sunday.setUTCDate(monday.getUTCDate() + 6);
+    return { from: monday.toISOString().slice(0, 10), to: sunday.toISOString().slice(0, 10) };
+  }
+  if (period === "last_month") {
+    const d = new Date(day + "T00:00:00Z");
+    const firstOfLastMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
+    const lastOfLastMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0));
+    return { from: firstOfLastMonth.toISOString().slice(0, 10), to: lastOfLastMonth.toISOString().slice(0, 10) };
+  }
   if (period === "7d") {
     const d = new Date(day + "T00:00:00Z");
     d.setUTCDate(d.getUTCDate() - 6);
@@ -78,7 +94,8 @@ export function shareRangeForPeriod(period, businessDay) {
 
 export function shareTrendGrain(period) {
   if (period === "today") return "hour";
-  if (period === "30d" || period === "this_month") return "week";
+  if (period === "30d" || period === "this_month" || period === "last_month") return "week";
+  if (period === "last_week") return "day";
   if (period === "all") return "month";
   return "day";
 }
