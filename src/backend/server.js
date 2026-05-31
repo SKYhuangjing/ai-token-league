@@ -590,6 +590,18 @@ async function handleApi(req, res) {
       })).map((item) => transformBoardItem(item))
     }));
   }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/usage-ranking")) {
+    const url = new URL(req.url, "http://localhost");
+    return sendJson(res, 200, await store.adminUsageRanking({
+      range: url.searchParams.get("range") || "month",
+      startDay: url.searchParams.get("start") || "",
+      endDay: url.searchParams.get("end") || "",
+      participantId: url.searchParams.get("participantId") || "",
+      includeCost: includeCost(url),
+      page: url.searchParams.get("page") || "1",
+      pageSize: url.searchParams.get("pageSize") || "25"
+    }));
+  }
   if (req.method === "GET" && req.url.startsWith("/api/admin/usage")) {
     const url = new URL(req.url, "http://localhost");
     return sendJson(res, 200, await store.adminUsage({

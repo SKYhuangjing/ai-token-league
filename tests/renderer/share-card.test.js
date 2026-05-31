@@ -4,6 +4,7 @@ import {
   normalizeLocalShareData,
   renderShareCardHtml,
   renderPortraitShareCardHtml,
+  shareCardCss,
   portraitShareCardCss,
   polaroidDimensions,
   PORTRAIT_CARD_WIDTH,
@@ -237,6 +238,14 @@ describe("renderShareCardHtml", () => {
     expect(html).toContain(logoUrl);
   });
 
+  it("uses a three-column footer layout for quote, logo, and URL", () => {
+    const css = shareCardCss();
+    expect(css).toContain("grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)");
+    expect(css).toContain("grid-column: 1");
+    expect(css).toContain("grid-column: 2");
+    expect(css).toContain("grid-column: 3");
+  });
+
   it("omits footer logo when logoUrl is not provided", () => {
     const data = normalizeLocalShareData({
       period: "today",
@@ -383,6 +392,12 @@ describe("polaroidDimensions", () => {
     expect(dims.exportHeight).toBe(1262);
   });
 
+  it("uses measured content height when provided", () => {
+    const dims = polaroidDimensions("portrait", 1325.2);
+    expect(dims.cardHeight).toBe(1326);
+    expect(dims.exportHeight).toBe(1388);
+  });
+
   it("falls back to landscape for unknown orientation", () => {
     const dims = polaroidDimensions("foo");
     expect(dims.cardWidth).toBe(1200);
@@ -395,6 +410,7 @@ describe("portraitShareCardCss", () => {
     const css = portraitShareCardCss();
     expect(css).toContain("720px");
     expect(css).toContain("1200px");
+    expect(css).toContain("height: auto");
     expect(css).toContain("sc-portrait");
     expect(css).toContain("sc-pulse-grid");
     expect(css).toContain("sc-pulse-svg");
@@ -412,6 +428,7 @@ describe("renderPortraitShareCardHtml", () => {
     });
     const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://example.com", showCloudUrl: true });
     expect(html).toContain('data-share-card-style="portrait"');
+    expect(html).toContain("sc-portrait-brand-row");
     expect(html).toContain("sc-portrait-header");
     expect(html).toContain("sc-portrait-identity-col");
     expect(html).toContain("sc-portrait-hero-block");
@@ -421,6 +438,20 @@ describe("renderPortraitShareCardHtml", () => {
     expect(html).toContain("Source mix");
     expect(html).toContain("Model mix");
     expect(html).toContain("https://example.com");
+  });
+
+  it("renders portrait brand logo in the top brand row", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, logoUrl: "data:image/png;base64,abc" });
+    expect(html).toContain("sc-portrait-brand-row");
+    expect(html).toContain("sc-portrait-brand-logo");
+    expect(html).toContain("data:image/png;base64,abc");
   });
 
   it("renders Today's Code badge inside identity column when anonymousName is provided", () => {

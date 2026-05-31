@@ -17,7 +17,13 @@ const LOGO_PNG_BYTES = Buffer.from(
 const mockScript = readFileSync(resolve('tests/e2e/mock-tauri.js'), 'utf-8');
 const logoTest = base.extend({
   page: async ({ page }, use) => {
-    const config = { desktopAutoInitialized: false, language: 'en', syncConfigured: true };
+    const config = {
+      desktopAutoInitialized: false,
+      language: 'en',
+      syncConfigured: true,
+      brandLogoDataUrl: LOGO_DATA_URL,
+      brandLogoUrl: 'https://logo.example.com/logo.png',
+    };
     await page.addInitScript({ content: `window.__ATL_E2E_CONFIG__ = ${JSON.stringify(config)};` });
     await page.addInitScript({ content: mockScript });
 
@@ -50,6 +56,10 @@ test.describe('Share card', () => {
     await expect(page.locator('#share-card-preview')).toContainText('Source mix');
     await expect(page.locator('#share-card-preview')).toContainText('Model mix');
     await expect(page.locator('#share-card-preview')).toContainText('Top Workdirs', { ignoreCase: true });
+    const previewBox = await page.locator('#share-card-preview').boundingBox();
+    const rootHeight = await page.locator('#share-card-preview .sc-root').evaluate((el) => el.scrollHeight);
+    expect(previewBox.height).toBeGreaterThan(0);
+    expect(rootHeight).toBeGreaterThanOrEqual(500);
 
     const actions = page.locator('.polaroid-actions');
     await expect(actions).toHaveClass(/visible/, { timeout: 5_000 });
@@ -97,7 +107,7 @@ test.describe('Brand logo in share card', () => {
 });
 
 logoTest.describe('Brand logo real fetch chain', () => {
-  logoTest('fetchBrandLogo fetches image and renders in share card footer', async ({ page }) => {
+  logoTest('fetchBrandLogo uses sidecar brand:logo and renders in share card footer', async ({ page }) => {
     await waitForScanComplete(page);
 
     // Wait for fetchBrandLogo to complete — rail logo should get a data URL src
@@ -114,9 +124,24 @@ logoTest.describe('Brand logo real fetch chain', () => {
     await expect(footerLogo).toHaveAttribute('src', /^data:image/);
   });
 
+  logoTest('portrait share card renders logo in the top brand row', async ({ page }) => {
+    await waitForScanComplete(page);
+
+    await page.click('#open-share-card');
+    await expect(page.locator('.polaroid-stage')).toHaveClass(/visible/, { timeout: 3_000 });
+    await page.locator('#share-card-orientation button[data-range="portrait"]').click();
+    await expect(page.locator('#share-card-preview .sc-root.sc-portrait')).toBeVisible({ timeout: 5_000 });
+
+    const portraitLogo = page.locator('#share-card-preview .sc-portrait-brand-logo');
+    await expect(portraitLogo).toBeVisible({ timeout: 3_000 });
+    await expect(portraitLogo).toHaveAttribute('src', /^data:image/);
+  });
+
   logoTest('logo clears when image fetch fails', async ({ page }) => {
     // Override: logo image URL returns network error
     await page.route('https://logo.example.com/logo.png', (route) => route.abort());
+    // Use addInitScript so the flag survives the page.goto navigation
+    await page.addInitScript({ content: 'window.__ATL_E2E_STATE__ = Object.assign(window.__ATL_E2E_STATE__ || {}, { brandLogoError: true });' });
     await page.goto('/');
 
     await waitForScanComplete(page);

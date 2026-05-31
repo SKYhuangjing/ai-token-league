@@ -3812,6 +3812,107 @@ async function testAdminAuthDisabledWhenNotConfigured() {
   } finally { await cleanup(); }
 }
 
+async function testAdminUsageRankingPagination() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const day = localDay();
+    async function uploadRankedUsage(nickname, totalTokens, usageDay = day) {
+      const identity = generateIdentity();
+      const deviceId = newId("d");
+      const registerRes = await fetch(`${baseUrl}/api/devices/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          participantId: identity.participantId,
+          deviceId,
+          nickname,
+          identityPublicKey: identity.identityPublicKey,
+          os: "test",
+          appVersion: APP_VERSION
+        })
+      });
+      assert.equal(registerRes.status, 200);
+      const payload = {
+        participantId: identity.participantId,
+        deviceId,
+        clientGeneratedAt: new Date().toISOString(),
+        items: [{
+          day: usageDay,
+          toolCode: "codex",
+          providerId: "codex_local",
+          workdirHash: `h_${nickname}`,
+          workdirDisplayName: `wd_${nickname}`,
+          model: `model_${nickname}`,
+          inputTokens: totalTokens,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          totalTokens,
+          sourceQuality: "exact",
+          sourceFingerprint: `sf_${nickname}`
+        }]
+      };
+      const uploadRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+      });
+      assert.equal(uploadRes.status, 200);
+      return identity;
+    }
+
+    const low = await uploadRankedUsage("rank-low", 100);
+    await uploadRankedUsage("rank-high", 300);
+    await uploadRankedUsage("rank-mid", 200);
+    await uploadRankedUsage("rank-old", 500, addDays(day, -45));
+
+    const pageOneRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&page=1&pageSize=2`);
+    assert.equal(pageOneRes.status, 200);
+    const pageOne = await pageOneRes.json();
+    assert.equal(pageOne.total, 3);
+    assert.equal(pageOne.totalPages, 2);
+    assert.equal(pageOne.hasNext, true);
+    assert.deepEqual(pageOne.items.map((item) => [item.rank, item.nickname, item.totalTokens]), [
+      [1, "rank-high", 300],
+      [2, "rank-mid", 200]
+    ]);
+    assert.equal(pageOne.items[0].workdirs[0].name, "wd_rank-high");
+    assert.equal(pageOne.items[0].models[0].name, "model_rank-high");
+
+    const pageTwoRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&page=2&pageSize=2`);
+    const pageTwo = await pageTwoRes.json();
+    assert.equal(pageTwo.hasPrev, true);
+    assert.equal(pageTwo.hasNext, false);
+    assert.deepEqual(pageTwo.items.map((item) => [item.rank, item.nickname, item.totalTokens]), [
+      [3, "rank-low", 100]
+    ]);
+
+    const filteredRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&page=1&pageSize=2&participantId=${low.participantId}`);
+    const filtered = await filteredRes.json();
+    assert.equal(filtered.total, 1);
+    assert.equal(filtered.items[0].participantId, low.participantId);
+    assert.equal(filtered.items[0].rank, 1);
+
+    const allRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=all&page=1&pageSize=2`);
+    const all = await allRes.json();
+    assert.equal(all.total, 4);
+    assert.equal(all.from, addDays(day, -45));
+    assert.equal(all.to, day);
+    assert.deepEqual(all.items.map((item) => [item.rank, item.nickname, item.totalTokens]), [
+      [1, "rank-old", 500],
+      [2, "rank-high", 300]
+    ]);
+
+    const aggregateAllRes = await fetch(`${baseUrl}/api/admin/usage?range=all&grain=month`);
+    const aggregateAll = await aggregateAllRes.json();
+    assert.equal(aggregateAll.from, addDays(day, -45));
+    assert.equal(aggregateAll.to, day);
+    assert.ok(aggregateAll.items.some((item) => item.nickname === "rank-old"));
+    console.log("  testAdminUsageRankingPagination passed");
+  } finally { await cleanup(); }
+}
+
 async function testBoardPublicMode() {
   const { baseUrl, cleanup } = await createTestServer({ BOARD_SECURITY_LEVEL: "public" });
   try {
@@ -4452,6 +4553,14 @@ function testWebAdminStructure() {
   assert.match(html, /pricing/i);
   assert.match(html, /quality/i);
   assert.match(html, /devices/i);
+  assert.match(html, /ranking-tbody/i);
+  assert.match(html, /ranking-pagination/i);
+  assert.match(html, /usage-view-tabs/i);
+  assert.match(html, /data-usage-panel="ranking"/i);
+  assert.match(html, /data-usage-panel="aggregate"/i);
+  assert.match(html, /data-value="all"/i);
+  const js = fs.readFileSync("src/web/admin.js", "utf8");
+  assert.match(js, /state\.range === "all"\) return "month"/);
   console.log("  testWebAdminStructure passed");
 }
 
@@ -5184,6 +5293,7 @@ await testFullReconcileHttpCompareRepairFlow();
 await testUsageUploadRejectsUnregistered();
 await testAdminAuthEnforcement();
 await testAdminAuthDisabledWhenNotConfigured();
+await testAdminUsageRankingPagination();
 await testBoardPublicMode();
 await testBoardAuthenticatedMode();
 await testSelfServiceDeletionReplayProtection();

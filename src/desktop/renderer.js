@@ -1533,12 +1533,15 @@ function closeShareCardModal() {
   if (actions) actions.classList.remove("visible");
   if (settingsBar) settingsBar.classList.remove("visible");
   if (card) {
-    card.classList.remove("ejecting", "settled", "developing", "shaking", "portrait-card", "no-frame");
+    // Keep portrait-card and no-frame so dimensions/frame styles don't jump during dismiss
+    card.classList.remove("ejecting", "settled", "developing", "shaking");
     card.classList.add("dismissing");
   }
   setTimeout(() => {
     if (stage) stage.classList.remove("visible");
-    if (card) card.classList.remove("dismissing");
+    if (card) {
+      card.classList.remove("dismissing", "portrait-card", "no-frame");
+    }
     if (loading) loading.classList.remove("hidden");
     const modal = $("#share-card-modal");
     if (modal) modal.hidden = true;
@@ -1889,11 +1892,12 @@ async function renderShareCardPreview() {
       } else if (polaroidCard) {
         polaroidCard.classList.remove("portrait-card");
       }
+      const measuredCardH = measureShareCardContentHeight(root, cardH);
       const containerWidth = preview.offsetWidth || (isPortrait ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH);
       const scale = containerWidth / cardW;
       root.style.transform = `scale(${scale})`;
       root.style.transformOrigin = "top left";
-      preview.style.height = `${Math.ceil(cardH * scale)}px`;
+      preview.style.height = `${Math.ceil(measuredCardH * scale)}px`;
     }
   } catch (err) {
     console.error("Preview render failed:", err);
@@ -1913,6 +1917,16 @@ function shareCardRenderOptions() {
     showCloudUrl: latestConfig?.showShareCloudUrl ?? true,
     showAnonymousName: latestConfig?.showShareAnonymousName ?? true
   };
+}
+
+function measureShareCardContentHeight(root, fallbackHeight) {
+  if (!root) return fallbackHeight;
+  const previousTransform = root.style.transform;
+  root.style.transform = "none";
+  const rectHeight = root.getBoundingClientRect().height;
+  const measured = Math.max(root.scrollHeight || 0, root.offsetHeight || 0, rectHeight || 0);
+  root.style.transform = previousTransform;
+  return Math.ceil(measured || fallbackHeight);
 }
 
 async function exportShareCardBlob() {
@@ -1938,28 +1952,35 @@ async function exportShareCardBlob() {
   const cardHtml = isPortrait
     ? renderPortraitShareCardHtml(latestShareData, renderOpts)
     : renderShareCardHtml(latestShareData, renderOpts);
+  const cardCss = isPortrait
+    ? `${shareCardCss()}${portraitShareCardCss()}`
+    : shareCardCss();
+
+  const measureContainer = document.createElement("div");
+  measureContainer.style.cssText = `position:fixed;left:-9999px;top:0;width:${cardW}px;height:auto;overflow:visible;pointer-events:none;z-index:-1`;
+  measureContainer.innerHTML = `<style>${cardCss}</style>${cardHtml}`;
+  document.body.appendChild(measureContainer);
+  const measuredCardH = measureShareCardContentHeight(measureContainer.querySelector(".sc-root"), cardH);
+  document.body.removeChild(measureContainer);
 
   let exportHtml, exportW, exportH, targetSelector;
   if (showFrame) {
     exportHtml = renderExportPolaroidHtml(cardHtml, caption);
-    const dims = polaroidDimensions(orientation);
+    const dims = polaroidDimensions(orientation, measuredCardH);
     exportW = dims.exportWidth;
     exportH = dims.exportHeight;
     targetSelector = ".pe-frame";
   } else {
     exportHtml = cardHtml;
     exportW = cardW;
-    exportH = cardH;
+    exportH = measuredCardH;
     targetSelector = ".sc-root";
   }
 
   const container = document.createElement("div");
   container.style.cssText = `position:fixed;left:-9999px;top:0;width:${exportW}px;height:${exportH}px;overflow:hidden;pointer-events:none;z-index:-1`;
-  const cardCss = isPortrait
-    ? `${shareCardCss()}${portraitShareCardCss()}`
-    : shareCardCss();
   const css = showFrame
-    ? `${cardCss}${polaroidExportCss(orientation)}`
+    ? `${cardCss}${polaroidExportCss(orientation, measuredCardH)}`
     : cardCss;
   container.innerHTML = `<style>${css}</style>${exportHtml}`;
   document.body.appendChild(container);

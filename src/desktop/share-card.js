@@ -271,6 +271,18 @@ function renderShareHeader(data, opts) {
   const trophySvg = TROPHY_SVG;
   const medalSvg = MEDAL_SVG;
 
+  // 1. Generate headerStatsHtml (leaderDays & participantCount) to remain in header
+  let headerStatsHtml = "";
+  if (data.rankStats) {
+    const rs = data.rankStats;
+    const leaderHtml = rs.leaderDays ? `<span class="sc-rank-stat"><span class="sc-rank-stat-val">${rs.leaderDays}</span><span class="sc-rank-stat-label">${escapeHtml(t("desktop.share.leaderDays"))}</span></span>` : "";
+    const pCountHtml = rs.participantCount ? `<span class="sc-rank-stat sc-rank-stat--dark"><span class="sc-rank-stat-val">${rs.participantCount}</span><span class="sc-rank-stat-label">${escapeHtml(t("desktop.share.participants"))}</span></span>` : "";
+    if (leaderHtml || pCountHtml) {
+      headerStatsHtml = `${leaderHtml}${pCountHtml}`;
+    }
+  }
+
+  // 2. Generate rankHtml (only the badge) to be placed next to AI labels below
   let rankHtml = "";
   if (data.rankStats) {
     const rs = data.rankStats;
@@ -279,11 +291,9 @@ function renderShareHeader(data, opts) {
     const normalClass = rank > 3 ? " sc-rank-normal" : "";
     const rankNum = rank ? `No.${rank}` : t("desktop.share.noRank");
     const medalIcon = rank === 1 ? trophySvg : (rank === 2 || rank === 3) ? medalSvg : "";
-    const leaderHtml = rs.leaderDays ? `<span class="sc-rank-stat"><span class="sc-rank-stat-val">${rs.leaderDays}</span><span class="sc-rank-stat-label">${escapeHtml(t("desktop.share.leaderDays"))}</span></span>` : "";
-    const pCountHtml = rs.participantCount ? `<span class="sc-rank-stat sc-rank-stat--dark"><span class="sc-rank-stat-val">${rs.participantCount}</span><span class="sc-rank-stat-label">${escapeHtml(t("desktop.share.participants"))}</span></span>` : "";
-    rankHtml = `<div class="sc-rank-strip"><span class="sc-rank-badge${medalClass}${normalClass}">${medalIcon}${rankNum}</span>${leaderHtml}${pCountHtml}</div>`;
+    rankHtml = `<span class="sc-rank-badge${medalClass}${normalClass}">${medalIcon}${rankNum}</span>`;
   } else if (data.mode === "local") {
-    rankHtml = `<div class="sc-rank-strip"><span class="sc-rank-badge sc-rank-local">${escapeHtml(t("desktop.share.localStats"))}</span></div>`;
+    rankHtml = `<span class="sc-rank-badge sc-rank-local">${escapeHtml(t("desktop.share.localStats"))}</span>`;
   }
 
   const anonymousCode = data.identity.anonymousName;
@@ -299,7 +309,7 @@ function renderShareHeader(data, opts) {
     ${badgeHtml}
   </div>`;
 
-  return `<div class="sc-header">
+  const headerHtml = `<div class="sc-header">
     <div class="sc-header-left">
       <span class="sc-brand">${escapeHtml(t("app.name"))}</span>
       ${nameRowHtml}
@@ -307,10 +317,12 @@ function renderShareHeader(data, opts) {
     <div class="sc-header-right">
       <div class="sc-header-meta">
         <span class="sc-header-range">${escapeHtml(dateRange)}</span>
-        ${rankHtml}
+        ${headerStatsHtml}
       </div>
     </div>
   </div>`;
+
+  return { headerHtml, rankHtml };
 }
 
 function renderShareHeroScore(data, opts) {
@@ -512,13 +524,24 @@ function renderShareFooter(data, opts) {
   </div>`;
 }
 
+function renderPortraitBrandRow(opts) {
+  const { t, logoUrl } = opts;
+  const logoHtml = logoUrl
+    ? `<img class="sc-portrait-brand-logo" src="${escapeHtml(logoUrl)}" alt="" />`
+    : `<span class="sc-portrait-brand-text">${escapeHtml(t("app.name"))}</span>`;
+  return `<div class="sc-portrait-brand-row">
+    ${logoHtml}
+    <span class="sc-portrait-brand-kicker">AI TOKEN LEAGUE</span>
+  </div>`;
+}
+
 // ── Main render ──
 
 export function renderShareCardHtml(data, opts = {}) {
   const otherLabel = opts.t ? opts.t("desktop.share.other") || "Other" : "Other";
   const sparkCols = data.trendRows?.length || 1;
 
-  const header = renderShareHeader(data, opts);
+  const { headerHtml, rankHtml } = renderShareHeader(data, opts);
   const hero = renderShareHeroScore(data, opts);
   const stats = renderShareStatCards(data, opts);
   const sparkBars = renderShareSparkBars(data, opts);
@@ -543,12 +566,15 @@ export function renderShareCardHtml(data, opts = {}) {
   </div>`).join("\n");
 
   return `<div class="sc-root" data-share-card-style="overview" style="--spark-cols:${sparkCols}">
-    ${header}
+    ${headerHtml}
     <div class="sc-dash-row">
       ${hero}
       <div class="sc-dash-right">
+        <div class="sc-dash-top-row">
+          ${rankHtml}
+          <div class="sc-dash-pills">${personaPillsHtml}</div>
+        </div>
         ${stats}
-        <div class="sc-dash-pills">${personaPillsHtml}</div>
       </div>
     </div>
     <div class="sc-meter-cols">${providers}${models}${workdirs}</div>
@@ -1121,6 +1147,7 @@ export function renderPortraitShareCardHtml(data, opts = {}) {
   </div>`;
 
   return `<div class="sc-root sc-portrait" data-share-card-style="portrait">
+    ${renderPortraitBrandRow(opts)}
     ${headerHtml}
     <div class="sc-portrait-hero-block">
       ${heroBlockHtml}
@@ -1135,7 +1162,8 @@ export function renderPortraitShareCardHtml(data, opts = {}) {
 export function shareCardCss() {
   return `
 .sc-root {
-  width: ${SHARE_CARD_WIDTH}px; height: ${SHARE_CARD_HEIGHT}px;
+  width: ${SHARE_CARD_WIDTH}px;
+  height: auto;
   background:
     linear-gradient(rgba(16, 17, 15, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(16, 17, 15, 0.035) 1px, transparent 1px),
@@ -1145,9 +1173,9 @@ export function shareCardCss() {
   background-size: 24px 24px, 24px 24px, auto, auto, auto;
   font-family: ui-serif, Georgia, "Times New Roman", serif;
   color: #10110f;
-  overflow: hidden;
+  overflow: visible;
   display: flex; flex-direction: column;
-  padding: 24px 32px;
+  padding: 24px 32px 20px;
   box-sizing: border-box;
 }
 
@@ -1156,8 +1184,8 @@ export function shareCardCss() {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 0 24px;
-  margin-bottom: 16px;
+  padding: 8px 0 18px;
+  margin-bottom: 18px;
   border-bottom: 1.5px solid rgba(16, 17, 15, 0.08);
 }
 .sc-header-left {
@@ -1352,19 +1380,26 @@ export function shareCardCss() {
   grid-template-columns: minmax(280px, 0.8fr) 1.2fr;
   align-items: stretch;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
 }
 .sc-dash-right {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-self: stretch;
   min-height: 0;
+}
+.sc-dash-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
 }
 .sc-dash-pills {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 0;
 }
 .sc-stat-grid {
   display: grid; grid-template-columns: repeat(3, 1fr);
@@ -1399,7 +1434,9 @@ export function shareCardCss() {
   border: none;
   border-radius: 14px;
   background: rgba(255, 251, 243, 0.65);
-  padding: 10px 16px;
+  padding: 10px 17px;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
 }
 .sc-card-title {
@@ -1407,7 +1444,7 @@ export function shareCardCss() {
 }
 
 /* ── Spark Bars — mirrors .spark ── */
-.sc-spark-section { margin-bottom: 0; }
+.sc-spark-section { margin-bottom: 12px; }
 .sc-spark-wrap { overflow: visible; margin-top: 6px; }
 .sc-spark {
   display: grid;
@@ -1470,8 +1507,8 @@ export function shareCardCss() {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
-  margin-top: 12px;
-  padding-top: 10px;
+  margin-top: 11px;
+  padding-top: 11px;
   border-top: 1.5px solid rgba(16, 17, 15, 0.12);
 }
 .sc-spark-stat-card {
@@ -1504,9 +1541,10 @@ export function shareCardCss() {
 /* ── Mini Meters — mirrors .mini-meter-row ── */
 .sc-meter-cols {
   display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: 12px; margin-bottom: 10px;
+  align-items: stretch;
+  gap: 12px; margin-bottom: 16px;
 }
-.sc-stack { display: grid; gap: 6px; }
+.sc-stack { display: grid; gap: 7px; flex: 1 1 auto; align-content: start; }
 .sc-mini-meter-row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -1556,31 +1594,40 @@ export function shareCardCss() {
 
 /* ── Footer ── */
 .sc-footer {
-  flex: 1;
+  margin-top: auto;
+  flex-shrink: 0;
   display: flex; flex-direction: column;
   justify-content: flex-end;
-  padding-top: 6px;
+  padding-top: 12px;
 }
 .sc-footer-inner {
-  display: flex; justify-content: space-between; align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
   border-top: 1px solid rgba(16, 17, 15, 0.15);
-  padding-top: 6px;
-  padding-bottom: 2px;
+  padding-top: 10px;
+  padding-bottom: 3px;
 }
 .sc-quote {
+  grid-column: 1;
   font-style: italic; font-size: 13px; line-height: 1.5;
-  color: #6f695e; max-width: 70%;
+  color: #6f695e; min-width: 0;
 }
 .sc-brand-url {
+  grid-column: 3;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px; color: #9e9890; text-align: right; white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.sc-footer-inner { position: relative; }
 .sc-footer-logo {
-  position: absolute; left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
+  grid-column: 2;
   height: 16px; width: auto; object-fit: contain;
   opacity: 0.7;
+  justify-self: center;
+  max-width: 180px;
 }
 
 /* ── Empty state ── */
@@ -1656,9 +1703,36 @@ export function portraitShareCardCss() {
   return `
 .sc-root.sc-portrait {
   width: ${PORTRAIT_CARD_WIDTH}px;
-  height: ${PORTRAIT_CARD_HEIGHT}px;
+  height: auto;
   padding: 28px 32px;
-  gap: 10px;
+  gap: 17px;
+}
+
+.sc-portrait-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 30px;
+  padding-bottom: 2px;
+}
+.sc-portrait-brand-logo {
+  max-width: 172px;
+  max-height: 28px;
+  object-fit: contain;
+}
+.sc-portrait-brand-text,
+.sc-portrait-brand-kicker {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: #b43b32;
+  text-transform: uppercase;
+}
+.sc-portrait-brand-kicker {
+  color: #6f695e;
+  font-size: 10px;
 }
 
 /* ── Portrait header ── */
@@ -1666,7 +1740,7 @@ export function portraitShareCardCss() {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 0 16px;
+  padding: 9px 0 18px;
   border-bottom: 1.5px solid rgba(16, 17, 15, 0.08);
 }
 .sc-portrait-header-left {
@@ -1872,7 +1946,7 @@ export function portraitShareCardCss() {
 /* ── Portrait layout overrides ── */
 .sc-portrait .sc-dash-row {
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 15px;
 }
 .sc-portrait .sc-stat-grid {
   grid-template-columns: repeat(3, 1fr);
@@ -1880,7 +1954,7 @@ export function portraitShareCardCss() {
 .sc-portrait .sc-stat-card { min-height: 82px; padding: 10px 16px; border-radius: 14px; }
 .sc-portrait .sc-meter-cols {
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 15px;
 }
 .sc-portrait .sc-visual-card {
   border: none !important;
@@ -2058,7 +2132,7 @@ export function portraitShareCardCss() {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-top: 14px;
+  padding-top: 19px;
   border-top: 1px solid rgba(16, 17, 15, 0.12);
 }
 .sc-portrait-quote {
@@ -2084,19 +2158,22 @@ const POLAROID_PAD_BOTTOM = 44;
 export const POLAROID_EXPORT_WIDTH = SHARE_CARD_WIDTH + POLAROID_PAD_SIDE * 2;
 export const POLAROID_EXPORT_HEIGHT = SHARE_CARD_HEIGHT + POLAROID_PAD_TOP + POLAROID_PAD_BOTTOM;
 
-export function polaroidDimensions(orientation = "landscape") {
+export function polaroidDimensions(orientation = "landscape", contentHeight = null) {
   const cardW = orientation === "portrait" ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH;
-  const cardH = orientation === "portrait" ? PORTRAIT_CARD_HEIGHT : SHARE_CARD_HEIGHT;
+  const defaultCardH = orientation === "portrait" ? PORTRAIT_CARD_HEIGHT : SHARE_CARD_HEIGHT;
+  const measuredCardH = Number.isFinite(contentHeight) && contentHeight > 0
+    ? Math.ceil(contentHeight)
+    : defaultCardH;
   return {
     cardWidth: cardW,
-    cardHeight: cardH,
+    cardHeight: measuredCardH,
     exportWidth: cardW + POLAROID_PAD_SIDE * 2,
-    exportHeight: cardH + POLAROID_PAD_TOP + POLAROID_PAD_BOTTOM
+    exportHeight: measuredCardH + POLAROID_PAD_TOP + POLAROID_PAD_BOTTOM
   };
 }
 
-export function polaroidExportCss(orientation = "landscape") {
-  const dims = polaroidDimensions(orientation);
+export function polaroidExportCss(orientation = "landscape", contentHeight = null) {
+  const dims = polaroidDimensions(orientation, contentHeight);
   return `
 .pe-frame {
   width: ${dims.exportWidth}px;

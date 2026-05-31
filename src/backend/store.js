@@ -916,9 +916,9 @@ export class Store {
   leaderboard({ period, range = "today", tool = "all", startDay = "", endDay = "" } = {}) {
     const businessDay = this.currentBusinessDay();
     const days = period ? daysForPeriod(period, { businessDay }) : daysForDetailRange(range, { startDay, endDay, businessDay });
-    const daySet = new Set(days);
+    const daySet = daySetForRange(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      return daySet.has(item.day) && (tool === "all" || item.toolCode === tool);
+      return matchesDaySet(item.day, daySet) && (tool === "all" || item.toolCode === tool);
     });
     const byParticipant = new Map();
     for (const item of rows) {
@@ -998,8 +998,8 @@ export class Store {
   }
 
   computePublicLeaderboard({ period, range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
-    const daySet = new Set(daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() }));
-    const rows = Object.values(this.db.usageDaily).filter((item) => daySet.has(item.day));
+    const daySet = daySetForRange(daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() }));
+    const rows = Object.values(this.db.usageDaily).filter((item) => matchesDaySet(item.day, daySet));
     const byParticipant = new Map();
     for (const item of rows) {
       const participant = this.db.participants[item.participantId];
@@ -1056,17 +1056,18 @@ export class Store {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
     const days = daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
-    const daySet = new Set(days);
-    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && daySet.has(item.day));
+    const daySet = daySetForRange(days);
+    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && matchesDaySet(item.day, daySet));
     const selectedPeriod = period || range;
     const rankRow = this.publicLeaderboard({ period, range, startDay, endDay, includeCost }).find((item) => item.participantId === participantId);
+    const bounds = rangeBounds(days, rows);
     const detail = {
       participantId,
       nickname: participant.nickname,
       selectedPeriod,
-      from: days[0] || "",
-      to: days.at(-1) || "",
-      isSingleDay: days.length <= 1,
+      from: bounds.from,
+      to: bounds.to,
+      isSingleDay: bounds.from && bounds.from === bounds.to,
       rank: rankRow?.rank || null,
       totalTokens: 0,
       inputTokens: 0,
@@ -1143,14 +1144,15 @@ export class Store {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
-    const daySet = new Set(days);
-    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && daySet.has(item.day));
+    const daySet = daySetForRange(days);
+    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && matchesDaySet(item.day, daySet));
+    const bounds = rangeBounds(days, rows);
     return {
       participantId,
       nickname: participant.nickname,
       grain: normalizeGrain(grain),
-      from: days[0] || "",
-      to: days.at(-1) || "",
+      from: bounds.from,
+      to: bounds.to,
       items: aggregateUsageRows(rows, normalizeGrain(grain), { participants: this.db.participants, includeCost })
     };
   }
@@ -1174,10 +1176,17 @@ export class Store {
     } else {
       days = daysForDetailRange(range, { startDay, endDay, businessDay });
     }
-    const daySet = new Set(days);
+    if (!days) {
+      const allDays = new Set();
+      for (const item of Object.values(this.db.usageDaily || {})) {
+        if (item.day) allDays.add(item.day);
+      }
+      days = [...allDays].sort();
+    }
+    const daySet = daySetForRange(days);
     
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      const matchesDay = daySet.has(item.day);
+      const matchesDay = matchesDaySet(item.day, daySet);
       const matchesParticipant = !participantId || item.participantId === participantId;
       return matchesDay && matchesParticipant;
     });
@@ -1298,10 +1307,11 @@ export class Store {
     }
     const heatmap = Object.values(heatmapSeries).sort((a, b) => a.day.localeCompare(b.day));
 
+    const bounds = rangeBounds(days, rows);
     const result = {
       period: period || range,
-      from: days[0] || "",
-      to: days.at(-1) || "",
+      from: bounds.from,
+      to: bounds.to,
       summary: {
         totalTokens,
         inputTokens,
@@ -1360,28 +1370,82 @@ export class Store {
     return this.cachedAggregate("adminUsage", args, () => this.computeAdminUsage(args), { dayScoped: isDayScopedRange({ range, startDay, endDay }) });
   }
 
+  adminUsageRanking({ range = "month", startDay = "", endDay = "", participantId = "", includeCost = false, page = 1, pageSize = 25 } = {}) {
+    const paging = normalizePagination({ page, pageSize });
+    const args = { range, startDay, endDay, participantId, includeCost, ...paging };
+    return this.cachedAggregate("adminUsageRanking", args, () => this.computeAdminUsageRanking(args), { dayScoped: isDayScopedRange({ range, startDay, endDay }) });
+  }
+
+  computeAdminUsageRanking({ range = "month", startDay = "", endDay = "", participantId = "", includeCost = false, page = 1, pageSize = 25 } = {}) {
+    const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
+    const daySet = daySetForRange(days);
+    const rows = Object.values(this.db.usageDaily).filter((item) => {
+      return matchesDaySet(item.day, daySet) && (!participantId || item.participantId === participantId);
+    });
+    const byParticipant = new Map();
+    for (const item of rows) {
+      const participant = this.db.participants[item.participantId];
+      if (!participant) continue;
+      const current = byParticipant.get(item.participantId) || emptyRankingAggregate(item, participant);
+      current.totalTokens += item.totalTokens || 0;
+      current.inputTokens += item.inputTokens || 0;
+      current.outputTokens += item.outputTokens || 0;
+      current.reasoningTokens += item.reasoningTokens || 0;
+      current.cacheReadTokens += item.cacheReadTokens || 0;
+      current.cacheWriteTokens += item.cacheWriteTokens || 0;
+      current.modelsMap[item.model || "unknown"] = (current.modelsMap[item.model || "unknown"] || 0) + (item.totalTokens || 0);
+      current.workdirsMap[item.workdirDisplayName || "unknown"] = (current.workdirsMap[item.workdirDisplayName || "unknown"] || 0) + (item.totalTokens || 0);
+      current.providersMap[item.providerId || "unknown"] = (current.providersMap[item.providerId || "unknown"] || 0) + (item.totalTokens || 0);
+      if (includeCost) {
+        aggregateCost(current, item);
+        addCostBreakdownItem(current.modelsCostMap, item.model || "unknown", item);
+        addCostBreakdownItem(current.workdirsCostMap, item.workdirDisplayName || "unknown", item);
+        addCostBreakdownItem(current.providersCostMap, item.providerId || "unknown", item);
+      }
+      if (item.sourceQuality !== "exact") current.sourceQuality = "partial";
+      if (item.uploadedAt > current.lastSyncedAt) current.lastSyncedAt = item.uploadedAt;
+      byParticipant.set(item.participantId, current);
+    }
+    const ranked = [...byParticipant.values()]
+      .sort((a, b) => b.totalTokens - a.totalTokens || a.nickname.localeCompare(b.nickname) || a.participantId.localeCompare(b.participantId))
+      .map((item, index) => finalizeRankingAggregate(item, index + 1, { includeCost }));
+    const bounds = rangeBounds(days, rows);
+    return pagedRankingResponse(ranked, {
+      page,
+      pageSize,
+      from: bounds.from,
+      to: bounds.to,
+      participants: this.adminParticipantOptions()
+    });
+  }
+
   computeAdminUsage({ grain = "day", range = "month", startDay = "", endDay = "", participantId = "", includeCost = false } = {}) {
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
-    const daySet = new Set(days);
+    const daySet = daySetForRange(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      return daySet.has(item.day) && (!participantId || item.participantId === participantId);
+      return matchesDaySet(item.day, daySet) && (!participantId || item.participantId === participantId);
     });
+    const bounds = rangeBounds(days, rows);
     return {
       grain: normalizeGrain(grain),
-      from: days[0] || "",
-      to: days.at(-1) || "",
-      participants: Object.values(this.db.participants)
-        .map((item) => ({ participantId: item.id, nickname: item.nickname }))
-        .sort((a, b) => a.nickname.localeCompare(b.nickname)),
+      from: bounds.from,
+      to: bounds.to,
+      participants: this.adminParticipantOptions(),
       items: aggregateUsageRows(rows, normalizeGrain(grain), { includeAdminFields: true, participants: this.db.participants, includeCost })
     };
   }
 
+  adminParticipantOptions() {
+    return Object.values(this.db.participants)
+      .map((item) => ({ participantId: item.id, nickname: item.nickname }))
+      .sort((a, b) => a.nickname.localeCompare(b.nickname));
+  }
+
   exportDailyCsv({ range = "month", startDay = "", endDay = "", participantId = "" } = {}) {
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
-    const daySet = new Set(days);
+    const daySet = daySetForRange(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      return daySet.has(item.day) && (!participantId || item.participantId === participantId);
+      return matchesDaySet(item.day, daySet) && (!participantId || item.participantId === participantId);
     });
     const participants = this.db.participants || {};
     return rows
@@ -1424,9 +1488,9 @@ export class Store {
 
   adminQuality({ range = "month", startDay = "", endDay = "", participantId = "" } = {}) {
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
-    const daySet = new Set(days);
+    const daySet = daySetForRange(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => {
-      return daySet.has(item.day) && (!participantId || item.participantId === participantId);
+      return matchesDaySet(item.day, daySet) && (!participantId || item.participantId === participantId);
     });
     const totals = {
       rows: rows.length,
@@ -1557,10 +1621,11 @@ export class Store {
         });
       }
     }
+    const bounds = rangeBounds(days, rows);
     return {
       range,
-      from: days[0] || "",
-      to: days.at(-1) || "",
+      from: bounds.from,
+      to: bounds.to,
       ...totals,
       compositionRatios: {
         inputRatio: compositionRatio(totals.inputTokens, totals.totalTokens),
@@ -1755,10 +1820,10 @@ export class Store {
 
   missingPriceModels({ range = "month", startDay = "", endDay = "" } = {}) {
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
-    const daySet = new Set(days);
+    const daySet = daySetForRange(days);
     const map = new Map();
     for (const item of Object.values(this.db.usageDaily || {})) {
-      if (!daySet.has(item.day)) continue;
+      if (!matchesDaySet(item.day, daySet)) continue;
       if (item.estimatedCostUsd !== null && item.estimatedCostUsd !== undefined) continue;
       const model = item.model || "unknown";
       const current = map.get(model) || { model, totalTokens: 0, rows: 0, providers: {}, lastSeenAt: "" };
@@ -1869,6 +1934,7 @@ function daysForPeriod(period, { businessDay = localDay() } = {}) {
 }
 
 function daysForDetailRange(range, { startDay = "", endDay = "", businessDay = localDay() } = {}) {
+  if (range === "all") return null;
   if (range === "custom" && isDay(startDay) && isDay(endDay)) return daysBetween(startDay, endDay);
   if (range === "today" || range === "yesterday") return daysForPeriod(range, { businessDay });
   if (range === "last7") return trailingDays(7, { businessDay });
@@ -1883,8 +1949,23 @@ function daysForDetailRange(range, { startDay = "", endDay = "", businessDay = l
   return trailingDays(30, { businessDay });
 }
 
+function daySetForRange(days) {
+  return days ? new Set(days) : null;
+}
+
+function matchesDaySet(day, daySet) {
+  return !daySet || daySet.has(day);
+}
+
+function rangeBounds(days, rows = []) {
+  if (days) return { from: days[0] || "", to: days.at(-1) || "" };
+  const unique = [...new Set((rows || []).map((item) => item.day).filter(Boolean))].sort();
+  return { from: unique[0] || "", to: unique.at(-1) || "" };
+}
+
 function daysForRange(range, { startDay = "", endDay = "", businessDay = localDay() } = {}) {
   const today = businessDay;
+  if (range === "all") return null;
   if (range === "custom" && isDay(startDay) && isDay(endDay)) {
     return daysBetween(startDay, endDay);
   }
@@ -1975,6 +2056,71 @@ function emptyAggregate(bucket, item, participants = {}) {
   };
 }
 
+function emptyRankingAggregate(item, participant) {
+  return {
+    participantId: item.participantId,
+    nickname: participant?.nickname || item.participantId,
+    totalTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    modelsMap: {},
+    workdirsMap: {},
+    providersMap: {},
+    modelsCostMap: {},
+    workdirsCostMap: {},
+    providersCostMap: {},
+    estimatedCostUsd: 0,
+    costQuality: "",
+    pricingVersion: "",
+    sourceQuality: "exact",
+    lastSyncedAt: item.uploadedAt || ""
+  };
+}
+
+function finalizeRankingAggregate(item, rank, { includeCost = false } = {}) {
+  const { modelsMap, workdirsMap, providersMap, modelsCostMap, workdirsCostMap, providersCostMap, ...publicItem } = item;
+  return {
+    rank,
+    ...publicItem,
+    compositionSummary: tokenCompositionSummary(publicItem),
+    dominantComposition: dominantComposition(publicItem),
+    ...(includeCost ? costFields(publicItem) : {}),
+    models: includeCost ? finalizeCostBreakdown(modelsCostMap) : sortedBreakdown(modelsMap),
+    workdirs: includeCost ? finalizeCostBreakdown(workdirsCostMap) : sortedBreakdown(workdirsMap),
+    providers: includeCost ? finalizeCostBreakdown(providersCostMap) : sortedBreakdown(providersMap)
+  };
+}
+
+function normalizePagination({ page = 1, pageSize = 25 } = {}) {
+  return {
+    page: Math.max(1, Number.parseInt(page, 10) || 1),
+    pageSize: Math.max(1, Math.min(Number.parseInt(pageSize, 10) || 25, 100))
+  };
+}
+
+function pagedRankingResponse(items, { page = 1, pageSize = 25, from = "", to = "", participants = [] } = {}) {
+  const paging = normalizePagination({ page, pageSize });
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / paging.pageSize));
+  const effectivePage = Math.min(paging.page, totalPages);
+  const offset = (effectivePage - 1) * paging.pageSize;
+  return {
+    from,
+    to,
+    page: effectivePage,
+    pageSize: paging.pageSize,
+    total,
+    totalPages,
+    hasPrev: effectivePage > 1,
+    hasNext: effectivePage < totalPages,
+    participants,
+    items: items.slice(offset, offset + paging.pageSize)
+  };
+}
+
 function aggregateUsageRows(rows, grain, { includeAdminFields = false, participants = {}, includeCost = false } = {}) {
   const map = new Map();
   for (const item of rows) {
@@ -2031,6 +2177,7 @@ function isDay(value) {
 }
 
 function isDayScopedRange({ period = "", range = "today", startDay = "", endDay = "" } = {}) {
+  if (period === "all" || range === "all") return false;
   if (!period && range === "custom" && isDay(startDay) && isDay(endDay)) return false;
   return true;
 }

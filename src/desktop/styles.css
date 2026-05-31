@@ -1750,11 +1750,10 @@ label {
   position: relative;
   max-width: 100vw;
   box-sizing: border-box;
-  transition: opacity 0.075s ease, transform 0.075s ease;
+  transition: opacity 0.075s ease;
 }
 .polaroid-container.switching-layout {
   opacity: 0 !important;
-  transform: scale(0.98);
 }
 .polaroid-main {
   display: flex;
@@ -1903,12 +1902,10 @@ label {
   position: absolute;
   inset: 0 auto auto 0;
   width: 1200px;
-  height: 720px;
   transform-origin: top left;
 }
 .share-card-preview .sc-root.sc-portrait {
   width: 720px;
-  height: 1200px;
 }
 
 /* Develop overlay — overexposed filter */
@@ -2155,19 +2152,18 @@ label {
 
 .polaroid-container.portrait-mode #polaroid-actions {
   grid-area: actions;
-  flex-direction: row; /* Horizontal actions in portrait mode */
-  justify-content: flex-start;
-  align-self: end;
+  align-self: start;
+  justify-self: end;
   transform: none;
   opacity: 1;
-  gap: 16px;
 }
 
 .polaroid-container.portrait-mode #share-modal-settings {
   grid-area: settings;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  align-self: start;
+  align-self: end;
+  justify-self: end;
   gap: 16px;
   margin-top: 0;
   transform: none;
@@ -3015,7 +3011,30 @@ label {
 }
 
 .drawer-meter-row {
-  grid-template-columns: minmax(96px, 1fr) minmax(72px, 0.8fr) 66px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  column-gap: 20px;
+}
+
+.drawer-meter-row .meter-name,
+.drawer-meter-row > span:first-child:not(.meter-value) {
+  grid-column: 1;
+}
+
+.drawer-meter-row .mini-meter {
+  grid-column: 1;
+  width: 100%;
+}
+
+.drawer-meter-row .meter-val-top,
+.drawer-meter-row .meter-cost {
+  grid-column: 2;
+  min-width: 72px;
+}
+
+.drawer-meter-row .meter-value {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 72px;
 }
 
 .drawer-meter-row span:last-child small {

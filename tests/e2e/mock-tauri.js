@@ -418,6 +418,17 @@
         : Promise.resolve({ status: "reachable", checkedAt: new Date().toISOString(), serverVersion: "1.0.0", compatibility: { compatible: true } });
     };
     api.providerHealth = () => Promise.resolve(mockHealth);
+    api.brandLogo = () => {
+      if (window.__ATL_E2E_STATE__.brandLogoError || cfg.brandLogoError) {
+        return Promise.reject(new Error("Brand logo failed"));
+      }
+      return Promise.resolve({
+        dataUrl: cfg.brandLogoDataUrl || null,
+        logoUrl: cfg.brandLogoUrl || null,
+        byteLength: cfg.brandLogoDataUrl ? cfg.brandLogoDataUrl.length : 0,
+        contentType: cfg.brandLogoContentType || "image/png",
+      });
+    };
     api.modelPrices = () => Promise.resolve(cfg.modelPrices || { custom: [], openrouter: [], aliases: [] });
     api.appVersion = () => Promise.resolve("0.7.0-test");
     api.getMyIdentity = () => Promise.resolve({ deviceId: "dev_test456", nickname: "Test User", identityMode: "named" });

@@ -1314,6 +1314,53 @@ html[lang="en"] .feature-copy strong::after {
   display: block;
 }
 
+.usage-view-tabs {
+  display: flex;
+  gap: 0;
+  padding: 14px 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.usage-view-tabs button {
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: rgba(255, 250, 240, 0.72);
+  color: var(--muted);
+  cursor: pointer;
+  font: 800 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 12px 16px;
+}
+
+.usage-view-tabs button:first-child {
+  border-radius: 8px 0 0 0;
+}
+
+.usage-view-tabs button:last-child {
+  border-left: 0;
+  border-radius: 0 8px 0 0;
+}
+
+.usage-view-tabs button.active {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.usage-view-panel {
+  display: none;
+}
+
+.usage-view-panel.active {
+  display: block;
+}
+
+.usage-view-controls {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
 .date-filter {
   display: flex;
   flex-wrap: wrap;
@@ -1454,6 +1501,37 @@ h2 {
 
 .table-wrap {
   overflow-x: auto;
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pagination-bar span {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.pagination-bar button {
+  min-width: 92px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 800;
+  padding: 8px 12px;
+}
+
+.pagination-bar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 table {
@@ -3317,4 +3395,3 @@ body.is-embedded .analytics-card {
   font-weight: 700;
   margin: 0 0 14px;
 }
-

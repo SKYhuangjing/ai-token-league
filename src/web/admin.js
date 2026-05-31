@@ -13,10 +13,13 @@ updatePageTranslations();
 const state = {
   grainMode: "auto",
   grain: "day",
+  usageView: "ranking",
   range: "month",
   start: "",
   end: "",
   participantId: "",
+  rankingPage: 1,
+  rankingPageSize: 25,
   rawTokens: false,
   showCost: false,
   expandedUsageKey: ""
@@ -26,7 +29,12 @@ const storageKeys = {
   showCost: "ai-token-league.admin.showCost"
 };
 const tbody = document.querySelector("#leaderboard");
+const rankingTbody = document.querySelector("#ranking-tbody");
 const statusEl = document.querySelector("#status");
+const rankingStatus = document.querySelector("#ranking-status");
+const rankingPrev = document.querySelector("#ranking-prev");
+const rankingNext = document.querySelector("#ranking-next");
+const rankingPageLabel = document.querySelector("#ranking-page-label");
 const detailBoard = document.querySelector("#detail-board");
 const detailBackdrop = document.querySelector("#admin-detail-backdrop");
 const participantFilter = document.querySelector("#participant-filter");
@@ -47,12 +55,25 @@ async function fetchAdmin(url, options) {
 function showAuthRequired() {
   const message = t("admin.authRequired");
   statusEl.textContent = message;
+  rankingStatus.textContent = message;
   pricingStatus.textContent = message;
+  rankingTbody.innerHTML = `<tr><td class="empty" colspan="7">${message}</td></tr>`;
   tbody.innerHTML = `<tr><td class="empty" colspan="7">${message}</td></tr>`;
+}
+
+function applyUsageView() {
+  document.querySelectorAll("[data-usage-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.usageView === state.usageView);
+  });
+  document.querySelectorAll("[data-usage-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.usagePanel === state.usageView);
+  });
+  syncRangeInputs();
 }
 
 hydratePreferences();
 applyToggleState();
+applyUsageView();
 
 document.querySelector(".admin-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("button");
@@ -73,6 +94,13 @@ document.querySelector(".admin-tabs").addEventListener("click", (event) => {
   }
 });
 
+document.querySelector(".usage-view-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  state.usageView = button.dataset.usageView || "ranking";
+  applyUsageView();
+});
+
 window.addEventListener("message", (event) => {
   if (event.data?.type === "analytics-resize") {
     const iframe = document.querySelector("#analytics-iframe");
@@ -87,6 +115,7 @@ document.querySelector("[data-filter='quick-range']").addEventListener("click", 
   state.range = button.dataset.value;
   state.start = "";
   state.end = "";
+  resetUsagePaging();
   updateAutoGrain();
   syncRangeInputs();
   loadUsage();
@@ -98,11 +127,13 @@ document.querySelector("[data-filter='grain']").addEventListener("click", (event
   setActive(event.currentTarget, button);
   state.grainMode = button.dataset.value;
   updateAutoGrain();
+  state.expandedUsageKey = "";
   loadUsage();
 });
 
 participantFilter.addEventListener("change", () => {
   state.participantId = participantFilter.value;
+  resetUsagePaging();
   loadUsage();
 });
 
@@ -111,6 +142,7 @@ document.querySelector("#apply-custom-range").addEventListener("click", () => {
   state.start = document.querySelector("#start-date").value;
   state.end = document.querySelector("#end-date").value;
   document.querySelectorAll("[data-filter='quick-range'] button").forEach((item) => item.classList.remove("active"));
+  resetUsagePaging();
   updateAutoGrain();
   syncRangeInputs();
   loadUsage();
@@ -127,6 +159,17 @@ document.querySelector("#show-cost").addEventListener("change", (event) => {
   state.showCost = event.target.checked;
   persistPreference(storageKeys.showCost, state.showCost);
   applyToggleState();
+  loadUsage();
+});
+
+rankingPrev.addEventListener("click", () => {
+  if (state.rankingPage <= 1) return;
+  state.rankingPage -= 1;
+  loadUsage();
+});
+
+rankingNext.addEventListener("click", () => {
+  state.rankingPage += 1;
   loadUsage();
 });
 
@@ -201,9 +244,15 @@ async function loadUsage() {
   updateAutoGrain();
   syncRangeInputs();
   statusEl.textContent = t("admin.loading");
-  const response = await fetchAdmin(`/api/admin/usage?${queryString()}`);
+  rankingStatus.textContent = t("admin.loading");
+  const [response, rankingResponse] = await Promise.all([
+    fetchAdmin(`/api/admin/usage?${queryString()}`),
+    fetchAdmin(`/api/admin/usage-ranking?${rankingQueryString()}`)
+  ]);
   const data = await response.json();
+  const ranking = await rankingResponse.json();
   renderParticipantOptions(data.participants || []);
+  renderRanking(ranking);
   render(data.items || []);
   statusEl.textContent = t("admin.usage.rows", { count: data.items.length, plural: data.items.length === 1 ? "" : "s", from: data.from || "-", to: data.to || "-" });
   await refreshQualityIfActive();
@@ -397,6 +446,44 @@ function renderParticipantOptions(participants) {
   participantFilter.value = current;
 }
 
+function renderRanking(data) {
+  const items = data.items || [];
+  state.rankingPage = data.page || state.rankingPage;
+  rankingPrev.disabled = !data.hasPrev;
+  rankingNext.disabled = !data.hasNext;
+  rankingPageLabel.textContent = t("admin.usage.pageLabel", { page: data.page || 1, totalPages: data.totalPages || 1 });
+  rankingStatus.textContent = t("admin.usage.rankingRows", {
+    count: data.total || 0,
+    plural: data.total === 1 ? "" : "s",
+    from: data.from || "-",
+    to: data.to || "-"
+  });
+  if (!items.length) {
+    rankingTbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.usage.noUsage")}</td></tr>`;
+    return;
+  }
+  rankingTbody.innerHTML = items
+    .map((item) => `<tr>
+      <td><span class="rank">#${item.rank}</span></td>
+      <td><button class="link-button" data-ranking-participant="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</button></td>
+      <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
+      <td>${renderCostQuality(item)}</td>
+      <td>${renderPrimarySlice(item.workdirs)}</td>
+      <td>${renderPrimarySlice(item.models)}</td>
+      <td>
+        <div class="row-actions">
+          <button type="button" class="link-button" data-ranking-detail="${escapeHtml(item.participantId)}">${t("admin.usage.viewDetail")}</button>
+        </div>
+      </td>
+    </tr>`)
+    .join("");
+  rankingTbody.querySelectorAll("[data-ranking-participant], [data-ranking-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      loadDetail(button.dataset.rankingParticipant || button.dataset.rankingDetail);
+    });
+  });
+}
+
 function render(items) {
   if (!items.length) {
     tbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.usage.noUsage")}</td></tr>`;
@@ -547,6 +634,26 @@ function queryString() {
   return params.toString();
 }
 
+function rankingQueryString() {
+  const params = new URLSearchParams({
+    range: state.range,
+    page: String(state.rankingPage),
+    pageSize: String(state.rankingPageSize)
+  });
+  if (state.participantId) params.set("participantId", state.participantId);
+  if (state.showCost) params.set("includeCost", "1");
+  if (state.range === "custom") {
+    if (state.start) params.set("start", state.start);
+    if (state.end) params.set("end", state.end);
+  }
+  return params.toString();
+}
+
+function resetUsagePaging() {
+  state.rankingPage = 1;
+  state.expandedUsageKey = "";
+}
+
 function detailQueryString(rowRange = null) {
   const params = new URLSearchParams({
     grain: state.grain,
@@ -591,6 +698,7 @@ function updateAutoGrain() {
 }
 
 function autoGrain() {
+  if (state.range === "all") return "month";
   if (state.range === "last_month") return "week";
   if (state.range === "custom") {
     const span = daySpan(state.start, state.end);
@@ -635,13 +743,16 @@ function syncRangeInputs() {
     document.querySelector("#start-date").value = start;
     document.querySelector("#end-date").value = end;
   }
-  document.querySelector("#date-range-display").textContent = t("admin.usage.grainLabel", { label, grain: grainLabel(state.grain) });
+  document.querySelector("#date-range-display").textContent = state.usageView === "aggregate"
+    ? t("admin.usage.grainLabel", { label, grain: grainLabel(state.grain) })
+    : label;
 }
 
 function selectedRange() {
   if (state.range === "custom") {
     return { start: state.start || "", end: state.end || "", label: `${state.start || "-"} - ${state.end || "-"}` };
   }
+  if (state.range === "all") return { start: "", end: "", label: t("admin.usage.allTime") };
   const today = utcToday();
   if (state.range === "today") return { start: toDay(today), end: toDay(today), label: t("admin.usage.today") };
   if (state.range === "last7") return trailingRange(7, t("admin.usage.last7"));

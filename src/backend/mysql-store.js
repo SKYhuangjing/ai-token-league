@@ -677,14 +677,130 @@ export class MySqlStore extends Store {
       includeAdminFields: true,
       includeCost: Boolean(effectiveArgs.includeCost)
     });
+    const bounds = days
+      ? { from: days[0] || "", to: days.at(-1) || "" }
+      : await this.mysqlUsageBounds(whereSql, params);
     return {
       grain,
-      from: days?.[0] || "",
-      to: days?.at(-1) || "",
+      from: bounds.from,
+      to: bounds.to,
       participants: Object.values(this.db.participants)
         .map((item) => ({ participantId: item.id, nickname: item.nickname }))
         .sort((a, b) => a.nickname.localeCompare(b.nickname)),
       items
+    };
+  }
+
+  async mysqlUsageBounds(whereSql = "", params = []) {
+    const [[row]] = await this.pool.query(
+      `SELECT DATE_FORMAT(MIN(u.day), '%Y-%m-%d') AS fromDay,
+              DATE_FORMAT(MAX(u.day), '%Y-%m-%d') AS toDay
+       FROM usage_daily u
+       ${whereSql}`,
+      params
+    );
+    return { from: row?.fromDay || "", to: row?.toDay || "" };
+  }
+
+  async adminUsageRanking(args = {}) {
+    const effectiveArgs = { range: "month", ...args };
+    const { page, pageSize } = normalizeMysqlPagination(effectiveArgs);
+    const includeCost = Boolean(effectiveArgs.includeCost);
+    const { whereSql, params, days } = this.mysqlUsageScope(effectiveArgs, "u");
+    const [[countRow]] = await this.pool.query(
+      `SELECT COUNT(*) AS total
+       FROM (
+         SELECT u.participantId
+         FROM usage_daily u
+         JOIN participants p ON p.id = u.participantId
+         ${whereSql}
+         GROUP BY u.participantId
+       ) ranked`,
+      params
+    );
+    const total = Number(countRow?.total || 0);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const effectivePage = Math.min(page, totalPages);
+    const effectiveOffset = (effectivePage - 1) * pageSize;
+    const [rows] = await this.pool.query(
+      `SELECT u.participantId, p.nickname,
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              COALESCE(SUM(u.inputTokens), 0) AS inputTokens,
+              COALESCE(SUM(u.outputTokens), 0) AS outputTokens,
+              COALESCE(SUM(u.cacheReadTokens), 0) AS cacheReadTokens,
+              COALESCE(SUM(u.cacheWriteTokens), 0) AS cacheWriteTokens,
+              COALESCE(SUM(u.reasoningTokens), 0) AS reasoningTokens,
+              CASE WHEN SUM(CASE WHEN u.sourceQuality <> 'exact' THEN 1 ELSE 0 END) > 0 THEN 'partial' ELSE 'exact' END AS sourceQuality,
+              MAX(u.uploadedAt) AS lastSyncedAt,
+              ${mysqlCostAggregateSelect("u")}
+       FROM usage_daily u
+       JOIN participants p ON p.id = u.participantId
+       ${whereSql}
+       GROUP BY u.participantId, p.nickname
+       ORDER BY totalTokens DESC, p.nickname ASC, u.participantId ASC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, effectiveOffset]
+    );
+    const participantIds = rows.map((row) => row.participantId);
+    const breakdowns = { models: new Map(), workdirs: new Map(), providers: new Map() };
+    if (participantIds.length) {
+      const placeholders = participantIds.map(() => "?").join(",");
+      const scopedWhere = whereSql
+        ? `${whereSql} AND u.participantId IN (${placeholders})`
+        : ` WHERE u.participantId IN (${placeholders})`;
+      const scopedParams = [...params, ...participantIds];
+      for (const [field, column] of Object.entries({ models: "model", workdirs: "workdirDisplayName", providers: "providerId" })) {
+        const [breakdownRows] = await this.pool.query(
+          `SELECT u.participantId,
+                  u.${column} AS name,
+                  COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+                  ${mysqlCostAggregateSelect("u")}
+           FROM usage_daily u
+           ${scopedWhere}
+           GROUP BY u.participantId, u.${column}
+           ORDER BY totalTokens DESC`,
+          scopedParams
+        );
+        breakdowns[field] = groupBreakdowns(breakdownRows, "participantId", { includeCost });
+      }
+    }
+    const bounds = days
+      ? { from: days[0] || "", to: days.at(-1) || "" }
+      : await this.mysqlUsageBounds(whereSql, params);
+    return {
+      from: bounds.from,
+      to: bounds.to,
+      page: effectivePage,
+      pageSize,
+      total,
+      totalPages,
+      hasPrev: effectivePage > 1,
+      hasNext: effectivePage < totalPages,
+      participants: this.adminParticipantOptions(),
+      items: rows.map((row, index) => {
+        const item = {
+          rank: effectiveOffset + index + 1,
+          participantId: row.participantId,
+          nickname: row.nickname,
+          totalTokens: Number(row.totalTokens || 0),
+          inputTokens: Number(row.inputTokens || 0),
+          outputTokens: Number(row.outputTokens || 0),
+          reasoningTokens: Number(row.reasoningTokens || 0),
+          cacheReadTokens: Number(row.cacheReadTokens || 0),
+          cacheWriteTokens: Number(row.cacheWriteTokens || 0),
+          sourceQuality: row.sourceQuality || "exact",
+          lastSyncedAt: row.lastSyncedAt || ""
+        };
+        return {
+          ...item,
+          compositionSummary: tokenCompositionSummary(item),
+          dominantComposition: dominantComposition(item),
+          ...(includeCost ? mysqlCostFields(row) : {}),
+          models: breakdowns.models.get(row.participantId) || [],
+          workdirs: breakdowns.workdirs.get(row.participantId) || [],
+          providers: breakdowns.providers.get(row.participantId) || []
+        };
+      })
     };
   }
 
@@ -2019,6 +2135,13 @@ function mysqlPeriodExpressions(grain = "day", alias = "u") {
 
 function mysqlNormalizeGrain(grain) {
   return ["day", "week", "month"].includes(grain) ? grain : "day";
+}
+
+function normalizeMysqlPagination({ page = 1, pageSize = 25 } = {}) {
+  return {
+    page: Math.max(1, Number.parseInt(page, 10) || 1),
+    pageSize: Math.max(1, Math.min(Number.parseInt(pageSize, 10) || 25, 100))
+  };
 }
 
 function mysqlRangeBounds(days) {

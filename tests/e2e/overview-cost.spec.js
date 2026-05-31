@@ -7,7 +7,7 @@ test.describe('Overview estimated cost', () => {
 
     await expect(page.locator('#today-cost .cost-amount')).toContainText('$');
     await expect(page.locator('#overview-input-detail .cost-amount')).toContainText('$');
-    await expect(page.locator('#provider-list .meter-value .cost-amount').first()).toContainText('$');
+    await expect(page.locator('#provider-list .meter-cost .cost-amount').first()).toContainText('$');
     await expect(page.locator('#overview-trend .spark-bar-value .cost-amount').first()).toContainText('$');
   });
 });

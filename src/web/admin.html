@@ -41,12 +41,7 @@
             <button data-value="last30">30d</button>
             <button data-value="month" class="active" data-i18n="admin.usage.mtd">MTD</button>
             <button data-value="last_month" data-i18n="admin.usage.lastMonth">Last month</button>
-          </div>
-          <div class="segmented" data-filter="grain">
-            <button data-value="auto" class="active" data-i18n="admin.usage.grainAuto">Auto</button>
-            <button data-value="day" data-i18n="admin.usage.grainDay">Day</button>
-            <button data-value="week" data-i18n="admin.usage.grainWeek">Week</button>
-            <button data-value="month" data-i18n="admin.usage.grainMonth">Month</button>
+            <button data-value="all" data-i18n="admin.usage.allTime">All</button>
           </div>
           <div class="date-filter">
             <select id="participant-filter">
@@ -66,26 +61,67 @@
           </label>
           <button type="button" id="export-csv" class="export-csv-btn" data-i18n="admin.usage.exportCsv">Export CSV</button>
         </section>
-        <div class="board-header">
-          <h2 data-i18n="admin.usage.aggregates">Usage aggregates</h2>
-          <p id="status" data-i18n="admin.loading">Loading...</p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th data-i18n="admin.usage.period">Period</th>
-                <th data-i18n="admin.usage.user">User</th>
-                <th data-i18n="admin.usage.totalTokens">Total tokens</th>
-                <th data-i18n="admin.usage.costQuality">Cost quality</th>
-                <th data-i18n="admin.usage.topWorkdir">Top workdir</th>
-                <th data-i18n="admin.usage.topModel">Top model</th>
-                <th data-i18n="admin.usage.action">Action</th>
-              </tr>
-            </thead>
-            <tbody id="leaderboard"></tbody>
-          </table>
-        </div>
+        <nav class="usage-view-tabs" aria-label="Usage views">
+          <button type="button" data-usage-view="ranking" class="active" data-i18n="admin.usage.ranking">Usage ranking</button>
+          <button type="button" data-usage-view="aggregate" data-i18n="admin.usage.aggregates">Usage aggregates</button>
+        </nav>
+        <section class="usage-view-panel active" data-usage-panel="ranking">
+          <div class="board-header">
+            <h2 data-i18n="admin.usage.ranking">Usage ranking</h2>
+            <p id="ranking-status" data-i18n="admin.loading">Loading...</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-i18n="admin.usage.rank">Rank</th>
+                  <th data-i18n="admin.usage.user">User</th>
+                  <th data-i18n="admin.usage.totalTokens">Total tokens</th>
+                  <th data-i18n="admin.usage.costQuality">Cost quality</th>
+                  <th data-i18n="admin.usage.topWorkdir">Top workdir</th>
+                  <th data-i18n="admin.usage.topModel">Top model</th>
+                  <th data-i18n="admin.usage.action">Action</th>
+                </tr>
+              </thead>
+              <tbody id="ranking-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar" id="ranking-pagination">
+            <button type="button" id="ranking-prev" data-i18n="admin.usage.previousPage">Previous</button>
+            <span id="ranking-page-label"></span>
+            <button type="button" id="ranking-next" data-i18n="admin.usage.nextPage">Next</button>
+          </div>
+        </section>
+        <section class="usage-view-panel" data-usage-panel="aggregate">
+          <div class="board-header">
+            <h2 data-i18n="admin.usage.aggregates">Usage aggregates</h2>
+            <p id="status" data-i18n="admin.loading">Loading...</p>
+          </div>
+          <div class="usage-view-controls">
+            <div class="segmented" data-filter="grain">
+              <button data-value="auto" class="active" data-i18n="admin.usage.grainAuto">Auto</button>
+              <button data-value="day" data-i18n="admin.usage.grainDay">Day</button>
+              <button data-value="week" data-i18n="admin.usage.grainWeek">Week</button>
+              <button data-value="month" data-i18n="admin.usage.grainMonth">Month</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-i18n="admin.usage.period">Period</th>
+                  <th data-i18n="admin.usage.user">User</th>
+                  <th data-i18n="admin.usage.totalTokens">Total tokens</th>
+                  <th data-i18n="admin.usage.costQuality">Cost quality</th>
+                  <th data-i18n="admin.usage.topWorkdir">Top workdir</th>
+                  <th data-i18n="admin.usage.topModel">Top model</th>
+                  <th data-i18n="admin.usage.action">Action</th>
+                </tr>
+              </thead>
+              <tbody id="leaderboard"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section class="board pricing-board admin-panel" data-admin-panel="pricing">
