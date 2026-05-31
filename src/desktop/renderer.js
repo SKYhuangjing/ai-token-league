@@ -466,16 +466,38 @@ $("#share-card-orientation")?.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-range]");
   if (!button) return;
   const value = button.dataset.range;
+
+  if (latestConfig?.shareCardOrientation === value) return; // No change
+
   await saveInstantPreference("shareCardOrientation", value);
-  setSegmentActive($("#share-card-orientation"), latestConfig?.shareCardOrientation || value);
+  setSegmentActive($("#share-card-orientation"), value);
+
   if (!$("#share-card-modal")?.hidden && latestShareData) {
     const card = $("#polaroid-card");
-    if (card) card.classList.remove("developing");
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    await renderShareCardPreview();
-    if (card) {
-      void card.offsetWidth;
-      card.classList.add("developing");
+    const container = $(".polaroid-container");
+    if (card && container) {
+      // 1. Fast fade layout (75ms)
+      container.classList.add("switching-layout");
+
+      await new Promise((resolve) => setTimeout(resolve, 75));
+
+      // 2. Instantly update dimensions and render while hidden
+      card.style.transition = "none";
+      const isPortrait = value === "portrait";
+      card.classList.toggle("portrait-card", isPortrait);
+      container.classList.toggle("portrait-mode", isPortrait);
+      
+      // Force layout so preview.offsetWidth is correct
+      void container.offsetWidth;
+      await renderShareCardPreview();
+
+      // 3. Fade in (75ms)
+      container.classList.remove("switching-layout");
+
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      card.style.transition = "";
+    } else {
+      await renderShareCardPreview();
     }
   }
 });
@@ -1825,9 +1847,11 @@ function updateWorkspaceLogo() {
   }
 }
 
+
 async function renderShareCardPreview() {
   const preview = $("#share-card-preview");
   const polaroidCard = $("#polaroid-card");
+  const container = $(".polaroid-container");
   if (!preview || !latestShareData) return;
 
   // Show/hide anonymous name toggle based on whether anonymous name exists
@@ -1838,6 +1862,10 @@ async function renderShareCardPreview() {
   const isPortrait = orientation === "portrait";
   const cardW = isPortrait ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH;
   const cardH = isPortrait ? PORTRAIT_CARD_HEIGHT : SHARE_CARD_HEIGHT;
+
+  if (container) {
+    container.classList.toggle("portrait-mode", isPortrait);
+  }
 
   try {
     const renderOpts = shareCardRenderOptions();
@@ -1861,10 +1889,11 @@ async function renderShareCardPreview() {
       } else if (polaroidCard) {
         polaroidCard.classList.remove("portrait-card");
       }
-      const containerWidth = preview.offsetWidth || 860;
+      const containerWidth = preview.offsetWidth || (isPortrait ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH);
       const scale = containerWidth / cardW;
-      root.style.zoom = String(scale);
-      preview.style.height = `${Math.round(cardH * scale)}px`;
+      root.style.transform = `scale(${scale})`;
+      root.style.transformOrigin = "top left";
+      preview.style.height = `${Math.ceil(cardH * scale)}px`;
     }
   } catch (err) {
     console.error("Preview render failed:", err);
