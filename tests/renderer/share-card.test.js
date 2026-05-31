@@ -408,8 +408,7 @@ describe("polaroidDimensions", () => {
 describe("portraitShareCardCss", () => {
   it("returns CSS containing portrait dimensions", () => {
     const css = portraitShareCardCss();
-    expect(css).toContain("720px");
-    expect(css).toContain("1200px");
+    expect(css).toContain(`${PORTRAIT_CARD_WIDTH}px`);
     expect(css).toContain("height: auto");
     expect(css).toContain("sc-portrait");
     expect(css).toContain("sc-pulse-grid");

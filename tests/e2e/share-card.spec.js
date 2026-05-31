@@ -83,6 +83,68 @@ test.describe('Share card', () => {
     await page.click('#save-share-card');
     await expect(page.locator('#share-card-modal')).toBeHidden({ timeout: 5_000 });
   });
+
+  test('keeps share controls fully visible in a compact window', async ({ page }) => {
+    await page.setViewportSize({ width: 980, height: 620 });
+    await waitForScanComplete(page);
+
+    await page.click('#open-share-card');
+    await expect(page.locator('.polaroid-stage')).toHaveClass(/visible/, { timeout: 3_000 });
+    await expect(page.locator('#share-card-preview .sc-root')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('.polaroid-actions')).toHaveClass(/visible/, { timeout: 5_000 });
+    await expect(page.locator('#share-modal-settings')).toHaveClass(/visible/, { timeout: 5_000 });
+
+    const viewport = page.viewportSize();
+    const actionBox = await page.locator('.polaroid-actions').boundingBox();
+    const settingsBox = await page.locator('#share-modal-settings').boundingBox();
+    expect(actionBox).toBeTruthy();
+    expect(settingsBox).toBeTruthy();
+    expect(actionBox.y).toBeGreaterThanOrEqual(0);
+    expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(viewport.height);
+    expect(settingsBox.y).toBeGreaterThanOrEqual(0);
+    expect(settingsBox.y + settingsBox.height).toBeLessThanOrEqual(viewport.height);
+  });
+
+  test('keeps action buttons aligned while switching orientation', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await waitForScanComplete(page);
+
+    await page.click('#open-share-card');
+    await expect(page.locator('.polaroid-stage')).toHaveClass(/visible/, { timeout: 3_000 });
+    await expect(page.locator('.polaroid-actions')).toHaveClass(/visible/, { timeout: 5_000 });
+
+    const landscapeBox = await page.locator('.polaroid-actions').boundingBox();
+    const landscapeCenterY = landscapeBox.y + landscapeBox.height / 2;
+
+    await page.locator('#share-card-orientation button[data-range="portrait"]').click();
+    await expect(page.locator('#polaroid-card')).toHaveClass(/orientation-flip-out/, { timeout: 120 });
+    await expect(page.locator('.polaroid-actions')).toHaveClass(/moving-layout/, { timeout: 600 });
+    await expect(page.locator('#polaroid-card')).not.toHaveClass(/orientation-flipping/, { timeout: 2_000 });
+    await expect(page.locator('#share-card-preview .sc-root.sc-portrait')).toBeVisible({ timeout: 5_000 });
+
+    const portraitBox = await page.locator('.polaroid-actions').boundingBox();
+    const portraitCenterY = portraitBox.y + portraitBox.height / 2;
+    expect(Math.abs(portraitCenterY - landscapeCenterY)).toBeLessThanOrEqual(40);
+
+    await page.locator('#share-card-orientation button[data-range="landscape"]').click();
+    await expect(page.locator('#polaroid-card')).toHaveClass(/orientation-flip-out/, { timeout: 120 });
+    await expect(page.locator('.polaroid-actions')).toHaveClass(/moving-layout/, { timeout: 600 });
+    await expect(page.locator('#polaroid-card')).not.toHaveClass(/orientation-flipping/, { timeout: 2_000 });
+    await expect(page.locator('#share-card-preview .sc-root:not(.sc-portrait)')).toBeVisible({ timeout: 5_000 });
+
+    const heights = await page.evaluate(() => {
+      const preview = document.querySelector('#share-card-preview').getBoundingClientRect();
+      const root = document.querySelector('#share-card-preview .sc-root').getBoundingClientRect();
+      const imageArea = document.querySelector('.polaroid-image-area').getBoundingClientRect();
+      return {
+        preview: preview.height,
+        root: root.height,
+        imageArea: imageArea.height,
+      };
+    });
+    expect(Math.abs(heights.preview - heights.root)).toBeLessThanOrEqual(6);
+    expect(Math.abs(heights.imageArea - heights.preview)).toBeLessThanOrEqual(8);
+  });
 });
 
 test.describe('Brand logo in share card', () => {

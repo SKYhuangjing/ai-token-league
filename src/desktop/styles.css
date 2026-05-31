@@ -1732,6 +1732,9 @@ label {
   justify-content: center;
   background: rgba(22, 21, 18, 0.65);
   backdrop-filter: blur(8px);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: clamp(12px, 3vh, 24px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s cubic-bezier(0.25, 1, 0.5, 1);
@@ -1748,12 +1751,18 @@ label {
   justify-content: center;
   gap: 32px;
   position: relative;
-  max-width: 100vw;
+  max-width: calc(100vw - 32px);
   box-sizing: border-box;
-  transition: opacity 0.075s ease;
+  transition:
+    opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    filter 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .polaroid-container.switching-layout {
-  opacity: 0 !important;
+  opacity: 0.82 !important;
+  transform: translateY(2px) scale(0.995);
+  filter: blur(1.5px);
+  pointer-events: none;
 }
 .polaroid-main {
   display: flex;
@@ -1782,9 +1791,11 @@ label {
     0 8px 32px rgba(0, 0, 0, 0.22),
     0 2px 8px rgba(0, 0, 0, 0.12);
   transform-origin: top center;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
   opacity: 0;
   transform: translateY(-100%) scale(0.98);
-  width: min(94vw, 900px);
+  width: min(94vw, 900px, calc(166.67vh - 317px));
   box-sizing: border-box;
 }
 .polaroid-card.portrait-card {
@@ -1809,6 +1820,23 @@ label {
     transform 0.15s cubic-bezier(0.25, 1, 0.5, 1),
     box-shadow 0.15s ease;
   will-change: transform;
+}
+.polaroid-card.settled.orientation-flipping {
+  transform-origin: center center;
+  transition:
+    transform 0.16s cubic-bezier(0.45, 0, 0.2, 1),
+    box-shadow 0.16s ease;
+  will-change: transform;
+}
+.polaroid-card.settled.orientation-flip-out {
+  transform: translateY(0) rotateY(88deg) scale(0.985);
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.24),
+    0 3px 10px rgba(0, 0, 0, 0.12);
+}
+.polaroid-card.settled.orientation-flip-in {
+  transform: translateY(0) rotateY(88deg) scale(0.985);
+  transition: none;
 }
 
 @keyframes polaroidPrint {
@@ -1959,6 +1987,10 @@ label {
 .polaroid-actions.visible {
   opacity: 1;
   transform: translateX(0);
+}
+.polaroid-actions.moving-layout {
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
 }
 
 /* Premium circular button styling */
@@ -2132,9 +2164,9 @@ label {
 .polaroid-container.portrait-mode {
   display: grid;
   grid-template-columns: auto 320px;
-  grid-template-rows: auto auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   grid-template-areas:
-    "card actions"
+    "card ."
     "card settings";
   align-items: center;
   gap: 20px 40px;
@@ -2151,11 +2183,14 @@ label {
 }
 
 .polaroid-container.portrait-mode #polaroid-actions {
-  grid-area: actions;
-  align-self: start;
+  grid-column: 2;
+  grid-row: 1 / -1;
+  align-self: center;
   justify-self: end;
-  transform: none;
-  opacity: 1;
+}
+
+.polaroid-container.portrait-mode #polaroid-actions.visible {
+  transform: translateX(0);
 }
 
 .polaroid-container.portrait-mode #share-modal-settings {
@@ -2166,8 +2201,6 @@ label {
   justify-self: end;
   gap: 16px;
   margin-top: 0;
-  transform: none;
-  opacity: 1;
   background: rgba(255, 255, 255, 0.05);
   padding: 20px;
   border-radius: 12px;
@@ -2175,6 +2208,10 @@ label {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   box-sizing: border-box;
+}
+
+.polaroid-container.portrait-mode #share-modal-settings.visible {
+  transform: translateY(0);
 }
 
 .polaroid-container.portrait-mode #share-modal-settings .share-modal-segmented {

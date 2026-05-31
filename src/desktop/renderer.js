@@ -167,6 +167,7 @@ let workdirsRange = "today";
 let latestShareData = null;
 let shareCardRange = "all";
 let shareCardRefreshSeq = 0;
+let shareActionsMoveTimer = null;
 let sourcesProviderTab = "claude_code_local";
 let latestSyncInfo = "";
 let pricingRefreshPromise = null;
@@ -469,37 +470,50 @@ $("#share-card-orientation")?.addEventListener("click", async (event) => {
 
   if (latestConfig?.shareCardOrientation === value) return; // No change
 
-  await saveInstantPreference("shareCardOrientation", value);
+  const savePreference = saveInstantPreference("shareCardOrientation", value);
   setSegmentActive($("#share-card-orientation"), value);
 
   if (!$("#share-card-modal")?.hidden && latestShareData) {
     const card = $("#polaroid-card");
     const container = $(".polaroid-container");
     if (card && container) {
-      // 1. Fast fade layout (75ms)
-      container.classList.add("switching-layout");
+      card.classList.remove("orientation-flip-in", "orientation-flip-out", "orientation-flipping", "orientation-switching");
+      card.classList.add("orientation-flipping");
+      void card.offsetWidth;
+      card.classList.add("orientation-flip-out");
 
-      await new Promise((resolve) => setTimeout(resolve, 75));
+      await new Promise((resolve) => setTimeout(resolve, 160));
 
-      // 2. Instantly update dimensions and render while hidden
+      const previousInlineTransition = card.style.transition;
       card.style.transition = "none";
+      card.classList.remove("orientation-flipping", "orientation-flip-out", "orientation-flip-in");
+      void card.offsetWidth;
       const isPortrait = value === "portrait";
+      const actions = $("#polaroid-actions");
+      const previousActionsRect = actions?.getBoundingClientRect();
       card.classList.toggle("portrait-card", isPortrait);
       container.classList.toggle("portrait-mode", isPortrait);
-      
-      // Force layout so preview.offsetWidth is correct
+
       void container.offsetWidth;
       await renderShareCardPreview();
+      animateShareActionsMove(actions, previousActionsRect);
+      void container.offsetWidth;
 
-      // 3. Fade in (75ms)
-      container.classList.remove("switching-layout");
+      card.classList.add("orientation-flipping", "orientation-flip-in");
+      void card.offsetWidth;
+      card.style.transition = previousInlineTransition;
+      requestAnimationFrame(() => {
+        card.classList.remove("orientation-flip-in");
+      });
 
-      await new Promise((resolve) => setTimeout(resolve, 75));
-      card.style.transition = "";
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      card.classList.remove("orientation-flipping");
     } else {
       await renderShareCardPreview();
     }
   }
+
+  await savePreference;
 });
 $("#share-card-range")?.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-range]");
@@ -1554,6 +1568,30 @@ function setShareStatus(message = "", kind = "") {
   if (!el) return;
   el.textContent = message;
   el.dataset.kind = kind;
+}
+
+function animateShareActionsMove(actions, previousRect) {
+  if (!actions || !previousRect || !actions.classList.contains("visible")) return;
+  const nextRect = actions.getBoundingClientRect();
+  const dx = previousRect.left - nextRect.left;
+  const dy = previousRect.top - nextRect.top;
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+
+  if (shareActionsMoveTimer) clearTimeout(shareActionsMoveTimer);
+  actions.classList.add("moving-layout");
+  actions.style.transition = "none";
+  actions.style.transform = `translate(${dx}px, ${dy}px)`;
+  void actions.offsetWidth;
+  actions.style.transition = "";
+  requestAnimationFrame(() => {
+    actions.style.transform = "";
+  });
+  shareActionsMoveTimer = setTimeout(() => {
+    actions.classList.remove("moving-layout");
+    actions.style.transition = "";
+    actions.style.transform = "";
+    shareActionsMoveTimer = null;
+  }, 320);
 }
 
 function setShareChartActive() {}
