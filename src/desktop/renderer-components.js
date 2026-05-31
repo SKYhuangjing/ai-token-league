@@ -68,12 +68,10 @@ export function renderMiniMeters(items, opts = {}) {
       const cost = showCost ? renderCost(item) : "";
       const colorClass = colorClasses[index % colorClasses.length] || "";
       return `<div class="mini-meter-row">
-        <span title="${name}">${name}</span>
+        <span class="meter-name" title="${name}">${name}</span>
+        <span class="meter-val-top" title="${formatTokenRaw(item.totalTokens)}">${val}</span>
         <div class="mini-meter ${colorClass}"><i style="width:${pct}%; transition: width 0.3s ease;"></i></div>
-        <span class="meter-value" title="${formatTokenRaw(item.totalTokens)}${cost ? ` · ${escapeHtml(costTitle(item, { pricingSource, t }))}` : ""}">
-          <strong>${val}</strong>
-          ${cost ? renderCostAmount(item) : ""}
-        </span>
+        <span class="meter-cost" title="${cost ? escapeHtml(costTitle(item, { pricingSource, t })) : ""}">${cost ? renderCostAmount(item) : ""}</span>
       </div>`;
     })
     .join("");
@@ -274,7 +272,7 @@ export function renderTrendDetailHero(row, opts = {}) {
   return `<article class="drawer-score-card"${showEstimatedCost ? ` title="${escapeHtml(costTitle(row, { pricingSource, t }))}"` : ""}>
     <span class="metric-label">${escapeHtml(t("desktop.overview.totalTokens"))}</span>
     <strong title="${formatTokenRaw(row.totalTokens)}">${formatToken(row.totalTokens, { showRawTokens, lang })}</strong>
-    ${cost ? `<small>${renderCostAmount(row)} <span class="cost-note">${escapeHtml(t("common.estimated").toLowerCase())}</span></small>` : ""}
+    ${cost ? `<small>${renderCostAmount(row)}</small>` : ""}
   </article>`;
 }
 

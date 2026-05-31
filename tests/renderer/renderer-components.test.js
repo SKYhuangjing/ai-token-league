@@ -318,7 +318,7 @@ describe('renderTrendDetailHero', () => {
   it('shows cost when showEstimatedCost=true', () => {
     const html = renderTrendDetailHero({ totalTokens: 1000, hasKnownPrice: true, estimatedCostUsd: 0.05 }, { showEstimatedCost: true, t });
     expect(html).toContain('cost-amount');
-    expect(html).toContain('cost-note');
+    expect(html).toContain('small');
   });
 });
 

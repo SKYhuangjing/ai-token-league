@@ -1156,10 +1156,24 @@ export class Store {
   }
 
   analytics({ period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = {}) {
+    const args = { period, range, startDay, endDay, participantId };
+    return this.cachedAggregate("analytics", args, () => this.computeAnalytics(args), { dayScoped: isDayScopedRange({ period, range, startDay, endDay }) });
+  }
+
+  computeAnalytics({ period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = {}) {
     const businessDay = this.currentBusinessDay();
-    const days = period 
-      ? daysForPeriod(period, { businessDay }) 
-      : daysForDetailRange(range, { startDay, endDay, businessDay });
+    let days;
+    if (period === "all") {
+      const allDays = new Set();
+      for (const item of Object.values(this.db.usageDaily || {})) {
+        if (item.day) allDays.add(item.day);
+      }
+      days = [...allDays].sort();
+    } else if (period) {
+      days = daysForPeriod(period, { businessDay });
+    } else {
+      days = daysForDetailRange(range, { startDay, endDay, businessDay });
+    }
     const daySet = new Set(days);
     
     const rows = Object.values(this.db.usageDaily).filter((item) => {
@@ -1315,12 +1329,20 @@ export class Store {
     if (!participantId || !days.length) {
       return { rank: null, participantCount: 0, leaderDays: 0, isLeaderToday: false };
     }
-    const periodRankings = rankParticipantsForRows(Object.values(this.db.usageDaily || {}).filter((item) => days.includes(item.day)), this.db.participants);
+    const daySet = new Set(days);
+    const perDay = new Map();
+    for (const item of Object.values(this.db.usageDaily || {})) {
+      if (!daySet.has(item.day)) continue;
+      let bucket = perDay.get(item.day);
+      if (!bucket) { bucket = []; perDay.set(item.day, bucket); }
+      bucket.push(item);
+    }
+    const periodRankings = rankParticipantsForRows([...perDay.values()].flat(), this.db.participants);
     const periodRank = periodRankings.find((item) => item.participantId === participantId)?.rank || null;
     let leaderDays = 0;
     let isLeaderToday = false;
-    for (const day of days) {
-      const dayRankings = rankParticipantsForRows(Object.values(this.db.usageDaily || {}).filter((item) => item.day === day), this.db.participants);
+    for (const [day, rows] of perDay) {
+      const dayRankings = rankParticipantsForRows(rows, this.db.participants);
       const row = dayRankings.find((item) => item.participantId === participantId);
       if (row?.rank === 1) leaderDays += 1;
       if (day === businessDay && row?.rank === 1) isLeaderToday = true;

@@ -62,12 +62,13 @@ h1, h2, h3, h4, p { margin-top: 0; }
   flex-direction: column;
   justify-content: space-between;
   height: 100vh;
-  border-right: 1px solid var(--line-strong);
+  border-right: 1px solid rgba(16, 17, 15, 0.08);
   background:
     linear-gradient(180deg, rgba(255, 249, 237, 0.96), rgba(239, 226, 203, 0.96)),
     var(--paper);
   padding: 24px 18px;
   overflow-y: auto;
+  box-shadow: 2px 0 20px rgba(16, 17, 15, 0.04);
 }
 
 .brand { margin-bottom: 28px; }
@@ -97,11 +98,12 @@ h1, h2, h3, h4, p { margin-top: 0; }
   gap: 8px;
   width: fit-content;
   margin-top: 14px;
-  border: 1px solid var(--line-strong);
+  border: none;
   border-radius: 999px;
   background: rgba(223, 244, 232, 0.72);
   padding: 7px 10px;
   font-weight: 800;
+  box-shadow: 0 2px 10px rgba(5, 143, 126, 0.08);
 }
 
 .identity-dot {
@@ -132,9 +134,10 @@ nav button {
 }
 
 nav button.active, nav button:hover {
-  border-color: var(--line-strong);
+  border-color: rgba(16, 17, 15, 0.12);
   background: var(--ink);
   color: var(--paper);
+  box-shadow: 0 4px 16px rgba(16, 17, 15, 0.10);
 }
 
 .nav-icon {
@@ -155,12 +158,13 @@ nav button.active, nav button:hover {
 .rail-note {
   display: grid;
   gap: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: rgba(255, 249, 237, 0.74);
+  border: none;
+  border-radius: 12px;
+  background: rgba(255, 251, 243, 0.72);
   padding: 14px;
   font-size: 12px;
   line-height: 1.45;
+  box-shadow: 0 4px 16px rgba(16, 17, 15, 0.04), 0 1px 3px rgba(16, 17, 15, 0.03);
 }
 
 .rail-note strong { font-size: 18px; }
@@ -206,13 +210,14 @@ nav button.active, nav button:hover {
   place-items: center;
   width: 36px;
   height: 36px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: rgba(255, 249, 237, 0.84);
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 251, 243, 0.72);
   padding: 0;
   color: var(--ink);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  box-shadow: 0 2px 8px rgba(16, 17, 15, 0.04);
 }
 
 .rail-icon-btn:hover,
@@ -426,13 +431,14 @@ button:disabled {
   position: relative;
   overflow: hidden;
   min-height: 152px;
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
+  border: 1px solid rgba(17, 18, 15, 0.35);
+  border-radius: 14px;
   background:
     radial-gradient(circle at 78% 18%, rgba(244, 176, 0, 0.28), transparent 12rem),
     linear-gradient(135deg, #171815, #2a2b25);
   color: var(--paper);
   padding: 18px 24px;
+  box-shadow: 0 8px 32px rgba(16, 17, 15, 0.12), 0 2px 6px rgba(16, 17, 15, 0.06);
 }
 
 .hero-score::after {
@@ -508,14 +514,15 @@ button:disabled {
 .stat-card.stat-narrow { grid-column: span 2; }
 
 .stat-card {
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  background: rgba(255, 249, 237, 0.78);
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 251, 243, 0.72);
   min-height: 100px;
   padding: 10px 16px;
   display: flex;
   flex-direction: column;
   justify-content: center;
+  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
 }
 
 .stat-card span {
@@ -562,10 +569,11 @@ button:disabled {
 }
 
 .visual-card {
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  background: rgba(255, 249, 237, 0.78);
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 251, 243, 0.65);
   padding: 12px 18px;
+  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
 }
 
 .visual-card h4 {
@@ -579,22 +587,43 @@ button:disabled {
 
 .mini-meter-row {
   display: grid;
-  grid-template-columns: minmax(84px, 1fr) minmax(40px, 0.72fr) minmax(72px, auto);
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 2px 8px;
   min-height: 30px;
   font-size: 13px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 900;
+  align-items: center;
 }
 
-.mini-meter-row span:first-child {
+.mini-meter-row .meter-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mini-meter-row span:last-child { text-align: right; }
+.mini-meter-row .meter-val-top {
+  align-self: end;
+  text-align: right;
+  line-height: 1.15;
+}
+
+.mini-meter-row .mini-meter {
+  grid-column: 1;
+  align-self: center;
+}
+
+.mini-meter-row .meter-cost {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 12px;
+  align-self: center;
+  text-align: right;
+  line-height: 1;
+}
 
 .meter-value {
   display: grid;
@@ -624,10 +653,6 @@ button:disabled {
   color: var(--cost-accent);
 }
 
-.cost-note {
-  color: inherit;
-  font-weight: 800;
-}
 
 .meter-value .cost-amount {
   font-size: 11px;
@@ -642,9 +667,10 @@ button:disabled {
 .mini-meter {
   height: 12px;
   overflow: hidden;
-  border: 1px solid rgba(16, 17, 15, 0.22);
+  border: none;
   border-radius: 999px;
-  background: rgba(16, 17, 15, 0.08);
+  background: rgba(16, 17, 15, 0.06);
+  box-shadow: inset 0 1px 3px rgba(16, 17, 15, 0.06);
 }
 
 .mini-meter i {
@@ -670,7 +696,7 @@ button:disabled {
   align-items: end;
   gap: clamp(6px, 1vw, 14px);
   min-height: 128px;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: 1.5px solid rgba(16, 17, 15, 0.10);
   padding: 32px 0 0;
 }
 
@@ -692,7 +718,7 @@ button:disabled {
 
 .spark-bar {
   min-width: 0;
-  border: 1px solid rgba(16, 17, 15, 0.25);
+  border: 1px solid rgba(16, 17, 15, 0.10);
   border-bottom: 0;
   border-radius: 6px 6px 0 0;
   background: linear-gradient(180deg, rgba(5, 143, 126, 0.68), rgba(5, 143, 126, 0.18));
@@ -745,12 +771,13 @@ button:disabled {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.34);
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 251, 243, 0.65);
   padding: 12px;
   cursor: pointer;
-  transition: transform 160ms ease;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
 }
 
 .workdir-card:hover { transform: translateX(4px); }
@@ -793,9 +820,10 @@ button:disabled {
   overflow: hidden;
   height: 8px;
   margin-top: 6px;
-  border: 1px solid rgba(16, 17, 15, 0.22);
+  border: none;
   border-radius: 999px;
-  background: rgba(16, 17, 15, 0.08);
+  background: rgba(16, 17, 15, 0.06);
+  box-shadow: inset 0 1px 3px rgba(16, 17, 15, 0.06);
 }
 
 .workdir-progress i {
@@ -813,10 +841,11 @@ button:disabled {
 .provider-source-grid { display: grid; gap: 12px; }
 
 .provider-card {
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  background: rgba(255, 249, 237, 0.78);
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 251, 243, 0.65);
   padding: 16px 20px;
+  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
 }
 
 .provider-card-head {
@@ -836,9 +865,9 @@ button:disabled {
   height: 28px;
   padding: 0;
   border-radius: 999px;
-  border: 1px solid var(--line-strong);
+  border: none;
   background: var(--mint);
-  box-shadow: none;
+  box-shadow: inset 0 1px 4px rgba(5, 143, 126, 0.12);
 }
 
 .source-switch::before {
@@ -1490,9 +1519,9 @@ label {
   z-index: 25;
   width: min(430px, 100vw);
   height: 100vh;
-  border-left: 2px solid var(--line-strong);
+  border-left: 1px solid rgba(16, 17, 15, 0.08);
   background: var(--paper-2);
-  box-shadow: -24px 0 60px rgba(16, 17, 15, 0.18);
+  box-shadow: -24px 0 60px rgba(16, 17, 15, 0.14);
   padding: 24px;
   transform: translateX(105%);
   transition: transform 180ms ease;
@@ -1508,13 +1537,14 @@ label {
   position: relative;
   overflow: hidden;
   margin-bottom: 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
+  border: 1px solid rgba(17, 18, 15, 0.35);
+  border-radius: 14px;
   background:
     radial-gradient(circle at 82% 12%, rgba(244, 176, 0, 0.24), transparent 9rem),
     linear-gradient(135deg, #171815, #2a2b25);
   color: var(--paper);
   padding: 14px 18px;
+  box-shadow: 0 8px 32px rgba(16, 17, 15, 0.12), 0 2px 6px rgba(16, 17, 15, 0.06);
 }
 
 .drawer-score-card::after {
@@ -1658,6 +1688,11 @@ label {
   max-width: 100vw;
   box-sizing: border-box;
 }
+.polaroid-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
 
 /* Stack — holds multiple polaroid cards */
 .polaroid-stack {
@@ -1683,6 +1718,15 @@ label {
   transform: translateY(-100%) scale(0.98);
   width: min(94vw, 900px);
   box-sizing: border-box;
+}
+.polaroid-card.portrait-card {
+  width: min(52vh, 480px);
+}
+.polaroid-card.no-frame {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 .polaroid-card.ejecting {
   animation: polaroidPrint 0.4s cubic-bezier(0.19, 1, 0.22, 1) forwards;
@@ -1789,6 +1833,10 @@ label {
   height: 720px;
   transform-origin: top left;
 }
+.share-card-preview .sc-root.sc-portrait {
+  width: 720px;
+  height: 1200px;
+}
 
 /* Develop overlay — overexposed filter */
 .polaroid-develop-overlay {
@@ -1892,6 +1940,74 @@ label {
   color: #fff;
 }
 
+/* Share modal settings bar */
+.share-modal-settings {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 14px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  position: relative;
+  z-index: 20;
+}
+.share-modal-settings.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.share-modal-segmented {
+  display: inline-flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+}
+.share-modal-segmented button {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(245, 239, 227, 0.55);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.share-modal-segmented button.active {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--paper);
+}
+.share-modal-segmented button:hover:not(.active) {
+  color: rgba(245, 239, 227, 0.8);
+}
+.share-modal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: rgba(245, 239, 227, 0.5);
+  transition: color 0.15s ease;
+}
+.share-modal-toggle:hover {
+  color: rgba(245, 239, 227, 0.8);
+}
+.share-modal-toggle input[type="checkbox"] {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.share-modal-toggle svg {
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+}
+.share-modal-toggle input:checked + svg {
+  opacity: 1;
+  color: var(--green, #5ecfb1);
+}
+
 /* Status text */
 .polaroid-status {
   min-height: 20px;
@@ -1950,6 +2066,10 @@ label {
   .share-card-preview {
     width: min(560px, calc(100vw - 80px));
     height: min(350px, calc((100vw - 80px) * 0.625));
+  }
+  .share-card-preview:has(.sc-portrait) {
+    width: min(350px, calc(100vw - 120px));
+    height: min(580px, calc((100vw - 120px) * 1.667));
   }
 }
 

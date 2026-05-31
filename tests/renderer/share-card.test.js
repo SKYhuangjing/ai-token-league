@@ -3,6 +3,13 @@ import {
   normalizeCloudShareData,
   normalizeLocalShareData,
   renderShareCardHtml,
+  renderPortraitShareCardHtml,
+  portraitShareCardCss,
+  polaroidDimensions,
+  PORTRAIT_CARD_WIDTH,
+  PORTRAIT_CARD_HEIGHT,
+  SHARE_CARD_WIDTH,
+  SHARE_CARD_HEIGHT,
   sharePeriodBounds,
   shareRangeForPeriod,
   withCloudPending
@@ -52,7 +59,8 @@ const t = (key, params = {}) => {
     "common.input": "Input",
     "common.output": "Output",
     "common.cache": "Cache",
-    "common.reasoning": "Reasoning"
+    "common.reasoning": "Reasoning",
+    "desktop.share.activity": "Activity"
   }[key] || key;
   Object.entries(params).forEach(([k, v]) => {
     val = val.replace(new RegExp(`{${k}}`, "g"), String(v));
@@ -253,5 +261,349 @@ describe("renderShareCardHtml", () => {
     // The " is escaped to &quot; preventing attribute breakout
     expect(html).toContain("&quot;");
     expect(html).not.toContain('"><img');
+  });
+
+  it("hides cloud URL when showCloudUrl is false", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://example.com", showCloudUrl: false });
+    expect(html).not.toContain("sc-brand-url");
+    expect(html).not.toContain("https://example.com");
+  });
+
+  it("shows cloud URL when showCloudUrl is true", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://my-league.com", showCloudUrl: true });
+    expect(html).toContain("sc-brand-url");
+    expect(html).toContain("https://my-league.com");
+  });
+
+  it("shows cloud URL by default when showCloudUrl is not set", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://default.com" });
+    expect(html).toContain("sc-brand-url");
+    expect(html).toContain("https://default.com");
+  });
+
+  it("hides anonymous name badge when showAnonymousName is false", () => {
+    const data = normalizeCloudShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+      analytics: {
+        from: "2026-05-30",
+        to: "2026-05-30",
+        summary: { totalTokens: 1000 },
+        providers: [{ name: "cursor_dashboard_usage", tokens: 1000 }]
+      }
+    });
+    const html = renderShareCardHtml(data, { t, formatToken, formatUsd, sourceName, showAnonymousName: false });
+    expect(html).not.toContain("sc-code-badge");
+    expect(html).not.toContain("GDPS");
+  });
+
+  it("shows anonymous name badge when showAnonymousName is true", () => {
+    const data = normalizeCloudShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+      analytics: {
+        from: "2026-05-30",
+        to: "2026-05-30",
+        summary: { totalTokens: 1000 },
+        providers: [{ name: "cursor_dashboard_usage", tokens: 1000 }]
+      }
+    });
+    const html = renderShareCardHtml(data, { t, formatToken, formatUsd, sourceName, showAnonymousName: true });
+    expect(html).toContain("sc-code-badge");
+    expect(html).toContain("Today's Code · GDPS");
+  });
+
+  it("shows anonymous name badge by default when showAnonymousName is not set", () => {
+    const data = normalizeCloudShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+      analytics: {
+        from: "2026-05-30",
+        to: "2026-05-30",
+        summary: { totalTokens: 1000 },
+        providers: [{ name: "cursor_dashboard_usage", tokens: 1000 }]
+      }
+    });
+    const html = renderShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    expect(html).toContain("sc-code-badge");
+    expect(html).toContain("Today's Code · GDPS");
+  });
+});
+
+describe("PORTRAIT_CARD_WIDTH / PORTRAIT_CARD_HEIGHT", () => {
+  it("exports portrait dimensions as 720x1200", () => {
+    expect(PORTRAIT_CARD_WIDTH).toBe(720);
+    expect(PORTRAIT_CARD_HEIGHT).toBe(1200);
+  });
+
+  it("is the swapped dimensions of landscape", () => {
+    expect(PORTRAIT_CARD_WIDTH).toBe(SHARE_CARD_HEIGHT);
+    expect(PORTRAIT_CARD_HEIGHT).toBe(SHARE_CARD_WIDTH);
+  });
+});
+
+describe("polaroidDimensions", () => {
+  it("returns landscape dimensions by default", () => {
+    const dims = polaroidDimensions();
+    expect(dims.cardWidth).toBe(1200);
+    expect(dims.cardHeight).toBe(720);
+    expect(dims.exportWidth).toBe(1236);
+    expect(dims.exportHeight).toBe(782);
+  });
+
+  it("returns portrait dimensions when orientation is portrait", () => {
+    const dims = polaroidDimensions("portrait");
+    expect(dims.cardWidth).toBe(720);
+    expect(dims.cardHeight).toBe(1200);
+    expect(dims.exportWidth).toBe(756);
+    expect(dims.exportHeight).toBe(1262);
+  });
+
+  it("falls back to landscape for unknown orientation", () => {
+    const dims = polaroidDimensions("foo");
+    expect(dims.cardWidth).toBe(1200);
+    expect(dims.cardHeight).toBe(720);
+  });
+});
+
+describe("portraitShareCardCss", () => {
+  it("returns CSS containing portrait dimensions", () => {
+    const css = portraitShareCardCss();
+    expect(css).toContain("720px");
+    expect(css).toContain("1200px");
+    expect(css).toContain("sc-portrait");
+    expect(css).toContain("sc-pulse-grid");
+    expect(css).toContain("sc-pulse-svg");
+  });
+});
+
+describe("renderPortraitShareCardHtml", () => {
+  it("renders portrait layout with data-share-card-style portrait", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 500, inputTokens: 200, outputTokens: 200, cacheReadTokens: 100 }, providers: [{ name: "codex_local", totalTokens: 500 }], models: [{ name: "gpt-5", totalTokens: 500 }] },
+      trend: { items: [{ hour: 9, totalTokens: 300 }, { hour: 14, totalTokens: 200 }] }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://example.com", showCloudUrl: true });
+    expect(html).toContain('data-share-card-style="portrait"');
+    expect(html).toContain("sc-portrait-header");
+    expect(html).toContain("sc-portrait-identity-col");
+    expect(html).toContain("sc-portrait-hero-block");
+    expect(html).toContain("sc-portrait-hero-container");
+    expect(html).toContain("sc-hero-persona-pill");
+    expect(html).toContain("sc-pulse-grid");
+    expect(html).toContain("Source mix");
+    expect(html).toContain("Model mix");
+    expect(html).toContain("https://example.com");
+  });
+
+  it("renders Today's Code badge inside identity column when anonymousName is provided", () => {
+    const data = normalizeCloudShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+      analytics: {
+        from: "2026-05-30",
+        to: "2026-05-30",
+        summary: { totalTokens: 1000 },
+        providers: [{ name: "cursor_dashboard_usage", tokens: 1000 }]
+      }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    expect(html).toContain("sc-portrait-identity-col");
+    expect(html).toContain("sc-code-badge");
+    expect(html).toContain("Today's Code · GDPS");
+  });
+
+  it("hides anonymous name badge when showAnonymousName is false", () => {
+    const data = normalizeCloudShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+      analytics: {
+        from: "2026-05-30",
+        to: "2026-05-30",
+        summary: { totalTokens: 1000 },
+        providers: [{ name: "cursor_dashboard_usage", tokens: 1000 }]
+      }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, showAnonymousName: false });
+    expect(html).not.toContain("sc-code-badge");
+    expect(html).not.toContain("GDPS");
+  });
+
+  it("shows anonymous name badge when showAnonymousName is true", () => {
+    const data = normalizeCloudShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+      analytics: {
+        from: "2026-05-30",
+        to: "2026-05-30",
+        summary: { totalTokens: 1000 },
+        providers: [{ name: "cursor_dashboard_usage", tokens: 1000 }]
+      }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, showAnonymousName: true });
+    expect(html).toContain("sc-code-badge");
+    expect(html).toContain("Today's Code · GDPS");
+  });
+
+  it("shows anonymous name badge by default when showAnonymousName is not set", () => {
+    const data = normalizeCloudShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+      analytics: {
+        from: "2026-05-30",
+        to: "2026-05-30",
+        summary: { totalTokens: 1000 },
+        providers: [{ name: "cursor_dashboard_usage", tokens: 1000 }]
+      }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    expect(html).toContain("sc-code-badge");
+    expect(html).toContain("Today's Code · GDPS");
+  });
+
+  it("escapes HTML in identity name to prevent XSS", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "<script>alert(1)</script>" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>alert(1)</script>");
+  });
+
+  it("hides cloud URL when showCloudUrl is false", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://example.com", showCloudUrl: false });
+    expect(html).not.toContain("sc-portrait-cloud");
+    expect(html).not.toContain("https://example.com");
+  });
+
+  it("shows cloud URL when showCloudUrl is true", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://my-league.com", showCloudUrl: true });
+    expect(html).toContain("sc-portrait-cloud");
+    expect(html).toContain("https://my-league.com");
+  });
+
+  it("shows cloud URL by default when showCloudUrl is not set", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName, cloudUrl: "https://default.com" });
+    expect(html).toContain("sc-portrait-cloud");
+    expect(html).toContain("https://default.com");
+  });
+
+  it("shows rank stats for cloud data with rank", () => {
+    const data = normalizeCloudShareData({
+      period: "this_week",
+      businessDay: "2026-05-30",
+      identity: { nickname: "Sky", identityMode: "public" },
+      analytics: {
+        from: "2026-05-25",
+        to: "2026-05-30",
+        summary: { totalTokens: 5000, inputTokens: 3000, outputTokens: 2000 },
+        providers: [{ name: "codex_local", tokens: 5000 }],
+        rankStats: { rank: 1, participantCount: 27, leaderDays: 3 }
+      }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    expect(html).toContain("No.1");
+    expect(html).toContain("sc-portrait-header-sub-list");
+    expect(html).toContain("27");
+    expect(html).toContain("3");
+  });
+
+  it("renders heatmap bars for hourly data", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 1000 } },
+      trend: { items: [{ hour: 9, totalTokens: 400 }, { hour: 14, totalTokens: 600 }] }
+    });
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    expect(html).toContain("sc-pulse-grid");
+    expect(html).toContain("sc-pulse-svg");
+    expect(html).toContain("sc-pulse-stats");
+  });
+
+  it("shows locale-aware date range for 'all' range", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    data.range = "all";
+    data.from = "2026-01-01";
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    // English locale: "Through 2026-05-30"
+    expect(html).toContain("Through 2026-05-30");
+  });
+
+  it("shows date span for '7d' range", () => {
+    const data = normalizeLocalShareData({
+      period: "today",
+      businessDay: "2026-05-30",
+      identity: { displayName: "Sky" },
+      summary: { totals: { totalTokens: 100 } },
+      trend: { items: [] }
+    });
+    data.range = "7d";
+    data.from = "2026-05-24";
+    const html = renderPortraitShareCardHtml(data, { t, formatToken, formatUsd, sourceName });
+    expect(html).toContain("2026-05-24 ~ 2026-05-30");
   });
 });

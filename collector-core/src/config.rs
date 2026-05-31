@@ -216,6 +216,14 @@ pub struct AppConfig {
     pub runtime_log_retention_days: u64,
     #[serde(default)]
     pub api_connection: serde_json::Value,
+    #[serde(default = "default_share_card_orientation")]
+    pub share_card_orientation: String,
+    #[serde(default = "default_true")]
+    pub show_share_cloud_url: bool,
+    #[serde(default = "default_true")]
+    pub show_share_polaroid_frame: bool,
+    #[serde(default = "default_true")]
+    pub show_share_anonymous_name: bool,
     #[serde(default, deserialize_with = "null_as_default")]
     pub sync_status: SyncStatusRecord,
     #[serde(default)]
@@ -280,6 +288,9 @@ fn default_backup_retention() -> u64 {
 }
 fn default_runtime_log_retention_days() -> u64 {
     3
+}
+fn default_share_card_orientation() -> String {
+    "landscape".to_string()
 }
 
 fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -529,6 +540,10 @@ pub fn init_config(input: serde_json::Value, persist: bool) -> AppConfig {
         cursor_dashboard_usage: CursorDashboardUsageConfig::default(),
         local_backup: LocalBackupConfig::default(),
         runtime_log_retention_days: default_runtime_log_retention_days(),
+        share_card_orientation: default_share_card_orientation(),
+        show_share_cloud_url: true,
+        show_share_polaroid_frame: true,
+        show_share_anonymous_name: true,
         api_connection: input
             .get("apiConnection")
             .cloned()
@@ -734,6 +749,13 @@ pub fn import_config_with_summary(
             .as_u64()
             .unwrap_or(default_runtime_log_retention_days())
             .clamp(1, 30),
+        share_card_orientation: imported["shareCardOrientation"]
+            .as_str()
+            .unwrap_or("landscape")
+            .to_string(),
+        show_share_cloud_url: imported["showShareCloudUrl"].as_bool().unwrap_or(true),
+        show_share_polaroid_frame: imported["showSharePolaroidFrame"].as_bool().unwrap_or(true),
+        show_share_anonymous_name: imported["showShareAnonymousName"].as_bool().unwrap_or(true),
         api_connection: serde_json::json!({}),
         sync_status: SyncStatusRecord::default(),
         workdir_aliases,
@@ -1099,6 +1121,18 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
     }
     if let Some(v) = input["runtimeLogRetentionDays"].as_u64() {
         config.runtime_log_retention_days = v.clamp(1, 30);
+    }
+    if let Some(v) = input["shareCardOrientation"].as_str() {
+        config.share_card_orientation = v.to_string();
+    }
+    if let Some(v) = input["showShareCloudUrl"].as_bool() {
+        config.show_share_cloud_url = v;
+    }
+    if let Some(v) = input["showSharePolaroidFrame"].as_bool() {
+        config.show_share_polaroid_frame = v;
+    }
+    if let Some(v) = input["showShareAnonymousName"].as_bool() {
+        config.show_share_anonymous_name = v;
     }
 
     config.updated_at = Some(now_iso());

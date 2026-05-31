@@ -67,15 +67,18 @@ import {
 import {
   SHARE_CARD_HEIGHT,
   SHARE_CARD_WIDTH,
-  POLAROID_EXPORT_WIDTH,
-  POLAROID_EXPORT_HEIGHT,
+  PORTRAIT_CARD_WIDTH,
+  PORTRAIT_CARD_HEIGHT,
+  polaroidDimensions,
   normalizeCloudShareData,
   normalizeLocalShareData,
   polaroidExportCss,
   randomShareQuoteIndex,
   renderExportPolaroidHtml,
   renderShareCardHtml,
+  renderPortraitShareCardHtml,
   shareCardCss,
+  portraitShareCardCss,
   sharePeriodBounds,
   shareRangeForPeriod,
   shareTrendGrain,
@@ -162,6 +165,8 @@ let runtimeEventHandlersRegistered = false;
 let overviewRange = "today";
 let workdirsRange = "today";
 let latestShareData = null;
+let shareCardRange = "all";
+let shareCardRefreshSeq = 0;
 let sourcesProviderTab = "claude_code_local";
 let latestSyncInfo = "";
 let pricingRefreshPromise = null;
@@ -456,6 +461,74 @@ $("#showEstimatedCost").addEventListener("change", async () => {
   await saveInstantPreference("showEstimatedCost", $("#showEstimatedCost").checked);
 });
 
+// Share card modal settings
+$("#share-card-orientation")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-range]");
+  if (!button) return;
+  const value = button.dataset.range;
+  await saveInstantPreference("shareCardOrientation", value);
+  setSegmentActive($("#share-card-orientation"), latestConfig?.shareCardOrientation || value);
+  if (!$("#share-card-modal")?.hidden && latestShareData) {
+    const card = $("#polaroid-card");
+    if (card) card.classList.remove("developing");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await renderShareCardPreview();
+    if (card) {
+      void card.offsetWidth;
+      card.classList.add("developing");
+    }
+  }
+});
+$("#share-card-range")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-range]");
+  if (!button) return;
+  shareCardRange = button.dataset.range;
+  setSegmentActive($("#share-card-range"), shareCardRange);
+  if (!$("#share-card-modal")?.hidden) await refreshShareCardPreview();
+});
+{
+  const polaroidToggle = $("#showSharePolaroidFrame");
+  if (polaroidToggle) {
+    const polaroidLabel = polaroidToggle.closest("label");
+    if (polaroidLabel) {
+      polaroidLabel.addEventListener("click", async (e) => {
+        e.preventDefault();
+        polaroidToggle.checked = !polaroidToggle.checked;
+        await saveInstantPreference("showSharePolaroidFrame", polaroidToggle.checked);
+        if (!$("#share-card-modal")?.hidden && latestShareData) renderShareCardPreview();
+      });
+    }
+  }
+}
+{
+  const cloudToggle = $("#showShareCloudUrl");
+  if (cloudToggle) {
+    const cloudLabel = cloudToggle.closest("label");
+    if (cloudLabel) {
+      cloudLabel.addEventListener("click", async (e) => {
+        e.preventDefault();
+        cloudToggle.checked = !cloudToggle.checked;
+        await saveInstantPreference("showShareCloudUrl", cloudToggle.checked);
+        if (!$("#share-card-modal")?.hidden && latestShareData) renderShareCardPreview();
+      });
+    }
+  }
+}
+{
+  const anonToggle = $("#showShareAnonymousName");
+  if (anonToggle) {
+    const anonLabel = anonToggle.closest("label");
+    if (anonLabel) {
+      anonLabel.addEventListener("click", async (e) => {
+        e.preventDefault();
+        anonToggle.checked = !anonToggle.checked;
+        await saveInstantPreference("showShareAnonymousName", anonToggle.checked);
+        if (!$("#share-card-modal")?.hidden && latestShareData) renderShareCardPreview();
+      });
+    }
+  }
+}
+
 // Dirty state tracking for save_required + next_cycle fields
 const DIRTY_TRACKED_FIELDS = ["nickname", "apiBaseUrl", "launchAtLogin", "hideDockIcon", "refreshIntervalMinutes"];
 
@@ -515,7 +588,7 @@ async function saveInstantPreference(field, value) {
     if (field === "showEstimatedCost" && !value) await syncTrayCostState();
     renderInstantPreferenceViews();
     const config = await api.updateConfig({ [field]: value });
-    latestConfig = config;
+    latestConfig = { ...latestConfig, ...config, [field]: config[field] ?? value };
     renderInstantPreferenceViews();
     updateDirtyState();
   } catch (error) {
@@ -1365,20 +1438,43 @@ async function openShareCardModal() {
   const card = $("#polaroid-card");
   const actions = $("#polaroid-actions");
   const loading = $("#polaroid-loading");
+  const settingsBar = $("#share-modal-settings");
   if (!modal || !flash || !stage || !card || !actions) return;
+
+  // Sync modal settings from config
+  shareCardRange = overviewRange;
+  const orientation = latestConfig?.shareCardOrientation || "landscape";
+  setSegmentActive($("#share-card-orientation"), orientation);
+  setSegmentActive($("#share-card-range"), shareCardRange);
+  if ($("#showShareCloudUrl")) $("#showShareCloudUrl").checked = latestConfig?.showShareCloudUrl ?? true;
+  if ($("#showSharePolaroidFrame")) $("#showSharePolaroidFrame").checked = latestConfig?.showSharePolaroidFrame ?? true;
+  if ($("#showShareAnonymousName")) $("#showShareAnonymousName").checked = latestConfig?.showShareAnonymousName ?? true;
 
   // Reset state
   modal.hidden = false;
-  card.classList.remove("ejecting", "settled", "developing", "shaking");
+  card.classList.remove("ejecting", "settled", "developing", "shaking", "no-frame", "portrait-card");
   actions.classList.remove("visible");
+  if (settingsBar) settingsBar.classList.remove("visible");
   if (loading) loading.classList.remove("hidden");
   setShareStatus("");
 
-  // Build data and render preview
+  // Phase 1: Flash + show stage immediately
+  flash.classList.add("active");
+  flash.addEventListener("animationend", () => flash.classList.remove("active"), { once: true });
+  stage.classList.add("visible");
+  card.classList.add("ejecting");
+
+  // Phase 2: Settle card (200ms)
+  setTimeout(() => {
+    card.classList.remove("ejecting");
+    card.classList.add("settled", "developing");
+  }, 200);
+
+  // Render local data immediately (no network delay)
   try {
-    const data = await buildOverviewShareData(overviewRange);
+    const data = await buildLocalShareData(shareCardRange);
     latestShareData = data;
-    await renderShareCardPreview();
+    renderShareCardPreview();
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, "0");
@@ -1394,29 +1490,16 @@ async function openShareCardModal() {
     setShareStatus(error.message || t("desktop.share.exportFailed"), "error");
   }
 
-  // Hide loading spinner once data is ready
   if (loading) loading.classList.add("hidden");
 
-  // Phase 1: Flash
-  flash.classList.add("active");
-  flash.addEventListener("animationend", () => flash.classList.remove("active"), { once: true });
-
-  // Phase 2: Show stage + eject card (after flash peak ≈35ms)
-  setTimeout(() => {
-    stage.classList.add("visible");
-    card.classList.add("ejecting");
-  }, 35);
-
-  // Phase 3: Start development after eject settles (≈400ms)
-  setTimeout(() => {
-    card.classList.remove("ejecting");
-    card.classList.add("settled", "developing");
-  }, 400);
-
-  // Phase 4: Show action bar after development (≈700ms)
+  // Phase 3: Show actions + settings bar (350ms)
   setTimeout(() => {
     actions.classList.add("visible");
-  }, 700);
+    if (settingsBar) settingsBar.classList.add("visible");
+  }, 350);
+
+  // Cloud enrichment in background — re-render when available
+  enrichShareDataWithCloud(shareCardRange).catch(() => {});
 }
 
 function closeShareCardModal() {
@@ -1424,9 +1507,11 @@ function closeShareCardModal() {
   const card = $("#polaroid-card");
   const actions = $("#polaroid-actions");
   const loading = $("#polaroid-loading");
+  const settingsBar = $("#share-modal-settings");
   if (actions) actions.classList.remove("visible");
+  if (settingsBar) settingsBar.classList.remove("visible");
   if (card) {
-    card.classList.remove("ejecting", "settled", "developing", "shaking");
+    card.classList.remove("ejecting", "settled", "developing", "shaking", "portrait-card", "no-frame");
     card.classList.add("dismissing");
   }
   setTimeout(() => {
@@ -1450,22 +1535,56 @@ function setShareChartActive() {}
 function setSharePeriodActive() {}
 
 async function refreshShareCardPreview() {
+  const currentSeq = ++shareCardRefreshSeq;
   setShareStatus(t("loading"));
+  const card = $("#polaroid-card");
+  if (card) card.classList.remove("developing");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  if (currentSeq !== shareCardRefreshSeq) return;
+
   try {
-    const data = await buildOverviewShareData(overviewRange);
+    const data = await buildLocalShareData(shareCardRange);
+    if (currentSeq !== shareCardRefreshSeq) return;
     latestShareData = data;
     await renderShareCardPreview();
-    setShareStatus(data.mode === "cloud_pending" ? t("desktop.share.cloudPending") : "");
+    if (card) {
+      void card.offsetWidth;
+      card.classList.add("developing");
+    }
+    setShareStatus("");
+    enrichShareDataWithCloud(shareCardRange, currentSeq).catch(() => {});
   } catch (error) {
+    if (currentSeq !== shareCardRefreshSeq) return;
+    if (card) card.classList.add("developing");
     latestShareData = null;
     $("#share-card-preview").innerHTML = `<div class="empty-state">${escapeHtml(t("desktop.share.exportFailed"))}</div>`;
     setShareStatus(error.message || t("desktop.share.exportFailed"), "error");
   }
 }
 
-async function buildOverviewShareData(range) {
+async function buildLocalShareData(range) {
+  return buildOverviewShareData(range, { skipCloud: true });
+}
+
+async function enrichShareDataWithCloud(range, reqSeq = null) {
+  if (!hasConfiguredApiBaseUrl(latestConfig) || !latestConfig?.participantId) return;
+  try {
+    const data = await buildOverviewShareData(range);
+    if (!latestShareData) return;
+    if (reqSeq !== null) {
+      if (reqSeq !== shareCardRefreshSeq) return;
+    } else {
+      if (shareCardRange !== range) return;
+    }
+    latestShareData = data;
+    renderShareCardPreview();
+    setShareStatus(data.mode === "cloud_pending" ? t("desktop.share.cloudPending") : "");
+  } catch { /* keep local data on failure */ }
+}
+
+async function buildOverviewShareData(range, { skipCloud = false } = {}) {
   const businessDay = localDay();
-  const grain = overviewTrendGrain();
+  const grain = shareTrendGrain(range);
 
   // Mirror renderToday() data pipeline
   const summary = usageQueryState.summaries.get(range);
@@ -1502,7 +1621,7 @@ async function buildOverviewShareData(range) {
 
   const data = {
     range,
-    from: sharePeriodBounds(range === "today" ? "today" : range === "7d" ? "this_week" : range === "30d" ? "this_month" : "today", businessDay).from,
+    from: sharePeriodBounds(range, businessDay).from,
     to: businessDay,
     businessDay,
     identity: {
@@ -1554,13 +1673,37 @@ async function buildOverviewShareData(range) {
       missingPriceTokens: r.missingPriceTokens ?? 0
     })),
     trendGrain: grain,
+    heatmap: range === "today"
+      ? Array.from({ length: 24 }, (_, h) => {
+          const found = trendRows.find((r) => r.hour === h);
+          return { hour: h, totalTokens: found?.totalTokens || 0 };
+        })
+      : grain === "day"
+        ? (() => {
+            const from = sharePeriodBounds(range, businessDay).from;
+            const days = [];
+            const d = new Date(from + "T00:00:00Z");
+            const end = new Date(businessDay + "T00:00:00Z");
+            while (d <= end) {
+              const dayStr = d.toISOString().slice(0, 10);
+              const found = trendRows.find((r) => (r.periodStart || r.day || r.label) === dayStr);
+              days.push({ day: dayStr, totalTokens: found?.totalTokens || 0 });
+              d.setUTCDate(d.getUTCDate() + 1);
+            }
+            return days;
+          })()
+        : trendRows.map((r) => ({
+            day: r.periodStart || r.day || r.label || "",
+            totalTokens: r.totalTokens || 0,
+            label: r.label || ""
+          })),
+    timeSeries: [],
     estimatedCostUsd: null,
     quoteIndex: randomShareQuoteIndex()
   };
 
-  // Try cloud enrichment (skip for "all" — cloud API has no all-time period,
-  // and mapping to "today" would show a misleading ranking for all-time totals)
-  if (range !== "all" && hasConfiguredApiBaseUrl(latestConfig) && latestConfig?.participantId) {
+  // Try cloud enrichment
+  if (!skipCloud && hasConfiguredApiBaseUrl(latestConfig) && latestConfig?.participantId) {
     try {
       const cloudData = await fetchCloudShareData(range, latestConfig);
       if (cloudData) {
@@ -1578,7 +1721,7 @@ async function buildOverviewShareData(range) {
 async function fetchCloudShareData(range, config) {
   if (!config?.participantId) return null;
 
-  const periodMap = { today: "today", "7d": "this_week", "30d": "this_month" };
+  const periodMap = { today: "today", "7d": "this_week", "30d": "this_month", this_week: "this_week", this_month: "this_month", all: "all" };
   const period = periodMap[range] || "today";
 
   const identity = await api.getMyIdentity();
@@ -1684,17 +1827,44 @@ function updateWorkspaceLogo() {
 
 async function renderShareCardPreview() {
   const preview = $("#share-card-preview");
+  const polaroidCard = $("#polaroid-card");
   if (!preview || !latestShareData) return;
 
+  // Show/hide anonymous name toggle based on whether anonymous name exists
+  const anonLabel = $("#showShareAnonymousNameLabel");
+  if (anonLabel) anonLabel.hidden = !latestShareData?.identity?.anonymousName;
+
+  const orientation = latestConfig?.shareCardOrientation || "landscape";
+  const isPortrait = orientation === "portrait";
+  const cardW = isPortrait ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH;
+  const cardH = isPortrait ? PORTRAIT_CARD_HEIGHT : SHARE_CARD_HEIGHT;
+
   try {
-    const cardHtml = renderShareCardHtml(latestShareData, { ...shareCardRenderOptions(), cloudUrl: normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "") });
-    preview.innerHTML = `<style>${shareCardCss()}</style>${cardHtml}`;
+    const renderOpts = shareCardRenderOptions();
+    const cardHtml = isPortrait
+      ? renderPortraitShareCardHtml(latestShareData, renderOpts)
+      : renderShareCardHtml(latestShareData, renderOpts);
+    const css = isPortrait
+      ? `${shareCardCss()}${portraitShareCardCss()}`
+      : shareCardCss();
+    preview.innerHTML = `<style>${css}</style>${cardHtml}`;
     const root = preview.querySelector(".sc-root");
+
+    // Toggle polaroid frame visibility
+    const showFrame = latestConfig?.showSharePolaroidFrame ?? true;
+    const whiteBorder = polaroidCard?.querySelector(".polaroid-white-border");
+    if (polaroidCard) polaroidCard.classList.toggle("no-frame", !showFrame);
+    if (whiteBorder) whiteBorder.classList.toggle("hidden", !showFrame);
     if (root) {
+      if (isPortrait && polaroidCard) {
+        polaroidCard.classList.add("portrait-card");
+      } else if (polaroidCard) {
+        polaroidCard.classList.remove("portrait-card");
+      }
       const containerWidth = preview.offsetWidth || 860;
-      const scale = containerWidth / SHARE_CARD_WIDTH;
+      const scale = containerWidth / cardW;
       root.style.zoom = String(scale);
-      preview.style.height = `${Math.round(SHARE_CARD_HEIGHT * scale)}px`;
+      preview.style.height = `${Math.round(cardH * scale)}px`;
     }
   } catch (err) {
     console.error("Preview render failed:", err);
@@ -1709,12 +1879,21 @@ function shareCardRenderOptions() {
     formatUsd,
     sourceName,
     formatAxisLabel,
-    logoUrl: latestBrandLogoUrl
+    logoUrl: latestBrandLogoUrl,
+    cloudUrl: normalizeApiBaseUrl(latestConfig?.apiBaseUrl || ""),
+    showCloudUrl: latestConfig?.showShareCloudUrl ?? true,
+    showAnonymousName: latestConfig?.showShareAnonymousName ?? true
   };
 }
 
 async function exportShareCardBlob() {
   if (!latestShareData) await refreshShareCardPreview();
+
+  const orientation = latestConfig?.shareCardOrientation || "landscape";
+  const isPortrait = orientation === "portrait";
+  const showFrame = latestConfig?.showSharePolaroidFrame ?? true;
+  const cardW = isPortrait ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH;
+  const cardH = isPortrait ? PORTRAIT_CARD_HEIGHT : SHARE_CARD_HEIGHT;
 
   // Build timestamp caption
   const now = new Date();
@@ -1726,22 +1905,40 @@ async function exportShareCardBlob() {
   const caption = `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 
   // Render share card content
-  const cardHtml = renderShareCardHtml(latestShareData, { ...shareCardRenderOptions(), cloudUrl: normalizeApiBaseUrl(latestConfig?.apiBaseUrl || "") });
-  // Wrap in Polaroid frame
-  const polaroidHtml = renderExportPolaroidHtml(cardHtml, caption);
+  const renderOpts = shareCardRenderOptions();
+  const cardHtml = isPortrait
+    ? renderPortraitShareCardHtml(latestShareData, renderOpts)
+    : renderShareCardHtml(latestShareData, renderOpts);
 
-  const w = POLAROID_EXPORT_WIDTH;
-  const h = POLAROID_EXPORT_HEIGHT;
+  let exportHtml, exportW, exportH, targetSelector;
+  if (showFrame) {
+    exportHtml = renderExportPolaroidHtml(cardHtml, caption);
+    const dims = polaroidDimensions(orientation);
+    exportW = dims.exportWidth;
+    exportH = dims.exportHeight;
+    targetSelector = ".pe-frame";
+  } else {
+    exportHtml = cardHtml;
+    exportW = cardW;
+    exportH = cardH;
+    targetSelector = ".sc-root";
+  }
 
   const container = document.createElement("div");
-  container.style.cssText = `position:fixed;left:-9999px;top:0;width:${w}px;height:${h}px;overflow:hidden;pointer-events:none;z-index:-1`;
-  container.innerHTML = `<style>${shareCardCss()}${polaroidExportCss()}</style>${polaroidHtml}`;
+  container.style.cssText = `position:fixed;left:-9999px;top:0;width:${exportW}px;height:${exportH}px;overflow:hidden;pointer-events:none;z-index:-1`;
+  const cardCss = isPortrait
+    ? `${shareCardCss()}${portraitShareCardCss()}`
+    : shareCardCss();
+  const css = showFrame
+    ? `${cardCss}${polaroidExportCss(orientation)}`
+    : cardCss;
+  container.innerHTML = `<style>${css}</style>${exportHtml}`;
   document.body.appendChild(container);
 
-  const target = container.querySelector(".pe-frame");
+  const target = container.querySelector(targetSelector);
   if (!target) {
     document.body.removeChild(container);
-    throw new Error("Polaroid export frame not found");
+    throw new Error("Export target not found");
   }
 
   try {
@@ -1819,7 +2016,7 @@ function blobToBase64(blob) {
 async function saveShareCardImage(blob = null) {
   triggerPolaroidFlashSuccess();
   const imageBlob = blob || await exportShareCardBlob();
-  const fileName = `ai-token-league-share-${overviewRange}-${localDay()}.png`;
+  const fileName = `ai-token-league-share-${shareCardRange}-${localDay()}.png`;
   if (api.saveShareImage) {
     const base64 = await blobToBase64(imageBlob);
     const result = await api.saveShareImage({ fileName, base64Png: base64 });
@@ -2784,7 +2981,7 @@ function renderToday() {
   const costEl = document.querySelector("#today-cost");
   if (costEl) {
     if (showOverviewCost) {
-      costEl.innerHTML = `${renderCostAmount(cost)} <span class="cost-note">${escapeHtml(t("common.estimated").toLowerCase())}</span>`;
+      costEl.innerHTML = renderCostAmount(cost);
       costEl.title = costTitle(cost);
     } else {
       costEl.textContent = "";
@@ -3408,6 +3605,24 @@ function daysForRange(range) {
   if (range === "all") return null;
   if (range === "7d") return new Set(trailingDays(7));
   if (range === "30d") return new Set(trailingDays(30));
+  if (range === "this_week") {
+    const today = utcToday();
+    const monday = startOfUtcWeek(today);
+    const days = [];
+    for (const d = new Date(monday); d <= today; d.setUTCDate(d.getUTCDate() + 1)) {
+      days.push(toDay(d));
+    }
+    return new Set(days);
+  }
+  if (range === "this_month") {
+    const today = utcToday();
+    const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    const days = [];
+    for (const d = new Date(first); d <= today; d.setUTCDate(d.getUTCDate() + 1)) {
+      days.push(toDay(d));
+    }
+    return new Set(days);
+  }
   return new Set([localDay()]);
 }
 
@@ -3619,12 +3834,10 @@ function renderMiniMeters(items, { showCost = false, limit = Infinity, colorClas
       const cost = showCost ? renderCost(item) : "";
       const colorClass = colorClasses[index % colorClasses.length] || "";
       return `<div class="mini-meter-row">
-        <span title="${name}">${name}</span>
+        <span class="meter-name" title="${name}">${name}</span>
+        <span class="meter-val-top" title="${formatTokenRaw(item.totalTokens)}">${val}</span>
         <div class="mini-meter ${colorClass}"><i style="width:${pct}%; transition: width 0.3s ease;"></i></div>
-        <span class="meter-value" title="${formatTokenRaw(item.totalTokens)}${cost ? ` · ${escapeHtml(costTitle(item))}` : ""}">
-          <strong>${val}</strong>
-          ${cost ? renderCostAmount(item) : ""}
-        </span>
+        <span class="meter-cost" title="${cost ? escapeHtml(costTitle(item)) : ""}">${cost ? renderCostAmount(item) : ""}</span>
       </div>`;
     })
     .join("");
@@ -3641,12 +3854,10 @@ function renderDetailMeters(items = []) {
       const cost = latestConfig?.showEstimatedCost ? renderCost(item) : "";
       const colorClass = colorClasses[index % colorClasses.length] || "";
       return `<div class="mini-meter-row drawer-meter-row">
-        <span title="${name}">${name}</span>
+        <span class="meter-name" title="${name}">${name}</span>
+        <span class="meter-val-top" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</span>
         <div class="mini-meter ${colorClass}"><i style="width:${pct}%; transition: width 0.3s ease;"></i></div>
-        <span class="meter-value" title="${formatTokenRaw(item.totalTokens)}${cost ? ` · ${escapeHtml(costTitle(item))}` : ""}">
-          <strong>${formatToken(item.totalTokens)}</strong>
-          ${cost ? renderCostAmount(item) : ""}
-        </span>
+        <span class="meter-cost" title="${cost ? escapeHtml(costTitle(item)) : ""}">${cost ? renderCostAmount(item) : ""}</span>
       </div>`;
     })
     .join("")}</div>`;
@@ -3757,7 +3968,7 @@ function renderTrendDetailHero(row) {
   return `<article class="drawer-score-card"${latestConfig?.showEstimatedCost ? ` title="${escapeHtml(costTitle(row))}"` : ""}>
     <span class="metric-label">${escapeHtml(t("desktop.overview.totalTokens"))}</span>
     <strong title="${formatTokenRaw(row.totalTokens)}">${formatToken(row.totalTokens)}</strong>
-    ${cost ? `<small>${renderCostAmount(row)} <span class="cost-note">${escapeHtml(t("common.estimated").toLowerCase())}</span></small>` : ""}
+    ${cost ? `<small>${renderCostAmount(row)}</small>` : ""}
   </article>`;
 }
 

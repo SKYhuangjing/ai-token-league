@@ -702,19 +702,17 @@ async function handleApi(req, res) {
       participantId: realId
     });
 
+    let identity;
     if (realId && BOARD_SECURITY_LEVEL === "anonymous") {
-      data.displayName = boardAnonymizer.getDisplayName(displayId);
-      data.displayId = displayId;
+      identity = { displayName: boardAnonymizer.getDisplayName(displayId), displayId };
     } else if (realId) {
       const p = store.getParticipant(realId);
-      data.displayName = p ? p.nickname : realId;
-      data.displayId = realId;
+      identity = { displayName: p ? p.nickname : realId, displayId: realId };
     } else {
-      data.displayName = "Community";
-      data.displayId = "";
+      identity = { displayName: "Community", displayId: "" };
     }
 
-    return sendJson(res, 200, withBusinessDay(data));
+    return sendJson(res, 200, withBusinessDay({ ...data, ...identity }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/analytics")) {
     const url = new URL(req.url, "http://localhost");
@@ -736,16 +734,15 @@ async function handleApi(req, res) {
       participantId: realId
     });
 
+    let identity;
     if (realId) {
       const p = store.getParticipant(realId);
-      data.displayName = p ? p.nickname : realId;
-      data.displayId = realId;
+      identity = { displayName: p ? p.nickname : realId, displayId: realId };
     } else {
-      data.displayName = "Community";
-      data.displayId = "";
+      identity = { displayName: "Community", displayId: "" };
     }
 
-    return sendJson(res, 200, withBusinessDay(data));
+    return sendJson(res, 200, withBusinessDay({ ...data, ...identity }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/board/participants/")) {
     const url = new URL(req.url, "http://localhost");

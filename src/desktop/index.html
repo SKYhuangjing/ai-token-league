@@ -232,6 +232,7 @@
                 <label class="toggle-row"><input id="hideDockIcon" type="checkbox" /><span data-i18n="status.off">Off</span></label>
               </div>
             </div>
+
           </section>
 
           <section class="settings-panel" data-settings-panel="cloud">
@@ -548,18 +549,56 @@
       <div id="polaroid-flash" class="polaroid-flash"></div>
       <section class="polaroid-stage" role="dialog" aria-modal="true" aria-labelledby="share-card-title">
         <div class="polaroid-container">
-          <div id="polaroid-stack" class="polaroid-stack">
-            <div id="polaroid-card" class="polaroid-card">
-              <div class="polaroid-image-area">
-                <div id="share-card-preview" class="share-card-preview"></div>
-                <div class="polaroid-develop-overlay"></div>
-                <div id="polaroid-loading" class="polaroid-loading">
-                  <div class="polaroid-spinner"></div>
+          <div class="polaroid-main">
+            <div id="polaroid-stack" class="polaroid-stack">
+              <div id="polaroid-card" class="polaroid-card">
+                <div class="polaroid-image-area">
+                  <div id="share-card-preview" class="share-card-preview"></div>
+                  <div class="polaroid-develop-overlay"></div>
+                  <div id="polaroid-loading" class="polaroid-loading">
+                    <div class="polaroid-spinner"></div>
+                  </div>
+                </div>
+                <div class="polaroid-white-border">
+                  <span id="polaroid-caption" class="polaroid-caption"></span>
                 </div>
               </div>
-              <div class="polaroid-white-border">
-                <span id="polaroid-caption" class="polaroid-caption"></span>
+            </div>
+            <div id="share-modal-settings" class="share-modal-settings">
+              <div class="segmented share-modal-segmented" id="share-card-range" aria-label="Share card range">
+                <button type="button" data-range="today" data-i18n="desktop.range.today">Today</button>
+                <button type="button" data-range="7d" data-i18n="desktop.range.7d">7D</button>
+                <button type="button" data-range="this_week" data-i18n="desktop.share.period.this_week">This week</button>
+                <button type="button" data-range="30d" data-i18n="desktop.range.30d">30D</button>
+                <button type="button" data-range="this_month" data-i18n="desktop.share.period.this_month">This month</button>
+                <button type="button" data-range="all" class="active" data-i18n="desktop.range.all">ALL</button>
               </div>
+              <div class="segmented share-modal-segmented" id="share-card-orientation" aria-label="Share card orientation">
+                <button type="button" data-range="landscape" class="active" data-i18n="desktop.share.orientation.landscape">Landscape</button>
+                <button type="button" data-range="portrait" data-i18n="desktop.share.orientation.portrait">Portrait</button>
+              </div>
+              <label class="share-modal-toggle" data-i18n-title="desktop.share.showPolaroidFrame">
+                <input id="showSharePolaroidFrame" type="checkbox" checked />
+                <svg class="lucide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="3" y1="15" x2="21" y2="15"></line>
+                </svg>
+              </label>
+              <label class="share-modal-toggle" id="showShareAnonymousNameLabel" data-i18n-title="desktop.share.showAnonymousName" hidden>
+                <input id="showShareAnonymousName" type="checkbox" checked />
+                <svg class="lucide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+              </label>
+              <label class="share-modal-toggle" data-i18n-title="desktop.share.showCloudUrl">
+                <input id="showShareCloudUrl" type="checkbox" checked />
+                <svg class="lucide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="2" y1="12" x2="22" y2="12"></line>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+              </label>
             </div>
           </div>
           <div id="polaroid-actions" class="polaroid-actions">

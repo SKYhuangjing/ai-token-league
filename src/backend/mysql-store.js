@@ -6,7 +6,7 @@ import { newId } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
-import { CLOUD_PROVIDER_IDS, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
+import { CLOUD_PROVIDER_IDS, STORAGE_SCHEMA_VERSION, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
@@ -584,7 +584,17 @@ export class MySqlStore extends Store {
 
   async analytics(args = {}) {
     const businessDay = this.currentBusinessDay();
-    const periodDays = mysqlDaysForQuery(args, { businessDay });
+    const cacheArgs = { ...args, businessDay };
+    const cacheKey = `analytics|${STORAGE_SCHEMA_VERSION}|${JSON.stringify(cacheArgs)}`;
+    if (this.aggregateCache?.[cacheKey]) return this.aggregateCache[cacheKey].value;
+
+    let periodDays;
+    if (args.period === "all") {
+      const [allDayRows] = await this.pool.query("SELECT DISTINCT day FROM usage_daily ORDER BY day");
+      periodDays = allDayRows.map(r => toDayString(r.day));
+    } else {
+      periodDays = mysqlDaysForQuery(args, { businessDay });
+    }
     const heatmapDays = mysqlTrailingDays(90, { businessDay });
     const unionDays = [...new Set([...periodDays, ...heatmapDays])];
 
@@ -637,6 +647,8 @@ export class MySqlStore extends Store {
     if (args.participantId && periodDays.length) {
       result.rankStats = await this.mysqlAnalyticsRankStats(args.participantId, periodDays, { businessDay });
     }
+    this.aggregateCache ||= {};
+    this.aggregateCache[cacheKey] = { value: result };
     return result;
   }
 

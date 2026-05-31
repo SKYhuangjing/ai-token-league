@@ -6,7 +6,12 @@ import { localDay } from "../shared/date.js";
 
 export const SHARE_CARD_WIDTH = 1200;
 export const SHARE_CARD_HEIGHT = 720;
+export const PORTRAIT_CARD_WIDTH = 720;
+export const PORTRAIT_CARD_HEIGHT = 1200;
 export const SHARE_QUOTE_COUNT = 12;
+
+export const TROPHY_SVG = `<svg class="sc-medal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a1 1 0 0 1 0-5H6"/><path d="M18 9h1.5a1 1 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 22"/><path d="M14 14.66V17a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>`;
+export const MEDAL_SVG = `<svg class="sc-medal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
 
 // ── Utilities ──
 
@@ -53,6 +58,16 @@ export function sharePeriodBounds(period, businessDay) {
     return { from, to: day };
   }
   if (period === "this_month") return { from: day.slice(0, 8) + "01", to: day };
+  if (period === "7d") {
+    const d = new Date(day + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - 6);
+    return { from: d.toISOString().slice(0, 10), to: day };
+  }
+  if (period === "30d") {
+    const d = new Date(day + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - 29);
+    return { from: d.toISOString().slice(0, 10), to: day };
+  }
   return { from: day, to: day };
 }
 
@@ -63,6 +78,8 @@ export function shareRangeForPeriod(period, businessDay) {
 
 export function shareTrendGrain(period) {
   if (period === "today") return "hour";
+  if (period === "30d" || period === "this_month") return "week";
+  if (period === "all") return "month";
   return "day";
 }
 
@@ -251,8 +268,8 @@ function renderShareHeader(data, opts) {
     dateRange = fromVal && toVal ? `${fromVal} ~ ${toVal}` : data.range;
   }
 
-  const trophySvg = `<svg class="sc-medal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a1 1 0 0 1 0-5H6"/><path d="M18 9h1.5a1 1 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 22"/><path d="M14 14.66V17a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>`;
-  const medalSvg = `<svg class="sc-medal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
+  const trophySvg = TROPHY_SVG;
+  const medalSvg = MEDAL_SVG;
 
   let rankHtml = "";
   if (data.rankStats) {
@@ -271,7 +288,7 @@ function renderShareHeader(data, opts) {
 
   const anonymousCode = data.identity.anonymousName;
   let badgeHtml = "";
-  if (anonymousCode && String(anonymousCode).trim() !== "") {
+  if (opts.showAnonymousName !== false && anonymousCode && String(anonymousCode).trim() !== "") {
     const badgeLabel = isZh ? "今日代号" : "Today's Code";
     badgeHtml = `<span class="sc-code-badge">${escapeHtml(badgeLabel)} · ${escapeHtml(anonymousCode)}</span>`;
   }
@@ -304,11 +321,7 @@ function renderShareHeroScore(data, opts) {
   let costHtml = "";
   if (cost !== null && cost !== undefined) {
     const formattedCost = formatUsd ? formatUsd(cost) : `$${round(cost, 2)}`;
-    const hasAsterisk = data.totals.missingPriceTokens > 0 ? " *" : "";
-    const isEstimated = data.totals.costQuality === "estimated_price" || data.totals.costQuality === "unknown_price"
-      ? ` <span class="sc-cost-estimate">${escapeHtml(t("common.estimated").toLowerCase())}</span>`
-      : "";
-    costHtml = `<span class="sc-hero-cost">${formattedCost}${hasAsterisk}</span>${isEstimated}`;
+    costHtml = `<span class="sc-hero-cost">${formattedCost}</span>`;
   }
 
   return `<div class="sc-hero-score">
@@ -361,13 +374,11 @@ function renderShareSparkBars(data, opts) {
         costLabel = formatUsd ? formatUsd(row.estimatedCostUsd) : `$${round(row.estimatedCostUsd, 2)}`;
       }
     }
-    const hasAsterisk = row.missingPriceTokens > 0 ? " *" : "";
-
     return `<div class="sc-spark-bar-wrap">
       <div class="sc-spark-bar${isHot ? " hot" : ""}" style="height:${h}%">
         <div class="sc-spark-val-group">
           <span class="sc-spark-val-tokens">${tokensLabel}</span>
-          <span class="sc-spark-val-cost">${costLabel}${hasAsterisk}</span>
+          <span class="sc-spark-val-cost">${costLabel}</span>
         </div>
       </div>
     </div>`;
@@ -381,12 +392,70 @@ function renderShareSparkBars(data, opts) {
     return `<span>${escapeHtml(label)}</span>`;
   }).join("");
 
+  // ── Spark stats (peak / streak / avg) ──
+  const todayText = t("desktop.share.period.today") || "今日";
+  const isZh = todayText.includes("日") || todayText.includes("今");
+  const grain = data.trendGrain || "day";
+  const peakRow = rows[peakIdx];
+  const hasActive = peakRow.totalTokens > 0;
+
+  const peakTimeStr = hasActive ? (() => {
+    if (grain === "hour") {
+      const dateStr = data.businessDay || "";
+      const m = dateStr.slice(5, 7) || "01";
+      const d = dateStr.slice(8, 10) || "01";
+      const h = String(peakRow.hour != null ? peakRow.hour : peakRow.label || "00").padStart(2, "0").replace(/:.*$/, "");
+      return isZh ? `${m}月${d}日 ${h}:00` : `${m}/${d} ${h}:00`;
+    }
+    const dateStr = peakRow.day || peakRow.label || "";
+    if (dateStr.length >= 10) {
+      const m = dateStr.slice(5, 7);
+      const d = dateStr.slice(8, 10);
+      return isZh ? `${m}月${d}日` : `${m}/${d}`;
+    }
+    return dateStr;
+  })() : "-";
+
+  let currentStreak = 0, maxStreak = 0;
+  for (const row of rows) {
+    if (row.totalTokens > 0) { currentStreak++; if (currentStreak > maxStreak) maxStreak = currentStreak; }
+    else { currentStreak = 0; }
+  }
+
+  const streakUnit = grain === "hour" ? (t("desktop.share.hours") || "小时") : (t("desktop.share.days") || "天");
+  const sum = rows.reduce((s, r) => s + r.totalTokens, 0);
+  const avg = rows.length ? sum / rows.length : 0;
+
+  const peakCardLabel = t("desktop.share.metric.peak") || "最高峰";
+  const streakCardLabel = t("desktop.share.metric.streak") || "连续活跃";
+  const avgCardLabel = t("desktop.share.metric.avg") || "平均消耗";
+
+  const peakCardValue = hasActive ? `${peakTimeStr} / ${formatToken(peakRow.totalTokens)}` : "-";
+  const streakCardValue = `${maxStreak} ${streakUnit}`;
+  const avgCardValue = `${formatToken(avg)}${grain === "hour" ? " / 小时" : " / 天"}`;
+
+  const statsHtml = `<div class="sc-spark-stats">
+    <div class="sc-spark-stat-card">
+      <span class="sc-spark-stat-label">${escapeHtml(peakCardLabel)}</span>
+      <strong class="sc-spark-stat-val" title="${escapeHtml(peakCardValue)}">${escapeHtml(peakCardValue)}</strong>
+    </div>
+    <div class="sc-spark-stat-card">
+      <span class="sc-spark-stat-label">${escapeHtml(streakCardLabel)}</span>
+      <strong class="sc-spark-stat-val">${escapeHtml(streakCardValue)}</strong>
+    </div>
+    <div class="sc-spark-stat-card">
+      <span class="sc-spark-stat-label">${escapeHtml(avgCardLabel)}</span>
+      <strong class="sc-spark-stat-val">${escapeHtml(avgCardValue)}</strong>
+    </div>
+  </div>`;
+
   return `<div class="sc-visual-card sc-spark-section">
     <div><h4 class="sc-card-title">${escapeHtml(t("desktop.overview.usageTrend"))}</h4></div>
     <div class="sc-spark-wrap">
       <div class="sc-spark">${barsHtml}</div>
       <div class="sc-spark-axis">${labelsHtml}</div>
     </div>
+    ${statsHtml}
   </div>`;
 }
 
@@ -409,15 +478,11 @@ function renderShareMiniMeters(items, opts) {
         costLabel = formatUsd ? formatUsd(item.estimatedCostUsd) : `$${round(item.estimatedCostUsd, 2)}`;
       }
     }
-    const hasAsterisk = item.missingPriceTokens > 0 ? " *" : "";
-
     return `<div class="sc-mini-meter-row">
       <span class="sc-meter-name" title="${escapeHtml(item.name)}">${name}</span>
+      <span class="sc-meter-val-top">${formatToken(tokens)}</span>
       <div class="sc-mini-meter ${cc}"><i style="width:${pct}%"></i></div>
-      <span class="sc-meter-value">
-        <strong>${formatToken(tokens)}</strong>
-        <small class="sc-meter-cost">${costLabel}${hasAsterisk}</small>
-      </span>
+      <span class="sc-meter-cost">${costLabel}</span>
     </div>`;
   }).join("");
 
@@ -428,18 +493,21 @@ function renderShareMiniMeters(items, opts) {
 }
 
 function renderShareFooter(data, opts) {
-  const { t, cloudUrl, logoUrl } = opts;
+  const { t, cloudUrl, showCloudUrl, logoUrl } = opts;
   const quote = shareFooterQuote(data, t);
   const url = cloudUrl || "https://ai-token-league.com";
   const logo = logoUrl
     ? `<img class="sc-footer-logo" src="${escapeHtml(logoUrl)}" alt="" />`
+    : "";
+  const urlHtml = showCloudUrl !== false
+    ? `<div class="sc-brand-url">${escapeHtml(url)}</div>`
     : "";
 
   return `<div class="sc-footer">
     <div class="sc-footer-inner">
       <div class="sc-quote">${escapeHtml(quote)}</div>
       ${logo}
-      <div class="sc-brand-url">${escapeHtml(url)}</div>
+      ${urlHtml}
     </div>
   </div>`;
 }
@@ -465,15 +533,602 @@ export function renderShareCardHtml(data, opts = {}) {
   });
   const footer = renderShareFooter(data, opts);
 
+  const todayText = opts.t ? opts.t("desktop.share.period.today") || "今日" : "今日";
+  const isZh = todayText.includes("日") || todayText.includes("今");
+  const personas = getAiPersonas(data, isZh, 3);
+  const personaPillsHtml = personas.map(persona => `<div class="sc-hero-persona-pill" style="border-color:${persona.color}; box-shadow: 0 4px 12px ${persona.bgHex || "rgba(0,0,0,0.08)"};">
+    <span class="sc-hero-persona-label" style="color: ${persona.color};">#</span>
+    <span class="sc-hero-persona-divider"></span>
+    <span class="sc-hero-persona-text">${escapeHtml(persona.title)}</span>
+  </div>`).join("\n");
+
   return `<div class="sc-root" data-share-card-style="overview" style="--spark-cols:${sparkCols}">
     ${header}
     <div class="sc-dash-row">
       ${hero}
-      ${stats}
+      <div class="sc-dash-right">
+        ${stats}
+        <div class="sc-dash-pills">${personaPillsHtml}</div>
+      </div>
     </div>
     <div class="sc-meter-cols">${providers}${models}${workdirs}</div>
     ${sparkBars}
     ${footer}
+  </div>`;
+}
+
+// ── Portrait heatmap ──
+
+function dayOfWeekShort(dayStr) {
+  const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const d = new Date(dayStr + "T00:00:00Z");
+  return names[d.getUTCDay()];
+}
+
+function monthShort(dayStr) {
+  const d = new Date(dayStr + "T00:00:00Z");
+  return d.toLocaleString(undefined, { month: "short", timeZone: "UTC" });
+}
+
+function pulseAxisLabel(cell, grain) {
+  if (grain === "hour") return `${cell.hour}`;
+  if (grain === "week") return (cell.day || "").slice(5);
+  if (grain === "month") return monthShort(cell.day || "");
+  return (cell.day || "").slice(8);
+}
+
+function pulseTooltipLabel(cell, grain) {
+  if (grain === "hour") return `${cell.hour}:00`;
+  return (cell.day || "").slice(5);
+}
+
+function pulsePeakLabel(cell, grain) {
+  if (grain === "hour") return `${cell.hour}:00`;
+  if (grain === "week") return (cell.day || "").slice(5);
+  if (grain === "month") return monthShort(cell.day || "");
+  return (cell.day || "").slice(5);
+}
+
+function formatPeakTime(cell, grain, businessDay, isZh) {
+  if (grain === "hour") {
+    const dateStr = businessDay || "";
+    const m = dateStr.slice(5, 7) || "01";
+    const d = dateStr.slice(8, 10) || "01";
+    const h = String(cell.hour != null ? cell.hour : "00").padStart(2, "0") + ":00";
+    if (isZh) {
+      return `${m}月${d}日 ${h}`;
+    }
+    return `${m}/${d} ${h}`;
+  } else {
+    const dateStr = cell.day || cell.periodStart || cell.label || "";
+    if (dateStr.length >= 10) {
+      const m = dateStr.slice(5, 7);
+      const d = dateStr.slice(8, 10);
+      if (isZh) {
+        return `${m}月${d}日`;
+      }
+      return `${m}/${d}`;
+    }
+    return dateStr;
+  }
+}
+
+function renderPortraitHeatmap(data, opts) {
+  const { t, formatToken } = opts;
+  const cells = data.heatmap;
+  if (!cells || !cells.length) {
+    return `<div class="sc-visual-card sc-pulse-section">
+      <h4 class="sc-card-title">${escapeHtml(t("desktop.share.activity"))}</h4>
+      <div class="sc-empty">${escapeHtml(t("desktop.share.noData"))}</div>
+    </div>`;
+  }
+
+  const grain = data.trendGrain || "day";
+  const max = Math.max(...cells.map((c) => c.totalTokens), 1);
+  const peakIdx = cells.reduce((best, c, i) => c.totalTokens > cells[best].totalTokens ? i : best, 0);
+  const peakCell = cells[peakIdx];
+  const hasActive = peakCell.totalTokens > 0;
+
+  // Calculate metrics
+  const activeCells = cells.filter(c => c.totalTokens > 0);
+  const sum = cells.reduce((s, c) => s + c.totalTokens, 0);
+  const avg = cells.length ? sum / cells.length : 0;
+
+  // Longest streak
+  let currentStreak = 0;
+  let maxStreak = 0;
+  for (const cell of cells) {
+    if (cell.totalTokens > 0) {
+      currentStreak++;
+      if (currentStreak > maxStreak) {
+        maxStreak = currentStreak;
+      }
+    } else {
+      currentStreak = 0;
+    }
+  }
+
+  // Detect trough
+  let troughIdx = -1;
+  if (activeCells.length > 0) {
+    const nonPeakActive = activeCells.filter(c => c.totalTokens !== max);
+    if (nonPeakActive.length > 0) {
+      const minActiveVal = Math.min(...nonPeakActive.map(c => c.totalTokens));
+      troughIdx = cells.findIndex(c => c.totalTokens === minActiveVal);
+    } else {
+      troughIdx = cells.findIndex(c => c.totalTokens === max);
+    }
+  }
+
+  // Detect spike
+  const average = sum / cells.length;
+  const spikeIndices = [];
+  for (let i = 0; i < cells.length; i++) {
+    const val = cells[i].totalTokens;
+    if (val === max) continue;
+    if (val < 0.15 * max) continue;
+    if (val > 2.5 * average) {
+      const prevVal = i > 0 ? cells[i-1].totalTokens : 0;
+      const nextVal = i < cells.length - 1 ? cells[i+1].totalTokens : 0;
+      if (val >= prevVal && val >= nextVal) {
+        spikeIndices.push(i);
+      }
+    }
+  }
+  const spikeIdx = spikeIndices.length > 0 ? spikeIndices[0] : -1;
+
+  // Coordinate mapping
+  const chartW = 560;
+  const chartH = 90;
+  const padLeft = 20;
+  const padTop = 25;
+
+  const points = cells.map((cell, i) => {
+    const x = padLeft + (cells.length > 1 ? (i / (cells.length - 1)) * chartW : chartW / 2);
+    const ratio = max > 0 ? cell.totalTokens / max : 0;
+    const y = padTop + chartH - ratio * chartH;
+    return { x, y, val: cell.totalTokens, cell, index: i };
+  });
+
+  // SVG Bezier Curve (monotone cubic — smooth with no overshoot)
+  const getBezierPath = (pts) => {
+    if (pts.length === 0) return "";
+    if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const curr = pts[i];
+      const next = pts[i + 1];
+      const prev = i > 0 ? pts[i - 1] : curr;
+      const afterNext = i < pts.length - 2 ? pts[i + 2] : next;
+      const dx = next.x - curr.x;
+      const dy = next.y - curr.y;
+      const slopeCurr = (next.y - prev.y) / ((next.x - prev.x) || 1);
+      const slopeNext = (afterNext.y - curr.y) / ((afterNext.x - curr.x) || 1);
+      const signCurr = Math.sign(dy) || Math.sign(slopeCurr);
+      const signNext = Math.sign(dy) || Math.sign(slopeNext);
+      const tanCurr = signCurr === Math.sign(slopeCurr) ? slopeCurr : 0;
+      const tanNext = signNext === Math.sign(slopeNext) ? slopeNext : 0;
+      const cpX1 = curr.x + dx / 3;
+      const cpY1 = curr.y + tanCurr * dx / 3;
+      const cpX2 = next.x - dx / 3;
+      const cpY2 = next.y - tanNext * dx / 3;
+      d += ` C ${cpX1} ${cpY1}, ${cpX2} ${cpY2}, ${next.x} ${next.y}`;
+    }
+    return d;
+  };
+
+  const linePath = getBezierPath(points);
+  const firstPoint = points[0];
+  const lastPoint = points[points.length - 1];
+  const areaPath = points.length > 1 ? `${linePath} L ${lastPoint.x} ${padTop + chartH} L ${firstPoint.x} ${padTop + chartH} Z` : "";
+
+  // Render callouts
+  let calloutsHtml = "";
+
+  const addAnnotation = (idx, text, type) => {
+    if (idx < 0 || idx >= points.length) return;
+    const pt = points[idx];
+    const pctX = (pt.x / 600) * 100;
+    const pctY = (pt.y / 140) * 100;
+
+    calloutsHtml += `<div class="sc-pulse-callout ${type}" style="left:${pctX}%;top:${pctY}%;">
+      ${escapeHtml(text)}
+    </div>`;
+  };
+
+
+  const labelInterval = cells.length <= 10 ? 1 : cells.length <= 16 ? 2 : cells.length <= 31 ? 5 : Math.ceil(cells.length / 8);
+  const showLabel = (cell, idx) => {
+    if (grain === "hour") {
+      return idx === 0 || idx === 6 || idx === 12 || idx === 18 || idx === 23;
+    }
+    return idx === 0 || idx === cells.length - 1 || idx % labelInterval === 0;
+  };
+
+  const axisHtml = cells.map((cell, i) => {
+    const show = showLabel(cell, i);
+    return `<span class="sc-pulse-axis-label">${show ? escapeHtml(pulseAxisLabel(cell, grain)) : ""}</span>`;
+  }).join("");
+
+  const isZh = (t("desktop.share.period.today") || "今日").includes("日");
+  const peakTimeStr = hasActive ? formatPeakTime(peakCell, grain, data.businessDay, isZh) : "-";
+  const streakUnit = grain === "hour" ? (t("desktop.share.hours") || "小时") : (t("desktop.share.days") || "天");
+
+  const peakCardLabel = t("desktop.share.metric.peak") || "最高峰";
+  const streakCardLabel = t("desktop.share.metric.streak") || "连续活跃";
+  const avgCardLabel = t("desktop.share.metric.avg") || "平均消耗";
+
+  const peakCardValue = hasActive ? `${peakTimeStr} / ${formatToken(peakCell.totalTokens)}` : "-";
+  const streakCardValue = `${maxStreak} ${streakUnit}`;
+  const avgCardValue = `${formatToken(avg)}${grain === "hour" ? " / 小时" : " / 天"}`;
+
+  return `<div class="sc-visual-card sc-pulse-section">
+    <div class="sc-pulse-header">
+      <h4 class="sc-card-title">${escapeHtml(t("desktop.share.activity"))}</h4>
+    </div>
+    <div class="sc-pulse-chart">
+      <div class="sc-pulse-grid">
+        <span></span><span></span><span></span>
+      </div>
+      <svg class="sc-pulse-svg" viewBox="0 0 600 140" width="100%" height="100%" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="line-grad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#0bb29d" />
+            <stop offset="50%" stop-color="#00e676" />
+            <stop offset="100%" stop-color="#0bb29d" />
+          </linearGradient>
+          <linearGradient id="area-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgba(11, 178, 157, 0.32)" />
+            <stop offset="100%" stop-color="rgba(11, 178, 157, 0.00)" />
+          </linearGradient>
+        </defs>
+        ${areaPath ? `<path d="${areaPath}" fill="url(#area-grad)" stroke="none" />` : ""}
+        ${linePath ? `<path d="${linePath}" fill="none" stroke="url(#line-grad)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />` : ""}
+      </svg>
+      ${calloutsHtml}
+    </div>
+    <div class="sc-pulse-axis">${axisHtml}</div>
+
+    <!-- Premium Metrics Row -->
+    <div class="sc-pulse-stats">
+      <div class="sc-pulse-stat-card">
+        <span class="sc-pulse-stat-label">${escapeHtml(peakCardLabel)}</span>
+        <strong class="sc-pulse-stat-val" title="${escapeHtml(peakCardValue)}">${escapeHtml(peakCardValue)}</strong>
+      </div>
+      <div class="sc-pulse-stat-card">
+        <span class="sc-pulse-stat-label">${escapeHtml(streakCardLabel)}</span>
+        <strong class="sc-pulse-stat-val">${escapeHtml(streakCardValue)}</strong>
+      </div>
+      <div class="sc-pulse-stat-card">
+        <span class="sc-pulse-stat-label">${escapeHtml(avgCardLabel)}</span>
+        <strong class="sc-pulse-stat-val">${escapeHtml(avgCardValue)}</strong>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── Portrait card renderer ──
+
+// ── AI Persona Helper ──
+
+const PERSONA_CATALOG = [
+  {
+    id: "cache_master",
+    title: { zh: "缓存刺客", en: "Cache Assassin" },
+    color: "#058f7e", bgHex: "rgba(5, 143, 126, 0.06)",
+    score: (d) => {
+      const total = d.totals.totalTokens || 1;
+      const ratio = ((d.totals.cacheReadTokens || 0) + (d.totals.cacheWriteTokens || 0)) / total;
+      return ratio > 0.5 ? ratio * 100 : 0;
+    }
+  },
+  {
+    id: "claude_geek",
+    title: { zh: "Claude 脑残粉", en: "Claude Cultist" },
+    color: "#b43b32", bgHex: "rgba(180, 59, 50, 0.06)",
+    score: (d) => {
+      const top = (d.providers[0]?.name || "").toLowerCase();
+      return top.includes("claude") ? 80 + (d.providers[0]?.ratio || 0) * 20 : 0;
+    }
+  },
+  {
+    id: "frontier_pioneer",
+    title: { zh: "烧钱尝鲜党", en: "Bleeding Edge" },
+    color: "#daa520", bgHex: "rgba(218, 165, 32, 0.06)",
+    score: (d) => {
+      const top = (d.models[0]?.name || "").toLowerCase();
+      return (top.includes("gpt-5") || top.includes("o1") || top.includes("o3") || top.includes("o4")) ? 85 : 0;
+    }
+  },
+  {
+    id: "token_shredder",
+    title: { zh: "Token 碎钞机", en: "Token Incinerator" },
+    color: "#9d78dc", bgHex: "rgba(157, 120, 220, 0.06)",
+    score: (d) => {
+      const t = d.totals.totalTokens || 0;
+      if (t > 100000000) return 95;
+      if (t > 50000000) return 80;
+      if (t > 10000000) return 60;
+      return 0;
+    }
+  },
+  {
+    id: "output_heavy",
+    title: { zh: "话痨养成系", en: "Chatterbox" },
+    color: "#e07828", bgHex: "rgba(224, 120, 40, 0.06)",
+    score: (d) => {
+      const total = d.totals.totalTokens || 1;
+      const ratio = (d.totals.outputTokens || 0) / total;
+      return ratio > 0.4 ? ratio * 90 : 0;
+    }
+  },
+  {
+    id: "reasoning_thinker",
+    title: { zh: "沉思的哲学家", en: "Deep Philosopher" },
+    color: "#6a8cda", bgHex: "rgba(106, 140, 218, 0.06)",
+    score: (d) => {
+      const total = d.totals.totalTokens || 1;
+      const ratio = (d.totals.reasoningTokens || 0) / total;
+      return ratio > 0.1 ? ratio * 120 : 0;
+    }
+  },
+  {
+    id: "multi_model",
+    title: { zh: "海王型选手", en: "Model Surfer" },
+    color: "#c05898", bgHex: "rgba(192, 88, 152, 0.06)",
+    score: (d) => {
+      const count = (d.models || []).filter(m => m.tokens > 0).length;
+      return count >= 3 ? 50 + count * 8 : 0;
+    }
+  },
+  {
+    id: "codex_geek",
+    title: { zh: "Codex 搭子", en: "Codex Buddy" },
+    color: "#10a37f", bgHex: "rgba(16, 163, 127, 0.06)",
+    score: (d) => {
+      const top = (d.providers[0]?.name || "").toLowerCase();
+      return top.includes("codex") ? 80 + (d.providers[0]?.ratio || 0) * 20 : 0;
+    }
+  },
+  {
+    id: "cursor_wizard",
+    title: { zh: "Cursor 念咒人", en: "Cursor Sorcerer" },
+    color: "#7c6aef", bgHex: "rgba(124, 106, 239, 0.06)",
+    score: (d) => {
+      const top = (d.providers[0]?.name || "").toLowerCase();
+      return top.includes("cursor") ? 80 + (d.providers[0]?.ratio || 0) * 20 : 0;
+    }
+  },
+  {
+    id: "night_owl",
+    title: { zh: "凌晨修仙党", en: "Midnight Alchemist" },
+    color: "#4a6cf7", bgHex: "rgba(74, 108, 247, 0.06)",
+    score: (d) => {
+      const ts = d.timeSeries || [];
+      if (ts.length === 0) return 0;
+      const nightTokens = ts.filter(h => h.hour != null && (h.hour >= 22 || h.hour < 6))
+        .reduce((s, h) => s + (h.totalTokens || 0), 0);
+      const totalTokens = ts.reduce((s, h) => s + (h.totalTokens || 0), 0) || 1;
+      const ratio = nightTokens / totalTokens;
+      return ratio > 0.4 ? ratio * 100 : 0;
+    }
+  },
+  {
+    id: "steady_coder",
+    title: { zh: "永动机", en: "Perpetual Engine" },
+    color: "#2eaa6f", bgHex: "rgba(46, 170, 111, 0.06)",
+    score: (d) => {
+      const ts = d.timeSeries || [];
+      const active = ts.filter(h => (h.totalTokens || 0) > 0);
+      if (active.length < 3) return 0;
+      const values = active.map(h => h.totalTokens);
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+      const variance = values.reduce((s, v) => s + (v - avg) ** 2, 0) / values.length;
+      const cv = Math.sqrt(variance) / (avg || 1);
+      return cv < 0.4 ? (1 - cv) * 80 : 0;
+    }
+  },
+  {
+    id: "rising_star",
+    title: { zh: "越卷越勇", en: "Momentum Rider" },
+    color: "#e85d3a", bgHex: "rgba(232, 93, 58, 0.06)",
+    score: (d) => {
+      const ts = d.timeSeries || [];
+      const active = ts.filter(h => (h.totalTokens || 0) > 0);
+      if (active.length < 3) return 0;
+      const mid = Math.floor(active.length / 2);
+      const firstHalf = active.slice(0, mid).reduce((s, h) => s + h.totalTokens, 0);
+      const secondHalf = active.slice(mid).reduce((s, h) => s + h.totalTokens, 0);
+      if (firstHalf === 0) return 0;
+      const growth = secondHalf / firstHalf;
+      return growth > 1.5 ? Math.min(growth * 40, 95) : 0;
+    }
+  },
+  {
+    id: "winding_down",
+    title: { zh: "佛系收工", en: "Zen Mode" },
+    color: "#6c8cbe", bgHex: "rgba(108, 140, 190, 0.06)",
+    score: (d) => {
+      const ts = d.timeSeries || [];
+      const active = ts.filter(h => (h.totalTokens || 0) > 0);
+      if (active.length < 3) return 0;
+      const mid = Math.floor(active.length / 2);
+      const firstHalf = active.slice(0, mid).reduce((s, h) => s + h.totalTokens, 0);
+      const secondHalf = active.slice(mid).reduce((s, h) => s + h.totalTokens, 0);
+      if (secondHalf === 0 || firstHalf === 0) return 0;
+      const decline = firstHalf / secondHalf;
+      return decline > 1.5 ? Math.min(decline * 40, 95) : 0;
+    }
+  },
+  {
+    id: "copilot",
+    title: { zh: "AI 最佳拍档", en: "AI Sidekick" },
+    color: "#058f7e", bgHex: "rgba(5, 143, 126, 0.06)",
+    score: () => 20 // always-present baseline
+  }
+];
+
+export function getAiPersonas(data, isZh, count = 2) {
+  const safeData = {
+    totals: data.totals || {},
+    providers: data.providers || [],
+    models: data.models || [],
+    timeSeries: data.timeSeries || []
+  };
+  const scored = PERSONA_CATALOG.map(p => ({ ...p, s: p.score(safeData) }))
+    .filter(p => p.s > 0)
+    .sort((a, b) => b.s - a.s);
+
+  const picked = [];
+  for (const p of scored) {
+    if (picked.length >= count) break;
+    if (picked.some(x => x.id === p.id)) continue;
+    picked.push({
+      id: p.id,
+      title: isZh ? p.title.zh : p.title.en,
+      color: p.color,
+      bgHex: p.bgHex
+    });
+  }
+
+  // Pad with baseline if we don't have enough
+  while (picked.length < count) {
+    const fallback = PERSONA_CATALOG[PERSONA_CATALOG.length - 1];
+    picked.push({
+      id: fallback.id + "_" + picked.length,
+      title: isZh ? fallback.title.zh : fallback.title.en,
+      color: fallback.color,
+      bgHex: fallback.bgHex
+    });
+  }
+
+  return picked;
+}
+
+/** @deprecated Use getAiPersonas instead — kept for backward compat */
+export function getAiPersona(data, isZh) {
+  const [first] = getAiPersonas(data, isZh, 1);
+  return first;
+}
+
+export function renderPortraitShareCardHtml(data, opts = {}) {
+  const { t, cloudUrl, showCloudUrl, showAnonymousName } = opts;
+  const otherLabel = opts.t ? opts.t("desktop.share.other") || "Other" : "Other";
+
+  const name = escapeHtml(data.identity.nickname || data.identity.displayName || t("app.name"));
+  const fromVal = data.from || "";
+  const toVal = data.to || "";
+  const todayText = t("desktop.share.period.today") || "今日";
+  const isZh = todayText.includes("日") || todayText.includes("今");
+  const greeting = isZh ? "我是" : "I am";
+
+  let dateRange = "";
+  if (data.range === "today") {
+    dateRange = toVal;
+  } else if (data.range === "7d" || data.range === "30d") {
+    dateRange = `${fromVal} ~ ${toVal}`;
+  } else if (data.range === "all") {
+    const prefix = isZh ? "截止 " : "Through ";
+    dateRange = `${prefix}${toVal}`;
+  } else {
+    dateRange = fromVal && toVal ? `${fromVal} ~ ${toVal}` : data.range;
+  }
+
+  let heroRankBadge = "";
+  if (data.rankStats) {
+    const rank = data.rankStats.rank || 0;
+    const rankText = rank ? `No.${rank}` : "";
+    if (rankText) {
+      const medalClass = rank >= 1 && rank <= 3 ? ` sc-medal sc-medal-${rank}` : "";
+      const medalIcon = rank === 1 ? TROPHY_SVG : (rank === 2 || rank === 3) ? MEDAL_SVG : "";
+      heroRankBadge = `<div class="sc-hero-rank-pill${medalClass}">${medalIcon}<span class="sc-hero-rank-text">${rankText}</span></div>`;
+    }
+  } else if (data.mode === "local") {
+    heroRankBadge = `<div class="sc-hero-rank-pill sc-hero-rank-local"><span class="sc-hero-rank-text">${escapeHtml(t("desktop.share.localStats"))}</span></div>`;
+  }
+
+  let rankSubHtml = "";
+  if (data.rankStats) {
+    const rs = data.rankStats;
+    const frags = [];
+    if (rs.leaderDays) {
+      const label = isZh ? "登顶" : "Led";
+      frags.push(`<span class="sc-rank-stat"><span class="sc-rank-stat-val">${rs.leaderDays}</span><span class="sc-rank-stat-label">${label}</span></span>`);
+    }
+    if (rs.participantCount) {
+      const label = isZh ? "人参与" : "players";
+      frags.push(`<span class="sc-rank-stat sc-rank-stat--dark"><span class="sc-rank-stat-val">${rs.participantCount}</span><span class="sc-rank-stat-label">${label}</span></span>`);
+    }
+    if (frags.length) {
+      rankSubHtml = `<div class="sc-portrait-header-sub-list">${frags.join("")}</div>`;
+    }
+  }
+
+  const anonymousCode = data.identity.anonymousName;
+  let badgeHtml = "";
+  if (opts.showAnonymousName !== false && anonymousCode && String(anonymousCode).trim() !== "") {
+    const badgeLabel = isZh ? "今日代号" : "Today's Code";
+    badgeHtml = `<span class="sc-code-badge">${escapeHtml(badgeLabel)} · ${escapeHtml(anonymousCode)}</span>`;
+  }
+
+  const headerHtml = `<div class="sc-portrait-header">
+    <div class="sc-portrait-header-left">
+      <div class="sc-portrait-identity-col">
+        <span class="sc-portrait-greeting">${greeting} ${name}</span>
+        ${badgeHtml}
+      </div>
+    </div>
+    <div class="sc-portrait-header-right">
+      <span class="sc-portrait-date">${escapeHtml(dateRange)}</span>
+      ${rankSubHtml}
+    </div>
+  </div>`;
+
+  const heroHtml = renderShareHeroScore(data, opts);
+  const modelsHtml = renderShareMiniMeters(collapseTop(data.models, 4, otherLabel), {
+    ...opts, title: (opts.t ? opts.t("desktop.share.models") : null) || "Model mix", colorClasses: ["sc-color-violet", "sc-color-yellow", ""]
+  });
+  const providersHtml = renderShareMiniMeters(collapseTop(data.providers, 4, otherLabel), {
+    ...opts, title: (opts.t ? opts.t("desktop.share.sources") : null) || "Source mix", colorClasses: ["sc-color-teal", "sc-color-yellow", ""]
+  });
+  const heatmapHtml = renderPortraitHeatmap(data, opts);
+
+  const quote = shareFooterQuote(data, t);
+  const cloudHtml = (showCloudUrl !== false && cloudUrl)
+    ? `<div class="sc-portrait-cloud">${escapeHtml(cloudUrl)}</div>`
+    : "";
+
+  const portraitFooter = `<div class="sc-portrait-footer">
+    <div class="sc-portrait-quote">${escapeHtml(quote)}</div>
+    ${cloudHtml}
+  </div>`;
+
+  const personas = getAiPersonas(data, isZh, 2);
+  const personaPillsHtml = personas.map(persona => `<div class="sc-hero-persona-pill" style="border-color:${persona.color}; box-shadow: 0 4px 12px ${persona.bgHex || "rgba(0,0,0,0.08)"};">
+    <span class="sc-hero-persona-label" style="color: ${persona.color};">#</span>
+    <span class="sc-hero-persona-divider"></span>
+    <span class="sc-hero-persona-text">${escapeHtml(persona.title)}</span>
+  </div>`).join("\n");
+
+  const heroBlockHtml = `<div class="sc-portrait-hero-container">
+    <div class="sc-portrait-hero-left">
+      ${heroHtml}
+    </div>
+    <div class="sc-portrait-hero-right">
+      ${heroRankBadge}
+      ${personaPillsHtml}
+    </div>
+  </div>`;
+
+  return `<div class="sc-root sc-portrait" data-share-card-style="portrait">
+    ${headerHtml}
+    <div class="sc-portrait-hero-block">
+      ${heroBlockHtml}
+    </div>
+    ${modelsHtml}
+    ${providersHtml}
+    ${heatmapHtml}
+    ${portraitFooter}
   </div>`;
 }
 
@@ -503,7 +1158,7 @@ export function shareCardCss() {
   align-items: center;
   padding: 12px 0 24px;
   margin-bottom: 16px;
-  border-bottom: 1.5px solid rgba(16, 17, 15, 0.12);
+  border-bottom: 1.5px solid rgba(16, 17, 15, 0.08);
 }
 .sc-header-left {
   display: flex;
@@ -622,21 +1277,20 @@ export function shareCardCss() {
 .sc-rank-stat {
   display: inline-flex; align-items: center; gap: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  background: rgba(16, 17, 15, 0.04);
+  background: rgba(16, 17, 15, 0.035);
   padding: 5px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(16, 17, 15, 0.08);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+  border: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.025);
 }
 .sc-rank-stat--dark {
-  background: rgba(16, 17, 15, 0.06);
-  border: 1px solid rgba(16, 17, 15, 0.12);
+  background: rgba(16, 17, 15, 0.05);
 }
 .sc-rank-stat--dark .sc-rank-stat-val {
   color: #10110f;
 }
 .sc-rank-stat-val {
-  font-size: 18px; font-weight: 900; color: #b43b32;
+  font-size: 22px; font-weight: 900; color: #b43b32;
 }
 .sc-rank-stat-label {
   font-size: 11px; color: #6f695e; font-weight: 500;
@@ -648,13 +1302,14 @@ export function shareCardCss() {
 .sc-hero-score {
   position: relative; overflow: hidden;
   min-height: 100px;
-  border: 1px solid #11120f;
-  border-radius: 12px;
+  border: 1px solid rgba(17, 18, 15, 0.35);
+  border-radius: 14px;
   background:
     radial-gradient(circle at 78% 18%, rgba(244, 176, 0, 0.28), transparent 12rem),
     linear-gradient(135deg, #171815, #2a2b25);
   color: #f5efe3;
   padding: 16px 20px;
+  box-shadow: 0 8px 32px rgba(16, 17, 15, 0.12), 0 2px 6px rgba(16, 17, 15, 0.06);
 }
 .sc-hero-score::after {
   content: "";
@@ -673,7 +1328,7 @@ export function shareCardCss() {
 }
 .sc-total-value {
   margin: 6px 0 2px;
-  font-size: 48px; font-weight: 900;
+  font-size: 58px; font-weight: 900;
   line-height: 0.92;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -684,48 +1339,54 @@ export function shareCardCss() {
 .sc-hero-sub span {
   display: inline-flex; align-items: center; gap: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 16px; font-weight: 900;
+  font-size: 19px; font-weight: 900;
   color: rgba(245, 239, 227, 0.92);
 }
 .sc-hero-cost {
   color: #f4b000 !important;
-}
-.sc-cost-estimate {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 14px;
-  font-weight: 700;
-  color: #f4b000;
-  margin-left: 6px;
 }
 
 /* ── Stat Cards — mirrors .stat-card ── */
 .sc-dash-row {
   display: grid;
   grid-template-columns: minmax(280px, 0.8fr) 1.2fr;
-  align-items: start;
+  align-items: stretch;
   gap: 12px;
   margin-bottom: 10px;
+}
+.sc-dash-right {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 0;
+}
+.sc-dash-pills {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
 }
 .sc-stat-grid {
   display: grid; grid-template-columns: repeat(3, 1fr);
   gap: 10px;
 }
 .sc-stat-card {
-  border: 1px solid #11120f;
-  border-radius: 12px;
-  background: rgba(255, 249, 237, 0.78);
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 251, 243, 0.72);
   min-height: 70px; padding: 8px 14px;
   display: flex; flex-direction: column; justify-content: center;
+  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
 }
 .sc-stat-card span {
   color: #6f695e; font-size: 13px; font-weight: 900;
 }
 .sc-stat-card strong {
-  font-size: 20px; font-weight: 900; margin-top: 4px;
+  font-size: 24px; font-weight: 900; margin-top: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .sc-stat-detail {
-  color: #6f695e; font-size: 12px; margin-top: 4px;
+  color: #6f695e; font-size: 14px; margin-top: 4px;
 }
 .sc-stat-cost-val {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
@@ -735,10 +1396,11 @@ export function shareCardCss() {
 
 /* ── Visual Cards — mirrors .visual-card ── */
 .sc-visual-card {
-  border: 1px solid #11120f;
-  border-radius: 12px;
-  background: rgba(255, 249, 237, 0.78);
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 251, 243, 0.65);
   padding: 10px 16px;
+  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
 }
 .sc-card-title {
   margin: 0 0 6px; font-size: 20px;
@@ -752,8 +1414,8 @@ export function shareCardCss() {
   grid-template-columns: repeat(var(--spark-cols), minmax(0, 1fr));
   align-items: end;
   gap: 6px;
-  height: 140px;
-  border-bottom: 1px solid #11120f;
+  height: 100px;
+  border-bottom: 1.5px solid rgba(16, 17, 15, 0.10);
   padding: 32px 0 0;
   box-sizing: border-box;
 }
@@ -766,7 +1428,7 @@ export function shareCardCss() {
 }
 .sc-spark-bar {
   width: 100%;
-  border: 1px solid rgba(16, 17, 15, 0.25);
+  border: 1px solid rgba(16, 17, 15, 0.10);
   border-bottom: 0;
   border-radius: 6px 6px 0 0;
   background: linear-gradient(180deg, rgba(5, 143, 126, 0.68), rgba(5, 143, 126, 0.18));
@@ -789,11 +1451,11 @@ export function shareCardCss() {
 }
 .sc-spark-val-tokens {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px; font-weight: 900; color: #10110f;
+  font-size: 13px; font-weight: 900; color: #10110f;
 }
 .sc-spark-val-cost {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px; font-weight: 700; color: #f4b000;
+  font-size: 12px; font-weight: 700; color: #f4b000;
 }
 .sc-spark-axis {
   display: grid;
@@ -804,6 +1466,40 @@ export function shareCardCss() {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 900; white-space: nowrap;
 }
+.sc-spark-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1.5px solid rgba(16, 17, 15, 0.12);
+}
+.sc-spark-stat-card {
+  background: rgba(16, 17, 15, 0.025);
+  border: none;
+  border-radius: 10px;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 2px 10px rgba(16, 17, 15, 0.03);
+}
+.sc-spark-stat-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  color: #6f695e;
+  text-transform: uppercase;
+}
+.sc-spark-stat-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 900;
+  color: #10110f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ── Mini Meters — mirrors .mini-meter-row ── */
 .sc-meter-cols {
@@ -813,29 +1509,37 @@ export function shareCardCss() {
 .sc-stack { display: grid; gap: 6px; }
 .sc-mini-meter-row {
   display: grid;
-  grid-template-columns: minmax(70px, 1fr) minmax(40px, 0.72fr) minmax(60px, auto);
-  align-items: center; gap: 10px;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 2px 8px;
   min-height: 32px;
-  font-size: 13px;
+  font-size: 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 900;
+  align-items: center;
 }
-.sc-mini-meter-row span:first-child {
+.sc-mini-meter-row .sc-meter-name {
+  min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sc-mini-meter-row span:last-child { text-align: right; }
-.sc-meter-value {
+.sc-mini-meter-row .sc-meter-val-top { align-self: end; text-align: right; line-height: 1.15; }
+.sc-mini-meter-row .sc-mini-meter { grid-column: 1; align-self: center; }
+.sc-mini-meter-row .sc-meter-cost {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.1;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 12px;
+  align-self: center;
+  text-align: right;
+  font-size: 12px;
+  line-height: 1;
 }
-.sc-meter-value strong { font-size: 13px; color: #10110f; }
 .sc-mini-meter {
   height: 12px; overflow: hidden;
-  border: 1px solid rgba(16, 17, 15, 0.22);
+  border: none;
   border-radius: 999px;
-  background: rgba(16, 17, 15, 0.08);
+  background: rgba(16, 17, 15, 0.06);
+  box-shadow: inset 0 1px 3px rgba(16, 17, 15, 0.06);
 }
 .sc-mini-meter i {
   display: block; height: 100%; border-radius: 999px;
@@ -845,10 +1549,9 @@ export function shareCardCss() {
 .sc-mini-meter.sc-color-yellow i { background: #f4b000; }
 .sc-mini-meter.sc-color-violet i { background: #9d78dc; }
 .sc-meter-cost {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   color: #f4b000;
-  margin-top: 1px;
 }
 
 /* ── Footer ── */
@@ -885,6 +1588,490 @@ export function shareCardCss() {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; color: #6f695e; padding: 16px 0;
 }
+
+/* ── Persona pills (shared) ── */
+.sc-hero-persona-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(16, 17, 15, 0.04);
+  color: #111111;
+  border: 1px solid rgba(16, 17, 15, 0.10);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  text-align: center;
+  box-sizing: border-box;
+}
+.sc-hero-persona-label {
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.sc-hero-persona-divider {
+  width: 1px;
+  height: 12px;
+  background: rgba(16, 17, 15, 0.15);
+  flex-shrink: 0;
+}
+.sc-hero-persona-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: 0.4px currentColor;
+  white-space: nowrap;
+}
+.sc-hero-persona-pill .sc-persona-icon {
+  width: 12px;
+  height: 12px;
+  color: #daa520;
+  flex-shrink: 0;
+}
+.sc-hero-code-label {
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sc-hero-code-val {
+  font-size: 13px;
+  font-weight: 900;
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+}
+`;
+}
+
+export function portraitShareCardCss() {
+  return `
+.sc-root.sc-portrait {
+  width: ${PORTRAIT_CARD_WIDTH}px;
+  height: ${PORTRAIT_CARD_HEIGHT}px;
+  padding: 28px 32px;
+  gap: 10px;
+}
+
+/* ── Portrait header ── */
+.sc-portrait-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0 16px;
+  border-bottom: 1.5px solid rgba(16, 17, 15, 0.08);
+}
+.sc-portrait-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sc-portrait-identity-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.sc-portrait-header-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.sc-portrait-greeting {
+  font-size: 26px; font-weight: 800;
+  font-family: ui-serif, Georgia, "Times New Roman", serif;
+  color: #10110f;
+}
+.sc-portrait-rank {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 19px; font-weight: 950;
+  background: #3d8a7a; color: #fff;
+  padding: 4px 14px; border-radius: 99px;
+  display: inline-flex; align-items: center; gap: 6px;
+  box-shadow: 0 4px 12px rgba(61, 138, 122, 0.2);
+  letter-spacing: 0.02em;
+}
+.sc-portrait-rank.sc-medal {
+  font-size: 22px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.sc-portrait-rank.sc-medal-1 {
+  background: #daa520;
+  border: 2px solid #f5d060;
+  box-shadow: 0 6px 18px rgba(218, 165, 32, 0.3);
+}
+.sc-portrait-rank.sc-medal-2 {
+  background: #a0a8b0;
+  border: 2px solid #c0c8d0;
+  box-shadow: 0 4px 14px rgba(160, 168, 176, 0.25);
+}
+.sc-portrait-rank.sc-medal-3 {
+  background: #b46a2f;
+  border: 2px solid #d49060;
+  box-shadow: 0 4px 14px rgba(180, 106, 47, 0.25);
+}
+.sc-portrait-rank-local {
+  color: #fff;
+  background: #3a3b34;
+  border: 1px solid rgba(16, 17, 15, 0.4);
+  box-shadow: 0 4px 12px rgba(16, 17, 15, 0.15);
+  font-size: 13px;
+  padding: 4px 14px;
+}
+.sc-portrait-rank .sc-medal-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.sc-portrait-rank.sc-medal-1 .sc-medal-icon {
+  width: 22px;
+  height: 22px;
+}
+.sc-portrait-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.sc-persona-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  border: 1px solid currentColor;
+  box-shadow: 0 2px 6px rgba(16, 17, 15, 0.04);
+}
+.sc-persona-icon {
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+.sc-portrait-date {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 16px; color: #6f695e; font-weight: 700;
+  background: rgba(111, 105, 94, 0.06);
+  padding: 5px 14px;
+  border-radius: 99px;
+  border: 1px solid rgba(111, 105, 94, 0.15);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+}
+.sc-portrait-header-sub-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Portrait hero block ── */
+.sc-portrait-hero-block {  }
+.sc-portrait-hero-container {
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+.sc-portrait-hero-left {
+  display: flex;
+  flex-direction: column;
+}
+.sc-portrait-hero-left .sc-hero-score {
+  flex: 1;
+  min-height: 100px;
+  padding-bottom: 28px;
+  box-sizing: border-box;
+}
+.sc-portrait-hero-block .sc-metric-label { font-size: 14px; }
+.sc-portrait-hero-block .sc-total-value { font-size: 70px; }
+.sc-portrait-hero-block .sc-hero-sub span { font-size: 23px; }
+
+.sc-portrait-hero-right {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+}
+.sc-hero-rank-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #3d8a7a;
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 16px;
+  font-weight: 950;
+  box-shadow: 0 4px 12px rgba(61, 138, 122, 0.15);
+  border: 1.5px solid rgba(61, 138, 122, 0.4);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  text-align: center;
+  box-sizing: border-box;
+}
+.sc-hero-rank-pill.sc-medal-1 {
+  background: linear-gradient(135deg, #daa520, #b8860b);
+  border: 1.5px solid #f5d060;
+  box-shadow: 0 6px 18px rgba(218, 165, 32, 0.25);
+  font-size: 18px;
+}
+.sc-hero-rank-pill.sc-medal-2 {
+  background: linear-gradient(135deg, #a0a8b0, #707880);
+  border: 1.5px solid #c0c8d0;
+  box-shadow: 0 4px 14px rgba(160, 168, 176, 0.2);
+}
+.sc-hero-rank-pill.sc-medal-3 {
+  background: linear-gradient(135deg, #b46a2f, #8b4513);
+  border: 1.5px solid #d49060;
+  box-shadow: 0 4px 14px rgba(180, 106, 47, 0.2);
+}
+.sc-hero-rank-local {
+  background: linear-gradient(135deg, #2b2c28, #1c1d1a);
+  border: 1px solid rgba(16,17,15,0.4);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  font-size: 13px;
+}
+.sc-hero-rank-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+
+
+/* ── Portrait stat cards ── */
+.sc-portrait .sc-stat-card span { font-size: 19px; }
+.sc-portrait .sc-stat-card strong { font-size: 29px; }
+.sc-portrait .sc-stat-detail { font-size: 17px; }
+
+/* ── Portrait mini meters ── */
+.sc-portrait .sc-card-title { font-size: 24px; }
+.sc-portrait .sc-mini-meter-row {
+  font-size: 19px; min-height: 38px;
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+.sc-portrait .sc-meter-val-top { font-size: 19px; }
+.sc-portrait .sc-meter-cost { font-size: 14px; }
+
+/* ── Portrait layout overrides ── */
+.sc-portrait .sc-dash-row {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.sc-portrait .sc-stat-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+.sc-portrait .sc-stat-card { min-height: 82px; padding: 10px 16px; border-radius: 14px; }
+.sc-portrait .sc-meter-cols {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.sc-portrait .sc-visual-card {
+  border: none !important;
+  background: rgba(255, 251, 243, 0.68) !important;
+  box-shadow: 0 6px 24px rgba(16, 17, 15, 0.04), 0 1px 4px rgba(16, 17, 15, 0.03) !important;
+}
+
+/* ── Portrait activity pulse ── */
+/* ── Portrait activity pulse (SVG Line Chart Upgrade) ── */
+.sc-pulse-section { padding: 12px 16px; position: relative; }
+.sc-pulse-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sc-pulse-chart {
+  position: relative;
+  height: 190px !important;
+  margin-top: 10px;
+  overflow: visible;
+}
+.sc-pulse-grid {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 1;
+}
+.sc-pulse-grid span {
+  border-bottom: 1px dashed rgba(16, 17, 15, 0.05);
+}
+.sc-pulse-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  z-index: 2;
+}
+.sc-pulse-marker .sc-pulse-halo {
+  fill: none;
+  stroke-width: 1.5;
+  opacity: 0.45;
+}
+.sc-pulse-marker.peak .sc-pulse-halo {
+  stroke: #f4b000;
+  animation: pulse-ring 2.2s infinite ease-in-out;
+}
+.sc-pulse-marker.summit .sc-pulse-halo {
+  stroke: #daa520;
+  animation: pulse-ring 2.2s infinite ease-in-out;
+}
+.sc-pulse-marker.trough .sc-pulse-halo {
+  stroke: #3d8a7a;
+}
+.sc-pulse-marker.spike .sc-pulse-halo {
+  stroke: #b43b32;
+  animation: pulse-ring 1.8s infinite ease-in-out;
+}
+.sc-pulse-marker .sc-pulse-dot {
+  stroke: #fff;
+  stroke-width: 1.5;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.sc-pulse-marker.peak .sc-pulse-dot { fill: #f4b000; }
+.sc-pulse-marker.summit .sc-pulse-dot { fill: #daa520; }
+.sc-pulse-marker.trough .sc-pulse-dot { fill: #3d8a7a; }
+.sc-pulse-marker.spike .sc-pulse-dot { fill: #b43b32; }
+
+.sc-pulse-node {
+  fill: #fff;
+  stroke: #0bb29d;
+  stroke-width: 1.5;
+}
+
+.sc-pulse-callout {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  margin-top: -10px;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 3px 8px;
+  border-radius: 6px;
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 4px 10px rgba(16, 17, 15, 0.15);
+  transition: all 0.25s ease;
+  letter-spacing: 0.02em;
+}
+.sc-pulse-callout.peak {
+  background: #f4b000;
+  color: #10110f;
+  border: 1.5px solid #f5d060;
+}
+.sc-pulse-callout.summit {
+  background: #daa520;
+  color: #fff;
+  border: 1.5px solid #f5d060;
+}
+.sc-pulse-callout.trough {
+  background: #3d8a7a;
+  color: #fff;
+  border: 1.5px solid #5fb3a2;
+}
+.sc-pulse-callout.spike {
+  background: #b43b32;
+  color: #fff;
+  border: 1.5px solid #e05a4f;
+}
+
+.sc-pulse-axis {
+  display: flex;
+  margin-top: 8px;
+  border-top: 1.5px solid rgba(16, 17, 15, 0.08);
+  padding-top: 6px;
+}
+.sc-pulse-axis-label {
+  flex: 1;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  color: #6f695e;
+}
+
+.sc-pulse-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1.5px solid rgba(16, 17, 15, 0.12);
+}
+.sc-pulse-stat-card {
+  background: rgba(16, 17, 15, 0.025);
+  border: none;
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 2px 10px rgba(16, 17, 15, 0.03);
+}
+.sc-pulse-stat-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  color: #6f695e;
+  text-transform: uppercase;
+}
+.sc-pulse-stat-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 900;
+  color: #10110f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.9; }
+  50% { transform: scale(1.6); opacity: 0.15; }
+  100% { transform: scale(0.9); opacity: 0.9; }
+}
+
+/* ── Portrait quote & cloud footer ── */
+.sc-portrait-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(16, 17, 15, 0.12);
+}
+.sc-portrait-quote {
+  font-style: italic; font-size: 17px; line-height: 1.5;
+  color: #6f695e;
+  text-align: center;
+}
+.sc-portrait-cloud {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px; color: #9e9890;
+  text-align: center;
+  padding-bottom: 4px;
+}
 `;
 }
 
@@ -897,11 +2084,23 @@ const POLAROID_PAD_BOTTOM = 44;
 export const POLAROID_EXPORT_WIDTH = SHARE_CARD_WIDTH + POLAROID_PAD_SIDE * 2;
 export const POLAROID_EXPORT_HEIGHT = SHARE_CARD_HEIGHT + POLAROID_PAD_TOP + POLAROID_PAD_BOTTOM;
 
-export function polaroidExportCss() {
+export function polaroidDimensions(orientation = "landscape") {
+  const cardW = orientation === "portrait" ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH;
+  const cardH = orientation === "portrait" ? PORTRAIT_CARD_HEIGHT : SHARE_CARD_HEIGHT;
+  return {
+    cardWidth: cardW,
+    cardHeight: cardH,
+    exportWidth: cardW + POLAROID_PAD_SIDE * 2,
+    exportHeight: cardH + POLAROID_PAD_TOP + POLAROID_PAD_BOTTOM
+  };
+}
+
+export function polaroidExportCss(orientation = "landscape") {
+  const dims = polaroidDimensions(orientation);
   return `
 .pe-frame {
-  width: ${POLAROID_EXPORT_WIDTH}px;
-  height: ${POLAROID_EXPORT_HEIGHT}px;
+  width: ${dims.exportWidth}px;
+  height: ${dims.exportHeight}px;
   background: #fff;
   border-radius: 6px;
   box-shadow:
@@ -914,7 +2113,7 @@ export function polaroidExportCss() {
   padding: ${POLAROID_PAD_TOP}px ${POLAROID_PAD_SIDE}px 0 ${POLAROID_PAD_SIDE}px;
 }
 .pe-image-area {
-  flex: 0 0 ${SHARE_CARD_HEIGHT}px;
+  flex: 0 0 ${dims.cardHeight}px;
   overflow: hidden;
   border-radius: 4px;
   position: relative;
