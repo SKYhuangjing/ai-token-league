@@ -57,6 +57,9 @@ function renderPreview(data) {
   renderDelta("delta-today", data.todayTokens, data.yesterdayTokens);
   renderDelta("delta-week", data.weekTokens, data.lastWeekTokens);
   renderDelta("delta-month", data.thisMonthTokens, data.lastMonthTokens);
+
+  const participantsEl = document.querySelector("#trend-participant-count");
+  if (participantsEl) participantsEl.textContent = data.participantCount ?? "--";
 }
 
 function renderDelta(elId, current, previous) {
@@ -381,7 +384,7 @@ async function loadSummary() {
 
 async function loadAnalytics() {
   try {
-    const params = new URLSearchParams({ period: "this_month" });
+    const params = new URLSearchParams({ range: "last30" });
     const response = await fetch(`/api/board/analytics?${params.toString()}`);
     if (!response.ok) {
       renderAuthFallback("#home-trend-chart");

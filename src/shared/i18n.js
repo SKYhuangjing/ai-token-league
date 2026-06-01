@@ -896,7 +896,7 @@ const translations = {
 
     // Web 端 - 社区智能首页
     "web.home.communityIntelligence": "社区智能数据",
-    "web.home.monthTrend": "本月社区趋势",
+    "web.home.monthTrend": "近 30 天趋势",
     "web.home.topToday": "今日排行榜",
     "web.home.monthAnalytics": "本月数据分析",
     "web.home.viewFullAnalytics": "查看完整分析",
@@ -1792,7 +1792,7 @@ const translations = {
 
     // Web - Community Intelligence Home
     "web.home.communityIntelligence": "Community Intelligence",
-    "web.home.monthTrend": "Monthly Community Trend",
+    "web.home.monthTrend": "Last 30 Days Trend",
     "web.home.topToday": "Top Today",
     "web.home.monthAnalytics": "This Month Analytics",
     "web.home.viewFullAnalytics": "View full analytics",

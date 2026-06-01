@@ -86,7 +86,14 @@
           </div>
         </div>
         <article class="analytics-card home-trend-card">
-          <h3 data-i18n="web.home.monthTrend">Monthly Community Trend</h3>
+          <div class="trend-card-header">
+            <h3 data-i18n="web.home.monthTrend">Last 30 Days Trend</h3>
+            <span class="trend-participant-badge" id="trend-participant-badge">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M10 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6 8a6 6 0 0 1 12 0H4Z"/></svg>
+              <span class="tpb-count" id="trend-participant-count">--</span>
+              <span class="tpb-label" data-i18n="web.landing.participants">Participants</span>
+            </span>
+          </div>
           <div style="position: relative; flex: 1; min-height: 0;">
             <svg id="home-trend-chart" viewBox="0 0 800 200" preserveAspectRatio="none" class="chart-svg" style="width: 100%; height: 100%;"></svg>
           </div>

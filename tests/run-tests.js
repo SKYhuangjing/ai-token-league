@@ -5091,42 +5091,43 @@ function testStoreAnalyticsDateRanges() {
     os: "test", appVersion: APP_VERSION
   });
 
+  // Insert data for today only — guaranteed to be in every period (this_week, this_month, etc.)
+  // This avoids boundary failures when today is Monday (ISO week start) and yesterday
+  // falls in the previous week, or when today is the 1st and yesterday is last month.
   const today = localDay();
-  const yesterday = addDays(today, -1);
   store.upsertUsageBatch({
     participantId: identity.participantId, deviceId,
     clientGeneratedAt: new Date().toISOString(),
-    items: [makeSnapshotItem({ day: today, workdirHash: "wd_r1", inputTokens: 40, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 60 })]
-  });
-  store.upsertUsageBatch({
-    participantId: identity.participantId, deviceId,
-    clientGeneratedAt: new Date().toISOString(),
-    items: [makeSnapshotItem({ day: yesterday, workdirHash: "wd_r2", inputTokens: 80, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 120 })]
+    items: [makeSnapshotItem({ day: today, workdirHash: "wd_r1", inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 150 })]
   });
 
-  // period=this_week
+  // period=this_week — today is always in the current week
   const week = store.analytics({ period: "this_week", participantId: identity.participantId });
   assert.equal(week.period, "this_week");
-  assert.equal(week.summary.totalTokens, 180);
+  assert.equal(week.summary.totalTokens, 150);
 
-  // period=this_month
+  // period=this_month — today is always in the current month
   const month = store.analytics({ period: "this_month", participantId: identity.participantId });
   assert.equal(month.period, "this_month");
-  assert.equal(month.summary.totalTokens, 180);
+  assert.equal(month.summary.totalTokens, 150);
 
   // range=this_week
   const rangeWeek = store.analytics({ range: "this_week", participantId: identity.participantId });
-  assert.equal(rangeWeek.summary.totalTokens, 180);
+  assert.equal(rangeWeek.summary.totalTokens, 150);
 
-  // custom range
+  // range=last30 — covers trailing 30 days, always includes today
+  const rangeLast30 = store.analytics({ range: "last30", participantId: identity.participantId });
+  assert.equal(rangeLast30.summary.totalTokens, 150);
+
+  // custom range — single day, only today
   const custom = store.analytics({ range: "custom", startDay: today, endDay: today, participantId: identity.participantId });
-  assert.equal(custom.summary.totalTokens, 60, "custom range single day should only include today");
+  assert.equal(custom.summary.totalTokens, 150, "custom range single day should only include today");
   assert.equal(custom.from, today);
   assert.equal(custom.to, today);
 
   // No participantId = all users
   const all = store.analytics({ period: "today" });
-  assert.equal(all.summary.totalTokens, 60, "no participantId should aggregate all");
+  assert.equal(all.summary.totalTokens, 150, "no participantId should aggregate all");
 
   if (fs.existsSync(path.join(tmp, "db-analytics-ranges.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-ranges.json"));
   console.log("  testStoreAnalyticsDateRanges passed");

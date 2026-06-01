@@ -332,41 +332,6 @@ h1 {
   z-index: 100;
 }
 
-.landing-participant-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 2px solid var(--ink);
-  border-radius: 6px;
-  background: #fffaf0;
-  padding: 6px 14px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: nowrap;
-  box-shadow: 3px 3px 0 var(--ink);
-}
-
-.landing-participant-badge svg {
-  width: 16px;
-  height: 16px;
-  color: #3b82f6;
-  flex-shrink: 0;
-}
-
-.landing-participant-badge .lpb-count {
-  font-size: 22px;
-  font-weight: 800;
-  line-height: 1;
-  color: var(--ink);
-}
-
-.landing-participant-badge .lpb-label {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--muted);
-  letter-spacing: 0;
-}
-
 .landing-section {
   padding: 24px 0;
 }
@@ -3364,6 +3329,57 @@ body.is-embedded .analytics-card {
 .home-trend-card {
   display: flex;
   flex-direction: column;
+}
+
+.trend-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 8px;
+}
+
+.trend-card-header h3 {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.trend-participant-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1.5px solid var(--ink);
+  border-radius: 5px;
+  background: #fff8eb;
+  padding: 4px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+  flex-shrink: 0;
+  box-shadow: 2px 2px 0 var(--ink);
+}
+
+.trend-participant-badge svg {
+  width: 14px;
+  height: 14px;
+  color: var(--blue);
+  flex-shrink: 0;
+}
+
+.trend-participant-badge .tpb-count {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.trend-participant-badge .tpb-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0;
 }
 
 .home-section {

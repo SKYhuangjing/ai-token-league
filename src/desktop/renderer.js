@@ -1666,11 +1666,12 @@ async function buildOverviewShareData(range, { skipCloud = false } = {}) {
     ? groupBy(breakdownItems, "workdirDisplayName")
     : summary?.workdirs || [];
 
-  // Trend rows for spark bars
+  // Trend rows for spark bars — prefer local computation to preserve cost data
   const trendQuery = usageQueryState.trends.get(usageQueryKey(range, grain));
-  const trendRows = trendQuery?.items || (range === "today"
+  const localTrendRows = range === "today"
     ? groupByHour(localRangeItems)
-    : groupByGrain(localRangeItems.length ? localRangeItems : usageForRange(range), grain).filter(hasPositiveUsage));
+    : groupByGrain(localRangeItems.length ? localRangeItems : usageForRange(range), grain).filter(hasPositiveUsage);
+  const trendRows = localTrendRows.length ? localTrendRows : (trendQuery?.items || []);
 
   // Provider/model/workdir ratios
   const providerTotal = providers.reduce((s, p) => s + (p.totalTokens || 0), 0) || 1;

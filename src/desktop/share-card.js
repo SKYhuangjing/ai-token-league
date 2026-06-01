@@ -1169,9 +1169,9 @@ export function renderPortraitShareCardHtml(data, opts = {}) {
     <div class="sc-portrait-hero-block">
       ${heroBlockHtml}
     </div>
+    ${heatmapHtml}
     ${modelsHtml}
     ${providersHtml}
-    ${heatmapHtml}
     ${portraitFooter}
   </div>`;
 }
