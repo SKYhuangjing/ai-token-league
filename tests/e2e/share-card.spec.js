@@ -103,6 +103,15 @@ test.describe('Share card', () => {
     expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(viewport.height);
     expect(settingsBox.y).toBeGreaterThanOrEqual(0);
     expect(settingsBox.y + settingsBox.height).toBeLessThanOrEqual(viewport.height);
+
+    const stageMetrics = await page.locator('.polaroid-stage').evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+    expect(stageMetrics.scrollHeight).toBeLessThanOrEqual(stageMetrics.clientHeight + 1);
+    expect(stageMetrics.scrollWidth).toBeLessThanOrEqual(stageMetrics.clientWidth + 1);
   });
 
   test('keeps action buttons visible while switching orientation', async ({ page }) => {
@@ -121,13 +130,29 @@ test.describe('Share card', () => {
 
     const portraitBox = await page.locator('.polaroid-actions').boundingBox();
     const settingsBox = await page.locator('#share-modal-settings').boundingBox();
+    const cardBox = await page.locator('#polaroid-card').boundingBox();
+    const stageBox = await page.locator('.polaroid-stage').boundingBox();
     const viewport = page.viewportSize();
     expect(portraitBox).toBeTruthy();
     expect(settingsBox).toBeTruthy();
+    expect(cardBox).toBeTruthy();
+    expect(stageBox).toBeTruthy();
     expect(portraitBox.y).toBeGreaterThanOrEqual(0);
     expect(portraitBox.y + portraitBox.height).toBeLessThanOrEqual(viewport.height);
     expect(settingsBox.y).toBeGreaterThanOrEqual(portraitBox.y + portraitBox.height + 24);
     expect(settingsBox.y + settingsBox.height).toBeLessThanOrEqual(viewport.height);
+    expect(cardBox.y).toBeGreaterThanOrEqual(stageBox.y + 8);
+    expect(cardBox.x).toBeGreaterThanOrEqual(stageBox.x + 8);
+    expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(stageBox.y + stageBox.height - 8);
+
+    const portraitStageMetrics = await page.locator('.polaroid-stage').evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+    expect(portraitStageMetrics.scrollHeight).toBeLessThanOrEqual(portraitStageMetrics.clientHeight + 1);
+    expect(portraitStageMetrics.scrollWidth).toBeLessThanOrEqual(portraitStageMetrics.clientWidth + 1);
 
     await page.locator('#share-card-orientation button[data-range="landscape"]').click();
     await expect(page.locator('#polaroid-card')).toHaveClass(/orientation-flip-out/, { timeout: 120 });
@@ -147,6 +172,15 @@ test.describe('Share card', () => {
     });
     expect(Math.abs(heights.preview - heights.root)).toBeLessThanOrEqual(6);
     expect(Math.abs(heights.imageArea - heights.preview)).toBeLessThanOrEqual(8);
+
+    const landscapeStageMetrics = await page.locator('.polaroid-stage').evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+    expect(landscapeStageMetrics.scrollHeight).toBeLessThanOrEqual(landscapeStageMetrics.clientHeight + 1);
+    expect(landscapeStageMetrics.scrollWidth).toBeLessThanOrEqual(landscapeStageMetrics.clientWidth + 1);
   });
 });
 

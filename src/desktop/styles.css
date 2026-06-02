@@ -1733,7 +1733,7 @@ label {
   background: rgba(22, 21, 18, 0.65);
   backdrop-filter: blur(8px);
   box-sizing: border-box;
-  overflow: auto;
+  overflow: hidden;
   padding: clamp(12px, 3vh, 24px);
   opacity: 0;
   pointer-events: none;
@@ -1752,6 +1752,7 @@ label {
   gap: 32px;
   position: relative;
   max-width: calc(100vw - 32px);
+  max-height: 100%;
   box-sizing: border-box;
   transition:
     opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1),
@@ -1768,6 +1769,7 @@ label {
   display: flex;
   flex-direction: column;
   align-items: center;
+  min-height: 0;
 }
 
 /* Stack — holds multiple polaroid cards */
@@ -1779,6 +1781,7 @@ label {
   overflow: hidden;
   padding: 40px 20px 20px 20px;
   perspective: 1200px;
+  max-width: 100%;
 }
 
 /* Polaroid card */
@@ -1796,6 +1799,7 @@ label {
   opacity: 0;
   transform: translateY(-100%) scale(0.98);
   width: min(94vw, 900px, calc(166.67vh - 317px));
+  max-width: 100%;
   box-sizing: border-box;
 }
 .polaroid-card.portrait-card {
@@ -1922,6 +1926,8 @@ label {
 .share-card-preview {
   position: relative;
   width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
   overflow: hidden;
   display: block;
 }
@@ -2171,7 +2177,7 @@ label {
   align-items: center;
   column-gap: clamp(28px, 4vw, 56px);
   row-gap: 18px;
-  margin-top: clamp(18px, 3vh, 44px);
+  margin-top: 0;
   max-width: min(1000px, calc(100vw - 32px));
 }
 
@@ -2259,6 +2265,36 @@ label {
   .polaroid-container.portrait-mode #share-modal-settings {
     width: min(420px, calc(100vw - 48px));
     justify-self: center;
+  }
+}
+
+@media (max-width: 1100px), (max-height: 700px) {
+  .polaroid-container:not(.portrait-mode) {
+    flex-direction: column;
+    gap: 16px;
+    max-width: min(100%, calc(100vw - 24px));
+  }
+
+  .polaroid-container:not(.portrait-mode) .polaroid-main {
+    width: 100%;
+  }
+
+  .polaroid-container:not(.portrait-mode) #polaroid-stack {
+    padding: 20px 10px 12px;
+  }
+
+  .polaroid-container:not(.portrait-mode) #polaroid-actions {
+    flex-direction: row;
+    transform: translateY(12px);
+  }
+
+  .polaroid-container:not(.portrait-mode) #polaroid-actions.visible {
+    transform: translateY(0);
+  }
+
+  .polaroid-container:not(.portrait-mode) #share-modal-settings {
+    width: min(100%, calc(100vw - 48px));
+    justify-content: center;
   }
 }
 

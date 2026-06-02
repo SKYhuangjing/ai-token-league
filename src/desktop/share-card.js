@@ -36,7 +36,27 @@ function collapseTop(items, limit = 4, mergeLabel = "Other") {
   const rest = items.slice(limit - 1);
   const restTokens = rest.reduce((sum, item) => sum + (item.tokens || item.totalTokens || 0), 0);
   const restRatio = rest.reduce((sum, item) => sum + (item.ratio || 0), 0);
-  return [...top, { name: mergeLabel, tokens: restTokens, ratio: round(restRatio, 4) }];
+
+  let restCost = null;
+  let restMissingPrice = null;
+  rest.forEach((item) => {
+    if (item.estimatedCostUsd !== null && item.estimatedCostUsd !== undefined) {
+      if (restCost === null) restCost = 0;
+      restCost += item.estimatedCostUsd;
+    }
+    if (item.missingPriceTokens !== null && item.missingPriceTokens !== undefined) {
+      if (restMissingPrice === null) restMissingPrice = 0;
+      restMissingPrice += item.missingPriceTokens;
+    }
+  });
+
+  return [...top, {
+    name: mergeLabel,
+    tokens: restTokens,
+    ratio: round(restRatio, 4),
+    estimatedCostUsd: restCost,
+    missingPriceTokens: restMissingPrice
+  }];
 }
 
 function topName(items) {
@@ -576,7 +596,7 @@ export function renderShareCardHtml(data, opts = {}) {
   const todayText = opts.t ? opts.t("desktop.share.period.today") || "今日" : "今日";
   const isZh = todayText.includes("日") || todayText.includes("今");
   const personas = getAiPersonas(data, isZh, 3);
-  const personaPillsHtml = personas.map(persona => `<div class="sc-hero-persona-pill" style="border-color:${persona.color}; box-shadow: 0 4px 12px ${persona.bgHex || "rgba(0,0,0,0.08)"};">
+  const personaPillsHtml = personas.map(persona => `<div class="sc-hero-persona-pill" style="border-color: ${persona.color}; background: ${persona.bgHex || "rgba(16, 17, 15, 0.04)"}; box-shadow: 0 4px 12px ${persona.bgHex || "rgba(0,0,0,0.08)"};">
     <span class="sc-hero-persona-label" style="color: ${persona.color};">#</span>
     <span class="sc-hero-persona-divider"></span>
     <span class="sc-hero-persona-text">${escapeHtml(persona.title)}</span>
@@ -858,7 +878,7 @@ const PERSONA_CATALOG = [
   {
     id: "cache_master",
     title: { zh: "缓存刺客", en: "Cache Assassin" },
-    color: "#058f7e", bgHex: "rgba(5, 143, 126, 0.06)",
+    color: "#058f7e", bgHex: "rgba(5, 143, 126, 0.09)",
     score: (d) => {
       const total = d.totals.totalTokens || 1;
       const ratio = ((d.totals.cacheReadTokens || 0) + (d.totals.cacheWriteTokens || 0)) / total;
@@ -868,7 +888,7 @@ const PERSONA_CATALOG = [
   {
     id: "claude_geek",
     title: { zh: "Claude 脑残粉", en: "Claude Cultist" },
-    color: "#b43b32", bgHex: "rgba(180, 59, 50, 0.06)",
+    color: "#b43b32", bgHex: "rgba(180, 59, 50, 0.09)",
     score: (d) => {
       const top = (d.providers[0]?.name || "").toLowerCase();
       return top.includes("claude") ? 80 + (d.providers[0]?.ratio || 0) * 20 : 0;
@@ -877,7 +897,7 @@ const PERSONA_CATALOG = [
   {
     id: "frontier_pioneer",
     title: { zh: "烧钱尝鲜党", en: "Bleeding Edge" },
-    color: "#daa520", bgHex: "rgba(218, 165, 32, 0.06)",
+    color: "#daa520", bgHex: "rgba(218, 165, 32, 0.09)",
     score: (d) => {
       const top = (d.models[0]?.name || "").toLowerCase();
       return (top.includes("gpt-5") || top.includes("o1") || top.includes("o3") || top.includes("o4")) ? 85 : 0;
@@ -886,7 +906,7 @@ const PERSONA_CATALOG = [
   {
     id: "token_shredder",
     title: { zh: "Token 碎钞机", en: "Token Incinerator" },
-    color: "#9d78dc", bgHex: "rgba(157, 120, 220, 0.06)",
+    color: "#9d78dc", bgHex: "rgba(157, 120, 220, 0.09)",
     score: (d) => {
       const t = d.totals.totalTokens || 0;
       if (t > 100000000) return 95;
@@ -898,7 +918,7 @@ const PERSONA_CATALOG = [
   {
     id: "output_heavy",
     title: { zh: "话痨养成系", en: "Chatterbox" },
-    color: "#e07828", bgHex: "rgba(224, 120, 40, 0.06)",
+    color: "#e07828", bgHex: "rgba(224, 120, 40, 0.09)",
     score: (d) => {
       const total = d.totals.totalTokens || 1;
       const ratio = (d.totals.outputTokens || 0) / total;
@@ -908,7 +928,7 @@ const PERSONA_CATALOG = [
   {
     id: "reasoning_thinker",
     title: { zh: "沉思的哲学家", en: "Deep Philosopher" },
-    color: "#6a8cda", bgHex: "rgba(106, 140, 218, 0.06)",
+    color: "#6a8cda", bgHex: "rgba(106, 140, 218, 0.09)",
     score: (d) => {
       const total = d.totals.totalTokens || 1;
       const ratio = (d.totals.reasoningTokens || 0) / total;
@@ -918,7 +938,7 @@ const PERSONA_CATALOG = [
   {
     id: "multi_model",
     title: { zh: "海王型选手", en: "Model Surfer" },
-    color: "#c05898", bgHex: "rgba(192, 88, 152, 0.06)",
+    color: "#c05898", bgHex: "rgba(192, 88, 152, 0.09)",
     score: (d) => {
       const count = (d.models || []).filter(m => m.tokens > 0).length;
       return count >= 3 ? 50 + count * 8 : 0;
@@ -927,7 +947,7 @@ const PERSONA_CATALOG = [
   {
     id: "codex_geek",
     title: { zh: "Codex 搭子", en: "Codex Buddy" },
-    color: "#10a37f", bgHex: "rgba(16, 163, 127, 0.06)",
+    color: "#10a37f", bgHex: "rgba(16, 163, 127, 0.09)",
     score: (d) => {
       const top = (d.providers[0]?.name || "").toLowerCase();
       return top.includes("codex") ? 80 + (d.providers[0]?.ratio || 0) * 20 : 0;
@@ -936,7 +956,7 @@ const PERSONA_CATALOG = [
   {
     id: "cursor_wizard",
     title: { zh: "Cursor 念咒人", en: "Cursor Sorcerer" },
-    color: "#7c6aef", bgHex: "rgba(124, 106, 239, 0.06)",
+    color: "#7c6aef", bgHex: "rgba(124, 106, 239, 0.09)",
     score: (d) => {
       const top = (d.providers[0]?.name || "").toLowerCase();
       return top.includes("cursor") ? 80 + (d.providers[0]?.ratio || 0) * 20 : 0;
@@ -945,7 +965,7 @@ const PERSONA_CATALOG = [
   {
     id: "night_owl",
     title: { zh: "凌晨修仙党", en: "Midnight Alchemist" },
-    color: "#4a6cf7", bgHex: "rgba(74, 108, 247, 0.06)",
+    color: "#4a6cf7", bgHex: "rgba(74, 108, 247, 0.09)",
     score: (d) => {
       const ts = d.timeSeries || [];
       if (ts.length === 0) return 0;
@@ -959,7 +979,7 @@ const PERSONA_CATALOG = [
   {
     id: "steady_coder",
     title: { zh: "永动机", en: "Perpetual Engine" },
-    color: "#2eaa6f", bgHex: "rgba(46, 170, 111, 0.06)",
+    color: "#2eaa6f", bgHex: "rgba(46, 170, 111, 0.09)",
     score: (d) => {
       const ts = d.timeSeries || [];
       const active = ts.filter(h => (h.totalTokens || 0) > 0);
@@ -974,7 +994,7 @@ const PERSONA_CATALOG = [
   {
     id: "rising_star",
     title: { zh: "越卷越勇", en: "Momentum Rider" },
-    color: "#e85d3a", bgHex: "rgba(232, 93, 58, 0.06)",
+    color: "#e85d3a", bgHex: "rgba(232, 93, 58, 0.09)",
     score: (d) => {
       const ts = d.timeSeries || [];
       const active = ts.filter(h => (h.totalTokens || 0) > 0);
@@ -990,7 +1010,7 @@ const PERSONA_CATALOG = [
   {
     id: "winding_down",
     title: { zh: "佛系收工", en: "Zen Mode" },
-    color: "#6c8cbe", bgHex: "rgba(108, 140, 190, 0.06)",
+    color: "#6c8cbe", bgHex: "rgba(108, 140, 190, 0.09)",
     score: (d) => {
       const ts = d.timeSeries || [];
       const active = ts.filter(h => (h.totalTokens || 0) > 0);
@@ -1006,7 +1026,7 @@ const PERSONA_CATALOG = [
   {
     id: "copilot",
     title: { zh: "AI 最佳拍档", en: "AI Sidekick" },
-    color: "#058f7e", bgHex: "rgba(5, 143, 126, 0.06)",
+    color: "#058f7e", bgHex: "rgba(5, 143, 126, 0.09)",
     score: () => 20 // always-present baseline
   }
 ];
@@ -1147,7 +1167,7 @@ export function renderPortraitShareCardHtml(data, opts = {}) {
   </div>`;
 
   const personas = getAiPersonas(data, isZh, 2);
-  const personaPillsHtml = personas.map(persona => `<div class="sc-hero-persona-pill" style="border-color:${persona.color}; box-shadow: 0 4px 12px ${persona.bgHex || "rgba(0,0,0,0.08)"};">
+  const personaPillsHtml = personas.map(persona => `<div class="sc-hero-persona-pill" style="border-color: ${persona.color}; background: ${persona.bgHex || "rgba(16, 17, 15, 0.04)"}; box-shadow: 0 4px 12px ${persona.bgHex || "rgba(0,0,0,0.08)"};">
     <span class="sc-hero-persona-label" style="color: ${persona.color};">#</span>
     <span class="sc-hero-persona-divider"></span>
     <span class="sc-hero-persona-text">${escapeHtml(persona.title)}</span>
@@ -1184,10 +1204,11 @@ export function shareCardCss() {
   background:
     linear-gradient(rgba(16, 17, 15, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(16, 17, 15, 0.035) 1px, transparent 1px),
-    radial-gradient(circle at 16% 10%, rgba(244, 176, 0, 0.18), transparent 24rem),
-    radial-gradient(circle at 86% 18%, rgba(5, 143, 126, 0.15), transparent 25rem),
+    radial-gradient(circle at 16% 10%, rgba(244, 176, 0, 0.24), transparent 28rem),
+    radial-gradient(circle at 86% 18%, rgba(5, 143, 126, 0.22), transparent 28rem),
+    radial-gradient(circle at 50% 90%, rgba(157, 120, 220, 0.18), transparent 30rem),
     #f5efe3;
-  background-size: 24px 24px, 24px 24px, auto, auto, auto;
+  background-size: 24px 24px, 24px 24px, auto, auto, auto, auto, auto;
   font-family: ui-serif, Georgia, "Times New Roman", serif;
   color: #10110f;
   overflow: visible;
@@ -1238,7 +1259,7 @@ export function shareCardCss() {
   border: 1px solid rgba(5, 143, 126, 0.35);
   border-radius: 6px;
   padding: 4px 12px;
-  font-size: 11px;
+  font-size: 20px;
   font-weight: 700;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: 0.03em;
@@ -1250,7 +1271,7 @@ export function shareCardCss() {
 }
 .sc-header-range {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px; color: #6f695e; letter-spacing: 0.02em;
+  font-size: 20px; color: #6f695e; letter-spacing: 0.02em;
   font-weight: 700;
   background: rgba(111, 105, 94, 0.06);
   padding: 5px 14px;
@@ -1338,7 +1359,7 @@ export function shareCardCss() {
   font-size: 22px; font-weight: 900; color: #b43b32;
 }
 .sc-rank-stat-label {
-  font-size: 11px; color: #6f695e; font-weight: 500;
+  font-size: 14px; color: #6f695e; font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -1425,10 +1446,10 @@ export function shareCardCss() {
 .sc-stat-card {
   border: none;
   border-radius: 14px;
-  background: rgba(255, 251, 243, 0.72);
+  background: #ffffff;
   min-height: 70px; padding: 8px 14px;
   display: flex; flex-direction: column; justify-content: center;
-  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
+  box-shadow: 0 6px 24px rgba(16, 17, 15, 0.06), 0 1px 4px rgba(16, 17, 15, 0.04);
 }
 .sc-stat-card span {
   color: #6f695e; font-size: 13px; font-weight: 900;
@@ -1442,7 +1463,7 @@ export function shareCardCss() {
 }
 .sc-stat-cost-val {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
-  color: #f4b000 !important;
+  color: #b45309 !important;
   font-weight: 900 !important;
 }
 
@@ -1450,11 +1471,11 @@ export function shareCardCss() {
 .sc-visual-card {
   border: none;
   border-radius: 14px;
-  background: rgba(255, 251, 243, 0.65);
+  background: #ffffff;
   padding: 10px 17px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 20px rgba(16, 17, 15, 0.05), 0 1px 3px rgba(16, 17, 15, 0.04);
+  box-shadow: 0 6px 24px rgba(16, 17, 15, 0.06), 0 1px 4px rgba(16, 17, 15, 0.04);
 }
 .sc-card-title {
   margin: 0 0 6px; font-size: 20px;
@@ -1509,7 +1530,7 @@ export function shareCardCss() {
 }
 .sc-spark-val-cost {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px; font-weight: 700; color: #f4b000;
+  font-size: 12px; font-weight: 700; color: #b45309;
 }
 .sc-spark-axis {
   display: grid;
@@ -1606,7 +1627,7 @@ export function shareCardCss() {
 .sc-meter-cost {
   font-size: 12px;
   font-weight: 700;
-  color: #f4b000;
+  color: #b45309;
 }
 
 /* ── Footer ── */
@@ -1665,7 +1686,7 @@ export function shareCardCss() {
   border-radius: 12px;
   padding: 10px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: 20px;
   font-weight: 900;
   letter-spacing: 0.04em;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
@@ -1741,7 +1762,7 @@ export function portraitShareCardCss() {
 .sc-portrait-brand-text,
 .sc-portrait-brand-kicker {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: 20px;
   font-weight: 900;
   letter-spacing: 0.12em;
   color: #b43b32;
@@ -1749,7 +1770,7 @@ export function portraitShareCardCss() {
 }
 .sc-portrait-brand-kicker {
   color: #6f695e;
-  font-size: 10px;
+  font-size: 20px;
 }
 
 /* ── Portrait header ── */
@@ -1855,7 +1876,7 @@ export function portraitShareCardCss() {
 }
 .sc-portrait-date {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 16px; color: #6f695e; font-weight: 700;
+  font-size: 20px; color: #6f695e; font-weight: 700;
   background: rgba(111, 105, 94, 0.06);
   padding: 5px 14px;
   border-radius: 99px;
@@ -1909,7 +1930,7 @@ export function portraitShareCardCss() {
   border-radius: 12px;
   padding: 10px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 950;
   box-shadow: 0 4px 12px rgba(61, 138, 122, 0.15);
   border: 1.5px solid rgba(61, 138, 122, 0.4);
@@ -1921,7 +1942,7 @@ export function portraitShareCardCss() {
   background: linear-gradient(135deg, #daa520, #b8860b);
   border: 1.5px solid #f5d060;
   box-shadow: 0 6px 18px rgba(218, 165, 32, 0.25);
-  font-size: 18px;
+  font-size: 20px;
 }
 .sc-hero-rank-pill.sc-medal-2 {
   background: linear-gradient(135deg, #a0a8b0, #707880);
@@ -1946,19 +1967,96 @@ export function portraitShareCardCss() {
 
 
 /* ── Portrait stat cards ── */
-.sc-portrait .sc-stat-card span { font-size: 19px; }
-.sc-portrait .sc-stat-card strong { font-size: 29px; }
-.sc-portrait .sc-stat-detail { font-size: 17px; }
+.sc-portrait .sc-stat-card span { font-size: 22px; font-weight: 900; }
+.sc-portrait .sc-stat-card strong { font-size: 34px; font-weight: 900; }
+.sc-portrait .sc-stat-detail { font-size: 20px; font-weight: 800; }
 
-/* ── Portrait mini meters ── */
-.sc-portrait .sc-card-title { font-size: 24px; }
+/* ── Portrait mini meters — bar-row pill style ── */
+.sc-portrait .sc-card-title { font-size: 24px; margin-bottom: 10px; font-weight: 900; }
+.sc-portrait .sc-stack { gap: 10px; }
 .sc-portrait .sc-mini-meter-row {
-  font-size: 19px; min-height: 38px;
-  grid-template-rows: auto auto;
-  align-content: start;
+  display: grid !important;
+  grid-template-columns: 1fr auto auto;
+  grid-template-rows: 1fr !important;
+  align-items: center;
+  position: relative;
+  height: 64px !important;
+  min-height: 64px !important;
+  border-radius: 50px;
+  overflow: hidden;
+  font-size: 15px;
+  padding: 0 20px;
+  box-sizing: border-box;
+  gap: 10px;
 }
-.sc-portrait .sc-meter-val-top { font-size: 19px; }
-.sc-portrait .sc-meter-cost { font-size: 14px; }
+.sc-portrait .sc-mini-meter-row .sc-mini-meter {
+  position: absolute !important;
+  left: 0; top: 0;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 1;
+  border-radius: 50px;
+  background: #EDEAE3;
+  box-shadow: none;
+  overflow: visible;
+}
+@keyframes sc-bar-grow { from { transform: scaleX(0); } }
+.sc-portrait .sc-mini-meter-row .sc-mini-meter i {
+  display: block;
+  height: 100% !important;
+  border-radius: 50px;
+  background: linear-gradient(90deg, #a7f3d0, #058f7e);
+  animation: sc-bar-grow 1.3s cubic-bezier(0.34, 1.4, 0.64, 1) forwards;
+  transform-origin: left;
+}
+.sc-portrait .sc-mini-meter-row .sc-mini-meter.sc-color-teal i { background: linear-gradient(90deg, #a7f3d0, #058f7e) !important; }
+.sc-portrait .sc-mini-meter-row .sc-mini-meter.sc-color-yellow i { background: linear-gradient(90deg, #fde68a, #e8960a) !important; }
+.sc-portrait .sc-mini-meter-row .sc-mini-meter.sc-color-violet i { background: linear-gradient(90deg, #ddd6fe, #7c5aef) !important; }
+.sc-portrait .sc-mini-meter-row .sc-meter-name {
+  position: relative !important;
+  z-index: 2;
+  color: #1C1B18;
+  font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  font-weight: 900;
+  font-size: 24px;
+  padding-left: 10px !important;
+  left: unset !important;
+  top: unset !important;
+  transform: unset !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  align-self: center !important;
+  line-height: 1.2 !important;
+}
+.sc-portrait .sc-mini-meter-row .sc-meter-val-top {
+  position: relative !important;
+  z-index: 2;
+  color: #1C1B18;
+  font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  font-weight: 900;
+  font-size: 24px;
+  top: unset !important;
+  right: unset !important;
+  transform: unset !important;
+  align-self: center !important;
+  line-height: 1.2 !important;
+}
+.sc-portrait .sc-mini-meter-row .sc-meter-cost {
+  position: relative !important;
+  z-index: 2;
+  color: #92400e;
+  font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  font-weight: 900;
+  font-size: 22px;
+  top: unset !important;
+  right: unset !important;
+  transform: unset !important;
+  align-self: center !important;
+  line-height: 1.2 !important;
+  display: inline-block !important;
+  min-height: unset !important;
+}
 
 /* ── Portrait layout overrides ── */
 .sc-portrait .sc-dash-row {
@@ -1975,8 +2073,8 @@ export function portraitShareCardCss() {
 }
 .sc-portrait .sc-visual-card {
   border: none !important;
-  background: rgba(255, 251, 243, 0.68) !important;
-  box-shadow: 0 6px 24px rgba(16, 17, 15, 0.04), 0 1px 4px rgba(16, 17, 15, 0.03) !important;
+  background: #ffffff !important;
+  box-shadow: 0 8px 30px rgba(16, 17, 15, 0.06), 0 2px 6px rgba(16, 17, 15, 0.04) !important;
 }
 
 /* ── Portrait activity pulse ── */
@@ -2097,7 +2195,7 @@ export function portraitShareCardCss() {
   flex: 1;
   text-align: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 900;
   color: #6f695e;
 }
@@ -2128,8 +2226,8 @@ export function portraitShareCardCss() {
   text-transform: uppercase;
 }
 .sc-pulse-stat-val {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  font-size: 20px;
   font-weight: 900;
   color: #10110f;
   white-space: nowrap;
@@ -2153,13 +2251,13 @@ export function portraitShareCardCss() {
   border-top: 1px solid rgba(16, 17, 15, 0.12);
 }
 .sc-portrait-quote {
-  font-style: italic; font-size: 17px; line-height: 1.5;
+  font-style: italic; font-size: 20px; line-height: 1.5;
   color: #6f695e;
   text-align: center;
 }
 .sc-portrait-cloud {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px; color: #9e9890;
+  font-size: 20px; color: #9e9890;
   text-align: center;
   padding-bottom: 4px;
 }

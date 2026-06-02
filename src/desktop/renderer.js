@@ -462,6 +462,13 @@ $("#showEstimatedCost").addEventListener("change", async () => {
   await saveInstantPreference("showEstimatedCost", $("#showEstimatedCost").checked);
 });
 
+window.addEventListener("resize", () => {
+  if ($("#share-card-modal")?.hidden || !latestShareData) return;
+  renderShareCardPreview().catch((error) => {
+    console.error("Share card resize render failed:", error);
+  });
+});
+
 // Share card modal settings
 $("#share-card-orientation")?.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-range]");
@@ -1932,11 +1939,14 @@ async function renderShareCardPreview() {
         polaroidCard.classList.remove("portrait-card");
       }
       const measuredCardH = measureShareCardContentHeight(root, cardH);
-      const containerWidth = preview.offsetWidth || (isPortrait ? PORTRAIT_CARD_WIDTH : SHARE_CARD_WIDTH);
-      const scale = containerWidth / cardW;
-      root.style.transform = `scale(${scale})`;
-      root.style.transformOrigin = "top left";
-      preview.style.height = `${Math.ceil(measuredCardH * scale)}px`;
+      fitShareCardPreview({
+        preview,
+        root,
+        polaroidCard,
+        measuredCardH,
+        cardW,
+        isPortrait
+      });
     }
   } catch (err) {
     console.error("Preview render failed:", err);
@@ -1966,6 +1976,97 @@ function measureShareCardContentHeight(root, fallbackHeight) {
   const measured = Math.max(root.scrollHeight || 0, root.offsetHeight || 0, rectHeight || 0);
   root.style.transform = previousTransform;
   return Math.ceil(measured || fallbackHeight);
+}
+
+function fitShareCardPreview({ preview, root, polaroidCard, measuredCardH, cardW, isPortrait }) {
+  if (!preview || !root || !polaroidCard) return;
+
+  const FIT_SAFETY_GUTTER = 4;
+  const stage = $(".polaroid-stage");
+  const container = $(".polaroid-container");
+  const actions = $("#polaroid-actions");
+  const settingsBar = $("#share-modal-settings");
+  const status = $("#share-card-status");
+  const stack = $("#polaroid-stack");
+  const whiteBorder = polaroidCard.querySelector(".polaroid-white-border");
+  const showFrame = latestConfig?.showSharePolaroidFrame ?? true;
+
+  const readPx = (value) => Number.parseFloat(value || "0") || 0;
+  const sizeOf = (element) => {
+    if (!element || element.hidden) return { width: 0, height: 0 };
+    const styles = getComputedStyle(element);
+    if (styles.display === "none") return { width: 0, height: 0 };
+    return {
+      width: element.offsetWidth || 0,
+      height: element.offsetHeight || 0,
+      marginTop: readPx(styles.marginTop),
+      marginBottom: readPx(styles.marginBottom)
+    };
+  };
+
+  const stageRect = stage?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
+  const stageStyles = stage ? getComputedStyle(stage) : null;
+  const containerStyles = container ? getComputedStyle(container) : null;
+  const cardStyles = getComputedStyle(polaroidCard);
+  const stackStyles = stack ? getComputedStyle(stack) : null;
+  const controlsBelowCard = !isPortrait && containerStyles?.flexDirection === "column";
+
+  const stageInnerWidth = Math.max(
+    0,
+    stageRect.width - readPx(stageStyles?.paddingLeft) - readPx(stageStyles?.paddingRight)
+  );
+  const stageInnerHeight = Math.max(
+    0,
+    stageRect.height - readPx(stageStyles?.paddingTop) - readPx(stageStyles?.paddingBottom)
+  );
+
+  const columnGap = readPx(containerStyles?.columnGap || containerStyles?.gap);
+  const rowGap = readPx(containerStyles?.rowGap || containerStyles?.gap);
+  const cardPadX = readPx(cardStyles.paddingLeft) + readPx(cardStyles.paddingRight);
+  const cardPadY = readPx(cardStyles.paddingTop) + readPx(cardStyles.paddingBottom);
+  const stackPadX = readPx(stackStyles?.paddingLeft) + readPx(stackStyles?.paddingRight);
+  const stackPadY = readPx(stackStyles?.paddingTop) + readPx(stackStyles?.paddingBottom);
+
+  const actionSize = sizeOf(actions);
+  const settingsSize = sizeOf(settingsBar);
+  const statusSize = sizeOf(status);
+  const whiteBorderHeight = showFrame && whiteBorder ? whiteBorder.offsetHeight || 0 : 0;
+
+  const reservedWidth = controlsBelowCard
+    ? 0
+    : isPortrait
+    ? Math.max(actionSize.width, settingsSize.width)
+    : actionSize.width;
+  const reservedHeight = statusSize.height
+    + statusSize.marginTop
+    + statusSize.marginBottom
+    + (
+      isPortrait
+        ? 0
+        : settingsSize.height
+          + settingsSize.marginTop
+          + settingsSize.marginBottom
+          + (controlsBelowCard ? actionSize.height + (actionSize.height > 0 ? rowGap : 0) : 0)
+    );
+
+  const availableCardWidth = Math.max(
+    120,
+    stageInnerWidth - reservedWidth - (reservedWidth > 0 ? columnGap : 0) - stackPadX - FIT_SAFETY_GUTTER
+  );
+  const availableCardHeight = Math.max(120, stageInnerHeight - reservedHeight - stackPadY - FIT_SAFETY_GUTTER);
+  const availablePreviewWidth = Math.max(80, availableCardWidth - cardPadX);
+  const availablePreviewHeight = Math.max(80, availableCardHeight - cardPadY - whiteBorderHeight);
+  const scale = Math.min(availablePreviewWidth / cardW, availablePreviewHeight / measuredCardH, 1);
+
+  const previewWidth = Math.max(1, Math.floor(cardW * scale));
+  const previewHeight = Math.max(1, Math.ceil(measuredCardH * scale));
+  const cardWidth = previewWidth + cardPadX;
+
+  root.style.transform = `scale(${scale})`;
+  root.style.transformOrigin = "top left";
+  preview.style.width = `${previewWidth}px`;
+  preview.style.height = `${previewHeight}px`;
+  polaroidCard.style.width = `${cardWidth}px`;
 }
 
 async function exportShareCardBlob() {
@@ -2018,9 +2119,12 @@ async function exportShareCardBlob() {
 
   const container = document.createElement("div");
   container.style.cssText = `position:fixed;left:-9999px;top:0;width:${exportW}px;height:${exportH}px;overflow:hidden;pointer-events:none;z-index:-1`;
+  const animDisable = isPortrait
+    ? `.sc-portrait .sc-mini-meter-row .sc-mini-meter i{animation:none!important;transform:none!important;}`
+    : '';
   const css = showFrame
-    ? `${cardCss}${polaroidExportCss(orientation, measuredCardH)}`
-    : cardCss;
+    ? `${cardCss}${polaroidExportCss(orientation, measuredCardH)}${animDisable}`
+    : `${cardCss}${animDisable}`;
   container.innerHTML = `<style>${css}</style>${exportHtml}`;
   document.body.appendChild(container);
 

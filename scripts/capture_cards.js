@@ -5,7 +5,9 @@ import {
   normalizeLocalShareData,
   normalizeCloudShareData,
   renderShareCardHtml,
-  shareCardCss
+  renderPortraitShareCardHtml,
+  shareCardCss,
+  portraitShareCardCss
 } from "../src/desktop/share-card.js";
 
 const artifactDir = join(import.meta.dirname, "..", "artifacts", "share-cards");
@@ -48,7 +50,7 @@ const t = (key, params = {}) => {
     "desktop.share.chart.composition": "Composition",
     "desktop.share.chart.league": "League",
     "desktop.share.quote.0": "别只看峰值，看见节奏，才看见真正的生产力。",
-    "desktop.share.quote.1": "今天的 Token 消耗，是一次认真思考留下的热量。",
+    "desktop.share.quote.1": "今天的 Token 消耗，是一次认真思考留留下热量。",
     "desktop.share.quote.2": "技术不是思考的替代品，而是思考的放大器。",
     "desktop.share.quote.3": "代码是写给人看的，只是顺便让机器执行一下。",
     "desktop.share.quote.4": "让 AI 成为你的杠杆，而不是你的拐杖。",
@@ -80,7 +82,7 @@ const formatUsd = (val) => `$${Number(val).toFixed(2)}`;
 const weeklyData = normalizeCloudShareData({
   period: "this_week",
   businessDay: "2026-05-30",
-  identity: { nickname: "Sky Huang", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+  identity: { nickname: "Sky Huang", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS", anonymousName: "蚂蚁 2" },
   analytics: {
     from: "2026-05-25",
     to: "2026-05-30",
@@ -110,7 +112,7 @@ const weeklyData = normalizeCloudShareData({
 const dailyData = normalizeCloudShareData({
   period: "today",
   businessDay: "2026-05-30",
-  identity: { nickname: "Sky Huang", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS" },
+  identity: { nickname: "Sky Huang", identityMode: "anonymous", publicId: "GDPS", displayName: "GDPS", anonymousName: "第一代号 · 狮城 2" },
   analytics: {
     from: "2026-05-30",
     to: "2026-05-30",
@@ -132,22 +134,31 @@ const dailyData = normalizeCloudShareData({
 
 const weeklyHtml = renderShareCardHtml(weeklyData, { t, formatToken, formatUsd });
 const dailyHtml = renderShareCardHtml(dailyData, { t, formatToken, formatUsd });
+const portraitWeeklyHtml = renderPortraitShareCardHtml(weeklyData, { t, formatToken, formatUsd, showAnonymousName: true });
+const portraitDailyHtml = renderPortraitShareCardHtml(dailyData, { t, formatToken, formatUsd, showAnonymousName: true });
 
 async function capture() {
   console.log("Launching headless browser via Playwright...");
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.setViewportSize({ width: 1200, height: 800 });
 
-  for (const [name, html] of [["weekly-card", weeklyHtml], ["daily-card", dailyHtml]]) {
-    console.log(`Capturing ${name}...`);
+  const scenarios = [
+    { name: "weekly-card", html: weeklyHtml, css: shareCardCss(), width: 1200, height: 720 },
+    { name: "daily-card", html: dailyHtml, css: shareCardCss(), width: 1200, height: 720 },
+    { name: "portrait-weekly-card", html: portraitWeeklyHtml, css: `${shareCardCss()} ${portraitShareCardCss()}`, width: 720, height: 1200 },
+    { name: "portrait-daily-card", html: portraitDailyHtml, css: `${shareCardCss()} ${portraitShareCardCss()}`, width: 720, height: 1200 }
+  ];
+
+  for (const s of scenarios) {
+    console.log(`Capturing ${s.name}...`);
+    await page.setViewportSize({ width: s.width, height: s.height });
     await page.setContent(`
       <html>
-        <head><style>body { margin: 0; padding: 0; background: #fff; overflow: hidden; } ${shareCardCss()}</style></head>
-        <body>${html}</body>
+        <head><style>body { margin: 0; padding: 0; background: #fff; overflow: hidden; } ${s.css}</style></head>
+        <body>${s.html}</body>
       </html>
     `);
-    await page.screenshot({ path: join(artifactDir, `${name}.png`), fullPage: true });
+    await page.screenshot({ path: join(artifactDir, `${s.name}.png`), fullPage: true });
   }
 
   await browser.close();
