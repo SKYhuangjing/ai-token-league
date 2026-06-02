@@ -12,7 +12,7 @@
 
 **官方支持平台**：macOS Apple silicon、macOS Intel、Windows x64。
 
-当前版本：`0.7.5`
+当前版本：`0.7.6`
 
 ---
 
@@ -142,9 +142,9 @@ reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
 
 前往 [GitHub Releases](https://github.com/SKYhuangjing/ai-token-league/releases) 下载对应系统的安装包：
 
-- **macOS Apple silicon**：`AI Token League-0.7.5-mac-arm64-installer.dmg`
-- **macOS Intel**：`AI Token League-0.7.5-mac-x64-installer.dmg`
-- **Windows x64**：`AI Token League-0.7.5-win-x64-installer.exe`
+- **macOS Apple silicon**：`AI Token League-0.7.6-mac-arm64-installer.dmg`
+- **macOS Intel**：`AI Token League-0.7.6-mac-x64-installer.dmg`
+- **Windows x64**：`AI Token League-0.7.6-win-x64-installer.exe`
 
 ### 选项 B：下载 zip 包
 

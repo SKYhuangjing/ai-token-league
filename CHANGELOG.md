@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6] - 2026-06-02
+
+### Added
+
+- [Desktop] Added share-card settings with local-first preview, portrait export, and quick share periods for last week and last month.
+- [Web] Added a participant badge to the public download-page trend card and surfaced the chart as a rolling last-30-days view.
+
+### Changed
+
+- [Desktop] Refined share-card layout fitting, portrait mini-meter styling, and orientation switching polish for cleaner export output.
+- [Web] Reworked admin usage operations into ranking and aggregate views, with pagination support for large ranking lists.
+
+### Fixed
+
+- [Desktop] Fixed share-card sizing and selector behavior so portrait mode, auto-height, and preview interactions stay consistent with automated coverage.
+- [Web] Fixed board/admin analytics responses to always include stable participant identity labels, improving trend and admin view consistency.
+
 ## [0.7.5] - 2026-05-31
 
 ### Added
