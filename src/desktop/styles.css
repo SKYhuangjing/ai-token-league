@@ -45,31 +45,35 @@
   --line: #263244;
   --line-strong: #d7e0ea;
   --yellow: #ffc857;
-  --teal: #38d7c2;
-  --mint: rgba(56, 215, 194, 0.18);
+  --teal: #35cfc0;
+  --mint: rgba(53, 207, 192, 0.16);
   --red: #ff6b6b;
   --violet: #b99cff;
   --cost-accent: #ffc857;
   --green: #57d68d;
   --blue: #6ea8ff;
-  --bg-grid: rgba(244, 247, 251, 0.045);
-  --bg-yellow-glow: rgba(255, 200, 87, 0.12);
-  --bg-teal-glow: rgba(56, 215, 194, 0.14);
+  --bg-grid: rgba(244, 247, 251, 0.026);
+  --bg-yellow-glow: rgba(255, 200, 87, 0.09);
+  --bg-teal-glow: rgba(53, 207, 192, 0.11);
   --rail-bg: linear-gradient(180deg, rgba(18, 26, 38, 0.96), rgba(8, 13, 22, 0.96));
-  --panel-bg: rgba(18, 26, 38, 0.78);
-  --panel-bg-strong: rgba(24, 34, 49, 0.96);
-  --panel-bg-soft: rgba(18, 26, 38, 0.68);
-  --control-bg: rgba(20, 29, 42, 0.78);
-  --control-hover-bg: rgba(244, 247, 251, 0.08);
-  --subtle-bg: rgba(244, 247, 251, 0.07);
-  --border-subtle: rgba(244, 247, 251, 0.10);
-  --border-hover: rgba(244, 247, 251, 0.18);
+  --panel-bg: rgba(20, 30, 44, 0.88);
+  --panel-bg-strong: rgba(25, 37, 54, 0.97);
+  --panel-bg-soft: rgba(20, 30, 44, 0.78);
+  --control-bg: rgba(20, 30, 44, 0.82);
+  --control-hover-bg: rgba(53, 207, 192, 0.12);
+  --subtle-bg: rgba(244, 247, 251, 0.055);
+  --border-subtle: rgba(244, 247, 251, 0.14);
+  --border-hover: rgba(53, 207, 192, 0.34);
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
-  --card-shadow: 0 14px 34px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(244, 247, 251, 0.04);
+  --card-shadow: 0 18px 42px rgba(0, 0, 0, 0.30), inset 0 0 0 1px rgba(244, 247, 251, 0.055);
   --button-shadow: 0 2px 8px rgba(0, 0, 0, 0.22), inset 0 0 0 1px var(--border-subtle);
   --button-hover-shadow: 0 8px 18px rgba(0, 0, 0, 0.28), inset 0 0 0 1px var(--border-hover);
-  --accent-surface: var(--teal);
-  --accent-text: #061019;
+  --accent-surface: rgba(53, 207, 192, 0.16);
+  --accent-text: #e9fffb;
+  --accent-border: rgba(53, 207, 192, 0.48);
+  --accent-strong-surface: #35cfc0;
+  --accent-strong-text: #061019;
+  --brand-accent: #dce7f2;
   --hero-bg: radial-gradient(circle at 78% 18%, rgba(56, 215, 194, 0.24), transparent 12rem), linear-gradient(135deg, #141c2b, #251b3d);
   --hero-ink: #f4f7fb;
   --hero-muted: rgba(244, 247, 251, 0.76);
@@ -3518,4 +3522,68 @@ label {
 :root[data-theme="dark"] .row-action-card:focus-visible {
   background: var(--accent-surface);
   color: var(--accent-text);
+}
+
+:root[data-theme="dark"] .brand .mono {
+  color: var(--brand-accent);
+  text-shadow: 0 0 18px rgba(53, 207, 192, 0.14);
+}
+
+:root[data-theme="dark"] nav button {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 800;
+}
+
+:root[data-theme="dark"] nav button.active,
+:root[data-theme="dark"] nav button:hover {
+  border-color: var(--accent-border);
+  background:
+    linear-gradient(90deg, rgba(53, 207, 192, 0.18), rgba(53, 207, 192, 0.08)),
+    var(--panel-bg-soft);
+  color: var(--accent-text);
+  box-shadow: inset 4px 0 0 var(--teal), 0 8px 22px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme="dark"] .segmented button {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 800;
+}
+
+:root[data-theme="dark"] .segmented button.active,
+:root[data-theme="dark"] .segmented button:hover {
+  background: rgba(53, 207, 192, 0.18);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+:root[data-theme="dark"] .primary-pill,
+:root[data-theme="dark"] .teal-button {
+  background: var(--accent-strong-surface);
+  color: var(--accent-strong-text);
+}
+
+:root[data-theme="dark"] .primary-pill:hover,
+:root[data-theme="dark"] .teal-button:hover {
+  background: #54ded1;
+  color: var(--accent-strong-text);
+}
+
+:root[data-theme="dark"] :is(.stat-card, .visual-card, .workdir-card, .provider-card, .row-card, .rail-note, .about-panel > .stack) {
+  border: 1px solid var(--border-subtle);
+  background: var(--panel-bg);
+}
+
+:root[data-theme="dark"] :is(.topline h3, .visual-card h4, .row-card strong) {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+
+:root[data-theme="dark"] :is(.metric-label, .stat-card span, .badge, .rail-note, .toast) {
+  font-weight: 800;
+}
+
+:root[data-theme="dark"] .hero-score {
+  border-color: rgba(244, 247, 251, 0.16);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34), inset 0 0 0 1px rgba(53, 207, 192, 0.06);
 }
