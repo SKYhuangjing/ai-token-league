@@ -56,6 +56,22 @@ test.describe('Settings', () => {
     expect(await switcher.inputValue()).toBe('en');
   });
 
+  test('theme selector switches between light and dark immediately', async ({ page }) => {
+    const theme = page.locator('#theme');
+    await expect(theme).toBeVisible();
+    await expect(theme).toHaveValue('light');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+
+    await theme.selectOption('dark');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(theme).toHaveValue('dark');
+
+    await page.reload();
+    await page.locator('[data-section="settings"]').click();
+    await expect(page.locator('#theme')).toHaveValue('dark');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  });
+
   test('checkbox toggles flip checked state', async ({ page }) => {
     const showCost = page.locator('#showEstimatedCost');
     await expect(showCost).toBeVisible();

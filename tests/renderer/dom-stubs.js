@@ -31,7 +31,7 @@ const ALL_IDS = [
   'reveal-backup-directory','reveal-runtime-log-directory','runtimeLogRetentionDays',
   'save-cursor-token','save-share-card','settings-save-message',
   'share-card-modal','share-card-preview','share-card-status','settings-source-list','settings-tabs',
-  'showEstimatedCost','showRawTokens','sources-tabs','sync-state','toast',
+  'showEstimatedCost','showRawTokens','sources-tabs','sync-state','theme','toast',
   'today-cost','today-total','trend-chart-panel','trend-drawer',
   'trend-drawer-backdrop','trend-drawer-body','trend-drawer-copy','trend-drawer-title',
   'trend-heading','trend-rows','trend-selection-panel','trend-summary',
@@ -58,7 +58,7 @@ const TEXT_INPUT_IDS = new Set([
   'localBackupRetention','runtimeLogRetentionDays','refreshIntervalMinutes',
 ]);
 
-const SELECT_IDS = new Set(['overview-range','workdirs-range']);
+const SELECT_IDS = new Set(['overview-range','workdirs-range','theme']);
 
 // IDs that should be button elements (disabled/click semantics)
 const BUTTON_IDS = new Set([
@@ -93,7 +93,7 @@ export function createStubDOM() {
       el = document.createElement('button');
     } else if (SELECT_IDS.has(id)) {
       el = document.createElement('select');
-      for (const val of ['today', '7d', '30d', 'all']) {
+      for (const val of id === 'theme' ? ['light', 'dark'] : ['today', '7d', '30d', 'all']) {
         const opt = document.createElement('option');
         opt.value = val;
         opt.textContent = val;

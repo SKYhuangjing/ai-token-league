@@ -461,6 +461,14 @@ $("#showRawTokens").addEventListener("change", async () => {
 $("#showEstimatedCost").addEventListener("change", async () => {
   await saveInstantPreference("showEstimatedCost", $("#showEstimatedCost").checked);
 });
+const themeSelect = $("#theme");
+if (themeSelect) {
+  themeSelect.addEventListener("change", async () => {
+    const theme = normalizeTheme(themeSelect.value);
+    applyTheme(theme);
+    await saveInstantPreference("theme", theme);
+  });
+}
 
 window.addEventListener("resize", () => {
   if ($("#share-card-modal")?.hidden || !latestShareData) return;
@@ -572,6 +580,17 @@ $("#share-card-range")?.addEventListener("click", async (event) => {
   }
 }
 
+
+const SUPPORTED_THEMES = new Set(["light", "dark"]);
+
+function normalizeTheme(theme) {
+  return SUPPORTED_THEMES.has(theme) ? theme : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = normalizeTheme(theme);
+}
+
 // Dirty state tracking for save_required + next_cycle fields
 const DIRTY_TRACKED_FIELDS = ["nickname", "apiBaseUrl", "launchAtLogin", "hideDockIcon", "refreshIntervalMinutes"];
 
@@ -622,21 +641,27 @@ function isApiBaseUrlDirty() {
 
 async function saveInstantPreference(field, value) {
   const previousConfig = latestConfig || {};
-  const previousValue = previousConfig[field] ?? false;
+  const previousValue = previousConfig[field] ?? (field === "theme" ? "light" : false);
   latestConfig = { ...previousConfig, [field]: value };
   const input = document.getElementById(field);
 
   try {
     if (field === "showEstimatedCost" && value) await refreshPricing();
     if (field === "showEstimatedCost" && !value) await syncTrayCostState();
+    if (field === "theme") applyTheme(value);
     renderInstantPreferenceViews();
     const config = await api.updateConfig({ [field]: value });
     latestConfig = { ...latestConfig, ...config, [field]: config[field] ?? value };
+    if (field === "theme") applyTheme(latestConfig.theme);
     renderInstantPreferenceViews();
     updateDirtyState();
   } catch (error) {
     latestConfig = { ...previousConfig, [field]: previousValue };
-    if (input) input.checked = Boolean(previousValue);
+    if (input) {
+      if (input.type === "checkbox") input.checked = Boolean(previousValue);
+      else input.value = previousValue;
+    }
+    if (field === "theme") applyTheme(previousValue);
     renderInstantPreferenceViews();
     setSaveMessage(error.message || t("desktop.renderer.actionFailed"), "error");
   }
@@ -845,6 +870,7 @@ function settingsPayload() {
     nickname: $("#nickname")?.value || "anonymous",
     apiBaseUrl: $("#apiBaseUrl")?.value?.trim() || "",
     refreshIntervalMinutes: Number($("#refreshIntervalMinutes")?.value) || 15,
+    theme: normalizeTheme($("#theme")?.value),
     launchAtLogin: $("#launchAtLogin")?.checked ?? false,
     hideDockIcon: $("#hideDockIcon")?.checked ?? false,
     desktopAutoInitialized: false,
@@ -2579,6 +2605,9 @@ function renderConfig(config) {
   if ($("#apiBaseUrl")) $("#apiBaseUrl").value = config?.apiBaseUrl ?? "";
   if ($("#showEstimatedCost")) $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
   if ($("#showRawTokens")) $("#showRawTokens").checked = config?.showRawTokens ?? false;
+  const theme = normalizeTheme(config?.theme);
+  applyTheme(theme);
+  if ($("#theme")) $("#theme").value = theme;
   if ($("#refreshIntervalMinutes")) $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
   if ($("#runtimeLogRetentionDays")) $("#runtimeLogRetentionDays").value = config?.runtimeLogRetentionDays ?? 3;
   if ($("#launchAtLogin")) $("#launchAtLogin").checked = config?.launchAtLogin ?? false;

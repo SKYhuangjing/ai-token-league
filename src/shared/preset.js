@@ -5,6 +5,7 @@ export const PRESET_ALLOWED_KEYS = [
   "apiBaseUrl",
   "nickname",
   "language",
+  "theme",
   "refreshIntervalMinutes",
   "launchAtLogin",
   "showEstimatedCost",

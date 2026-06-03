@@ -40,6 +40,7 @@ function parsePreset() {
   if (process.env.PRESET_API_BASE_URL) preset.apiBaseUrl = process.env.PRESET_API_BASE_URL;
   if (process.env.PRESET_NICKNAME) preset.nickname = process.env.PRESET_NICKNAME;
   if (process.env.PRESET_LANGUAGE) preset.language = process.env.PRESET_LANGUAGE;
+  if (process.env.PRESET_THEME) preset.theme = process.env.PRESET_THEME;
   if (process.env.PRESET_REFRESH_INTERVAL) preset.refreshIntervalMinutes = Number(process.env.PRESET_REFRESH_INTERVAL);
   if (process.env.PRESET_LAUNCH_AT_LOGIN) preset.launchAtLogin = parseBool(process.env.PRESET_LAUNCH_AT_LOGIN);
   if (process.env.PRESET_SHOW_ESTIMATED_COST) preset.showEstimatedCost = parseBool(process.env.PRESET_SHOW_ESTIMATED_COST);

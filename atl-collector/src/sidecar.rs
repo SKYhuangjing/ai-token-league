@@ -2249,6 +2249,7 @@ mod tests {
             device_id: "d_test".to_string(),
             api_base_url: "league.example.com".to_string(),
             language: "zh-CN".to_string(),
+            theme: "light".to_string(),
             show_estimated_cost: true,
             show_raw_tokens: false,
             auto_refresh_enabled: true,
