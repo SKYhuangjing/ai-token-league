@@ -622,7 +622,7 @@ button:disabled {
 
 .mini-meter-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) max-content;
   grid-template-rows: auto auto;
   gap: 2px 8px;
   min-height: 30px;
