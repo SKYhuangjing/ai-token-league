@@ -3152,6 +3152,7 @@ function testNicknameGenerator() {
 function testPresetModule() {
   assert.ok(PRESET_ALLOWED_KEYS.includes("apiBaseUrl"));
   assert.ok(PRESET_ALLOWED_KEYS.includes("language"));
+  assert.ok(PRESET_ALLOWED_KEYS.includes("theme"));
   assert.ok(PRESET_ALLOWED_KEYS.includes("refreshIntervalMinutes"));
   assert.ok(PRESET_ALLOWED_KEYS.includes("providerEnabled"));
   assert.ok(!PRESET_ALLOWED_KEYS.includes("identityPrivateKey"));
@@ -3165,12 +3166,14 @@ function testPresetModule() {
   fs.writeFileSync(path.join(presetAssetDir, "preset.json"), JSON.stringify({
     apiBaseUrl: "https://example.com",
     language: "en",
+    theme: "dark",
     identityPrivateKey: "secret",
     extraKey: "ignored"
   }));
   const loaded = loadBuildPreset(presetDir);
   assert.equal(loaded.apiBaseUrl, "https://example.com");
   assert.equal(loaded.language, "en");
+  assert.equal(loaded.theme, "dark");
   assert.equal(Object.hasOwn(loaded, "identityPrivateKey"), false);
   assert.equal(Object.hasOwn(loaded, "extraKey"), false);
   console.log("  testPresetModule passed");

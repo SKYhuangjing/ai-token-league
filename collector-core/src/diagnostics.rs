@@ -180,6 +180,7 @@ mod tests {
             device_id: "d_diag_test".into(),
             api_base_url: String::new(),
             language: String::new(),
+            theme: "light".into(),
             show_estimated_cost: false,
             show_raw_tokens: false,
             auto_refresh_enabled: true,

@@ -584,6 +584,7 @@ mod tests {
             device_id: "d_test".to_string(),
             api_base_url: String::new(),
             language: "zh-CN".to_string(),
+            theme: "light".to_string(),
             show_estimated_cost: false,
             show_raw_tokens: false,
             auto_refresh_enabled: true,

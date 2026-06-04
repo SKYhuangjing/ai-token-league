@@ -192,6 +192,8 @@ pub struct AppConfig {
     pub api_base_url: String,
     #[serde(default)]
     pub language: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
     #[serde(default)]
     pub show_estimated_cost: bool,
     #[serde(default)]
@@ -279,6 +281,18 @@ fn default_true() -> bool {
 }
 fn default_silent_update_mode() -> String {
     DEFAULT_SILENT_UPDATE_MODE.to_string()
+}
+
+fn default_theme() -> String {
+    "light".to_string()
+}
+
+fn normalize_theme(value: &str) -> String {
+    match value {
+        "dark" => "dark".to_string(),
+        "system" => "system".to_string(),
+        _ => default_theme(),
+    }
 }
 fn default_refresh_interval() -> u64 {
     15
@@ -397,6 +411,7 @@ pub fn load_build_preset() -> serde_json::Value {
         "apiBaseUrl",
         "nickname",
         "language",
+        "theme",
         "refreshIntervalMinutes",
         "launchAtLogin",
         "showEstimatedCost",
@@ -529,6 +544,7 @@ pub fn init_config(input: serde_json::Value, persist: bool) -> AppConfig {
         device_id: new_id("d"),
         api_base_url: normalize_api_base_url(input["apiBaseUrl"].as_str().unwrap_or("")),
         language: input["language"].as_str().unwrap_or("").to_string(),
+        theme: normalize_theme(input["theme"].as_str().unwrap_or("light")),
         show_estimated_cost: input["showEstimatedCost"].as_bool().unwrap_or(false),
         show_raw_tokens: input["showRawTokens"].as_bool().unwrap_or(false),
         auto_refresh_enabled: DEFAULT_AUTO_REFRESH_ENABLED,
@@ -732,6 +748,7 @@ pub fn import_config_with_summary(
         device_id,
         api_base_url: imported["apiBaseUrl"].as_str().unwrap_or("").to_string(),
         language: imported["language"].as_str().unwrap_or("").to_string(),
+        theme: normalize_theme(imported["theme"].as_str().unwrap_or("light")),
         show_estimated_cost: imported["showEstimatedCost"].as_bool().unwrap_or(false),
         show_raw_tokens: imported["showRawTokens"].as_bool().unwrap_or(false),
         auto_refresh_enabled: DEFAULT_AUTO_REFRESH_ENABLED,
@@ -1049,6 +1066,9 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
     if let Some(v) = input["language"].as_str() {
         config.language = v.to_string();
     }
+    if let Some(v) = input["theme"].as_str() {
+        config.theme = normalize_theme(v);
+    }
     if let Some(v) = input["showEstimatedCost"].as_bool() {
         config.show_estimated_cost = v;
     }
@@ -1327,6 +1347,7 @@ mod tests {
             "deviceId": "d-imported",
             "apiBaseUrl": "https://example.com",
             "language": "en",
+            "theme": "dark",
             "cursorDashboardUsage": {
                 "accounts": [{"accessToken": "secret-at", "refreshToken": "secret-rt", "authId": "auth1"}]
             },
@@ -1705,6 +1726,22 @@ mod tests {
             !atomic_tmp_path(&config_path()).unwrap().exists(),
             "temp file must be cleaned up after successful save"
         );
+    }
+
+
+    #[test]
+    fn theme_defaults_and_updates_are_normalized() {
+        let cfg = init_config(serde_json::json!({"nickname": "theme-test", "theme": "dark"}), false);
+        assert_eq!(cfg.theme, "dark");
+
+        let light = update_config(serde_json::json!({"theme": "light"}), &cfg, false);
+        assert_eq!(light.theme, "light");
+
+        let system = update_config(serde_json::json!({"theme": "system"}), &light, false);
+        assert_eq!(system.theme, "system");
+
+        let fallback = update_config(serde_json::json!({"theme": "neon"}), &system, false);
+        assert_eq!(fallback.theme, "light");
     }
 
     #[test]
