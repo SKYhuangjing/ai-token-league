@@ -3536,8 +3536,8 @@ label {
 
 :root[data-theme="dark"] #rail-brand-logo[src],
 :root[data-theme="dark"] .rail-brand-logo[src] {
-  opacity: 0.74;
-  filter: saturate(0.58) brightness(0.82) contrast(0.92);
+  opacity: 0.95;
+  filter: brightness(1.35) saturate(1.25) contrast(1.1) drop-shadow(0 1px 3px rgba(255, 255, 255, 0.08));
 }
 
 :root[data-theme="dark"] .identity {
