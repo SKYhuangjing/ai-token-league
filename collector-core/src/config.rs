@@ -290,6 +290,7 @@ fn default_theme() -> String {
 fn normalize_theme(value: &str) -> String {
     match value {
         "dark" => "dark".to_string(),
+        "system" => "system".to_string(),
         _ => default_theme(),
     }
 }
@@ -1736,7 +1737,10 @@ mod tests {
         let light = update_config(serde_json::json!({"theme": "light"}), &cfg, false);
         assert_eq!(light.theme, "light");
 
-        let fallback = update_config(serde_json::json!({"theme": "neon"}), &light, false);
+        let system = update_config(serde_json::json!({"theme": "system"}), &light, false);
+        assert_eq!(system.theme, "system");
+
+        let fallback = update_config(serde_json::json!({"theme": "neon"}), &system, false);
         assert_eq!(fallback.theme, "light");
     }
 

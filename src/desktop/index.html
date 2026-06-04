@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-i18n="app.name">AI Token League</title>
     <link rel="icon" type="image/png" href="./favicon.png" />
+    <script>
+      (() => {
+        try {
+          const key = "atl.theme";
+          const supported = new Set(["light", "dark", "system"]);
+          const stored = localStorage.getItem(key);
+          const preference = supported.has(stored) ? stored : "light";
+          const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)")?.matches;
+          document.documentElement.dataset.themePreference = preference;
+          document.documentElement.dataset.theme = preference === "system" && systemDark ? "dark" : preference === "dark" ? "dark" : "light";
+        } catch {
+          document.documentElement.dataset.themePreference = "light";
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -222,11 +238,12 @@
                 <span class="setting-icon icon" style="--icon: url('./icons/palette.svg')" aria-hidden="true"></span>
                 <div>
                   <strong data-i18n="desktop.display.theme">Theme</strong>
-                  <div class="muted" data-i18n="desktop.display.themeDesc">Choose a light or dark UI.</div>
+                  <div class="muted" data-i18n="desktop.display.themeDesc">Choose light, dark, or follow the system.</div>
                 </div>
                 <select id="theme" aria-label="Theme">
                   <option value="light" data-i18n="desktop.theme.light">Light</option>
                   <option value="dark" data-i18n="desktop.theme.dark">Dark</option>
+                  <option value="system" data-i18n="desktop.theme.system">System</option>
                 </select>
               </div>
               <div class="row-card">

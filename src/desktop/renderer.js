@@ -466,6 +466,7 @@ if (themeSelect) {
   themeSelect.addEventListener("change", async () => {
     const theme = normalizeTheme(themeSelect.value);
     applyTheme(theme);
+    storeThemePreference(theme);
     await saveInstantPreference("theme", theme);
   });
 }
@@ -581,14 +582,55 @@ $("#share-card-range")?.addEventListener("click", async (event) => {
 }
 
 
-const SUPPORTED_THEMES = new Set(["light", "dark"]);
+const THEME_STORAGE_KEY = "atl.theme";
+const SYSTEM_DARK_QUERY = "(prefers-color-scheme: dark)";
+const SUPPORTED_THEMES = new Set(["light", "dark", "system"]);
+let systemThemeMedia = null;
 
 function normalizeTheme(theme) {
   return SUPPORTED_THEMES.has(theme) ? theme : "light";
 }
 
+function systemPrefersDark() {
+  return Boolean(window.matchMedia?.(SYSTEM_DARK_QUERY)?.matches);
+}
+
+function resolveTheme(theme) {
+  const normalized = normalizeTheme(theme);
+  if (normalized === "system") return systemPrefersDark() ? "dark" : "light";
+  return normalized;
+}
+
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = normalizeTheme(theme);
+  const normalized = normalizeTheme(theme);
+  document.documentElement.dataset.themePreference = normalized;
+  document.documentElement.dataset.theme = resolveTheme(normalized);
+}
+
+function storeThemePreference(theme) {
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, normalizeTheme(theme));
+  } catch {
+    // Theme persistence still works through config; localStorage only prevents startup flash.
+  }
+}
+
+function storedThemePreference() {
+  try {
+    return normalizeTheme(localStorage.getItem(THEME_STORAGE_KEY));
+  } catch {
+    return "light";
+  }
+}
+
+function bindSystemThemeSync() {
+  if (systemThemeMedia) return;
+  systemThemeMedia = window.matchMedia?.(SYSTEM_DARK_QUERY);
+  if (!systemThemeMedia?.addEventListener) return;
+  systemThemeMedia.addEventListener("change", () => {
+    const current = normalizeTheme(latestConfig?.theme || document.documentElement.dataset.themePreference || storedThemePreference());
+    if (current === "system") applyTheme("system");
+  });
 }
 
 // Dirty state tracking for save_required + next_cycle fields
@@ -641,18 +683,24 @@ function isApiBaseUrlDirty() {
 
 async function saveInstantPreference(field, value) {
   const previousConfig = latestConfig || {};
-  const previousValue = previousConfig[field] ?? (field === "theme" ? "light" : false);
+  const previousValue = previousConfig[field] ?? (field === "theme" ? storedThemePreference() : false);
   latestConfig = { ...previousConfig, [field]: value };
   const input = document.getElementById(field);
 
   try {
     if (field === "showEstimatedCost" && value) await refreshPricing();
     if (field === "showEstimatedCost" && !value) await syncTrayCostState();
-    if (field === "theme") applyTheme(value);
+    if (field === "theme") {
+      applyTheme(value);
+      storeThemePreference(value);
+    }
     renderInstantPreferenceViews();
     const config = await api.updateConfig({ [field]: value });
     latestConfig = { ...latestConfig, ...config, [field]: config[field] ?? value };
-    if (field === "theme") applyTheme(latestConfig.theme);
+    if (field === "theme") {
+      applyTheme(latestConfig.theme);
+      storeThemePreference(latestConfig.theme);
+    }
     renderInstantPreferenceViews();
     updateDirtyState();
   } catch (error) {
@@ -661,7 +709,10 @@ async function saveInstantPreference(field, value) {
       if (input.type === "checkbox") input.checked = Boolean(previousValue);
       else input.value = previousValue;
     }
-    if (field === "theme") applyTheme(previousValue);
+    if (field === "theme") {
+      applyTheme(previousValue);
+      storeThemePreference(previousValue);
+    }
     renderInstantPreferenceViews();
     setSaveMessage(error.message || t("desktop.renderer.actionFailed"), "error");
   }
@@ -2607,6 +2658,7 @@ function renderConfig(config) {
   if ($("#showRawTokens")) $("#showRawTokens").checked = config?.showRawTokens ?? false;
   const theme = normalizeTheme(config?.theme);
   applyTheme(theme);
+  storeThemePreference(theme);
   if ($("#theme")) $("#theme").value = theme;
   if ($("#refreshIntervalMinutes")) $("#refreshIntervalMinutes").value = config?.refreshIntervalMinutes ?? 15;
   if ($("#runtimeLogRetentionDays")) $("#runtimeLogRetentionDays").value = config?.runtimeLogRetentionDays ?? 3;
@@ -4782,6 +4834,9 @@ function toDay(date) {
 
 const escapeHtml = _escapeHtml;
 const cssEscape = _cssEscape;
+
+applyTheme(storedThemePreference());
+bindSystemThemeSync();
 
 // 初始化语言切换器
 const langContainer = document.querySelector("#lang-switcher-container");

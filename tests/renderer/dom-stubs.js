@@ -93,7 +93,7 @@ export function createStubDOM() {
       el = document.createElement('button');
     } else if (SELECT_IDS.has(id)) {
       el = document.createElement('select');
-      for (const val of id === 'theme' ? ['light', 'dark'] : ['today', '7d', '30d', 'all']) {
+      for (const val of id === 'theme' ? ['light', 'dark', 'system'] : ['today', '7d', '30d', 'all']) {
         const opt = document.createElement('option');
         opt.value = val;
         opt.textContent = val;

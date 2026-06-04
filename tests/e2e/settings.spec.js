@@ -56,20 +56,31 @@ test.describe('Settings', () => {
     expect(await switcher.inputValue()).toBe('en');
   });
 
-  test('theme selector switches between light and dark immediately', async ({ page }) => {
+  test('theme selector switches between light, dark, and system immediately', async ({ page }) => {
     const theme = page.locator('#theme');
     await expect(theme).toBeVisible();
+    await expect(theme.locator('option')).toHaveCount(3);
     await expect(theme).toHaveValue('light');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'light');
 
     await theme.selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'dark');
     await expect(theme).toHaveValue('dark');
 
     await page.reload();
     await page.locator('[data-section="settings"]').click();
     await expect(page.locator('#theme')).toHaveValue('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.locator('#theme').selectOption('system');
+    await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'system');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 
   test('checkbox toggles flip checked state', async ({ page }) => {
