@@ -40,43 +40,43 @@
 :root[data-theme="dark"] {
   --paper: #0c1119;
   --paper-2: #121a26;
-  --ink: #f4f7fb;
-  --muted: #9aa7b6;
+  --ink: #e3e9f1;
+  --muted: #8e9aaa;
   --line: #263244;
   --line-strong: #d7e0ea;
-  --yellow: #ffc857;
-  --teal: #35cfc0;
-  --mint: rgba(53, 207, 192, 0.16);
-  --red: #ff6b6b;
-  --violet: #b99cff;
-  --cost-accent: #ffc857;
+  --yellow: #d9aa4d;
+  --teal: #2fb8ad;
+  --mint: rgba(47, 184, 173, 0.13);
+  --red: #e86464;
+  --violet: #a98de6;
+  --cost-accent: #d6a44b;
   --green: #57d68d;
   --blue: #6ea8ff;
-  --bg-grid: rgba(244, 247, 251, 0.026);
-  --bg-yellow-glow: rgba(255, 200, 87, 0.09);
-  --bg-teal-glow: rgba(53, 207, 192, 0.11);
+  --bg-grid: rgba(218, 226, 236, 0.018);
+  --bg-yellow-glow: rgba(217, 170, 77, 0.055);
+  --bg-teal-glow: rgba(47, 184, 173, 0.07);
   --rail-bg: linear-gradient(180deg, rgba(18, 26, 38, 0.96), rgba(8, 13, 22, 0.96));
   --panel-bg: rgba(20, 30, 44, 0.88);
   --panel-bg-strong: rgba(25, 37, 54, 0.97);
   --panel-bg-soft: rgba(20, 30, 44, 0.78);
   --control-bg: rgba(20, 30, 44, 0.82);
-  --control-hover-bg: rgba(53, 207, 192, 0.12);
+  --control-hover-bg: rgba(47, 184, 173, 0.09);
   --subtle-bg: rgba(244, 247, 251, 0.055);
   --border-subtle: rgba(244, 247, 251, 0.14);
-  --border-hover: rgba(53, 207, 192, 0.34);
+  --border-hover: rgba(47, 184, 173, 0.26);
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   --card-shadow: 0 18px 42px rgba(0, 0, 0, 0.30), inset 0 0 0 1px rgba(244, 247, 251, 0.055);
   --button-shadow: 0 2px 8px rgba(0, 0, 0, 0.22), inset 0 0 0 1px var(--border-subtle);
   --button-hover-shadow: 0 8px 18px rgba(0, 0, 0, 0.28), inset 0 0 0 1px var(--border-hover);
-  --accent-surface: rgba(53, 207, 192, 0.16);
-  --accent-text: #e9fffb;
-  --accent-border: rgba(53, 207, 192, 0.48);
-  --accent-strong-surface: #35cfc0;
-  --accent-strong-text: #061019;
-  --brand-accent: #dce7f2;
-  --hero-bg: radial-gradient(circle at 78% 18%, rgba(56, 215, 194, 0.24), transparent 12rem), linear-gradient(135deg, #141c2b, #251b3d);
-  --hero-ink: #f4f7fb;
-  --hero-muted: rgba(244, 247, 251, 0.76);
+  --accent-surface: rgba(47, 184, 173, 0.12);
+  --accent-text: #dff5f2;
+  --accent-border: rgba(47, 184, 173, 0.34);
+  --accent-strong-surface: #2fb8ad;
+  --accent-strong-text: #071316;
+  --brand-accent: #c8d2df;
+  --hero-bg: radial-gradient(circle at 78% 18%, rgba(47, 184, 173, 0.18), transparent 12rem), linear-gradient(135deg, #151d2b, #202237);
+  --hero-ink: #eef3f8;
+  --hero-muted: rgba(226, 234, 244, 0.68);
   color-scheme: dark;
 }
 
@@ -546,7 +546,7 @@ button:disabled {
   right: -76px;
   bottom: -86px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(5, 143, 126, 0.86), transparent 70%);
+  background: radial-gradient(circle, rgba(47, 184, 173, 0.46), transparent 70%);
 }
 
 .hero-score > * { position: relative; z-index: 1; }
@@ -3526,7 +3526,7 @@ label {
 
 :root[data-theme="dark"] .brand .mono {
   color: var(--brand-accent);
-  text-shadow: 0 0 18px rgba(53, 207, 192, 0.14);
+  text-shadow: 0 0 14px rgba(47, 184, 173, 0.10);
 }
 
 :root[data-theme="dark"] nav button {
@@ -3538,10 +3538,10 @@ label {
 :root[data-theme="dark"] nav button:hover {
   border-color: var(--accent-border);
   background:
-    linear-gradient(90deg, rgba(53, 207, 192, 0.18), rgba(53, 207, 192, 0.08)),
+    linear-gradient(90deg, rgba(47, 184, 173, 0.12), rgba(47, 184, 173, 0.045)),
     var(--panel-bg-soft);
   color: var(--accent-text);
-  box-shadow: inset 4px 0 0 var(--teal), 0 8px 22px rgba(0, 0, 0, 0.22);
+  box-shadow: inset 3px 0 0 rgba(47, 184, 173, 0.74), 0 8px 20px rgba(0, 0, 0, 0.18);
 }
 
 :root[data-theme="dark"] .segmented button {
@@ -3551,7 +3551,7 @@ label {
 
 :root[data-theme="dark"] .segmented button.active,
 :root[data-theme="dark"] .segmented button:hover {
-  background: rgba(53, 207, 192, 0.18);
+  background: rgba(47, 184, 173, 0.12);
   color: var(--accent-text);
   box-shadow: inset 0 0 0 1px var(--accent-border);
 }
@@ -3564,7 +3564,7 @@ label {
 
 :root[data-theme="dark"] .primary-pill:hover,
 :root[data-theme="dark"] .teal-button:hover {
-  background: #54ded1;
+  background: #48c8be;
   color: var(--accent-strong-text);
 }
 
@@ -3585,5 +3585,11 @@ label {
 
 :root[data-theme="dark"] .hero-score {
   border-color: rgba(244, 247, 251, 0.16);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34), inset 0 0 0 1px rgba(53, 207, 192, 0.06);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.30), inset 0 0 0 1px rgba(47, 184, 173, 0.045);
+}
+
+:root[data-theme="dark"] #rail-brand-logo[src],
+:root[data-theme="dark"] .rail-brand-logo[src] {
+  opacity: 0.82;
+  filter: saturate(0.72) brightness(0.9);
 }
