@@ -79,6 +79,11 @@ test.describe('Settings', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'system');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
+    await page.locator('#settings .primary-pill').first().click();
+    await expect(page.locator('#theme')).toHaveValue('system');
+    await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'system');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
     await page.emulateMedia({ colorScheme: 'light' });
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });

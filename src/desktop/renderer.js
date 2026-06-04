@@ -897,9 +897,11 @@ async function saveSettings() {
   if (apiChanged && payload.apiBaseUrl) renderRailSyncStatus({ state: "syncing", reason: "checking_connection", label: t("desktop.syncStatus.syncing"), detail: t("desktop.syncStatus.syncingDetail.checkingConnection"), title: payload.apiBaseUrl, action: null, actionLabel: "", apiBaseUrl: payload.apiBaseUrl, lastSuccessAt: "", lastAttemptAt: "", queuePending: 0, lastError: "" });
   const existing = await api.getConfig();
   const config = existing ? await api.updateConfig(payload) : await api.initConfig(payload);
-  renderConfig(config);
+  const savedConfig = config || {};
+  const renderedConfig = { ...payload, ...savedConfig, theme: savedConfig.theme ?? payload.theme };
+  renderConfig(renderedConfig);
   if (api.platform === "darwin" && api.setDockVisible) {
-    api.setDockVisible(!config.hideDockIcon);
+    api.setDockVisible(!renderedConfig.hideDockIcon);
   }
   updateDirtyState();
   if (nextCycleDirty) {
@@ -913,7 +915,7 @@ async function saveSettings() {
   } else {
     await loadBackgroundStatus();
   }
-  return config;
+  return renderedConfig;
 }
 
 function settingsPayload() {
@@ -2656,7 +2658,7 @@ function renderConfig(config) {
   if ($("#apiBaseUrl")) $("#apiBaseUrl").value = config?.apiBaseUrl ?? "";
   if ($("#showEstimatedCost")) $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
   if ($("#showRawTokens")) $("#showRawTokens").checked = config?.showRawTokens ?? false;
-  const theme = normalizeTheme(config?.theme);
+  const theme = normalizeTheme(config?.theme || document.documentElement.dataset.themePreference || storedThemePreference());
   applyTheme(theme);
   storeThemePreference(theme);
   if ($("#theme")) $("#theme").value = theme;
