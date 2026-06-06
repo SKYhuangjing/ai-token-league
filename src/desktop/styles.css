@@ -662,6 +662,9 @@ button:disabled {
 
 .three-col .stack {
   min-height: 96px;
+  align-items: start;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .three-col .empty-state {
@@ -690,16 +693,21 @@ button:disabled {
 .mini-meter-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
-  grid-template-rows: auto auto;
+  grid-template-rows: max-content max-content;
   gap: 2px 8px;
-  min-height: 30px;
+  width: 100%;
+  height: max-content;
   font-size: 13px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 900;
   align-items: center;
+  align-self: start;
+  align-content: start;
 }
 
 .mini-meter-row .meter-name {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -707,17 +715,22 @@ button:disabled {
 }
 
 .mini-meter-row .meter-val-top {
-  align-self: end;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
   text-align: right;
   line-height: 1.15;
 }
 
 .mini-meter-row .mini-meter {
   grid-column: 1;
+  grid-row: 2;
   align-self: center;
 }
 
 .mini-meter-row .meter-cost {
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
   align-items: center;
   justify-content: flex-end;
