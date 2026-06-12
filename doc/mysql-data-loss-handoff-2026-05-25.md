@@ -82,7 +82,7 @@ set -a && . ./env.local && set +a && node tests/mysql-dual-backend-e2e.js
 
 未跑（无可用环境/工具）：
 
-- `npm run verify:ccusage` —— 本地未安装 `ccusage` / `ccusage-codex`，发布前需补；
+- `npm run verify:ccusage` —— 当时本地未安装统一版 `ccusage`，发布前需补；
 - `npm run test:ui` / `npm run test:e2e` —— 本次未触及桌面渲染层，跳过。
 
 ### 推荐的接收方验证步骤

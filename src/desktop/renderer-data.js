@@ -58,6 +58,10 @@ function finalizeTrendRow(row) {
 export function sourceName(providerId, t = (k) => k) {
   if (providerId === "codex_local") return t("source.codex");
   if (providerId === "claude_code_local") return t("source.claude");
+  if (providerId === "mimocode_local") return t("source.mimocode");
+  if (providerId === "opencode_local") return t("source.opencode");
+  if (providerId === "hermes_local") return t("source.hermes");
+  if (providerId === "openclaw_local") return t("source.openclaw");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

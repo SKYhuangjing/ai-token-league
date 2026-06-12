@@ -31,11 +31,16 @@ impl CursorDashboardProvider {
                 continue;
             }
             if account.refresh_token.is_empty() {
+                account.auth_status = "reauth_required".to_string();
+                changed = true;
                 continue;
             }
             match cursor_auth::refresh_token(&account.refresh_token).await {
                 Ok(result) => {
                     account.access_token = result.access_token;
+                    if let Some(rt) = result.refresh_token {
+                        account.refresh_token = rt;
+                    }
                     account.last_refresh_at = Some(now.clone());
                     account.auth_status = "active".to_string();
                     // Extract exp from new JWT
@@ -43,11 +48,11 @@ impl CursorDashboardProvider {
                     account.access_token_expires_at = exp;
                     changed = true;
                 }
-                Err(e) if e == "shouldLogout" => {
+                Err(cursor_auth::CursorRefreshError::ReauthRequired) => {
                     account.auth_status = "reauth_required".to_string();
                     changed = true;
                 }
-                Err(_) => {
+                Err(cursor_auth::CursorRefreshError::Transient(_)) => {
                     account.auth_status = "refresh_failed".to_string();
                     changed = true;
                 }
@@ -99,20 +104,23 @@ impl CursorDashboardProvider {
                             let account =
                                 &mut config.cursor_dashboard_usage.accounts[account_index];
                             account.access_token = result.access_token.clone();
+                            if let Some(rt) = result.refresh_token {
+                                account.refresh_token = rt;
+                            }
                             new_access_token = result.access_token;
                             account.last_refresh_at = Some(now);
                             account.auth_status = "active".to_string();
                             let (_, exp) = cursor_auth::extract_jwt_claims(&new_access_token);
                             account.access_token_expires_at = exp;
-                            new_cookie = if !account.sub.is_empty() {
-                                let raw = format!("{}::{}", account.sub, &account.access_token);
-                                format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
-                            } else {
-                                cursor_token_to_cookie(&account.access_token)
-                            };
+                            new_cookie = build_cursor_session_cookie(
+                                account.sub.as_str(),
+                                &account.access_token,
+                            );
                         }
+                        let retry_result = self.fetch_usage(&new_cookie).await;
+                        update_status_after_usage_retry(config, account_index, &retry_result);
                         crate::config::save_config(config);
-                        self.fetch_usage(&new_cookie).await
+                        retry_result
                     }
                     Err(refresh_err) => {
                         if let Some(account) = config
@@ -120,14 +128,17 @@ impl CursorDashboardProvider {
                             .accounts
                             .get_mut(account_index)
                         {
-                            account.auth_status = if refresh_err == "shouldLogout" {
-                                "reauth_required".to_string()
-                            } else {
-                                "refresh_failed".to_string()
+                            account.auth_status = match &refresh_err {
+                                cursor_auth::CursorRefreshError::ReauthRequired => {
+                                    "reauth_required".to_string()
+                                }
+                                cursor_auth::CursorRefreshError::Transient(_) => {
+                                    "refresh_failed".to_string()
+                                }
                             };
                         }
                         crate::config::save_config(config);
-                        Err(refresh_err)
+                        Err(refresh_err.to_string())
                     }
                 }
             }
@@ -153,15 +164,13 @@ impl CursorDashboardProvider {
             if account.ignored {
                 continue;
             }
+            if account.auth_status != "active" {
+                continue;
+            }
             if account.access_token.is_empty() {
                 continue;
             }
-            let cookie = if !account.sub.is_empty() {
-                let raw = format!("{}::{}", account.sub, account.access_token);
-                format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
-            } else {
-                cursor_token_to_cookie(&account.access_token)
-            };
+            let cookie = build_cursor_session_cookie(account.sub.as_str(), &account.access_token);
             let account_name = if !account.email.is_empty() {
                 account.email.clone()
             } else if !account.account_hash.is_empty() {
@@ -205,7 +214,7 @@ impl CursorDashboardProvider {
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .header("Cookie", cookie)
-                .header("User-Agent", "AI Token League")
+                .header("User-Agent", "ai-token-league/0.7.6")
                 .json(&body)
                 .send()
                 .await
@@ -305,6 +314,28 @@ impl CursorDashboardProvider {
     }
 }
 
+fn is_auth_http_error(error: &str) -> bool {
+    error == "HTTP 401 Unauthorized" || error == "HTTP 403 Forbidden"
+}
+
+fn update_status_after_usage_retry(
+    config: &mut AppConfig,
+    account_index: usize,
+    retry_result: &Result<Vec<Value>, String>,
+) {
+    if let Err(error) = retry_result {
+        if is_auth_http_error(error) {
+            if let Some(account) = config
+                .cursor_dashboard_usage
+                .accounts
+                .get_mut(account_index)
+            {
+                account.auth_status = "reauth_required".to_string();
+            }
+        }
+    }
+}
+
 fn parse_event_timestamp(raw: &Value) -> i64 {
     if let Some(value) = raw.as_i64() {
         return timestamp_number_to_millis(value);
@@ -390,6 +421,17 @@ pub fn cursor_token_to_cookie(value: &str) -> String {
     }
 
     format!("WorkosCursorSessionToken={}", urlencoding::encode(&decoded))
+}
+
+/// Build a WorkosCursorSessionToken cookie from sub and access_token.
+/// Cursor expects encodeURIComponent(sub + "::" + accessToken).
+pub fn build_cursor_session_cookie(sub: &str, access_token: &str) -> String {
+    if !sub.is_empty() {
+        let raw = format!("{}::{}", sub, access_token);
+        format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
+    } else {
+        cursor_token_to_cookie(access_token)
+    }
 }
 
 fn cursor_user_id_from_token(token: &str) -> Option<String> {
@@ -552,5 +594,174 @@ mod tests {
         let scan_start = cursor_scan_start(now);
 
         assert_eq!(scan_start.to_rfc3339(), "2025-12-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn test_build_cookie_encodes_complete_auth0_session_value() {
+        let sub = "auth0|user_01HPX9ABCDEF";
+        let access_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzAxSFBYOUFCQ0RFRiJ9.sig";
+
+        let cookie = build_cursor_session_cookie(sub, access_token);
+        let expected = format!(
+            "WorkosCursorSessionToken={}",
+            urlencoding::encode(&format!("{}::{}", sub, access_token))
+        );
+
+        assert_eq!(cookie, expected);
+        assert!(cookie.contains("auth0%7Cuser_"));
+        assert!(cookie.contains("%3A%3A"));
+    }
+
+    /// Simulate the full scanner cookie-matching flow with an Auth0 sub.
+    /// discover_sources builds cookies via build_cursor_session_cookie (new style).
+    /// The scanner's account_cookies map should also use build_cursor_session_cookie.
+    /// They must match for reactive refresh to work.
+    #[test]
+    fn test_cookie_matching_for_auth0_account() {
+        use crate::config::{
+            AppConfig, CursorAccount, CursorDashboardUsageConfig, LocalBackupConfig,
+            SyncStatusRecord,
+        };
+        use std::collections::HashMap;
+
+        let account = CursorAccount {
+            access_token: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhdXRoMHx1c2VyXzAxSFBYOUFCQ0RFRiJ9.sig"
+                .into(),
+            refresh_token: "rt_mock_jasper".into(),
+            auth_id: "auth_abc".into(),
+            sub: "auth0|user_01HPX9ABCDEF".into(),
+            email: "jasper.cui@example.com".into(),
+            account_hash: "hash_jasper".into(),
+            access_token_expires_at: Some(
+                (chrono::Utc::now() + chrono::Duration::hours(1))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            ),
+            last_refresh_at: None,
+            auth_status: "active".into(),
+            ignored: false,
+            added_at: None,
+        };
+
+        let mut cfg = AppConfig {
+            participant_id: "p_test".into(),
+            nickname: "test".into(),
+            nickname_auto_generated: false,
+            identity_public_key: "pk".into(),
+            identity_private_key: "sk".into(),
+            device_id: "d_test".into(),
+            api_base_url: String::new(),
+            language: "zh-CN".into(),
+            theme: "light".into(),
+            show_estimated_cost: false,
+            show_raw_tokens: false,
+            auto_refresh_enabled: true,
+            silent_update_mode: "auto_download".into(),
+            refresh_interval_minutes: 15,
+            launch_at_login: false,
+            hide_dock_icon: false,
+            desktop_auto_initialized: false,
+            cursor_dashboard_usage: CursorDashboardUsageConfig {
+                workos_session_token: String::new(),
+                workos_session_tokens: vec![],
+                accounts: vec![account],
+            },
+            local_backup: LocalBackupConfig::default(),
+            runtime_log_retention_days: 3,
+            share_card_orientation: "landscape".into(),
+            show_share_cloud_url: true,
+            show_share_polaroid_frame: true,
+            show_share_anonymous_name: true,
+            api_connection: json!({}),
+            sync_status: SyncStatusRecord::default(),
+            workdir_aliases: HashMap::new(),
+            provider_roots: HashMap::new(),
+            provider_enabled: HashMap::new(),
+            provider_ignored_auto_sources: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+            imported_at: None,
+            last_sync_at: None,
+            last_sync_status: None,
+            last_sync_api_base_url: None,
+            last_sync_error: None,
+        };
+        cfg.provider_enabled.insert(PROVIDER_ID.to_string(), true);
+
+        let provider = CursorDashboardProvider;
+
+        // discover_sources uses build_cursor_session_cookie
+        let sources = provider.discover_sources(&cfg);
+        assert_eq!(sources.len(), 1, "one active account → one source");
+        let source_cookie = &sources[0].cookie;
+
+        // Scanner's account_cookies map (now also uses build_cursor_session_cookie)
+        let account_cookies: Vec<(String, usize)> = cfg
+            .cursor_dashboard_usage
+            .accounts
+            .iter()
+            .enumerate()
+            .map(|(i, acc)| (build_cursor_session_cookie(&acc.sub, &acc.access_token), i))
+            .collect();
+
+        // The lookup must succeed
+        let idx = account_cookies
+            .iter()
+            .find(|(c, _)| c == source_cookie)
+            .map(|(_, i)| *i);
+        assert_eq!(
+            idx,
+            Some(0),
+            "cookie lookup must match for reactive refresh"
+        );
+    }
+
+    #[test]
+    fn discover_sources_skips_accounts_requiring_reauth() {
+        let mut cfg = crate::config::init_config(json!({}), false);
+        cfg.cursor_dashboard_usage
+            .accounts
+            .push(crate::config::CursorAccount {
+                access_token: "at".into(),
+                refresh_token: "rt".into(),
+                auth_id: "auth".into(),
+                sub: "auth0|user".into(),
+                email: "user@example.com".into(),
+                account_hash: "hash".into(),
+                access_token_expires_at: None,
+                last_refresh_at: None,
+                auth_status: "reauth_required".into(),
+                ignored: false,
+                added_at: None,
+            });
+
+        assert!(CursorDashboardProvider.discover_sources(&cfg).is_empty());
+    }
+
+    #[test]
+    fn retry_unauthorized_marks_account_for_reauth() {
+        let mut cfg = crate::config::init_config(json!({}), false);
+        cfg.cursor_dashboard_usage
+            .accounts
+            .push(crate::config::CursorAccount {
+                access_token: "new-at".into(),
+                refresh_token: "rt".into(),
+                auth_id: "auth".into(),
+                sub: "auth0|user".into(),
+                email: "user@example.com".into(),
+                account_hash: "hash".into(),
+                access_token_expires_at: None,
+                last_refresh_at: None,
+                auth_status: "active".into(),
+                ignored: false,
+                added_at: None,
+            });
+
+        let retry_result = Err("HTTP 401 Unauthorized".to_string());
+        update_status_after_usage_retry(&mut cfg, 0, &retry_result);
+
+        assert_eq!(
+            cfg.cursor_dashboard_usage.accounts[0].auth_status,
+            "reauth_required"
+        );
     }
 }

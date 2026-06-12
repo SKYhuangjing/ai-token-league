@@ -51,8 +51,12 @@ impl TestEnv {
             .join("claude/projects")
             .to_string_lossy()
             .to_string();
+        let hermes_path = samples.join("hermes").to_string_lossy().to_string();
+        let openclaw_path = samples.join("openclaw").to_string_lossy().to_string();
         let cfg = config::add_provider_root("codex_local", &codex_path, &cfg);
-        config::add_provider_root("claude_code_local", &claude_path, &cfg)
+        let cfg = config::add_provider_root("claude_code_local", &claude_path, &cfg);
+        let cfg = config::add_provider_root("hermes_local", &hermes_path, &cfg);
+        config::add_provider_root("openclaw_local", &openclaw_path, &cfg)
     }
 }
 
@@ -114,6 +118,63 @@ fn scenario_fresh_install_first_scan() {
     assert!(health.len() >= 2);
 }
 
+// ── Scenario 1b: Hermes and OpenClaw scan from sample data ──
+
+#[test]
+fn scenario_hermes_openclaw_scan() {
+    let _guard = lock();
+    let _prev = SaveHome::new();
+    let env = TestEnv::new();
+    let cfg = env.init_config();
+
+    let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
+
+    let hermes: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "hermes")
+        .collect();
+    let openclaw: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "openclaw")
+        .collect();
+
+    assert!(
+        !hermes.is_empty(),
+        "should find hermes items from samples/hermes/state.db"
+    );
+    assert!(
+        !openclaw.is_empty(),
+        "should find openclaw items from samples/openclaw/*.jsonl"
+    );
+
+    for item in &hermes {
+        assert_eq!(item["providerId"], "hermes_local");
+        assert!(item["totalTokens"].as_i64().unwrap_or(0) > 0);
+        assert!(!item["day"].as_str().unwrap_or("").is_empty());
+        assert!(!item["model"].as_str().unwrap_or("").is_empty());
+    }
+
+    for item in &openclaw {
+        assert_eq!(item["providerId"], "openclaw_local");
+        assert!(item["totalTokens"].as_i64().unwrap_or(0) > 0);
+        assert!(!item["day"].as_str().unwrap_or("").is_empty());
+        assert!(!item["model"].as_str().unwrap_or("").is_empty());
+    }
+
+    let hermes_total: i64 = hermes
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    let openclaw_total: i64 = openclaw
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert!(hermes_total > 0, "hermes total should be positive");
+    assert!(openclaw_total > 0, "openclaw total should be positive");
+}
+
 // ── Scenario 2: Scan → persist → query roundtrip ──
 
 #[test]
@@ -170,6 +231,63 @@ fn scenario_incremental_scan_with_cache() {
     assert!(
         !result.source_index.is_empty(),
         "first scan should produce source fingerprints"
+    );
+}
+
+// ── Scenario 3b: Multi-cycle scan with SQLite cache — no token amplification ──
+
+#[test]
+fn scenario_multi_cycle_scan_no_amplification() {
+    let _guard = lock();
+    let _prev = SaveHome::new();
+    let env = TestEnv::new();
+    let cfg = env.init_config();
+
+    // Round 1: fresh scan (empty cache)
+    let result1 = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
+    let total1: i64 = result1
+        .items
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert!(total1 > 0, "round 1 should have positive tokens");
+
+    // Round 2: scan with source cache from round 1
+    let mut cache2 = result1.source_index.clone();
+    let result2 = run_async(scanner::scan_usage_async_with_source_cache(
+        &cfg, &mut cache2,
+    ));
+    let total2: i64 = result2
+        .items
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+
+    // Round 3: scan with source cache from round 2
+    let mut cache3 = result2.source_index.clone();
+    let result3 = run_async(scanner::scan_usage_async_with_source_cache(
+        &cfg, &mut cache3,
+    ));
+    let total3: i64 = result3
+        .items
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+
+    assert_eq!(
+        total1, total2,
+        "round 2 should not amplify tokens: got {} vs {}",
+        total2, total1
+    );
+    assert_eq!(
+        total2, total3,
+        "round 3 should not amplify tokens: got {} vs {}",
+        total3, total2
+    );
+    assert_eq!(
+        result1.items.len(),
+        result2.items.len(),
+        "item count should be stable across rounds"
     );
 }
 

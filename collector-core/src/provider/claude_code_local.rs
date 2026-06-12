@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub const PROVIDER_ID: &str = "claude_code_local";
 pub const TOOL_CODE: &str = "claude_code";
-pub const VERSION: &str = "0.1.1";
+pub const VERSION: &str = "0.2.0";
 
 pub struct ClaudeCodeLocalProvider;
 
@@ -102,13 +102,17 @@ impl ClaudeCodeLocalProvider {
 
         let source = source_metadata(file, PROVIDER_ID, VERSION);
         let rows = read_json_lines(file);
-        let mut events = Vec::new();
 
         let mut last_model = String::new();
         let mut session_id = Path::new(file)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+
+        // First pass: collect usage entries, deduplicate by message ID (keep last occurrence)
+        let mut usage_entries: std::collections::HashMap<String, (Value, Value, String, String)> =
+            std::collections::HashMap::new();
+        let mut ordered_keys: Vec<String> = Vec::new();
 
         for row in &rows {
             // Model detection: sticky
@@ -139,6 +143,53 @@ impl ClaudeCodeLocalProvider {
                 None => continue,
             };
 
+            // Deduplicate by message ID: keep last occurrence per ID
+            let msg_id = row
+                .get("message")
+                .and_then(|m| m.get("id"))
+                .and_then(|m| m.as_str())
+                .or_else(|| row.get("uuid").and_then(|u| u.as_str()))
+                .unwrap_or("")
+                .to_string();
+
+            let key = if msg_id.is_empty() {
+                format!("{}:{}", session_id, ordered_keys.len())
+            } else {
+                msg_id
+            };
+
+            if !usage_entries.contains_key(&key) {
+                ordered_keys.push(key.clone());
+            }
+            usage_entries.insert(
+                key,
+                (
+                    row.clone(),
+                    usage.clone(),
+                    last_model.clone(),
+                    session_id.clone(),
+                ),
+            );
+        }
+
+        // Second pass: build events from deduplicated entries
+        let mut events = Vec::new();
+
+        for key in &ordered_keys {
+            let (row, usage, event_model, event_session_id) = match usage_entries.get(key) {
+                Some(entry) => entry,
+                None => continue,
+            };
+
+            // Extract message.id for cross-file global dedup (done in scanner)
+            let dedup_key = row
+                .get("message")
+                .and_then(|m| m.get("id"))
+                .and_then(|m| m.as_str())
+                .or_else(|| row.get("uuid").and_then(|u| u.as_str()))
+                .unwrap_or("")
+                .to_string();
+
             let raw_input_tokens =
                 token_field(usage, &["input_tokens", "inputTokens", "prompt_tokens"]);
             let output_tokens = token_field(
@@ -163,7 +214,7 @@ impl ClaudeCodeLocalProvider {
             );
             let reasoning_tokens = token_field(usage, &["reasoning_tokens", "reasoningTokens"]);
 
-            // Claude Code does NOT subtract cache from input (ccusage semantics)
+            // Claude Code: input_tokens is separate from cache in the API; use as-is (ccusage semantics)
             let input_tokens = raw_input_tokens;
 
             let direct_total = token_field(usage, &["total_tokens", "totalTokens"]);
@@ -174,10 +225,10 @@ impl ClaudeCodeLocalProvider {
                 continue;
             }
 
-            let model = if last_model.is_empty() {
+            let model = if event_model.is_empty() {
                 "unknown".to_string()
             } else {
-                last_model.clone()
+                event_model.clone()
             };
 
             let quality = if raw_input_tokens > 0 || output_tokens > 0 {
@@ -201,7 +252,7 @@ impl ClaudeCodeLocalProvider {
                 "toolCode": TOOL_CODE,
                 "sourceKind": "local_log",
                 "sourceQuality": quality,
-                "sessionId": session_id,
+                "sessionId": event_session_id,
                 "day": day_from_record(row, mtime_ms),
                 "hour": hour_from_record(row, mtime_ms),
                 "workdirCandidate": workdir_candidate,
@@ -215,6 +266,7 @@ impl ClaudeCodeLocalProvider {
                 "rawSourceRef": source.raw_source_ref,
                 "sourceFingerprint": source.source_fingerprint,
                 "parserVersion": source.parser_version,
+                "_dedupKey": dedup_key,
             }));
         }
 
@@ -285,15 +337,83 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_code_no_cache_subtraction() {
+    fn test_claude_code_input_tokens_includes_no_cache_subtraction() {
         let usage = json!({
             "input_tokens": 100,
             "output_tokens": 50,
             "cache_read_input_tokens": 30,
             "cache_creation_input_tokens": 20
         });
-        // Claude Code: inputTokens = rawInputTokens (no subtraction)
-        let input = token_field(&usage, &["input_tokens", "inputTokens", "prompt_tokens"]);
-        assert_eq!(input, 100); // NOT 50
+        // Claude Code: input_tokens is kept as-is; total = sum of all four fields
+        let raw_input = token_field(&usage, &["input_tokens", "inputTokens", "prompt_tokens"]);
+        let cache_read = token_field(
+            &usage,
+            &[
+                "cache_read_input_tokens",
+                "cacheReadTokens",
+                "cache_read_tokens",
+            ],
+        );
+        let cache_write = token_field(
+            &usage,
+            &[
+                "cache_creation_input_tokens",
+                "cacheWriteTokens",
+                "cache_write_tokens",
+            ],
+        );
+        let output = token_field(
+            &usage,
+            &["output_tokens", "outputTokens", "completion_tokens"],
+        );
+        assert_eq!(raw_input, 100);
+        assert_eq!(cache_read, 30);
+        assert_eq!(cache_write, 20);
+        let total = raw_input + output + cache_read + cache_write;
+        assert_eq!(total, 200); // 100 + 50 + 30 + 20
+    }
+
+    #[test]
+    fn test_parse_usage_preserves_model_at_each_message() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("atl-claude-models-{}.jsonl", suffix));
+        let rows = [
+            json!({
+                "timestamp": "2026-06-01T10:00:00Z",
+                "sessionId": "session-a",
+                "message": {
+                    "id": "message-a",
+                    "model": "model-a",
+                    "usage": {"input_tokens": 10, "output_tokens": 1}
+                }
+            }),
+            json!({
+                "timestamp": "2026-06-01T11:00:00Z",
+                "sessionId": "session-b",
+                "message": {
+                    "id": "message-b",
+                    "model": "model-b",
+                    "usage": {"input_tokens": 20, "output_tokens": 2}
+                }
+            }),
+        ];
+        let content = rows
+            .iter()
+            .map(|row| serde_json::to_string(row).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, content).unwrap();
+
+        let events = ClaudeCodeLocalProvider.parse_usage(&path.to_string_lossy());
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["model"], "model-a");
+        assert_eq!(events[0]["sessionId"], "session-a");
+        assert_eq!(events[1]["model"], "model-b");
+        assert_eq!(events[1]["sessionId"], "session-b");
+        let _ = fs::remove_file(path);
     }
 }

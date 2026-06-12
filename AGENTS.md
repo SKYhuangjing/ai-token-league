@@ -17,7 +17,7 @@ Before changing behavior, identify the real source of truth in code and docs. Do
 
 ## Product Summary
 
-AI Token League is a local-first AI coding token usage collector plus public leaderboard for Codex, Claude Code, and Cursor.
+AI Token League is a local-first AI coding token usage collector plus public leaderboard for Codex, Claude Code, MiMoCode, OpenCode, and Cursor.
 
 Current product baseline: `0.7`; client version: `0.7.6` (released 2026-06-02).
 Frozen product baseline: `0.6`, tracked by `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`.
@@ -38,6 +38,10 @@ Core behavior:
 | `codex_local` | Supported | Scans local Codex session JSONL logs. |
 | `claude_code_local` | Supported | Scans local Claude Code project logs. |
 | `cursor_dashboard_usage` | Supported when enabled | Uses Cursor dashboard usage API; real project paths are not available. |
+| `mimocode_local` | Supported | Scans local MiMoCode SQLite database. |
+| `opencode_local` | Supported | Scans local OpenCode SQLite database. |
+| `hermes_local` | Supported | Scans local Hermes SQLite database. |
+| `openclaw_local` | Supported | Scans local OpenClaw JSONL logs. |
 
 Token total rule:
 
@@ -420,14 +424,15 @@ For server deployment, release channel configuration, and client preset setup, s
 Use the smallest verification that covers the touched surface:
 
 - README or docs only: inspect rendered Markdown-sensitive links and run `git diff --check`.
-- Claude Code or Codex collector changes: run `npm test`, `cargo test --workspace`, and `npm run verify:ccusage`; the ccusage verifier compares completed local days against `ccusage` and `ccusage-codex` and requires those commands plus local usage logs.
+- Claude Code or Codex collector changes: run `npm test`, `cargo test --workspace`, and `npm run verify:ccusage`; the ccusage verifier compares completed local days against the unified `ccusage` commands (`ccusage claude` and `ccusage codex`) and requires that command plus local usage logs.
+- OpenCode collector changes: run `npm test`, `cargo test --workspace`, and `npm run verify:ccusage -- --provider=opencode`; the verifier queries the local OpenCode SQLite database directly and compares against collector output.
 - Every release regression must include `npm run verify:ccusage` before tagging or packaging release artifacts, because collector correctness is product-critical and internal tests cannot catch external tool scope drift.
 - Backend API or store changes: run `npm test` and relevant smoke/API checks.
 - Desktop feature quick self-test: if the goal is local behavior or UI-direction confirmation during development, run the desktop feature quick self-test loop above. This is enough for development-stage self-test, not for final delivery.
 - Desktop renderer changes (pure functions, data transforms, HTML generators in `renderer-helpers.js`, `renderer-data.js`, `renderer-components.js`): run `npm run test:ui`. These unit tests import real production code and verify outputs directly.
 - Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm run test:ui`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches.
 - Desktop UI feature verification (scan display, range switching, navigation, settings, wizard, sync status): run `npm run test:e2e` (52 mock E2E tests including zh-CN locale, async scan, empty data, error states, large dataset, and product workflows).
-- Collector correctness gate: run `npm run verify:ccusage` — compares against external ccusage output.
+- Collector correctness gate: run `npm run verify:ccusage` — compares against external ccusage output for Claude/Codex, direct SQLite query for OpenCode.
 - Full desktop release gate: `npm test`, `npm run test:ui`, `npm run test:e2e`, `cargo test --workspace`, `npm run desktop`. All must pass before packaging.
 - Packaging, updater, preset, bundled-asset, install/download UX, or package-resource changes: run tests, then build with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.

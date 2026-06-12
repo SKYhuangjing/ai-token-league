@@ -2,11 +2,12 @@ use crate::config::AppConfig;
 use crate::provider::common::*;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 pub const PROVIDER_ID: &str = "codex_local";
 pub const TOOL_CODE: &str = "codex";
-pub const VERSION: &str = "0.1.2";
+pub const VERSION: &str = "0.2.0";
 
 pub struct CodexProvider;
 
@@ -38,17 +39,16 @@ impl CodexProvider {
         let mut roots = Vec::new();
 
         if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            let sessions = Path::new(&codex_home).join("sessions");
-            if sessions.exists() {
-                roots.push(sessions.to_string_lossy().to_string());
+            for value in codex_home
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            {
+                add_codex_usage_roots(Path::new(value), &mut roots);
             }
         }
-        let default_root = home.join(".codex").join("sessions");
-        if default_root.exists() {
-            let root = default_root.to_string_lossy().to_string();
-            if !roots.contains(&root) {
-                roots.push(root);
-            }
+        if roots.is_empty() {
+            add_codex_usage_roots(&home.join(".codex"), &mut roots);
         }
 
         if roots.is_empty() {
@@ -82,18 +82,17 @@ impl CodexProvider {
             .into_iter()
             .filter(|r| !ignored.contains(r))
             .collect();
-        let manual = self
-            .manual_roots(config)
-            .into_iter()
-            .map(|root| codex_session_root(&root))
-            .collect::<Vec<_>>();
+        let mut manual = Vec::new();
+        for root in self.manual_roots(config) {
+            add_codex_usage_roots(Path::new(&root), &mut manual);
+        }
 
         let mut files = Vec::new();
         for root in auto.iter().chain(manual.iter()) {
             let found = walk_files(root, |f| f.ends_with(".jsonl"), 1000);
             files.extend(found);
         }
-        files
+        dedupe_active_and_archived_files(files)
     }
 
     pub fn parse_usage(&self, file: &str) -> Vec<Value> {
@@ -111,6 +110,8 @@ impl CodexProvider {
         let source = source_metadata(file, PROVIDER_ID, VERSION);
         let rows = read_json_lines(file);
         let mut events = Vec::new();
+        let replay_second = detect_subagent_replay_second(&rows, is_codex_subagent_session(file));
+        let mut skip_replay = replay_second.is_some();
 
         let mut session_cwd = String::new();
         let mut session_id = Path::new(file)
@@ -136,9 +137,20 @@ impl CodexProvider {
         let mut previous_cumulative_total: i64 = 0;
 
         for row in &rows {
-            let model_found = deep_find_string(row, &["model", "model_slug", "model_name"]);
-            if !model_found.is_empty() {
-                current_model = model_found;
+            if let Some(model) = codex_model_from_row(row) {
+                current_model = model;
+            }
+
+            if let Some(replay_second) = replay_second.as_deref() {
+                if skip_replay && is_token_count_row(row) {
+                    let Some(second) = timestamp_second(row) else {
+                        continue;
+                    };
+                    if second == replay_second {
+                        continue;
+                    }
+                    skip_replay = false;
+                }
             }
 
             let usage = match extract_usage(row) {
@@ -147,9 +159,11 @@ impl CodexProvider {
             };
 
             let normalized_model = normalize_codex_model(&current_model);
-            if normalized_model.is_empty() {
-                continue;
-            }
+            let normalized_model = if normalized_model.is_empty() {
+                "gpt-5".to_string()
+            } else {
+                normalized_model
+            };
 
             let total_tokens = usage.delta_total(previous_cumulative_total);
             if total_tokens == 0 {
@@ -192,6 +206,7 @@ impl CodexProvider {
                 "rawSourceRef": source.raw_source_ref,
                 "sourceFingerprint": source.source_fingerprint,
                 "parserVersion": source.parser_version,
+                "_codexDedupKey": codex_dedup_key(row, &normalized_model, &usage),
             }));
 
             if usage.cumulative_total > 0 {
@@ -203,13 +218,100 @@ impl CodexProvider {
     }
 }
 
-fn codex_session_root(root: &str) -> String {
-    let sessions = Path::new(root).join("sessions");
-    if sessions.exists() {
-        sessions.to_string_lossy().to_string()
-    } else {
-        root.to_string()
+fn add_codex_usage_roots(home_or_usage_dir: &Path, roots: &mut Vec<String>) {
+    let sessions = home_or_usage_dir.join("sessions");
+    let archived = home_or_usage_dir.join("archived_sessions");
+    let mut found = false;
+    for path in [&sessions, &archived] {
+        if path.is_dir() {
+            let value = path.to_string_lossy().to_string();
+            if !roots.contains(&value) {
+                roots.push(value);
+            }
+            found = true;
+        }
     }
+    if !found && home_or_usage_dir.is_dir() {
+        let value = home_or_usage_dir.to_string_lossy().to_string();
+        if !roots.contains(&value) {
+            roots.push(value);
+        }
+    }
+}
+
+fn dedupe_active_and_archived_files(files: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut sorted = files;
+    sorted.sort_by_key(|file| file.contains("/archived_sessions/"));
+    sorted
+        .into_iter()
+        .filter(|file| seen.insert(codex_file_key(file)))
+        .collect()
+}
+
+fn codex_file_key(file: &str) -> String {
+    for marker in ["/sessions/", "/archived_sessions/"] {
+        if let Some((home, relative)) = file.split_once(marker) {
+            return format!("{}|{}", home, relative);
+        }
+    }
+    file.to_string()
+}
+
+fn is_token_count_row(row: &Value) -> bool {
+    row["type"].as_str() == Some("event_msg")
+        && row["payload"]["type"].as_str() == Some("token_count")
+}
+
+fn timestamp_second(row: &Value) -> Option<String> {
+    let timestamp = row.get("timestamp")?.as_str()?.trim();
+    (timestamp.len() >= 19).then(|| timestamp[..19].to_string())
+}
+
+fn is_codex_subagent_session(file: &str) -> bool {
+    let Ok(mut file) = fs::File::open(file) else {
+        return false;
+    };
+    let mut buffer = [0u8; 16 * 1024];
+    let Ok(bytes_read) = file.read(&mut buffer) else {
+        return false;
+    };
+    buffer[..bytes_read]
+        .windows(b"thread_spawn".len())
+        .any(|window| window == b"thread_spawn")
+}
+
+fn detect_subagent_replay_second(rows: &[Value], is_subagent: bool) -> Option<String> {
+    if !is_subagent {
+        return None;
+    }
+    let mut seconds = rows
+        .iter()
+        .filter(|row| {
+            is_token_count_row(row)
+                && (row["payload"]["info"]["last_token_usage"].is_object()
+                    || row["payload"]["info"]["total_token_usage"].is_object())
+        })
+        .filter_map(timestamp_second);
+    let first = seconds.next()?;
+    (seconds.next().as_deref() == Some(first.as_str())).then_some(first)
+}
+
+fn codex_dedup_key(row: &Value, model: &str, usage: &UsageResult) -> String {
+    let timestamp = row
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        timestamp,
+        model,
+        usage.raw_input_tokens,
+        usage.cache_read_tokens,
+        usage.output_tokens,
+        usage.reasoning_tokens,
+        usage.raw_total_tokens
+    )
 }
 
 fn normalize_codex_model(model: &str) -> String {
@@ -220,7 +322,35 @@ fn normalize_codex_model(model: &str) -> String {
     value.to_string()
 }
 
+fn codex_model_from_row(row: &Value) -> Option<String> {
+    let value = if row["type"].as_str() == Some("turn_context") {
+        explicit_model(row.get("payload"))
+    } else if is_token_count_row(row) {
+        explicit_model(row.get("payload")).or_else(|| explicit_model(row.pointer("/payload/info")))
+    } else {
+        explicit_model(Some(row))
+            .or_else(|| explicit_model(row.get("data")))
+            .or_else(|| explicit_model(row.get("result")))
+            .or_else(|| explicit_model(row.get("response")))
+    };
+    value.and_then(|model| {
+        let trimmed = model.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn explicit_model(value: Option<&Value>) -> Option<&str> {
+    let value = value?;
+    value
+        .get("model")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("model_name").and_then(Value::as_str))
+        .or_else(|| value.get("model_slug").and_then(Value::as_str))
+        .or_else(|| value.pointer("/metadata/model").and_then(Value::as_str))
+}
+
 struct UsageResult {
+    raw_input_tokens: i64,
     input_tokens: i64,
     output_tokens: i64,
     cache_read_tokens: i64,
@@ -230,6 +360,7 @@ struct UsageResult {
     quality: String,
     is_cumulative: bool,
     total: i64,
+    raw_total_tokens: i64,
 }
 
 impl UsageResult {
@@ -327,6 +458,7 @@ fn extract_usage(row: &Value) -> Option<UsageResult> {
     };
 
     Some(UsageResult {
+        raw_input_tokens,
         input_tokens,
         output_tokens,
         cache_read_tokens,
@@ -336,6 +468,11 @@ fn extract_usage(row: &Value) -> Option<UsageResult> {
         quality: quality.to_string(),
         is_cumulative,
         total,
+        raw_total_tokens: if direct_total > 0 {
+            direct_total
+        } else {
+            total
+        },
     })
 }
 
@@ -390,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn test_manual_codex_home_uses_sessions_subdir() {
+    fn test_manual_codex_home_uses_sessions_and_archived_subdirs() {
         let root = std::env::temp_dir().join(format!(
             "atl-codex-root-{}",
             std::time::SystemTime::now()
@@ -399,13 +536,51 @@ mod tests {
                 .as_nanos()
         ));
         let sessions = root.join("sessions");
+        let archived = root.join("archived_sessions");
         std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&archived).unwrap();
 
+        let mut roots = Vec::new();
+        add_codex_usage_roots(&root, &mut roots);
         assert_eq!(
-            codex_session_root(&root.to_string_lossy()),
-            sessions.to_string_lossy()
+            roots,
+            vec![
+                sessions.to_string_lossy().to_string(),
+                archived.to_string_lossy().to_string()
+            ]
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_dedupes_active_and_archived_relative_copy() {
+        let files = vec![
+            "/tmp/codex/archived_sessions/a/session.jsonl".to_string(),
+            "/tmp/codex/sessions/a/session.jsonl".to_string(),
+            "/tmp/codex/archived_sessions/a/other.jsonl".to_string(),
+        ];
+        let result = dedupe_active_and_archived_files(files);
+        assert_eq!(result.len(), 2);
+        assert!(result
+            .iter()
+            .any(|file| file.contains("/sessions/a/session.jsonl")));
+        assert!(!result
+            .iter()
+            .any(|file| file.contains("/archived_sessions/a/session.jsonl")));
+    }
+
+    #[test]
+    fn test_detects_thread_spawn_replay_second() {
+        let rows = vec![
+            json!({"type":"session_meta","payload":{"source":{"subagent":{"thread_spawn":{}}}}}),
+            json!({"timestamp":"2026-05-12T08:01:00.100Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1}}}}),
+            json!({"timestamp":"2026-05-12T08:01:00.900Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"output_tokens":2}}}}),
+            json!({"timestamp":"2026-05-12T08:02:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":30,"output_tokens":3}}}}),
+        ];
+        assert_eq!(
+            detect_subagent_replay_second(&rows, true).as_deref(),
+            Some("2026-05-12T08:01:00")
+        );
     }
 }

@@ -225,7 +225,7 @@ npm run test:e2e:mock:headed  # Same with visible browser (debugging)
 
 ### Collector Correctness Gate (collector changes)
 ```bash
-npm run verify:ccusage        # Compare against ccusage/ccusage-codex output
+npm run verify:ccusage        # Compare against unified ccusage provider output
 ```
 
 ### Release / Packaging Gate

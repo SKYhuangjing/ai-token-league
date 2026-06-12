@@ -12,6 +12,10 @@ export function escapeAttribute(value) {
 export function sourceName(providerId) {
   if (providerId === "codex_local") return t("source.codex") || "Codex";
   if (providerId === "claude_code_local") return t("source.claude") || "Claude Code";
+  if (providerId === "mimocode_local") return t("source.mimocode") || "MiMoCode";
+  if (providerId === "opencode_local") return t("source.opencode") || "OpenCode";
+  if (providerId === "hermes_local") return t("source.hermes") || "Hermes";
+  if (providerId === "openclaw_local") return t("source.openclaw") || "OpenClaw";
   if (providerId === "cursor_dashboard_usage") return t("source.cursor") || "Cursor";
   return providerId;
 }

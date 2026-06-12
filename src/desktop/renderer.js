@@ -31,7 +31,8 @@ import {
   normalizeUsageTrend as _normalizeUsageTrend,
   normalizeUsageWorkdirs as _normalizeUsageWorkdirs,
   normalizeUsageTotal as _normalizeUsageTotal,
-  reconcileHealthWithConfig as _reconcileHealthWithConfig
+  reconcileHealthWithConfig as _reconcileHealthWithConfig,
+  sortProviderHealth
 } from "./renderer-helpers.js";
 
 import {
@@ -334,6 +335,22 @@ document.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const btn = event.target.closest("#add-claude-root");
   if (btn) run(() => addProviderRoot("claude_code_local"));
+});
+document.addEventListener("click", (event) => {
+  const btn = event.target.closest("#add-mimocode-root");
+  if (btn) run(() => addProviderRoot("mimocode_local"));
+});
+document.addEventListener("click", (event) => {
+  const btn = event.target.closest("#add-opencode-root");
+  if (btn) run(() => addProviderRoot("opencode_local"));
+});
+document.addEventListener("click", (event) => {
+  const btn = event.target.closest("#add-hermes-root");
+  if (btn) run(() => addProviderRoot("hermes_local"));
+});
+document.addEventListener("click", (event) => {
+  const btn = event.target.closest("#add-openclaw-root");
+  if (btn) run(() => addProviderRoot("openclaw_local"));
 });
 document.addEventListener("click", (event) => {
   const btn = event.target.closest("#connect-cursor");
@@ -1021,7 +1038,7 @@ async function renderWizard() {
     $("#wizard-api-base-url").value = latestConfig?.apiBaseUrl || "";
     setWizardSyncMode("cloud");
     try {
-      wizardDetectedSources = await api.providerHealth();
+      wizardDetectedSources = sortProviderHealth(await api.providerHealth());
     } catch {
       wizardDetectedSources = [];
     }
@@ -1032,7 +1049,7 @@ async function renderWizardSources() {
   const container = $("#wizard-source-list");
   if (!container) return;
   if (!wizardDetectedSources.length) {
-    try { wizardDetectedSources = await api.providerHealth(); } catch { wizardDetectedSources = []; }
+    try { wizardDetectedSources = sortProviderHealth(await api.providerHealth()); } catch { wizardDetectedSources = []; }
   }
   container.innerHTML = wizardDetectedSources.map((item) => {
     const detected = item.detected || (item.roots && item.roots.length > 0);
@@ -1108,6 +1125,10 @@ async function wizardImportProfile(mode = "join_existing_participant") {
 function sourceIconPath(providerId) {
   if (providerId === "codex_local") return "./icons/file-text.svg";
   if (providerId === "claude_code_local") return "./icons/folder-code.svg";
+  if (providerId === "mimocode_local") return "./icons/folder-code.svg";
+  if (providerId === "opencode_local") return "./icons/folder-code.svg";
+  if (providerId === "hermes_local") return "./icons/folder-code.svg";
+  if (providerId === "openclaw_local") return "./icons/folder-code.svg";
   if (providerId === "cursor_dashboard_usage") return "./icons/database.svg";
   return "./icons/file-text.svg";
 }
@@ -2417,7 +2438,7 @@ function applyUsageSnapshot(usage) {
     latestLocalSnapshot = { scannedAt: usage.scannedAt || "", sourceFingerprint: usage.sourceFingerprint, rowCount: usage.rowCount || 0 };
   }
   latestUsage = allUsage.filter((item) => item.day === localDay());
-  if (usage.health) latestHealth = reconcileHealthWithConfig(usage.health, latestConfig);
+  if (usage.health) latestHealth = sortProviderHealth(reconcileHealthWithConfig(usage.health, latestConfig));
   renderToday();
   renderWorkdirs();
   renderHealth();
@@ -2482,7 +2503,7 @@ function reconcileHealthWithConfig(health = [], config = latestConfig) {
 }
 
 async function loadHealth() {
-  latestHealth = await api.providerHealth();
+  latestHealth = sortProviderHealth(await api.providerHealth());
   renderCursorTokenSummary(latestConfig?.cursorDashboardUsage);
   renderHealth();
   await loadBackgroundStatus();
@@ -3594,7 +3615,15 @@ function renderHealth() {
         ? `<button class="outline-button" id="connect-cursor" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCursor")}</button>`
         : item.providerId === "codex_local"
           ? `<button class="outline-button" id="add-codex-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCodex")}</button>`
-          : `<button class="outline-button" id="add-claude-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addClaude")}</button>`;
+          : item.providerId === "mimocode_local"
+            ? `<button class="outline-button" id="add-mimocode-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addMiMoCode")}</button>`
+            : item.providerId === "hermes_local"
+              ? `<button class="outline-button" id="add-hermes-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addHermes")}</button>`
+              : item.providerId === "openclaw_local"
+                ? `<button class="outline-button" id="add-openclaw-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addOpenClaw")}</button>`
+                : item.providerId === "opencode_local"
+                  ? `<button class="outline-button" id="add-opencode-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addOpenCode")}</button>`
+                  : `<button class="outline-button" id="add-claude-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addClaude")}</button>`;
       return `<article class="provider-card">
       <div class="provider-card-head">
         <div>
@@ -4636,6 +4665,10 @@ function renderTrendTimeline(rows, latest, peak) {
 function sourceName(providerId) {
   if (providerId === "codex_local") return t("source.codex");
   if (providerId === "claude_code_local") return t("source.claude");
+  if (providerId === "mimocode_local") return t("source.mimocode");
+  if (providerId === "opencode_local") return t("source.opencode");
+  if (providerId === "hermes_local") return t("source.hermes");
+  if (providerId === "openclaw_local") return t("source.openclaw");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

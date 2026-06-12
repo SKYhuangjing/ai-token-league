@@ -1205,7 +1205,25 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
         let source_cache = read_source_index_cache();
         scanner::scan_usage_async(cfg, source_cache).await
     };
-    let snapshot = build_usage_snapshot(result.items, result.health, false, cfg);
+    let previous_items = if !result.provider_errors.is_empty() {
+        if let Some(store) = local_store.as_ref() {
+            store.all_usage_items().unwrap_or_default()
+        } else {
+            read_usage_cache()
+                .and_then(|snapshot| snapshot.get("items").and_then(|v| v.as_array()).cloned())
+                .unwrap_or_default()
+        }
+    } else {
+        Vec::new()
+    };
+    let items = merge_failed_provider_items(result.items, previous_items, &result.provider_errors);
+    let snapshot = build_usage_snapshot(
+        items,
+        result.health,
+        result.provider_errors.clone(),
+        false,
+        cfg,
+    );
     if let Some(store) = local_store.as_mut() {
         let scanned_at = snapshot
             .get("scannedAt")
@@ -1248,9 +1266,24 @@ fn arg_i64(args: &serde_json::Value, key: &str, default_value: i64) -> i64 {
         .unwrap_or(default_value)
 }
 
+fn merge_failed_provider_items(
+    mut current_items: Vec<serde_json::Value>,
+    previous_items: Vec<serde_json::Value>,
+    provider_errors: &HashMap<String, String>,
+) -> Vec<serde_json::Value> {
+    current_items.extend(previous_items.into_iter().filter(|item| {
+        item.get("providerId")
+            .and_then(|value| value.as_str())
+            .map(|provider_id| provider_errors.contains_key(provider_id))
+            .unwrap_or(false)
+    }));
+    current_items
+}
+
 fn build_usage_snapshot(
     items: Vec<serde_json::Value>,
     health: Vec<serde_json::Value>,
+    provider_errors: HashMap<String, String>,
     from_cache: bool,
     cfg: &config::AppConfig,
 ) -> serde_json::Value {
@@ -1258,9 +1291,13 @@ fn build_usage_snapshot(
     let row_count = items.len();
     let fingerprint = source_fingerprint(&items);
     let config_fingerprint = usage_source_config_fingerprint(cfg);
+    let failed_provider_ids = provider_errors.keys().cloned().collect::<Vec<_>>();
     serde_json::json!({
         "items": items,
         "health": health,
+        "partial": !provider_errors.is_empty(),
+        "failedProviderIds": failed_provider_ids,
+        "providerErrors": provider_errors,
         "cacheVersion": collector_core::schema::USAGE_CACHE_VERSION,
         "rowCount": row_count,
         "scannedAt": scanned_at,
@@ -1606,6 +1643,10 @@ fn persist_sync_status(
 const TRAY_PROVIDER_NAMES: &[(&str, &str)] = &[
     ("claude_code_local", "Claude Code"),
     ("codex_local", "Codex"),
+    ("mimocode_local", "MiMoCode"),
+    ("opencode_local", "OpenCode"),
+    ("hermes_local", "Hermes"),
+    ("openclaw_local", "OpenClaw"),
     ("cursor_dashboard_usage", "Cursor"),
 ];
 
@@ -2353,6 +2394,47 @@ mod tests {
             menu.as_array().unwrap()[2]["url"],
             "http://league.example.com"
         );
+    }
+
+    #[test]
+    fn failed_provider_merge_preserves_only_failed_provider_history() {
+        let current = vec![serde_json::json!({
+            "providerId": "codex_local",
+            "totalTokens": 100
+        })];
+        let previous = vec![
+            serde_json::json!({
+                "providerId": "mimocode_local",
+                "totalTokens": 200
+            }),
+            serde_json::json!({
+                "providerId": "codex_local",
+                "totalTokens": 50
+            }),
+        ];
+        let errors = HashMap::from([(
+            "mimocode_local".to_string(),
+            "database is locked".to_string(),
+        )]);
+
+        let merged = merge_failed_provider_items(current, previous, &errors);
+
+        assert_eq!(merged.len(), 2);
+        assert!(merged
+            .iter()
+            .any(|item| item["providerId"] == "mimocode_local" && item["totalTokens"] == 200));
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|item| item["providerId"] == "codex_local")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn tray_provider_names_include_opencode() {
+        assert_eq!(provider_display_name("opencode_local"), "OpenCode");
     }
 
     #[test]

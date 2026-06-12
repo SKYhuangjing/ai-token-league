@@ -2,7 +2,11 @@ use crate::config::AppConfig;
 use crate::crypto::sha256_hex;
 use crate::provider::claude_code_local::ClaudeCodeLocalProvider;
 use crate::provider::codex_local::CodexProvider;
-use crate::provider::cursor_dashboard::{cursor_token_to_cookie, CursorDashboardProvider};
+use crate::provider::cursor_dashboard::{build_cursor_session_cookie, CursorDashboardProvider};
+use crate::provider::hermes_local::HermesLocalProvider;
+use crate::provider::mimocode_local::MiMoCodeLocalProvider;
+use crate::provider::openclaw_local::OpenClawLocalProvider;
+use crate::provider::opencode_local::OpenCodeLocalProvider;
 use crate::schema::{compute_bucket_fingerprint, public_usage_item};
 use crate::workdir::workdir_from_candidate;
 use serde_json::{json, Value};
@@ -13,6 +17,7 @@ pub struct ScanResult {
     pub items: Vec<Value>,
     pub health: Vec<Value>,
     pub source_index: HashMap<String, Vec<Value>>,
+    pub provider_errors: HashMap<String, String>,
 }
 
 pub trait SourceCache {
@@ -46,6 +51,7 @@ pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
         let mut config = cursor.refresh_accounts_if_needed(config).await;
 
         let mut cursor_items = Vec::new();
+        let mut cursor_errors = Vec::new();
         let sources = cursor.discover_sources(&config);
 
         // Build a map from cookie to account index for reactive refresh
@@ -55,12 +61,7 @@ pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
             .iter()
             .enumerate()
             .map(|(i, acc)| {
-                let cookie = if !acc.sub.is_empty() {
-                    let raw = format!("{}::{}", acc.sub, acc.access_token);
-                    format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
-                } else {
-                    cursor_token_to_cookie(&acc.access_token)
-                };
+                let cookie = build_cursor_session_cookie(&acc.sub, &acc.access_token);
                 (cookie, i)
             })
             .collect();
@@ -84,19 +85,26 @@ pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
                 cursor.fetch_usage(&source.cookie).await
             };
 
-            if let Ok(events) = fetch_result {
-                cursor_items.extend(
-                    cursor
-                        .parse_events(&events, &source.account_name)
-                        .into_iter()
-                        .map(|event| finalize_event(event, &config)),
-                );
+            match fetch_result {
+                Ok(events) => {
+                    cursor_items.extend(
+                        cursor
+                            .parse_events(&events, &source.account_name)
+                            .into_iter()
+                            .map(|event| finalize_event(event, &config)),
+                    );
+                }
+                Err(error) => cursor_errors.push(format!("{}: {}", source.source_name, error)),
             }
         }
-        if !cursor_items.is_empty() {
+        if cursor_errors.is_empty() && !cursor_items.is_empty() {
             let mut combined = result.items;
             combined.extend(cursor_items);
             result.items = aggregate_items(&combined);
+        } else if !cursor_errors.is_empty() {
+            result
+                .provider_errors
+                .insert(cursor.id().to_string(), cursor_errors.join("; "));
         }
         result.health.push(cursor_provider_health(
             cursor.id(),
@@ -128,26 +136,37 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
 ) -> ScanResult {
     let mut health = Vec::new();
     let mut source_index: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut provider_errors = HashMap::new();
 
     // Codex
     let codex = CodexProvider;
     let codex_files = codex.scan_sessions(config);
-    for file in &codex_files {
-        let source_meta =
-            crate::provider::common::source_metadata(file, codex.id(), codex.version());
+    {
+        let mut source_fingerprints = codex_files
+            .iter()
+            .map(|file| {
+                crate::provider::common::source_metadata(file, codex.id(), codex.version())
+                    .source_fingerprint
+            })
+            .collect::<Vec<_>>();
+        source_fingerprints.sort();
+        let combined_fp = sha256_hex(&source_fingerprints.join("|"));
         let items = if let Some(cached) = source_cache
-            .take_cached_source(&source_meta.source_fingerprint)
+            .take_cached_source(&combined_fp)
             .filter(|items| cached_items_have_hour(items))
         {
             cached
         } else {
-            let events = codex.parse_usage(file);
-            events
+            let events = codex_files
+                .iter()
+                .flat_map(|file| codex.parse_usage(file))
+                .collect::<Vec<_>>();
+            global_dedup_by_field(events, "_codexDedupKey")
                 .into_iter()
                 .map(|event| finalize_event(event, config))
-                .collect::<Vec<_>>()
+                .collect()
         };
-        source_index.insert(source_meta.source_fingerprint, items);
+        source_index.insert(combined_fp, items);
     }
     health.push(local_provider_health(
         codex.id(),
@@ -159,25 +178,36 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
-    // Claude Code
+    // Claude Code — global dedup by message.id before public-field finalization.
     let claude = ClaudeCodeLocalProvider;
     let claude_files = claude.scan_sessions(config);
-    for file in &claude_files {
-        let source_meta =
-            crate::provider::common::source_metadata(file, claude.id(), claude.version());
+    {
+        let mut source_fingerprints = claude_files
+            .iter()
+            .map(|file| {
+                crate::provider::common::source_metadata(file, claude.id(), claude.version())
+                    .source_fingerprint
+            })
+            .collect::<Vec<_>>();
+        source_fingerprints.sort();
+        let combined_fp = sha256_hex(&source_fingerprints.join("|"));
+
         let items = if let Some(cached) = source_cache
-            .take_cached_source(&source_meta.source_fingerprint)
+            .take_cached_source(&combined_fp)
             .filter(|items| cached_items_have_hour(items))
         {
             cached
         } else {
-            let events = claude.parse_usage(file);
-            events
+            let events = claude_files
+                .iter()
+                .flat_map(|file| claude.parse_usage(file))
+                .collect::<Vec<_>>();
+            global_dedup_by_message_id(events)
                 .into_iter()
                 .map(|event| finalize_event(event, config))
-                .collect::<Vec<_>>()
+                .collect()
         };
-        source_index.insert(source_meta.source_fingerprint, items);
+        source_index.insert(combined_fp, items);
     }
     health.push(local_provider_health(
         claude.id(),
@@ -189,6 +219,162 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
+    // MiMoCode
+    let mimocode = MiMoCodeLocalProvider;
+    let mimocode_dbs = mimocode.scan_sessions(config);
+    let mut mimocode_sources = HashMap::new();
+    let mut mimocode_error = None;
+    for db_path in &mimocode_dbs {
+        let source_meta =
+            crate::provider::common::source_metadata(db_path, mimocode.id(), mimocode.version());
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            cached
+        } else {
+            match mimocode.try_parse_usage(db_path) {
+                Ok(events) => events
+                    .into_iter()
+                    .map(|event| finalize_event(event, config))
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    mimocode_error = Some(format!("{}: {}", db_path, error));
+                    Vec::new()
+                }
+            }
+        };
+        mimocode_sources.insert(source_meta.source_fingerprint, items);
+    }
+    if let Some(error) = mimocode_error {
+        provider_errors.insert(mimocode.id().to_string(), error);
+    } else {
+        source_index.extend(mimocode_sources);
+    }
+    health.push(local_provider_health(
+        mimocode.id(),
+        mimocode.tool_code(),
+        mimocode.auto_roots(config),
+        mimocode.manual_roots(config),
+        config,
+        mimocode_dbs.len(),
+        true,
+    ));
+
+    // OpenCode
+    let opencode = OpenCodeLocalProvider;
+    let opencode_dbs = opencode.scan_sessions(config);
+    let mut opencode_sources = HashMap::new();
+    let mut opencode_error = None;
+    for db_path in &opencode_dbs {
+        let source_meta =
+            crate::provider::common::source_metadata(db_path, opencode.id(), opencode.version());
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            cached
+        } else {
+            match opencode.try_parse_usage(db_path) {
+                Ok(events) => events
+                    .into_iter()
+                    .map(|event| finalize_event(event, config))
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    opencode_error = Some(format!("{}: {}", db_path, error));
+                    Vec::new()
+                }
+            }
+        };
+        opencode_sources.insert(source_meta.source_fingerprint, items);
+    }
+    if let Some(error) = opencode_error {
+        provider_errors.insert(opencode.id().to_string(), error);
+    } else {
+        source_index.extend(opencode_sources);
+    }
+    health.push(local_provider_health(
+        opencode.id(),
+        opencode.tool_code(),
+        opencode.auto_roots(config),
+        opencode.manual_roots(config),
+        config,
+        opencode_dbs.len(),
+        true,
+    ));
+
+    // Hermes
+    let hermes = HermesLocalProvider;
+    let hermes_dbs = hermes.scan_sessions(config);
+    let mut hermes_sources = HashMap::new();
+    let mut hermes_error = None;
+    for db_path in &hermes_dbs {
+        let source_meta =
+            crate::provider::common::source_metadata(db_path, hermes.id(), hermes.version());
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            cached
+        } else {
+            match hermes.try_parse_usage(db_path) {
+                Ok(events) => events
+                    .into_iter()
+                    .map(|event| finalize_event(event, config))
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    hermes_error = Some(format!("{}: {}", db_path, error));
+                    Vec::new()
+                }
+            }
+        };
+        hermes_sources.insert(source_meta.source_fingerprint, items);
+    }
+    if let Some(error) = hermes_error {
+        provider_errors.insert(hermes.id().to_string(), error);
+    } else {
+        source_index.extend(hermes_sources);
+    }
+    health.push(local_provider_health(
+        hermes.id(),
+        hermes.tool_code(),
+        hermes.auto_roots(config),
+        hermes.manual_roots(config),
+        config,
+        hermes_dbs.len(),
+        true,
+    ));
+
+    // OpenClaw
+    let openclaw = OpenClawLocalProvider;
+    let openclaw_files = openclaw.scan_sessions(config);
+    for file in &openclaw_files {
+        let source_meta =
+            crate::provider::common::source_metadata(file, openclaw.id(), openclaw.version());
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            cached
+        } else {
+            let events = openclaw.parse_usage(file);
+            events
+                .into_iter()
+                .map(|event| finalize_event(event, config))
+                .collect::<Vec<_>>()
+        };
+        source_index.insert(source_meta.source_fingerprint, items);
+    }
+    health.push(local_provider_health(
+        openclaw.id(),
+        openclaw.tool_code(),
+        openclaw.auto_roots(config),
+        openclaw.manual_roots(config),
+        config,
+        openclaw_files.len(),
+        true,
+    ));
+
     // Aggregate
     let aggregated = aggregate_item_refs(source_index.values().flat_map(|items| items.iter()));
 
@@ -196,6 +382,7 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         items: aggregated,
         health,
         source_index,
+        provider_errors,
     }
 }
 
@@ -203,9 +390,17 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let codex = CodexProvider;
     let claude = ClaudeCodeLocalProvider;
     let cursor = CursorDashboardProvider;
+    let mimocode = MiMoCodeLocalProvider;
+    let opencode = OpenCodeLocalProvider;
+    let hermes = HermesLocalProvider;
+    let openclaw = OpenClawLocalProvider;
     let codex_files = codex.scan_sessions(config);
     let claude_files = claude.scan_sessions(config);
     let cursor_sources = cursor.discover_sources(config);
+    let mimocode_dbs = mimocode.scan_sessions(config);
+    let opencode_dbs = opencode.scan_sessions(config);
+    let hermes_dbs = hermes.scan_sessions(config);
+    let openclaw_files = openclaw.scan_sessions(config);
 
     vec![
         local_provider_health(
@@ -224,6 +419,42 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
             claude.manual_roots(config),
             config,
             claude_files.len(),
+            true,
+        ),
+        local_provider_health(
+            mimocode.id(),
+            mimocode.tool_code(),
+            mimocode.auto_roots(config),
+            mimocode.manual_roots(config),
+            config,
+            mimocode_dbs.len(),
+            true,
+        ),
+        local_provider_health(
+            opencode.id(),
+            opencode.tool_code(),
+            opencode.auto_roots(config),
+            opencode.manual_roots(config),
+            config,
+            opencode_dbs.len(),
+            true,
+        ),
+        local_provider_health(
+            hermes.id(),
+            hermes.tool_code(),
+            hermes.auto_roots(config),
+            hermes.manual_roots(config),
+            config,
+            hermes_dbs.len(),
+            true,
+        ),
+        local_provider_health(
+            openclaw.id(),
+            openclaw.tool_code(),
+            openclaw.auto_roots(config),
+            openclaw.manual_roots(config),
+            config,
+            openclaw_files.len(),
             true,
         ),
         cursor_provider_health(cursor.id(), cursor.tool_code(), config, &cursor_sources),
@@ -546,6 +777,58 @@ fn cached_items_have_hour(items: &[Value]) -> bool {
     })
 }
 
+/// Global deduplication by message.id across all Claude Code files.
+/// Same message.id can appear in multiple project directories (e.g. ~/.config/claude/projects
+/// and ~/.claude/projects). Keep the entry with the highest totalTokens per message.id,
+/// matching ccusage's dedup semantics.
+///
+fn global_dedup_by_message_id(events: Vec<Value>) -> Vec<Value> {
+    let mut best: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut result: Vec<Value> = Vec::new();
+
+    for event in events {
+        let dedup_key = event
+            .get("_dedupKey")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let total = event["totalTokens"].as_i64().unwrap_or(0);
+        if !dedup_key.is_empty() {
+            if let Some(idx) = best.get(&dedup_key).copied() {
+                let existing_total = result[idx]["totalTokens"].as_i64().unwrap_or(0);
+                if total > existing_total {
+                    result[idx] = event;
+                }
+                continue;
+            }
+        }
+
+        let idx = result.len();
+        if !dedup_key.is_empty() {
+            best.insert(dedup_key, idx);
+        }
+        result.push(event);
+    }
+
+    result
+}
+
+fn global_dedup_by_field(events: Vec<Value>, field: &str) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
+    events
+        .into_iter()
+        .filter(|event| {
+            event
+                .get(field)
+                .and_then(Value::as_str)
+                .filter(|key| !key.is_empty())
+                .map(|key| seen.insert(key.to_string()))
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
 /// Finalize a raw provider event: resolve workdir, apply publicUsageItem.
 fn finalize_event(event: Value, config: &AppConfig) -> Value {
     let candidate = event["workdirCandidate"].as_str().unwrap_or("");
@@ -685,6 +968,58 @@ mod tests {
         assert!(cached_items_have_hour(&[json!({ "hour": 10 })]));
         assert!(!cached_items_have_hour(&[json!({ "day": "2026-05-16" })]));
         assert!(!cached_items_have_hour(&[json!({ "hour": 24 })]));
+    }
+
+    #[test]
+    fn test_global_dedup_by_message_id_basic() {
+        let events = vec![
+            json!({"_dedupKey": "msg_1", "day": "2026-06-01", "hour": 10,
+                   "providerId": "claude_code_local", "workdirHash": "h1", "model": "m1",
+                   "totalTokens": 100}),
+            json!({"_dedupKey": "msg_1", "day": "2026-06-01", "hour": 10,
+                   "providerId": "claude_code_local", "workdirHash": "h1", "model": "m1",
+                   "totalTokens": 150}),
+            json!({"_dedupKey": "msg_2", "day": "2026-06-01", "hour": 11,
+                   "providerId": "claude_code_local", "workdirHash": "h1", "model": "m1",
+                   "totalTokens": 200}),
+        ];
+        let result = global_dedup_by_message_id(events);
+        assert_eq!(result.len(), 2, "should dedupe by message id");
+        let msg1 = result.iter().find(|e| e["_dedupKey"] == "msg_1").unwrap();
+        assert_eq!(msg1["totalTokens"], 150);
+        assert_eq!(msg1["day"], "2026-06-01");
+    }
+
+    #[test]
+    fn test_global_dedup_keeps_distinct_events_with_same_public_fields() {
+        let first = json!({"_dedupKey": "msg_1", "day": "2026-06-01", "hour": 10,
+            "providerId": "claude_code_local", "workdirHash": "h1", "model": "m1",
+            "totalTokens": 100});
+        let second = json!({"_dedupKey": "msg_2", "day": "2026-06-01", "hour": 10,
+            "providerId": "claude_code_local", "workdirHash": "h1", "model": "m1",
+            "totalTokens": 100});
+        let result = global_dedup_by_message_id(vec![first, second]);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_global_dedup_keeps_unkeyed_events() {
+        let events = vec![
+            json!({"day": "2026-06-01", "totalTokens": 100}),
+            json!({"day": "2026-06-01", "totalTokens": 100}),
+        ];
+        assert_eq!(global_dedup_by_message_id(events).len(), 2);
+    }
+
+    #[test]
+    fn test_codex_global_dedup_ignores_session_id() {
+        let events = vec![
+            json!({"_codexDedupKey":"same","sessionId":"root","totalTokens":100}),
+            json!({"_codexDedupKey":"same","sessionId":"goal","totalTokens":100}),
+            json!({"_codexDedupKey":"different","sessionId":"goal","totalTokens":50}),
+        ];
+        let result = global_dedup_by_field(events, "_codexDedupKey");
+        assert_eq!(result.len(), 2);
     }
 
     #[test]

@@ -64,6 +64,12 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
             }
             let cache = std::collections::HashMap::new();
             let result = scanner::scan_usage_async(&cfg, cache).await;
+            if !result.provider_errors.is_empty() {
+                return Err(format!(
+                    "scan incomplete; refusing sync: {:?}",
+                    result.provider_errors
+                ));
+            }
             let sync_result =
                 collector_core::sync::sync_usage(&cfg, &result.items, &cfg.api_base_url).await?;
             println!(
@@ -105,6 +111,12 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
             );
             let cache = std::collections::HashMap::new();
             let result = scanner::scan_usage_async(&cfg, cache).await;
+            if !result.provider_errors.is_empty() {
+                return Err(format!(
+                    "scan incomplete; refusing reconcile: {:?}",
+                    result.provider_errors
+                ));
+            }
             let options = collector_core::reconcile::FullReconcileOptions {
                 resume: true,
                 ..Default::default()

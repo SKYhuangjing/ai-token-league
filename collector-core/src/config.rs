@@ -109,6 +109,7 @@ pub struct CursorTokenRecord {
 pub struct CursorAccount {
     pub access_token: String,
     pub refresh_token: String,
+    #[serde(default)]
     pub auth_id: String,
     #[serde(default)]
     pub sub: String,
@@ -1867,5 +1868,20 @@ mod tests {
             !recovered.desktop_auto_initialized,
             "wizard should remain dismissed after .bak recovery"
         );
+    }
+
+    #[test]
+    fn cursor_account_deserializes_without_legacy_auth_id() {
+        let account: CursorAccount = serde_json::from_value(serde_json::json!({
+            "accessToken": "at",
+            "refreshToken": "rt",
+            "sub": "auth0|user",
+            "email": "user@example.com",
+            "authStatus": "active"
+        }))
+        .unwrap();
+
+        assert!(account.auth_id.is_empty());
+        assert_eq!(account.sub, "auth0|user");
     }
 }

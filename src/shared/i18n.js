@@ -386,6 +386,10 @@ const translations = {
     // 桌面端 - 来源设置
     "desktop.sources.addCodex": "添加 Codex 位置",
     "desktop.sources.addClaude": "添加 Claude Code 位置",
+    "desktop.sources.addMiMoCode": "添加 MiMoCode 位置",
+    "desktop.sources.addOpenCode": "添加 OpenCode 位置",
+    "desktop.sources.addHermes": "添加 Hermes 位置",
+    "desktop.sources.addOpenClaw": "添加 OpenClaw 位置",
     "desktop.sources.addCursor": "连接 Cursor",
     "desktop.sources.manualCursorToken": "手工令牌",
     "desktop.sources.localDesc": "扫描本机使用记录，只上传每日汇总。",
@@ -559,6 +563,10 @@ const translations = {
     // 来源名称
     "source.codex": "Codex",
     "source.claude": "Claude Code",
+    "source.mimocode": "MiMoCode",
+    "source.opencode": "OpenCode",
+    "source.hermes": "Hermes",
+    "source.openclaw": "OpenClaw",
     "source.cursor": "Cursor",
 
     // 桌面端 - 渲染器补充
@@ -1289,6 +1297,10 @@ const translations = {
     // Desktop - Sources Settings
     "desktop.sources.addCodex": "Add Codex location",
     "desktop.sources.addClaude": "Add Claude Code location",
+    "desktop.sources.addMiMoCode": "Add MiMoCode location",
+    "desktop.sources.addOpenCode": "Add OpenCode location",
+    "desktop.sources.addHermes": "Add Hermes location",
+    "desktop.sources.addOpenClaw": "Add OpenClaw location",
     "desktop.sources.addCursor": "Connect Cursor",
     "desktop.sources.manualCursorToken": "Manual token",
     "desktop.sources.localDesc": "Scans local usage records and uploads only daily aggregates.",
@@ -1460,6 +1472,10 @@ const translations = {
     // Source Names
     "source.codex": "Codex",
     "source.claude": "Claude Code",
+    "source.mimocode": "MiMoCode",
+    "source.opencode": "OpenCode",
+    "source.hermes": "Hermes",
+    "source.openclaw": "OpenClaw",
     "source.cursor": "Cursor",
 
     // Desktop - Renderer supplement

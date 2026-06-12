@@ -58,7 +58,7 @@ pub struct SourceMetadata {
     pub parser_version: String,
 }
 
-/// Compute source fingerprint: sha256(providerId|version|path|size|round(mtimeMs))
+/// Compute source fingerprint from the main file and a possible SQLite WAL sidecar.
 pub fn source_metadata(file: &str, provider_id: &str, parser_version: &str) -> SourceMetadata {
     let path = Path::new(file);
     let raw_source_ref = path
@@ -66,17 +66,23 @@ pub fn source_metadata(file: &str, provider_id: &str, parser_version: &str) -> S
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let metadata = fs::metadata(file).ok();
-    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-    let mtime_ms = metadata
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+    let file_state = |path: &Path| {
+        let metadata = fs::metadata(path).ok();
+        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+        let mtime_ms = metadata
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        (size, mtime_ms)
+    };
+    let (size, mtime_ms) = file_state(path);
+    let wal_path = PathBuf::from(format!("{}-wal", file));
+    let (wal_size, wal_mtime_ms) = file_state(&wal_path);
 
     let fingerprint_input = format!(
-        "{}|{}|{}|{}|{}",
-        provider_id, parser_version, file, size, mtime_ms
+        "{}|{}|{}|{}|{}|{}|{}",
+        provider_id, parser_version, file, size, mtime_ms, wal_size, wal_mtime_ms
     );
 
     SourceMetadata {
@@ -228,5 +234,25 @@ mod tests {
     fn test_deep_find_number() {
         let v = serde_json::json!({"input_tokens": 100, "nested": {"input_tokens": 50}});
         assert_eq!(deep_find_number(&v, &["input_tokens"]), 150);
+    }
+
+    #[test]
+    fn source_metadata_changes_when_sqlite_wal_changes() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("atl-source-{}.db", suffix));
+        let wal_path = PathBuf::from(format!("{}-wal", db_path.to_string_lossy()));
+        fs::write(&db_path, b"database").unwrap();
+        fs::write(&wal_path, b"wal").unwrap();
+
+        let first = source_metadata(&db_path.to_string_lossy(), "sqlite_test", "1");
+        fs::write(&wal_path, b"wal-with-new-rows").unwrap();
+        let second = source_metadata(&db_path.to_string_lossy(), "sqlite_test", "1");
+
+        assert_ne!(first.source_fingerprint, second.source_fingerprint);
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(wal_path);
     }
 }

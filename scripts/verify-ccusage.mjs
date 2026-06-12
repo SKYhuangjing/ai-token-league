@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
-const TIMEZONE = "Asia/Singapore";
+const TIMEZONE = process.argv
+  .filter((arg) => arg.startsWith("--timezone="))
+  .map((arg) => arg.slice("--timezone=".length))[0] || "Asia/Singapore";
+
 const includeToday = process.argv.includes("--include-today");
 const providers = new Set(
   process.argv
@@ -10,7 +15,11 @@ const providers = new Set(
     .map((arg) => arg.trim())
     .filter(Boolean)
 );
-const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex"]);
+const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex", "opencode", "hermes", "openclaw", "mimocode"]);
+const explicitlySelected = providers.size > 0;
+const home = process.env.HOME || "";
+const configPath = join(home, ".ai-token-league", "config.json");
+const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -36,6 +45,29 @@ function requireCommand(command) {
   }
 }
 
+function parseSemver(value) {
+  const match = String(value).match(/(\d+)\.(\d+)\.(\d+)/);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function requireCcusageVersion(minimum) {
+  requireCommand("ccusage");
+  const actualText = run("ccusage", ["--version"]).trim();
+  const actual = parseSemver(actualText);
+  const required = parseSemver(minimum);
+  if (!actual || !required) {
+    throw new Error(`Cannot parse ccusage version: ${actualText}`);
+  }
+  for (let index = 0; index < 3; index += 1) {
+    if (actual[index] > required[index]) return;
+    if (actual[index] < required[index]) {
+      throw new Error(
+        `ccusage ${minimum}+ is required for Codex rollout/subagent deduplication; found ${actualText}`
+      );
+    }
+  }
+}
+
 function localDay(date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TIMEZONE,
@@ -43,6 +75,38 @@ function localDay(date = new Date()) {
     month: "2-digit",
     day: "2-digit"
   }).format(date);
+}
+
+function providerEnabled(providerId) {
+  return config.providerEnabled?.[providerId] !== false;
+}
+
+function configuredRoots(providerId, autoRoots) {
+  const ignored = new Set(config.providerIgnoredAutoSources?.[providerId] || []);
+  const roots = autoRoots.filter((root) => existsSync(root) && !ignored.has(root));
+  for (const root of config.providerRoots?.[providerId] || []) {
+    if (existsSync(root) && !roots.includes(root)) roots.push(root);
+  }
+  return roots;
+}
+
+function skipped(provider, reason) {
+  return { provider, expected: new Map(), verified: false, reason };
+}
+
+function verified(provider, expected) {
+  return { provider, expected, verified: true };
+}
+
+function externalProviderCanMatch(providerId, provider) {
+  if (!providerEnabled(providerId)) return skipped(provider, "provider disabled");
+  if ((config.providerRoots?.[providerId] || []).length > 0) {
+    return skipped(provider, "manual roots are not supported by the external reference tool");
+  }
+  if ((config.providerIgnoredAutoSources?.[providerId] || []).length > 0) {
+    return skipped(provider, "ignored auto sources are not supported by the external reference tool");
+  }
+  return null;
 }
 
 function normalizeDay(value) {
@@ -61,7 +125,11 @@ function addTotal(map, day, total) {
 function parseCollectorScan(stdout) {
   const byProvider = {
     claude: new Map(),
-    codex: new Map()
+    codex: new Map(),
+    opencode: new Map(),
+    hermes: new Map(),
+    openclaw: new Map(),
+    mimocode: new Map()
   };
   for (const line of stdout.split(/\r?\n/)) {
     const match = line.match(/^\s*(\d{4}-\d{2}-\d{2})\s+(\S+)\s+.+?\s+tokens=(\d+)\s*$/);
@@ -70,32 +138,184 @@ function parseCollectorScan(stdout) {
     const total = Number(totalRaw);
     if (providerId === "claude_code_local") addTotal(byProvider.claude, day, total);
     if (providerId === "codex_local") addTotal(byProvider.codex, day, total);
+    if (providerId === "opencode_local") addTotal(byProvider.opencode, day, total);
+    if (providerId === "hermes_local") addTotal(byProvider.hermes, day, total);
+    if (providerId === "openclaw_local") addTotal(byProvider.openclaw, day, total);
+    if (providerId === "mimocode_local") addTotal(byProvider.mimocode, day, total);
   }
   return byProvider;
 }
 
 function expectedClaude() {
+  const incompatible = externalProviderCanMatch("claude_code_local", "claude");
+  if (incompatible) return incompatible;
   requireCommand("ccusage");
-  const raw = run("ccusage", ["daily", "--json", "--timezone", TIMEZONE, "--offline"]);
+  const raw = run("ccusage", ["claude", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
   const parsed = JSON.parse(raw);
   const expected = new Map();
   for (const row of parsed.daily || []) {
     const total = Number(row.totalTokens || 0);
-    if (total > 0) expected.set(normalizeDay(row.date), total);
+    const dateValue = row.period || row.date;
+    if (total > 0 && dateValue) expected.set(normalizeDay(dateValue), total);
   }
-  return expected;
+  return verified("claude", expected);
 }
 
 function expectedCodex() {
-  requireCommand("ccusage-codex");
-  const raw = run("ccusage-codex", ["daily", "--json", "--timezone", TIMEZONE, "--offline"]);
+  const incompatible = externalProviderCanMatch("codex_local", "codex");
+  if (incompatible) return incompatible;
+  requireCcusageVersion("20.0.8");
+  const raw = run("ccusage", ["codex", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
   const parsed = JSON.parse(raw);
   const expected = new Map();
   for (const row of parsed.daily || []) {
     const total = Number(row.totalTokens || 0);
-    if (total > 0) expected.set(normalizeDay(row.date), total);
+    const dateValue = row.period || row.date;
+    if (total > 0 && dateValue) expected.set(normalizeDay(dateValue), total);
   }
-  return expected;
+  return verified("codex", expected);
+}
+
+function expectedOpenCode() {
+  if (!providerEnabled("opencode_local")) return skipped("opencode", "provider disabled");
+  const roots = configuredRoots("opencode_local", [`${home}/.local/share/opencode`]);
+  const dbPaths = roots.map((root) => join(root, "opencode.db")).filter(existsSync);
+  if (dbPaths.length === 0) return skipped("opencode", "no configured database found");
+  requireCommand("sqlite3");
+  const expected = new Map();
+  for (const dbPath of dbPaths) {
+    const raw = run("sqlite3", [dbPath, "-json",
+      `SELECT json_extract(data, '$.time.created') AS created, ` +
+      `COALESCE(json_extract(data, '$.tokens.input'), 0) + COALESCE(json_extract(data, '$.tokens.output'), 0) + ` +
+      `COALESCE(json_extract(data, '$.tokens.cache.read'), 0) + COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS total ` +
+      `FROM message WHERE json_extract(data, '$.tokens') IS NOT NULL AND json_extract(data, '$.role') = 'assistant'`
+    ]);
+    for (const row of JSON.parse(raw || "[]")) {
+      const total = Number(row.total || 0);
+      const created = Number(row.created);
+      if (Number.isFinite(created) && total > 0) addTotal(expected, localDay(new Date(created)), total);
+    }
+  }
+  return verified("opencode", expected);
+}
+
+function expectedHermes() {
+  if (!providerEnabled("hermes_local")) return skipped("hermes", "provider disabled");
+  const autoRoots = [];
+  if (process.env.HERMES_HOME) autoRoots.push(process.env.HERMES_HOME);
+  autoRoots.push(`${home}/.hermes`);
+  const roots = configuredRoots("hermes_local", autoRoots);
+  const dbPaths = roots.map((root) => join(root, "state.db")).filter(existsSync);
+  if (dbPaths.length === 0) return skipped("hermes", "no configured database found");
+  requireCommand("sqlite3");
+  const expected = new Map();
+  for (const dbPath of dbPaths) {
+    const raw = run("sqlite3", [dbPath, "-json",
+      `SELECT json_extract(data, '$.timestamp') AS timestamp, ` +
+      `COALESCE(json_extract(data, '$.input_tokens'), 0) + COALESCE(json_extract(data, '$.output_tokens'), 0) + ` +
+      `COALESCE(json_extract(data, '$.cache_read_tokens'), 0) + COALESCE(json_extract(data, '$.cache_write_tokens'), 0) AS total ` +
+      `FROM session_usage WHERE json_extract(data, '$.input_tokens') IS NOT NULL OR json_extract(data, '$.output_tokens') IS NOT NULL`
+    ]);
+    for (const row of JSON.parse(raw || "[]")) {
+      const parsed = new Date(row.timestamp);
+      const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+      const total = Number(row.total || 0);
+      if (total > 0) addTotal(expected, localDay(date), total);
+    }
+  }
+  return verified("hermes", expected);
+}
+
+function expectedOpenClaw() {
+  if (!providerEnabled("openclaw_local")) return skipped("openclaw", "provider disabled");
+  const openclawDir = process.env.OPENCLAW_DIR || "";
+  const autoRoots = [];
+  if (openclawDir) {
+    for (const d of openclawDir.split(",")) {
+      const trimmed = d.trim();
+      if (trimmed) autoRoots.push(trimmed);
+    }
+  }
+  for (const name of [".openclaw", ".clawdbot", ".moltbot", ".moldbot"]) {
+    autoRoots.push(`${home}/${name}`);
+  }
+  const roots = configuredRoots("openclaw_local", autoRoots);
+  if (roots.length === 0) return skipped("openclaw", "no configured directory found");
+  const expected = new Map();
+  for (const root of roots) {
+    const files = [];
+    const stack = [root];
+    while (stack.length > 0) {
+      const dir = stack.pop();
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (files.length >= 5000) break;
+        const full = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          stack.push(full);
+        } else if (
+          entry.name.endsWith(".jsonl") ||
+          entry.name.includes(".jsonl.deleted.") ||
+          entry.name.includes(".jsonl.reset.")
+        ) {
+          files.push(full);
+        }
+      }
+    }
+    for (const file of files) {
+      let content;
+      try { content = readFileSync(file, "utf8"); } catch { continue; }
+      for (const line of content.split("\n")) {
+        if (!line.trim()) continue;
+        let record;
+        try { record = JSON.parse(line); } catch { continue; }
+        if (record.role !== "assistant") continue;
+        const usage = record.usage;
+        if (!usage) continue;
+        const input = Number(usage.input_tokens || usage.inputTokens || usage.prompt_tokens || 0);
+        const output = Number(usage.output_tokens || usage.outputTokens || usage.completion_tokens || 0);
+        const cacheRead = Number(usage.cache_read_tokens || usage.cacheReadTokens || usage.cached_input_tokens || 0);
+        const cacheWrite = Number(usage.cache_write_tokens || usage.cacheWriteTokens || usage.cache_creation_input_tokens || 0);
+        const total = input + output + cacheRead + cacheWrite;
+        if (total <= 0) continue;
+        let day = "";
+        const ts = record.timestamp || record.created_at || record.createdAt || record.time || record.date;
+        if (typeof ts === "string") {
+          const ms = Date.parse(ts);
+          if (!Number.isNaN(ms)) day = localDay(new Date(ms));
+        }
+        if (!day) day = localDay(statSync(file).mtime);
+        addTotal(expected, day, total);
+      }
+    }
+  }
+  return verified("openclaw", expected);
+}
+
+function expectedMiMo() {
+  if (!providerEnabled("mimocode_local")) return skipped("mimocode", "provider disabled");
+  const roots = configuredRoots("mimocode_local", [`${home}/.local/share/mimocode`]);
+  const dbPaths = roots.map((root) => join(root, "mimocode.db")).filter(existsSync);
+  if (dbPaths.length === 0) return skipped("mimocode", "no configured database found");
+  requireCommand("sqlite3");
+  const expected = new Map();
+  for (const dbPath of dbPaths) {
+    const raw = run("sqlite3", [dbPath, "-json",
+      `SELECT json_extract(data, '$.time.created') AS created, ` +
+      `COALESCE(json_extract(data, '$.tokens.input'), 0) + COALESCE(json_extract(data, '$.tokens.output'), 0) + ` +
+      `COALESCE(json_extract(data, '$.tokens.cache.read'), 0) + COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS total ` +
+      `FROM message WHERE json_extract(data, '$.tokens') IS NOT NULL ` +
+      `AND json_extract(data, '$.role') = 'assistant' ` +
+      `AND session_id NOT IN (SELECT session_id FROM claude_import)`
+    ]);
+    for (const row of JSON.parse(raw || "[]")) {
+      const total = Number(row.total || 0);
+      const created = Number(row.created);
+      if (Number.isFinite(created) && total > 0) addTotal(expected, localDay(new Date(created)), total);
+    }
+  }
+  return verified("mimocode", expected);
 }
 
 function comparableDays(actual, expected) {
@@ -132,20 +352,47 @@ function compareProvider(name, actual, expected) {
   return true;
 }
 
+function compareExpected(name, actual, result) {
+  if (!result.verified) {
+    const message = `${name}: SKIPPED (${result.reason})`;
+    if (explicitlySelected) {
+      console.error(message);
+      return false;
+    }
+    console.log(message);
+    return true;
+  }
+  return compareProvider(name, actual, result.expected);
+}
+
 function main() {
-  if (![...selectedProviders].every((provider) => ["claude", "codex"].includes(provider))) {
-    throw new Error("Unsupported --provider value. Use claude, codex, or claude,codex.");
+  if (![...selectedProviders].every((provider) => ["claude", "codex", "opencode", "hermes", "openclaw", "mimocode"].includes(provider))) {
+    throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, or combinations.");
   }
 
-  const collectorOutput = run("cargo", ["run", "-p", "atl-collector", "--", "scan"]);
+  const collectorOutput = run("cargo", ["run", "-p", "atl-collector", "--", "scan"], {
+    env: { ...process.env, TZ: TIMEZONE }
+  });
   const actual = parseCollectorScan(collectorOutput);
   let ok = true;
 
   if (selectedProviders.has("claude")) {
-    ok = compareProvider("claude", actual.claude, expectedClaude()) && ok;
+    ok = compareExpected("claude", actual.claude, expectedClaude()) && ok;
   }
   if (selectedProviders.has("codex")) {
-    ok = compareProvider("codex", actual.codex, expectedCodex()) && ok;
+    ok = compareExpected("codex", actual.codex, expectedCodex()) && ok;
+  }
+  if (selectedProviders.has("opencode")) {
+    ok = compareExpected("opencode", actual.opencode, expectedOpenCode()) && ok;
+  }
+  if (selectedProviders.has("hermes")) {
+    ok = compareExpected("hermes", actual.hermes, expectedHermes()) && ok;
+  }
+  if (selectedProviders.has("openclaw")) {
+    ok = compareExpected("openclaw", actual.openclaw, expectedOpenClaw()) && ok;
+  }
+  if (selectedProviders.has("mimocode")) {
+    ok = compareExpected("mimocode", actual.mimocode, expectedMiMo()) && ok;
   }
 
   if (!ok) process.exit(1);

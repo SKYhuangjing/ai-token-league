@@ -1,0 +1,7 @@
+{"role":"assistant","type":"model-snapshot","model":"deepseek-v3","timestamp":"2026-06-08T09:00:00Z"}
+{"role":"assistant","usage":{"inputTokens":2000,"outputTokens":600,"cacheReadTokens":300,"cacheWriteTokens":100},"timestamp":"2026-06-08T09:05:00Z","workdir":"/Users/sky/demo/deep-project"}
+{"role":"assistant","usage":{"inputTokens":1500,"outputTokens":400,"cacheReadTokens":150,"cacheWriteTokens":50},"timestamp":"2026-06-08T09:10:00Z","workdir":"/Users/sky/demo/deep-project"}
+{"role":"user","content":"hello"}
+{"role":"assistant","type":"custom","model":"gpt-4o-mini","timestamp":"2026-06-09T11:00:00Z"}
+{"role":"assistant","usage":{"prompt_tokens":800,"completion_tokens":200,"cached_input_tokens":50,"cache_creation_input_tokens":20},"timestamp":"2026-06-09T11:05:00Z","working_directory":"/Users/sky/demo/mixed-project"}
+{"role":"assistant","usage":{"input_tokens":0,"output_tokens":0},"timestamp":"2026-06-09T11:10:00Z"}

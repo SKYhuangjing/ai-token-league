@@ -1,0 +1,6 @@
+{"role":"assistant","type":"model_change","model":"claude-haiku-3","timestamp":"2026-06-12T08:00:00Z"}
+{"role":"assistant","usage":{"input_tokens":4000,"output_tokens":1200,"cache_read_tokens":600,"cache_write_tokens":250},"cwd":"/Users/sky/demo/big-project","timestamp":"2026-06-12T08:05:00Z"}
+{"role":"assistant","usage":{"input_tokens":3500,"output_tokens":1000,"cache_read_tokens":500,"cache_write_tokens":200},"cwd":"/Users/sky/demo/big-project","timestamp":"2026-06-12T08:10:00Z"}
+{"role":"assistant","usage":{"input_tokens":200,"output_tokens":50},"project_path":"/Users/sky/demo/small-fix","timestamp":"2026-06-12T15:00:00Z"}
+{"role":"system","initialized":true}
+{"role":"assistant","usage":{},"timestamp":"2026-06-12T09:00:00Z"}

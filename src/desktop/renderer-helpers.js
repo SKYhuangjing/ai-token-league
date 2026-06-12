@@ -454,3 +454,21 @@ export function reconcileHealthWithConfig(health = [], config) {
     };
   });
 }
+
+const UI_PROVIDER_ORDER = [
+  "claude_code_local",
+  "codex_local",
+  "cursor_dashboard_usage",
+  "opencode_local",
+  "openclaw_local",
+  "hermes_local",
+  "mimocode_local"
+];
+
+export function sortProviderHealth(health = []) {
+  return [...health].sort((a, b) => {
+    const ia = UI_PROVIDER_ORDER.indexOf(a.providerId);
+    const ib = UI_PROVIDER_ORDER.indexOf(b.providerId);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+}

@@ -2,6 +2,7 @@ use crate::config::CursorAccount;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde_json::{json, Value};
+use std::fmt;
 
 const OAUTH_TOKEN_URL: &str = "https://api2.cursor.sh/oauth/token";
 const AUTH_POLL_URL: &str = "https://api2.cursor.sh/auth/poll";
@@ -95,16 +96,39 @@ pub async fn poll_auth(uuid: &str, code_verifier: &str) -> Result<AuthPollResult
     })
 }
 
+#[derive(Debug)]
 pub struct CursorAuthResult {
     pub access_token: String,
+    pub refresh_token: Option<String>,
     pub id_token: Option<String>,
     pub should_logout: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CursorRefreshError {
+    ReauthRequired,
+    Transient(String),
+}
+
+impl fmt::Display for CursorRefreshError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReauthRequired => write!(f, "Cursor authorization expired; reconnect required"),
+            Self::Transient(message) => f.write_str(message),
+        }
+    }
+}
+
 /// Refresh a Cursor access token using the stored refresh token.
 /// POST https://api2.cursor.sh/oauth/token (snake_case payload/response).
-/// Does NOT return a new refresh_token (confirmed by T01 protocol probe).
-pub async fn refresh_token(refresh_token: &str) -> Result<CursorAuthResult, String> {
+pub async fn refresh_token(refresh_token: &str) -> Result<CursorAuthResult, CursorRefreshError> {
+    refresh_token_at(OAUTH_TOKEN_URL, refresh_token).await
+}
+
+async fn refresh_token_at(
+    url: &str,
+    refresh_token: &str,
+) -> Result<CursorAuthResult, CursorRefreshError> {
     let client = reqwest::Client::new();
     let body = json!({
         "grant_type": "refresh_token",
@@ -113,21 +137,44 @@ pub async fn refresh_token(refresh_token: &str) -> Result<CursorAuthResult, Stri
     });
 
     let resp = client
-        .post(OAUTH_TOKEN_URL)
+        .post(url)
         .header("Content-Type", "application/json")
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("refresh request failed: {}", e))?;
+        .map_err(|e| CursorRefreshError::Transient(format!("refresh request failed: {}", e)))?;
 
     let status = resp.status();
-    let response_body: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("refresh response parse error: {}", e))?;
+    let response_text = resp.text().await.map_err(|e| {
+        CursorRefreshError::Transient(format!("refresh response read error: {}", e))
+    })?;
+
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        return Err(CursorRefreshError::ReauthRequired);
+    }
+
+    let response_body: Value = serde_json::from_str(&response_text).map_err(|e| {
+        CursorRefreshError::Transient(format!(
+            "refresh response parse error: {}, status={}, body_len={}",
+            e,
+            status,
+            response_text.len()
+        ))
+    })?;
 
     if !status.is_success() {
-        return Err(format!("refresh failed with status {}", status));
+        let error_code = response_body
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if error_code == "invalid_grant" {
+            return Err(CursorRefreshError::ReauthRequired);
+        }
+        return Err(CursorRefreshError::Transient(format!(
+            "Cursor token refresh returned status {}, body_len={}",
+            status,
+            response_text.len()
+        )));
     }
 
     let should_logout = response_body
@@ -136,14 +183,21 @@ pub async fn refresh_token(refresh_token: &str) -> Result<CursorAuthResult, Stri
         .unwrap_or(false);
 
     if should_logout {
-        return Err("shouldLogout".to_string());
+        return Err(CursorRefreshError::ReauthRequired);
     }
 
     let access_token = response_body
         .get("access_token")
         .and_then(|v| v.as_str())
-        .ok_or("missing access_token in refresh response")?
+        .ok_or_else(|| {
+            CursorRefreshError::Transient("missing access_token in refresh response".to_string())
+        })?
         .to_string();
+
+    let refresh_token_new = response_body
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let id_token = response_body
         .get("id_token")
@@ -152,6 +206,7 @@ pub async fn refresh_token(refresh_token: &str) -> Result<CursorAuthResult, Stri
 
     Ok(CursorAuthResult {
         access_token,
+        refresh_token: refresh_token_new,
         id_token,
         should_logout,
     })
@@ -160,17 +215,13 @@ pub async fn refresh_token(refresh_token: &str) -> Result<CursorAuthResult, Stri
 /// Fetch account info from cursor.com/api/auth/me using cookie auth.
 /// Cookie format: WorkosCursorSessionToken=<url_encoded(sub::accessToken)>
 pub async fn fetch_account_info(access_token: &str, sub: &str) -> Result<AccountInfo, String> {
-    let cookie_val = format!("{}::{}", sub, access_token);
-    let cookie = format!(
-        "WorkosCursorSessionToken={}",
-        urlencoding::encode(&cookie_val)
-    );
+    let cookie = crate::provider::cursor_dashboard::build_cursor_session_cookie(sub, access_token);
 
     let client = reqwest::Client::new();
     let resp = client
         .get(ACCOUNT_ME_URL)
         .header("Cookie", &cookie)
-        .header("User-Agent", "ai-token-league/0.6.4")
+        .header("User-Agent", "ai-token-league/0.7.6")
         .send()
         .await
         .map_err(|e| format!("account info request failed: {}", e))?;
@@ -212,6 +263,9 @@ pub struct AccountInfo {
 /// Check if a token needs refresh (expired or near expiry).
 /// We use a conservative check: if we have no expiry info, treat as needing refresh.
 pub fn token_needs_refresh(account: &CursorAccount) -> bool {
+    if account.auth_status == "refresh_failed" {
+        return true;
+    }
     if account.auth_status != "active" {
         return false;
     }
@@ -278,6 +332,93 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn mock_response(status: &str, content_type: &str, body: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let status = status.to_string();
+        let content_type = content_type.to_string();
+        let body = body.to_string();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = socket.read(&mut request).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status,
+                content_type,
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        format!("http://{}/oauth/token", address)
+    }
+
+    #[tokio::test]
+    async fn refresh_401_with_non_json_body_requires_reauth() {
+        let url = mock_response("401 Unauthorized", "text/html", "<html>denied</html>").await;
+        let error = refresh_token_at(&url, "expired").await.unwrap_err();
+        assert_eq!(error, CursorRefreshError::ReauthRequired);
+    }
+
+    #[tokio::test]
+    async fn refresh_invalid_grant_requires_reauth() {
+        let url = mock_response(
+            "400 Bad Request",
+            "application/json",
+            r#"{"error":"invalid_grant"}"#,
+        )
+        .await;
+        let error = refresh_token_at(&url, "expired").await.unwrap_err();
+        assert_eq!(error, CursorRefreshError::ReauthRequired);
+    }
+
+    #[tokio::test]
+    async fn refresh_invalid_request_remains_transient() {
+        let url = mock_response(
+            "400 Bad Request",
+            "application/json",
+            r#"{"error":"invalid_request"}"#,
+        )
+        .await;
+        let error = refresh_token_at(&url, "bad-request").await.unwrap_err();
+        assert!(matches!(error, CursorRefreshError::Transient(_)));
+    }
+
+    #[tokio::test]
+    async fn refresh_should_logout_requires_reauth() {
+        let url = mock_response(
+            "200 OK",
+            "application/json",
+            r#"{"access_token":"","shouldLogout":true}"#,
+        )
+        .await;
+        let error = refresh_token_at(&url, "expired").await.unwrap_err();
+        assert_eq!(error, CursorRefreshError::ReauthRequired);
+    }
+
+    #[tokio::test]
+    async fn refresh_non_json_server_error_remains_transient() {
+        let url = mock_response("502 Bad Gateway", "text/html", "<html>unavailable</html>").await;
+        let error = refresh_token_at(&url, "valid").await.unwrap_err();
+        assert!(matches!(error, CursorRefreshError::Transient(_)));
+    }
+
+    #[tokio::test]
+    async fn refresh_success_accepts_optional_rotated_refresh_token() {
+        let url = mock_response(
+            "200 OK",
+            "application/json",
+            r#"{"access_token":"new-at","refresh_token":"new-rt","shouldLogout":false}"#,
+        )
+        .await;
+        let result = refresh_token_at(&url, "old-rt").await.unwrap();
+        assert_eq!(result.access_token, "new-at");
+        assert_eq!(result.refresh_token.as_deref(), Some("new-rt"));
+    }
 
     #[test]
     fn test_generate_code_verifier_format() {
@@ -441,6 +582,29 @@ mod tests {
             added_at: None,
         };
         assert!(!token_needs_refresh(&account), "non-active → no refresh");
+    }
+
+    #[test]
+    fn test_token_needs_refresh_retries_transient_failure() {
+        let future = (chrono::Utc::now() + chrono::Duration::days(30))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let account = CursorAccount {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            auth_id: "a".into(),
+            sub: String::new(),
+            email: String::new(),
+            account_hash: String::new(),
+            access_token_expires_at: Some(future),
+            last_refresh_at: None,
+            auth_status: "refresh_failed".into(),
+            ignored: false,
+            added_at: None,
+        };
+        assert!(
+            token_needs_refresh(&account),
+            "transient refresh failures must retry on the next scan"
+        );
     }
 
     #[test]
