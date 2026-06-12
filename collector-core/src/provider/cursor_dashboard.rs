@@ -214,7 +214,10 @@ impl CursorDashboardProvider {
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .header("Cookie", cookie)
-                .header("User-Agent", "ai-token-league/0.7.6")
+                .header(
+                    "User-Agent",
+                    concat!("ai-token-league/", env!("CARGO_PKG_VERSION")),
+                )
                 .json(&body)
                 .send()
                 .await

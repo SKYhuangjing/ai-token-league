@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7] - 2026-06-12
+
+### Added
+
+- [Desktop] Added light, dark, and system-following themes with persisted startup behavior.
+- [Desktop] Added local usage collection and source settings for MiMoCode, OpenCode, Hermes, and OpenClaw.
+
+### Changed
+
+- Improved Codex and Claude Code scan deduplication across copied histories, archived sessions, and replayed subagent events.
+- Partial provider scan failures now preserve the last successful data for affected providers, while CLI sync and reconcile refuse incomplete scans.
+
+### Fixed
+
+- [Desktop] Fixed overview provider mini-meter sizing so provider rows align consistently with model rows.
+- [Desktop] Fixed Cursor token refresh and session-cookie handling, including rotated refresh tokens and reliable reconnect-required status.
+
 ## [0.7.6] - 2026-06-02
 
 ### Added

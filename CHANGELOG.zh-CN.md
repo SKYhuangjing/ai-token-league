@@ -6,6 +6,23 @@
 
 ---
 
+## [0.7.7] - 2026-06-12
+
+### 新增
+
+- [Desktop] 新增白底、黑底和跟随系统三种主题，并在启动时恢复已保存的主题。
+- [Desktop] 新增 MiMoCode、OpenCode、Hermes 和 OpenClaw 本地用量采集及来源设置。
+
+### 变更
+
+- 改进 Codex 和 Claude Code 扫描去重，覆盖复制历史、归档会话和子代理回放事件。
+- 单个 Provider 扫描失败时保留该来源最近一次成功数据；CLI sync 和 reconcile 遇到不完整扫描时拒绝上传。
+
+### 修复
+
+- [Desktop] 修复概览页 Provider mini-meter 尺寸，使来源行与模型行稳定对齐。
+- [Desktop] 修复 Cursor token 刷新和 session cookie 处理，支持 refresh token 轮换并准确标记需要重新连接的状态。
+
 ## [0.7.6] - 2026-06-02
 
 ### 新增

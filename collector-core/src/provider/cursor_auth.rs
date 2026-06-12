@@ -221,7 +221,10 @@ pub async fn fetch_account_info(access_token: &str, sub: &str) -> Result<Account
     let resp = client
         .get(ACCOUNT_ME_URL)
         .header("Cookie", &cookie)
-        .header("User-Agent", "ai-token-league/0.7.6")
+        .header(
+            "User-Agent",
+            concat!("ai-token-league/", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await
         .map_err(|e| format!("account info request failed: {}", e))?;
