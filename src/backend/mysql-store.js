@@ -2154,6 +2154,9 @@ function mysqlRangeSum(field, _name, range) {
 }
 
 function mysqlDaysForQuery({ period = "", range = "today", startDay = "", endDay = "" } = {}, { businessDay = localDay() } = {}) {
+  if (range === "custom" && mysqlIsDay(startDay) && mysqlIsDay(endDay)) {
+    return daysBetween(startDay, endDay);
+  }
   if (period) return mysqlDaysForPeriod(period, { businessDay });
   return mysqlDaysForRange(range, { startDay, endDay, businessDay });
 }

@@ -506,7 +506,8 @@ async function handleApi(req, res) {
     const url = new URL(req.url, "http://localhost");
     const participantId = decodeURIComponent(url.pathname.replace("/api/admin/participants/", ""));
     const detail = await store.participantDetail(participantId, {
-      period: url.searchParams.get("grain") || "",
+      period: url.searchParams.get("period") || "",
+      grain: url.searchParams.get("grain") || "day",
       range: url.searchParams.get("range") || "today",
       startDay: url.searchParams.get("start") || "",
       endDay: url.searchParams.get("end") || "",

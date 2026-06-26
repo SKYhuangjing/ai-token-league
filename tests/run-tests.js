@@ -1905,6 +1905,81 @@ async function testMysqlFullReconcileDailyFallbackDoesNotRequireHourlyDerivedCol
   console.log("  testMysqlFullReconcileDailyFallbackDoesNotRequireHourlyDerivedColumn passed");
 }
 
+function testMysqlCustomRangePrecedenceMatchesJsonStore() {
+  const store = new MySqlStore({});
+  store.currentBusinessDay = () => "2026-06-26";
+  const mysqlScope = store.mysqlUsageScope({
+    period: "today",
+    range: "custom",
+    startDay: "2026-06-24",
+    endDay: "2026-06-25"
+  });
+  assert.equal(mysqlScope.whereSql, " WHERE day BETWEEN ? AND ?");
+  assert.deepEqual(mysqlScope.params, ["2026-06-24", "2026-06-25"]);
+
+  const jsonStore = new Store(path.join(tmp, "db-custom-range-precedence.json"));
+  jsonStore.currentBusinessDay = () => "2026-06-26";
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  jsonStore.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "custom-precedence",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+  jsonStore.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [
+      {
+        day: "2026-06-24",
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirHash: "custom_precedence",
+        workdirDisplayName: "custom-precedence",
+        model: "gpt-5",
+        inputTokens: 100,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 100,
+        sourceQuality: "exact",
+        sourceFingerprint: "custom-precedence-0624"
+      },
+      {
+        day: "2026-06-26",
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirHash: "custom_precedence",
+        workdirDisplayName: "custom-precedence",
+        model: "gpt-5",
+        inputTokens: 900,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 900,
+        sourceQuality: "exact",
+        sourceFingerprint: "custom-precedence-0626"
+      }
+    ]
+  });
+  const detail = jsonStore.participantDetail(identity.participantId, {
+    period: "today",
+    range: "custom",
+    startDay: "2026-06-24",
+    endDay: "2026-06-25"
+  });
+  assert.equal(detail.totalTokens, 100);
+  assert.deepEqual(detail.rows.map((item) => item.day), ["2026-06-24"]);
+
+  console.log("  testMysqlCustomRangePrecedenceMatchesJsonStore passed");
+}
+
 function testBucketMetadataSchema() {
   const tmp = path.join(os.tmpdir(), `test-bucket-${Date.now()}.json`);
   const store = new Store(tmp);
@@ -4331,6 +4406,75 @@ async function testBoardParticipantDetailAndTrend() {
   } finally { await cleanup(); }
 }
 
+async function testAdminParticipantDetailUsesRangeAndGrainSeparately() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    const yesterday = addDays(localDay(), -1);
+    await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: identity.participantId,
+        deviceId,
+        nickname: "admin-detail-range",
+        identityPublicKey: identity.identityPublicKey,
+        os: "test",
+        appVersion: APP_VERSION
+      })
+    });
+    const payload = {
+      participantId: identity.participantId,
+      deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{
+        day: yesterday,
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirHash: "admin_detail_range",
+        workdirDisplayName: "admin-detail-project",
+        model: "gpt-5",
+        inputTokens: 120,
+        outputTokens: 30,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 150,
+        sourceQuality: "exact",
+        sourceFingerprint: "admin-detail-range-yesterday"
+      }]
+    };
+    await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+    });
+
+    const dayDetailRes = await fetch(`${baseUrl}/api/admin/participants/${identity.participantId}?grain=day&range=month`);
+    assert.equal(dayDetailRes.status, 200);
+    const dayDetail = await dayDetailRes.json();
+    assert.equal(dayDetail.rows.length, 1);
+    assert.equal(dayDetail.rows[0].day, yesterday);
+    assert.equal(dayDetail.totalTokens, 150);
+    assert.equal(dayDetail.periodRows.length, 1);
+    assert.equal(dayDetail.periodRows[0].periodStart, yesterday);
+
+    for (const grain of ["week", "month"]) {
+      const detailRes = await fetch(`${baseUrl}/api/admin/participants/${identity.participantId}?grain=${grain}&range=month`);
+      assert.equal(detailRes.status, 200);
+      const detail = await detailRes.json();
+      assert.equal(detail.rows.length, 1);
+      assert.equal(detail.totalTokens, 150);
+      assert.equal(detail.periodRows.length, 1);
+      assert.ok(detail.periodRows[0].periodStart <= yesterday);
+      assert.ok(detail.periodRows[0].periodEnd >= yesterday);
+    }
+
+    console.log("  testAdminParticipantDetailUsesRangeAndGrainSeparately passed");
+  } finally { await cleanup(); }
+}
+
 async function testModelPricesPublicEndpoint() {
   const { baseUrl, cleanup } = await createTestServer();
   try {
@@ -5307,6 +5451,7 @@ await testSelfServiceDeletionRejectsCrossParticipantDevice();
 await testSelfServiceDeletionRejectsInvalidSignature();
 await testLeaderboardEndpoint();
 await testBoardParticipantDetailAndTrend();
+await testAdminParticipantDetailUsesRangeAndGrainSeparately();
 await testModelPricesPublicEndpoint();
 await testAdminCrudViaHttp();
 await testStaticFileServing();
@@ -7420,6 +7565,7 @@ await testMysqlDeleteDeviceDataClearsCloudSyncScopesFromSql();
 await testMysqlModelPriceRecalculationIsModelScoped();
 await testMysqlFullPriceRecalculationUsesBatches();
 await testMysqlFullReconcileDailyFallbackDoesNotRequireHourlyDerivedColumn();
+testMysqlCustomRangePrecedenceMatchesJsonStore();
 
 // Cloud provider dedup tests
 testCursorSameAccountDedupAcrossDevices();

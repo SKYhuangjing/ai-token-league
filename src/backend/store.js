@@ -1052,9 +1052,10 @@ export class Store {
       }));
   }
 
-  participantDetail(participantId, { period, range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
+  participantDetail(participantId, { period, grain = "day", range = "today", startDay = "", endDay = "", includeCost = false } = {}) {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
+    const detailGrain = normalizeGrain(grain);
     const days = daysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
     const daySet = daySetForRange(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && matchesDaySet(item.day, daySet));
@@ -1125,7 +1126,7 @@ export class Store {
         addCostBreakdownItem(detail.byToolCost, item.toolCode || "unknown", item);
       }
     }
-    const periodRows = aggregateUsageRows(rows, "day", { participants: this.db.participants, includeCost });
+    const periodRows = aggregateUsageRows(rows, detailGrain, { participants: this.db.participants, includeCost });
     return {
       ...detail,
       compositionSummary: tokenCompositionSummary(detail),
@@ -1905,6 +1906,9 @@ function cursorDisplayDedupKey(row, participantId = row.participantId, deviceId 
 }
 
 function daysForQuery({ period = "", range = "today", startDay = "", endDay = "" } = {}, { businessDay = localDay() } = {}) {
+  if (range === "custom" && isDay(startDay) && isDay(endDay)) {
+    return daysBetween(startDay, endDay);
+  }
   if (period) return daysForPeriod(period, { businessDay });
   return daysForRange(range, { startDay, endDay, businessDay });
 }
@@ -2178,7 +2182,7 @@ function isDay(value) {
 
 function isDayScopedRange({ period = "", range = "today", startDay = "", endDay = "" } = {}) {
   if (period === "all" || range === "all") return false;
-  if (!period && range === "custom" && isDay(startDay) && isDay(endDay)) return false;
+  if (range === "custom" && isDay(startDay) && isDay(endDay)) return false;
   return true;
 }
 
