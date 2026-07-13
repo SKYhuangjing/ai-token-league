@@ -5670,7 +5670,7 @@ function testSyncStateReturnsMissingAndMatched() {
   const tmp = path.join(os.tmpdir(), `test-sync-state-${Date.now()}.json`);
   const store = new Store(tmp);
   const pid = "p_ss", did = "d_ss";
-  const day = "2026-05-14", providerId = "codex_local";
+  const day = localDay(), providerId = "codex_local";
 
   store.registerDevice({ participantId: pid, deviceId: did, nickname: "SS", identityPublicKey: "pk_ss", os: "test", appVersion: "0.1.0" });
 
@@ -5699,7 +5699,7 @@ function testSyncStateFallsBackToHourlyRowsWhenMetadataMissing() {
   const tmp = path.join(os.tmpdir(), `test-sync-state-hourly-fallback-${Date.now()}.json`);
   const store = new Store(tmp);
   const pid = "p_ssh", did = "d_ssh";
-  const day = "2026-05-14", providerId = "codex_local";
+  const day = localDay(), providerId = "codex_local";
 
   store.registerDevice({ participantId: pid, deviceId: did, nickname: "SSH", identityPublicKey: "pk_ssh", os: "test", appVersion: "0.1.0" });
 
@@ -5726,7 +5726,7 @@ function testSyncStateAfterResetDetectsMissing() {
   const tmp = path.join(os.tmpdir(), `test-sync-reset-${Date.now()}.json`);
   const store = new Store(tmp);
   const pid = "p_ssr", did = "d_ssr";
-  const day = "2026-05-14", providerId = "cursor_dashboard_usage";
+  const day = localDay(), providerId = "cursor_dashboard_usage";
 
   store.registerDevice({ participantId: pid, deviceId: did, nickname: "SSR", identityPublicKey: "pk_ssr", os: "test", appVersion: "0.1.0" });
 

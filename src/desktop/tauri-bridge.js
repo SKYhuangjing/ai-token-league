@@ -82,7 +82,7 @@
     unignoreAutoSource:  fwd("config:unignore-auto-source"),
 
     // ── Workdirs ────────────────────────────────────────────────
-    setWorkdirAlias:     fwd("workdirs:set-alias"),
+    setWorkdirAlias:     (workdirHash, alias) => invoke("forward_to_sidecar", { command: "workdirs:set-alias", args: { workdirHash, alias } }),
 
     // ── Provider health / pricing ───────────────────────────────
     providerHealth:      fwd("providers:health"),

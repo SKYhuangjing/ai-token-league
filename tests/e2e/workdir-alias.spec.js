@@ -41,4 +41,25 @@ test.describe('Workdir Alias', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#trend-drawer')).not.toHaveClass(/is-open/, { timeout: 3_000 });
   });
+
+  test('saves workdir alias from drawer input', async ({ page }) => {
+    await navigateTo(page, 'workdirs');
+
+    const card = page.locator('[data-open-workdir]').first();
+    await card.click();
+
+    const drawer = page.locator('#trend-drawer');
+    await expect(drawer).toHaveClass(/is-open/, { timeout: 3_000 });
+
+    const aliasInput = drawer.locator('[data-alias-input]');
+    await aliasInput.fill('Public Project');
+    await aliasInput.press('Enter');
+    await expect(aliasInput).toHaveAttribute('data-current-alias', 'Public Project');
+
+    await page.click('#close-trend-drawer');
+    await expect(drawer).not.toHaveClass(/is-open/, { timeout: 3_000 });
+
+    await card.click();
+    await expect(drawer.locator('[data-alias-input]')).toHaveValue('Public Project');
+  });
 });

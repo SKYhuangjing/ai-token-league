@@ -509,7 +509,18 @@
     api.removeProviderRoot = () => Promise.resolve(clone(mockConfig));
 
     // Workdir alias
-    api.setWorkdirAlias = () => Promise.resolve(null);
+    api.setWorkdirAlias = (workdirHash, alias) => {
+      if (!mockConfig.workdirAliases) mockConfig.workdirAliases = {};
+      const key = String(workdirHash || "");
+      const value = String(alias || "").trim();
+      if (key && value) {
+        mockConfig.workdirAliases[key] = value;
+      } else if (key) {
+        delete mockConfig.workdirAliases[key];
+      }
+      persistConfig(mockConfig);
+      return Promise.resolve(clone(mockConfig));
+    };
 
     // Cursor
     api.startCursorConnect = () => Promise.resolve({ url: "https://mock-cursor-oauth.test", state: "pending" });

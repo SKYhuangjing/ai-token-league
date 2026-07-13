@@ -11,6 +11,15 @@ import {
   normalizeUsageTotal, reconcileHealthWithConfig
 } from '../../src/desktop/renderer-data.js';
 
+function localDayOffset(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // ── Source / Provider helpers ──
 
 describe('sourceName', () => {
@@ -628,7 +637,7 @@ describe('groupTrend', () => {
     estimatedCostUsd: 0, costQuality: '', pricingVersion: ''
   });
   it('groups items into trend buckets', () => {
-    const items = [makeItem('2026-05-23'), makeItem('2026-05-22')];
+    const items = [makeItem(localDayOffset(0)), makeItem(localDayOffset(-1))];
     const result = groupTrend(items, { trendView: 'daily' });
     expect(result.length).toBeGreaterThan(0);
     expect(result[0].modelBreakdown).toBeDefined();
@@ -650,7 +659,8 @@ describe('groupTrend', () => {
     expect(result.length).toBeGreaterThan(0);
   });
   it('includes modelDetails and models list', () => {
-    const items = [makeItem('2026-05-23', 'gpt-4o'), makeItem('2026-05-23', 'claude-3.5')];
+    const day = localDayOffset(0);
+    const items = [makeItem(day, 'gpt-4o'), makeItem(day, 'claude-3.5')];
     const result = groupTrend(items, { trendView: 'daily' });
     expect(result[0].models).toContain('gpt-4o');
     expect(result[0].modelDetails.length).toBeGreaterThan(0);
