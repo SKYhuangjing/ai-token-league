@@ -798,7 +798,8 @@ export class Store {
         if (!serverBucket && !derivedFingerprint) {
           missing.push(bucket);
         } else {
-          const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+          // Facts are authoritative: metadata can survive an interrupted or legacy write.
+          const serverFingerprint = derivedFingerprint || serverBucket?.bucketFingerprint || "";
           if (serverFingerprint !== bucket.fingerprint) {
             different.push({ ...bucket, serverFingerprint });
           } else {
@@ -824,7 +825,8 @@ export class Store {
       if (!serverBucket && !derivedFingerprint) {
         missing.push(bucket);
       } else {
-        const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+        // Facts are authoritative: metadata can survive an interrupted or legacy write.
+        const serverFingerprint = derivedFingerprint || serverBucket?.bucketFingerprint || "";
         if (serverFingerprint !== bucket.fingerprint) {
           different.push({ ...bucket, serverFingerprint });
         } else {
@@ -839,6 +841,168 @@ export class Store {
       result.checkedBucketCount = (buckets || []).length;
     }
     return result;
+  }
+
+  listReconcileDailyScopes(participantId, deviceId, { cursor = "", limit = 250 } = {}) {
+    const boundedLimit = Math.max(1, Math.min(Number(limit) || 250, 250));
+    const scopes = new Set();
+    const addScope = (row) => {
+      if (row?.participantId !== participantId || row?.deviceId !== deviceId || !row.day || !row.providerId) return;
+      scopes.add(reconcileDailyScopeKey(row.day, row.providerId));
+    };
+    Object.values(this.db.usageDaily || {}).forEach(addScope);
+    Object.values(this.db.usageHourly || {}).forEach(addScope);
+    Object.values(this.db.usageSyncBuckets || {}).forEach(addScope);
+    Object.values(this.db.usageSyncBucketsHourly || {}).forEach(addScope);
+
+    const keys = [...scopes].sort().filter((key) => key > cursor).slice(0, boundedLimit + 1);
+    const page = keys.slice(0, boundedLimit).map((key) => {
+      const [day, providerId] = parseReconcileDailyScopeKey(key);
+      return {
+        day,
+        providerId,
+        fingerprint: this.reconcileDailyScopeFingerprint(participantId, deviceId, day, providerId)
+      };
+    });
+    return {
+      items: page,
+      nextCursor: keys.length > boundedLimit ? keys[boundedLimit - 1] : "",
+      hasMore: keys.length > boundedLimit
+    };
+  }
+
+  listReconcileHourlyScopes(participantId, deviceId, { cursor = "", limit = 250 } = {}) {
+    const boundedLimit = Math.max(1, Math.min(Number(limit) || 250, 250));
+    const scopes = new Set();
+    const addScope = (row) => {
+      if (row?.participantId !== participantId || row?.deviceId !== deviceId || !row.day || !row.providerId || !Number.isInteger(Number(row.hour))) return;
+      scopes.add(reconcileHourlyScopeKey(row.day, Number(row.hour), row.providerId));
+    };
+    Object.values(this.db.usageHourly || {}).forEach(addScope);
+    Object.values(this.db.usageSyncBucketsHourly || {}).forEach(addScope);
+    const keys = [...scopes].sort().filter((key) => key > cursor).slice(0, boundedLimit + 1);
+    const page = keys.slice(0, boundedLimit).map((key) => {
+      const [day, hour, providerId] = parseReconcileHourlyScopeKey(key);
+      return { day, hour, providerId, fingerprint: this.reconcileHourlyScopeFingerprint(participantId, deviceId, day, hour, providerId) };
+    });
+    return { items: page, nextCursor: keys.length > boundedLimit ? keys[boundedLimit - 1] : "", hasMore: keys.length > boundedLimit };
+  }
+
+  reconcileHourlyScopeFingerprint(participantId, deviceId, day, hour, providerId) {
+    const rows = Object.values(this.db.usageHourly || {}).filter((row) => (
+      row.participantId === participantId && row.deviceId === deviceId && row.day === day && Number(row.hour || 0) === Number(hour) && row.providerId === providerId
+    ));
+    return sha256Hex(computeBucketFingerprint(rows));
+  }
+
+  reconcileHourlyScopes(participantId, deviceId, actions = []) {
+    const results = [];
+    for (const action of actions.slice(0, 25)) {
+      const day = String(action?.day || "");
+      const hour = Number(action?.hour);
+      const providerId = String(action?.providerId || "");
+      const key = reconcileHourlyScopeKey(day, hour, providerId);
+      if (!isReconcileHourlyScope(day, hour, providerId) || action?.action !== "prune_hourly") {
+        results.push({ key, status: "invalid" });
+        continue;
+      }
+      const fingerprint = this.reconcileHourlyScopeFingerprint(participantId, deviceId, day, hour, providerId);
+      const hasScope = Object.values(this.db.usageHourly || {}).some((row) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && Number(row.hour || 0) === hour && row.providerId === providerId)
+        || Object.values(this.db.usageSyncBucketsHourly || {}).some((row) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && Number(row.hour || 0) === hour && row.providerId === providerId);
+      if (!hasScope) { results.push({ key, status: "absent" }); continue; }
+      if (fingerprint !== action.expectedFingerprint) { results.push({ key, status: "conflict" }); continue; }
+      for (const [usageKey, row] of Object.entries(this.db.usageHourly || {})) {
+        if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && Number(row.hour || 0) === hour && row.providerId === providerId) delete this.db.usageHourly[usageKey];
+      }
+      for (const [bucketKey, row] of Object.entries(this.db.usageSyncBucketsHourly || {})) {
+        if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && Number(row.hour || 0) === hour && row.providerId === providerId) delete this.db.usageSyncBucketsHourly[bucketKey];
+      }
+      for (const [usageKey, row] of Object.entries(this.db.usageDaily || {})) {
+        if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageDaily[usageKey];
+      }
+      for (const [bucketKey, row] of Object.entries(this.db.usageSyncBuckets || {})) {
+        if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageSyncBuckets[bucketKey];
+      }
+      this.deriveDailyFromHourly(participantId, deviceId, day, providerId);
+      results.push({ key, status: "pruned" });
+    }
+    if (results.some((item) => item.status === "pruned")) { this.invalidateAggregateCache(); this.save(); }
+    return summarizeReconcileDailyScopeResults(results);
+  }
+
+  reconcileDailyScopeFingerprint(participantId, deviceId, day, providerId) {
+    const dailyRows = Object.values(this.db.usageDaily || {}).filter((row) => (
+      row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId
+    ));
+    const hourlyRows = Object.values(this.db.usageHourly || {}).filter((row) => (
+      row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId
+    ));
+    return sha256Hex(JSON.stringify({
+      daily: computeDailyBucketFingerprint(dailyRows),
+      hourly: computeBucketFingerprint(hourlyRows)
+    }));
+  }
+
+  reconcileDailyScopes(participantId, deviceId, actions = []) {
+    const results = [];
+    for (const action of actions.slice(0, 25)) {
+      const day = String(action?.day || "");
+      const providerId = String(action?.providerId || "");
+      const mode = action?.action;
+      const key = reconcileDailyScopeKey(day, providerId);
+      if (!isReconcileDailyScope(day, providerId) || !["prune", "rebuild"].includes(mode)) {
+        results.push({ key, status: "invalid" });
+        continue;
+      }
+      const fingerprint = this.reconcileDailyScopeFingerprint(participantId, deviceId, day, providerId);
+      const hasScope = Object.values(this.db.usageDaily || {}).some((row) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId)
+        || Object.values(this.db.usageHourly || {}).some((row) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId)
+        || Object.values(this.db.usageSyncBuckets || {}).some((row) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId)
+        || Object.values(this.db.usageSyncBucketsHourly || {}).some((row) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId);
+      if (!hasScope) {
+        results.push({ key, status: "absent" });
+        continue;
+      }
+      if (action.expectedFingerprint !== fingerprint) {
+        results.push({ key, status: "conflict" });
+        continue;
+      }
+      if (mode === "prune") {
+        for (const [usageKey, row] of Object.entries(this.db.usageDaily || {})) {
+          if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageDaily[usageKey];
+        }
+        for (const [usageKey, row] of Object.entries(this.db.usageHourly || {})) {
+          if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageHourly[usageKey];
+        }
+        for (const [bucketKey, row] of Object.entries(this.db.usageSyncBuckets || {})) {
+          if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageSyncBuckets[bucketKey];
+        }
+        for (const [bucketKey, row] of Object.entries(this.db.usageSyncBucketsHourly || {})) {
+          if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageSyncBucketsHourly[bucketKey];
+        }
+        results.push({ key, status: "pruned" });
+        continue;
+      }
+
+      const hourlyCount = Object.values(this.db.usageHourly || {}).filter((row) => row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId).length;
+      if (!hourlyCount) {
+        results.push({ key, status: "conflict" });
+        continue;
+      }
+      for (const [usageKey, row] of Object.entries(this.db.usageDaily || {})) {
+        if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageDaily[usageKey];
+      }
+      for (const [bucketKey, row] of Object.entries(this.db.usageSyncBuckets || {})) {
+        if (row.participantId === participantId && row.deviceId === deviceId && row.day === day && row.providerId === providerId) delete this.db.usageSyncBuckets[bucketKey];
+      }
+      this.deriveDailyFromHourly(participantId, deviceId, day, providerId);
+      results.push({ key, status: "rebuilt" });
+    }
+    if (results.some((item) => ["pruned", "rebuilt"].includes(item.status))) {
+      this.invalidateAggregateCache();
+      this.save();
+    }
+    return summarizeReconcileDailyScopeResults(results);
   }
 
   deleteHourlyBucketUsageRows(participantId, deviceId, day, hour, providerId, incomingUsageKeys) {
@@ -1330,6 +1494,15 @@ export class Store {
       timeGrain: hourlySeries ? "hour" : "day",
       heatmap
     };
+    if (!participantId) {
+      result.participantRanking = rankParticipantsForRows(rows, this.db.participants)
+        .map((item) => ({
+          rank: item.rank,
+          participantId: item.participantId,
+          nickname: this.db.participants[item.participantId]?.nickname || item.participantId,
+          totalTokens: item.totalTokens
+        }));
+    }
     if (participantId) {
       result.rankStats = this.analyticsRankStats(participantId, days, { businessDay });
     }
@@ -1397,6 +1570,14 @@ export class Store {
       current.modelsMap[item.model || "unknown"] = (current.modelsMap[item.model || "unknown"] || 0) + (item.totalTokens || 0);
       current.workdirsMap[item.workdirDisplayName || "unknown"] = (current.workdirsMap[item.workdirDisplayName || "unknown"] || 0) + (item.totalTokens || 0);
       current.providersMap[item.providerId || "unknown"] = (current.providersMap[item.providerId || "unknown"] || 0) + (item.totalTokens || 0);
+      const device = this.db.devices[item.deviceId] || {};
+      const currentDevice = current.devicesMap[item.deviceId] || {
+        deviceId: item.deviceId,
+        clientPlatform: device.clientPlatform || device.os || "",
+        totalTokens: 0
+      };
+      currentDevice.totalTokens += item.totalTokens || 0;
+      current.devicesMap[item.deviceId] = currentDevice;
       if (includeCost) {
         aggregateCost(current, item);
         addCostBreakdownItem(current.modelsCostMap, item.model || "unknown", item);
@@ -2073,6 +2254,7 @@ function emptyRankingAggregate(item, participant) {
     modelsMap: {},
     workdirsMap: {},
     providersMap: {},
+    devicesMap: {},
     modelsCostMap: {},
     workdirsCostMap: {},
     providersCostMap: {},
@@ -2085,7 +2267,7 @@ function emptyRankingAggregate(item, participant) {
 }
 
 function finalizeRankingAggregate(item, rank, { includeCost = false } = {}) {
-  const { modelsMap, workdirsMap, providersMap, modelsCostMap, workdirsCostMap, providersCostMap, ...publicItem } = item;
+  const { modelsMap, workdirsMap, providersMap, devicesMap, modelsCostMap, workdirsCostMap, providersCostMap, ...publicItem } = item;
   return {
     rank,
     ...publicItem,
@@ -2094,7 +2276,8 @@ function finalizeRankingAggregate(item, rank, { includeCost = false } = {}) {
     ...(includeCost ? costFields(publicItem) : {}),
     models: includeCost ? finalizeCostBreakdown(modelsCostMap) : sortedBreakdown(modelsMap),
     workdirs: includeCost ? finalizeCostBreakdown(workdirsCostMap) : sortedBreakdown(workdirsMap),
-    providers: includeCost ? finalizeCostBreakdown(providersCostMap) : sortedBreakdown(providersMap)
+    providers: includeCost ? finalizeCostBreakdown(providersCostMap) : sortedBreakdown(providersMap),
+    devices: Object.values(devicesMap).sort((a, b) => b.totalTokens - a.totalTokens || a.deviceId.localeCompare(b.deviceId))
   };
 }
 
@@ -2178,6 +2361,44 @@ function daysForLastMonths(count, { businessDay = localDay() } = {}) {
 
 function isDay(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function reconcileDailyScopeKey(day, providerId) {
+  return `${day}|${providerId}`;
+}
+
+function parseReconcileDailyScopeKey(key) {
+  const separator = key.indexOf("|");
+  return separator < 0 ? ["", ""] : [key.slice(0, separator), key.slice(separator + 1)];
+}
+
+function isReconcileDailyScope(day, providerId) {
+  return isDay(day) && typeof providerId === "string" && providerId.length > 0 && providerId.length <= 96;
+}
+
+function reconcileHourlyScopeKey(day, hour, providerId) {
+  return `${day}|${String(hour).padStart(2, "0")}|${providerId}`;
+}
+
+function parseReconcileHourlyScopeKey(key) {
+  const [day, hour, ...provider] = key.split("|");
+  return [day || "", Number(hour), provider.join("|")];
+}
+
+function isReconcileHourlyScope(day, hour, providerId) {
+  return isReconcileDailyScope(day, providerId) && Number.isInteger(hour) && hour >= 0 && hour <= 23;
+}
+
+function summarizeReconcileDailyScopeResults(items) {
+  const count = (status) => items.filter((item) => item.status === status).length;
+  return {
+    items,
+    pruned: count("pruned"),
+    rebuilt: count("rebuilt"),
+    conflicts: count("conflict"),
+    absent: count("absent"),
+    invalid: count("invalid")
+  };
 }
 
 function isDayScopedRange({ period = "", range = "today", startDay = "", endDay = "" } = {}) {

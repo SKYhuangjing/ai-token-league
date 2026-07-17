@@ -126,6 +126,20 @@
             <!-- Dynamically populated rows -->
           </div>
         </article>
+
+        <!-- Panel 6: Participant Token Treemap (community scope only) -->
+        <article id="participant-ranking-card" class="analytics-card participant-ranking-card">
+            <h3 data-i18n="web.analytics.participantTreemap">人员 Token 分布</h3>
+            <p class="subtitle" data-i18n="web.analytics.participantTreemapSubtitle">矩形面积代表当前周期的 Token 使用量</p>
+            <div class="participant-treemap-chart">
+              <svg id="participant-treemap-svg" viewBox="0 0 900 360" preserveAspectRatio="none" class="participant-treemap-svg"
+              role="img" aria-labelledby="participant-treemap-svg-title participant-treemap-svg-desc">
+              <title id="participant-treemap-svg-title"></title>
+              <desc id="participant-treemap-svg-desc"></desc>
+            </svg>
+            <div id="participant-treemap-labels" class="participant-treemap-labels" role="list"></div>
+          </div>
+        </article>
       </div>
     </section>
 

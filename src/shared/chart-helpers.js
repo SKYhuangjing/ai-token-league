@@ -1,6 +1,9 @@
 import { t } from "./i18n.js";
 import { formatTokenCompact } from "./display.js";
 
+const TREEMAP_MIN_PARTICIPANTS = 12;
+const TREEMAP_MAX_PARTICIPANTS = 30;
+
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
@@ -206,6 +209,150 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
       </div>
     `;
     container.appendChild(row);
+  }
+}
+
+export function renderParticipantTreemap(svg, labels, rankings = [], { localeTokenCompact, tooltip = null } = {}) {
+  if (!svg || !labels) return;
+  const formatTokens = localeTokenCompact || ((value) => formatTokenCompact(value));
+  const svgEl = (tag, attrs = {}) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+    return el;
+  };
+
+  svg.innerHTML = "";
+  labels.innerHTML = "";
+  labels.hidden = true;
+
+  if (!rankings.length) {
+    const empty = svgEl("text", { x: 450, y: 190, class: "participant-treemap-empty" });
+    empty.textContent = t("web.analytics.noData");
+    svg.appendChild(empty);
+    return;
+  }
+
+  const displayCount = Math.min(
+    rankings.length,
+    TREEMAP_MAX_PARTICIPANTS,
+    Math.max(TREEMAP_MIN_PARTICIPANTS, Math.ceil(rankings.length / 2))
+  );
+  const width = 900;
+  const height = Math.max(360, Math.ceil((displayCount + 1) / 6) * 115);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const colors = ["#0f6f75", "#5c8d89", "#f0a202", "#d95d39", "#7b2cbf", "#3a506b", "#6b9080", "#bc6c25", "#2a9d8f", "#8d99ae", "#e76f51", "#8367c7", "#8b8c89"];
+  const entries = rankings.slice(0, displayCount).map((item) => ({
+    name: item.displayName || item.nickname || item.participantId || "",
+    totalTokens: Number(item.totalTokens || 0)
+  }));
+  const otherTokens = rankings.slice(displayCount).reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+  if (otherTokens > 0) entries.push({ name: t("web.analytics.otherParticipants"), totalTokens: otherTokens });
+
+  const totalTokens = entries.reduce((sum, item) => sum + item.totalTokens, 0);
+  if (totalTokens <= 0) {
+    const empty = svgEl("text", { x: width / 2, y: height / 2, class: "participant-treemap-empty" });
+    empty.textContent = t("web.analytics.noData");
+    svg.appendChild(empty);
+    return;
+  }
+
+  const layoutTreemap = (items, x, y, boxWidth, boxHeight, splitByWidth) => {
+    if (items.length === 1) return [{ ...items[0], x, y, width: boxWidth, height: boxHeight }];
+    const sum = items.reduce((total, item) => total + item.totalTokens, 0) || 1;
+    const target = sum / 2;
+    let running = 0;
+    let splitIndex = 1;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < items.length - 1; index += 1) {
+      running += items[index].totalTokens;
+      const distance = Math.abs(target - running);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        splitIndex = index + 1;
+      }
+    }
+    const first = items.slice(0, splitIndex);
+    const second = items.slice(splitIndex);
+    const firstRatio = first.reduce((total, item) => total + item.totalTokens, 0) / sum;
+    if (splitByWidth) {
+      const firstWidth = boxWidth * firstRatio;
+      return [
+        ...layoutTreemap(first, x, y, firstWidth, boxHeight, !splitByWidth),
+        ...layoutTreemap(second, x + firstWidth, y, boxWidth - firstWidth, boxHeight, !splitByWidth)
+      ];
+    }
+    const firstHeight = boxHeight * firstRatio;
+    return [
+      ...layoutTreemap(first, x, y, boxWidth, firstHeight, !splitByWidth),
+      ...layoutTreemap(second, x, y + firstHeight, boxWidth, boxHeight - firstHeight, !splitByWidth)
+    ];
+  };
+
+  const baseId = svg.id || "participant-treemap";
+  const titleId = `${baseId}-title`;
+  const descId = `${baseId}-desc`;
+  svg.setAttribute("aria-labelledby", `${titleId} ${descId}`);
+  const title = svgEl("title", { id: titleId });
+  title.textContent = t("web.analytics.participantTreemap");
+  const desc = svgEl("desc", { id: descId });
+  desc.textContent = t("web.analytics.participantTreemapSubtitle");
+  svg.append(title, desc);
+
+  const fallbackLabels = [];
+  const rectangles = layoutTreemap(entries, 0, 0, width, height, true);
+  rectangles.forEach((item, index) => {
+    const gap = Math.min(6, item.width / 8, item.height / 8);
+    const x = item.x + gap / 2;
+    const y = item.y + gap / 2;
+    const boxWidth = Math.max(1, item.width - gap);
+    const boxHeight = Math.max(1, item.height - gap);
+    const rect = svgEl("rect", {
+      x, y, width: boxWidth, height: boxHeight,
+      rx: Math.min(4, gap),
+      class: "participant-treemap-node",
+      fill: colors[index % colors.length],
+      "aria-label": `${item.name}: ${formatTokens(item.totalTokens)}`
+    });
+    rect.addEventListener("mouseenter", () => {
+      if (!tooltip) return;
+      tooltip.innerHTML = `<strong>${escapeHtml(item.name)}</strong><br>${formatTokens(item.totalTokens)}`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, rect);
+    });
+    rect.addEventListener("mouseleave", () => {
+      if (tooltip) tooltip.style.opacity = "0";
+    });
+    svg.appendChild(rect);
+
+    if (boxWidth >= 62 && boxHeight >= 30) {
+      const maxChars = Math.max(4, Math.floor((boxWidth - 18) / 7));
+      const labelText = item.name.length > maxChars ? `${item.name.slice(0, maxChars - 1)}…` : item.name;
+      const fontSize = Math.max(8, Math.min(15, Math.floor(Math.min(boxWidth / Math.max(labelText.length * 0.62, 1), boxHeight / 3))));
+      const name = svgEl("text", {
+        x: x + 10, y: y + boxHeight / 2 - 3, class: "participant-treemap-name", "font-size": fontSize
+      });
+      name.textContent = labelText;
+      svg.appendChild(name);
+      if (boxHeight >= 44) {
+        const value = svgEl("text", {
+          x: x + 10, y: y + boxHeight / 2 + 17, class: "participant-treemap-value"
+        });
+        value.textContent = formatTokens(item.totalTokens);
+        svg.appendChild(value);
+      }
+    } else {
+      fallbackLabels.push({ ...item, color: colors[index % colors.length] });
+    }
+  });
+  if (fallbackLabels.length) {
+    labels.hidden = false;
+    labels.innerHTML = fallbackLabels.map((item) => `
+      <span class="participant-treemap-label" role="listitem">
+        <i class="participant-treemap-label-swatch" style="background:${item.color}"></i>
+        <span>${escapeHtml(item.name)}</span>
+        <strong>${formatTokens(item.totalTokens)}</strong>
+      </span>
+    `).join("");
   }
 }
 

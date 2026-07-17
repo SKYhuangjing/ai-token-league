@@ -466,7 +466,7 @@ function renderRanking(data) {
     .map((item) => `<tr>
       <td><span class="rank">#${item.rank}</span></td>
       <td><button class="link-button" data-ranking-participant="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</button></td>
-      <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
+      <td class="tokens" title="${escapeHtml(deviceTokenTooltip(item))}">${formatToken(item.totalTokens)}</td>
       <td>${renderCostQuality(item)}</td>
       <td>${renderPrimarySlice(item.workdirs)}</td>
       <td>${renderPrimarySlice(item.models)}</td>
@@ -1070,6 +1070,24 @@ function formatToken(value) {
 
 function formatTokenRaw(value) {
   return `${formatNumber(value)} ${t("unit.tokens")}`;
+}
+
+function deviceTokenTooltip(item) {
+  const devices = Array.isArray(item.devices) ? item.devices : [];
+  if (devices.length <= 1) return formatTokenRaw(item.totalTokens);
+  return [
+    formatTokenRaw(item.totalTokens),
+    ...devices.map((device) => t("admin.usage.deviceTokenTotal", {
+      device: deviceLabel(device),
+      tokens: formatTokenRaw(device.totalTokens)
+    }))
+  ].join("\n");
+}
+
+function deviceLabel(device) {
+  const suffix = String(device?.deviceId || "").slice(-8) || "-";
+  const platform = String(device?.clientPlatform || "").trim();
+  return platform ? `${platform} · ${suffix}` : suffix;
 }
 
 

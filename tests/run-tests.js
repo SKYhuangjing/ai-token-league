@@ -3937,13 +3937,55 @@ async function testAdminUsageRankingPagination() {
         body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
       });
       assert.equal(uploadRes.status, 200);
-      return identity;
+      return { ...identity, deviceId };
     }
 
     const low = await uploadRankedUsage("rank-low", 100);
     await uploadRankedUsage("rank-high", 300);
     await uploadRankedUsage("rank-mid", 200);
     await uploadRankedUsage("rank-old", 500, addDays(day, -45));
+    const secondDeviceId = newId("d");
+    const registerSecondDevice = await fetch(`${baseUrl}/api/devices/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        participantId: low.participantId,
+        deviceId: secondDeviceId,
+        nickname: "rank-low",
+        identityPublicKey: low.identityPublicKey,
+        clientPlatform: "test-second-device",
+        os: "test",
+        appVersion: APP_VERSION
+      })
+    });
+    assert.equal(registerSecondDevice.status, 200);
+    const secondDevicePayload = {
+      participantId: low.participantId,
+      deviceId: secondDeviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: [{
+        day,
+        toolCode: "codex",
+        providerId: "codex_local",
+        workdirHash: "h_rank-low-second-device",
+        workdirDisplayName: "wd_rank-low-second-device",
+        model: "model_rank-low-second-device",
+        inputTokens: 40,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 40,
+        sourceQuality: "exact",
+        sourceFingerprint: "sf_rank-low-second-device"
+      }]
+    };
+    const uploadSecondDevice = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...secondDevicePayload, signature: signPayload(low.identityPrivateKey, secondDevicePayload) })
+    });
+    assert.equal(uploadSecondDevice.status, 200);
 
     const pageOneRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&page=1&pageSize=2`);
     assert.equal(pageOneRes.status, 200);
@@ -3963,7 +4005,11 @@ async function testAdminUsageRankingPagination() {
     assert.equal(pageTwo.hasPrev, true);
     assert.equal(pageTwo.hasNext, false);
     assert.deepEqual(pageTwo.items.map((item) => [item.rank, item.nickname, item.totalTokens]), [
-      [3, "rank-low", 100]
+      [3, "rank-low", 140]
+    ]);
+    assert.deepEqual(pageTwo.items[0].devices, [
+      { deviceId: low.deviceId, clientPlatform: "test", totalTokens: 100 },
+      { deviceId: secondDeviceId, clientPlatform: "test-second-device", totalTokens: 40 }
     ]);
 
     const filteredRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&page=1&pageSize=2&participantId=${low.participantId}`);
@@ -4021,6 +4067,12 @@ async function testBoardPublicMode() {
     assert.equal(lb.identityMode, "public");
     assert.equal(lb.identityLabel, "nickname");
     assert.equal(lb.items[0].displayName, "board-pub");
+
+    const analyticsRes = await fetch(`${baseUrl}/api/board/analytics?period=today`);
+    assert.equal(analyticsRes.status, 200);
+    const analytics = await analyticsRes.json();
+    assert.deepEqual(analytics.participantRanking.map((item) => [item.rank, item.displayName, item.totalTokens]), [[1, "board-pub", 150]]);
+    assert.equal(Object.hasOwn(analytics.participantRanking[0], "participantId"), false, "public analytics ranking must not expose participantId");
 
     const summaryRes = await fetch(`${baseUrl}/api/board/summary`);
     assert.equal(summaryRes.status, 200);
@@ -4693,6 +4745,22 @@ function testWebLeaderboardStructure() {
   console.log("  testWebLeaderboardStructure passed");
 }
 
+function testWebAnalyticsParticipantRankingStructure() {
+  const html = fs.readFileSync("src/web/analytics.html", "utf8");
+  const js = fs.readFileSync("src/web/analytics.js", "utf8");
+  const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
+  assert.match(html, /id="participant-ranking-card"/);
+  assert.match(html, /id="participant-treemap-svg"/);
+  assert.match(html, /id="participant-treemap-labels"/);
+  assert.match(js, /function renderParticipantTreemapPanel/);
+  assert.match(js, /sharedRenderParticipantTreemap/);
+  assert.match(shared, /export function renderParticipantTreemap/);
+  assert.match(shared, /TREEMAP_MAX_PARTICIPANTS = 30/);
+  assert.match(shared, /Math\.min\(\s*rankings\.length,\s*TREEMAP_MAX_PARTICIPANTS/);
+  assert.match(js, /card\.hidden = !isCommunityScope/);
+  console.log("  testWebAnalyticsParticipantRankingStructure passed");
+}
+
 function testWebAdminStructure() {
   const html = fs.readFileSync("src/web/admin.html", "utf8");
   assert.match(html, /admin/i);
@@ -4721,13 +4789,18 @@ function testWebDownloadStructure() {
   assert.match(html, /home-top-three/);
   assert.match(html, /home-model-chart/);
   assert.match(html, /home-provider-chart/);
+  assert.match(html, /home-participant-treemap-svg/);
+  assert.match(html, /home-participant-treemap-labels/);
   assert.match(js, /loadSummary/);
   assert.match(js, /loadAnalytics/);
   assert.match(js, /loadLeaderboard/);
+  assert.match(js, /range:\s*"this_month"/);
+  assert.match(js, /renderParticipantTreemap/);
   assert.match(js, /from\s+["']\/shared\/chart-helpers\.js["']/);
   assert.match(shared, /export function renderTrendChart/);
   assert.match(shared, /export function renderBarChart/);
   assert.match(shared, /export function renderGauge/);
+  assert.match(shared, /export function renderParticipantTreemap/);
   assert.match(shared, /export function formatCost/);
   assert.match(shared, /export function sourceName/);
   assert.match(shared, /export function normalizeModelSegments/);
@@ -5327,6 +5400,17 @@ function testStoreAnalyticsRankStats() {
   assert.equal(data.rankStats.leaderDays, 1);
   assert.equal(data.rankStats.isLeaderToday, false);
 
+  const community = store.analytics({
+    range: "custom",
+    startDay: yesterday,
+    endDay: today
+  });
+  assert.deepEqual(community.participantRanking.map((item) => [item.rank, item.nickname, item.totalTokens]), [
+    [1, "rank-a", 400],
+    [2, "rank-b", 300]
+  ]);
+  assert.equal(Object.hasOwn(data, "participantRanking"), false, "individual analytics must not include community ranking");
+
   if (fs.existsSync(path.join(tmp, "db-analytics-rank-stats.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-rank-stats.json"));
   console.log("  testStoreAnalyticsRankStats passed");
 }
@@ -5463,6 +5547,7 @@ testDesktopHtmlSections();
 testDesktopHtmlSettingsTabs();
 testDesktopHtmlDataI18n();
 testWebLeaderboardStructure();
+testWebAnalyticsParticipantRankingStructure();
 testWebAdminStructure();
 testWebDownloadStructure();
 testDesktopRendererExports();
@@ -5678,11 +5763,15 @@ function testSyncStateReturnsMissingAndMatched() {
   store.upsertUsageBatch(makeHourlySnapshotPayload([
     makeSnapshotItem({ workdirHash: "h1", totalTokens: 100, providerId, day, hour: 10 })
   ], pid, did, { providerId, day, hour: 10 }));
+  const factualFingerprint = computeBucketFingerprint(Object.values(store.db.usageHourly).filter((item) => (
+    item.participantId === pid && item.deviceId === did && item.day === day
+      && item.hour === 10 && item.providerId === providerId
+  )));
 
   const result = store.compareSyncState({
     participantId: pid, deviceId: did,
     buckets: [
-      { day, hour: 10, providerId, fingerprint: store.getHourlyBucketSync(pid, did, day, 10, providerId).bucketFingerprint },
+      { day, hour: 10, providerId, fingerprint: factualFingerprint },
       { day, hour: 11, providerId, fingerprint: "nonexistent_fp" }
     ]
   });
@@ -5720,6 +5809,27 @@ function testSyncStateFallsBackToHourlyRowsWhenMetadataMissing() {
 
   if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
   console.log("  testSyncStateFallsBackToHourlyRowsWhenMetadataMissing passed");
+}
+
+function testSyncStateUsesFactsWhenMetadataIsStale() {
+  const tmp = path.join(os.tmpdir(), `test-sync-state-stale-metadata-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_stale", did = "d_stale", day = localDay(), providerId = "codex_local";
+  store.registerDevice({ participantId: pid, deviceId: did, nickname: "Stale", identityPublicKey: "pk_stale", os: "test", appVersion: "0.1.0" });
+  const payload = makeHourlySnapshotPayload([
+    makeSnapshotItem({ workdirHash: "h1", totalTokens: 100, providerId, day, hour: 10 })
+  ], pid, did, { providerId, day, hour: 10 });
+  store.upsertUsageBatch(payload);
+  const row = Object.values(store.db.usageHourly).find((item) => item.participantId === pid && item.deviceId === did);
+  row.inputTokens = 200;
+  row.totalTokens = 200;
+  const result = store.compareSyncState({
+    participantId: pid, deviceId: did, mode: "full_reconcile",
+    buckets: [{ day, hour: 10, providerId, fingerprint: payload.snapshot.bucketFingerprint, granularity: "hourly" }]
+  });
+  assert.equal(result.different.length, 1, "raw hourly facts must override stale bucket metadata");
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testSyncStateUsesFactsWhenMetadataIsStale passed");
 }
 
 function testSyncStateAfterResetDetectsMissing() {
@@ -5784,6 +5894,76 @@ function testDeleteParticipantDataClearsHourlySyncState() {
   console.log("  testDeleteParticipantDataClearsHourlySyncState passed");
 }
 
+function testReconcileDailyScopeInventoryIsDeviceScopedAndPaged() {
+  const tmp = path.join(os.tmpdir(), `test-reconcile-inventory-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_inventory", didA = "d_inventory_a", didB = "d_inventory_b";
+  const providerId = "codex_local";
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_a", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_a", os: "test", appVersion: "0.1.0" });
+  for (const day of ["2026-03-01", "2026-03-02"]) {
+    store.upsertUsageBatch(makeHourlySnapshotPayload([
+      makeSnapshotItem({ day, hour: 8, providerId, workdirHash: `a_${day}`, totalTokens: 100 })
+    ], pid, didA, { day, hour: 8, providerId }));
+  }
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ day: "2026-03-03", hour: 8, providerId, workdirHash: "b_only", totalTokens: 100 })
+  ], pid, didB, { day: "2026-03-03", hour: 8, providerId }));
+
+  const first = store.listReconcileDailyScopes(pid, didA, { limit: 1 });
+  assert.equal(first.items.length, 1);
+  assert.equal(first.hasMore, true);
+  assert.equal(first.items[0].day, "2026-03-01");
+  const second = store.listReconcileDailyScopes(pid, didA, { cursor: first.nextCursor, limit: 1 });
+  assert.equal(second.items.length, 1);
+  assert.equal(second.items[0].day, "2026-03-02");
+  assert.equal(second.hasMore, false);
+  assert.equal(second.items.some((item) => item.day === "2026-03-03"), false, "other device scope must never be inventoried");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testReconcileDailyScopeInventoryIsDeviceScopedAndPaged passed");
+}
+
+function testReconcileDailyScopesPrunesServerOnlyAndRebuildsCurrentDeviceDaily() {
+  const tmp = path.join(os.tmpdir(), `test-reconcile-scopes-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_scope", didA = "d_scope_a", didB = "d_scope_b";
+  const providerId = "codex_local", localDay = "2026-03-10", staleDay = "2026-02-10";
+  store.registerDevice({ participantId: pid, deviceId: didA, nickname: "A", identityPublicKey: "pk_a", os: "test", appVersion: "0.1.0" });
+  store.registerDevice({ participantId: pid, deviceId: didB, nickname: "B", identityPublicKey: "pk_a", os: "test", appVersion: "0.1.0" });
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ day: localDay, hour: 8, providerId, workdirHash: "local_hourly", totalTokens: 100 })
+  ], pid, didA, { day: localDay, hour: 8, providerId }));
+  // Simulate a legacy daily row that remained beside the hourly-derived fact.
+  store.upsertUsageBatch(makeSnapshotPayload([
+    makeSnapshotItem({ day: localDay, providerId, workdirHash: "legacy_extra", totalTokens: 900 })
+  ], pid, didA, { day: localDay, providerId }));
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ day: staleDay, hour: 8, providerId, workdirHash: "stale", totalTokens: 500 })
+  ], pid, didA, { day: staleDay, hour: 8, providerId }));
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ day: staleDay, hour: 8, providerId, workdirHash: "other_device", totalTokens: 700 })
+  ], pid, didB, { day: staleDay, hour: 8, providerId }));
+
+  const inventory = store.listReconcileDailyScopes(pid, didA);
+  const scope = (day) => inventory.items.find((item) => item.day === day);
+  const result = store.reconcileDailyScopes(pid, didA, [
+    { day: localDay, providerId, action: "rebuild", expectedFingerprint: scope(localDay).fingerprint },
+    { day: staleDay, providerId, action: "prune", expectedFingerprint: scope(staleDay).fingerprint }
+  ]);
+  assert.equal(result.rebuilt, 1);
+  assert.equal(result.pruned, 1);
+  const currentDaily = Object.values(store.db.usageDaily).filter((row) => row.participantId === pid && row.deviceId === didA && row.day === localDay);
+  assert.equal(currentDaily.length, 1);
+  assert.equal(currentDaily[0].totalTokens, 150, "rebuild must remove legacy daily residue");
+  assert.equal(Object.values(store.db.usageDaily).some((row) => row.participantId === pid && row.deviceId === didA && row.day === staleDay), false);
+  assert.equal(Object.values(store.db.usageHourly).some((row) => row.participantId === pid && row.deviceId === didA && row.day === staleDay), false);
+  assert.equal(Object.values(store.db.usageDaily).some((row) => row.participantId === pid && row.deviceId === didB && row.day === staleDay), true, "other device facts must be preserved");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testReconcileDailyScopesPrunesServerOnlyAndRebuildsCurrentDeviceDaily passed");
+}
+
 function testFullReconcileModeNoCutoff() {
   const tmp = path.join(os.tmpdir(), `test-full-reconcile-no-cutoff-${Date.now()}.json`);
   const store = new Store(tmp);
@@ -5797,7 +5977,10 @@ function testFullReconcileModeNoCutoff() {
     makeSnapshotItem({ workdirHash: "h1", totalTokens: 100, providerId, day: oldDay, hour: 8 })
   ], pid, did, { providerId, day: oldDay, hour: 8 }));
 
-  const fp = store.getHourlyBucketSync(pid, did, oldDay, 8, providerId).bucketFingerprint;
+  const fp = computeBucketFingerprint(Object.values(store.db.usageHourly).filter((item) => (
+    item.participantId === pid && item.deviceId === did && item.day === oldDay
+      && item.hour === 8 && item.providerId === providerId
+  )));
 
   // recent mode would skip this old bucket; full_reconcile should not
   const recentResult = store.compareSyncState({
@@ -5833,7 +6016,10 @@ function testFullReconcileDailyGranularity() {
     makeSnapshotItem({ workdirHash: "h1", totalTokens: 200, providerId, day })
   ], pid, did, { providerId, day }));
 
-  const fp = store.getBucketSync(pid, did, day, providerId).bucketFingerprint;
+  const fp = computeDailyBucketFingerprint(Object.values(store.db.usageDaily).filter((item) => (
+    item.participantId === pid && item.deviceId === did && item.day === day
+      && item.providerId === providerId
+  )));
 
   const result = store.compareSyncState({
     participantId: pid, deviceId: did,
@@ -7578,8 +7764,11 @@ testCursorDedupDailyDerivedCorrectly();
 // Sync-state tests
 testSyncStateReturnsMissingAndMatched();
 testSyncStateFallsBackToHourlyRowsWhenMetadataMissing();
+testSyncStateUsesFactsWhenMetadataIsStale();
 testSyncStateAfterResetDetectsMissing();
 testDeleteParticipantDataClearsHourlySyncState();
+testReconcileDailyScopeInventoryIsDeviceScopedAndPaged();
+testReconcileDailyScopesPrunesServerOnlyAndRebuildsCurrentDeviceDaily();
 
 // Full reconcile tests
 testFullReconcileModeNoCutoff();

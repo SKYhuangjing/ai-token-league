@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import mysql from "mysql2/promise";
 import { Store } from "./store.js";
-import { newId } from "../shared/crypto.js";
+import { newId, sha256Hex } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { normalizeModelName } from "../shared/pricing.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
@@ -289,20 +289,20 @@ export class MySqlStore extends Store {
     const providerId = snapshot.providerId || "";
     if (!this.pool || !participantId || !deviceId || !day || !providerId) return;
     const [dailyRows] = await this.pool.query(
-      "SELECT * FROM usage_daily WHERE participantId = ? AND day = ? AND providerId = ?",
-      [participantId, day, providerId]
+      "SELECT * FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?",
+      [participantId, deviceId, day, providerId]
     );
     const [hourlyRows] = await this.pool.query(
-      "SELECT * FROM usage_hourly WHERE participantId = ? AND day = ? AND providerId = ?",
-      [participantId, day, providerId]
+      "SELECT * FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?",
+      [participantId, deviceId, day, providerId]
     ).catch(() => [[]]);
     const [dailyBuckets] = await this.pool.query(
-      "SELECT * FROM usage_sync_buckets WHERE participantId = ? AND day = ? AND providerId = ?",
-      [participantId, day, providerId]
+      "SELECT * FROM usage_sync_buckets WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?",
+      [participantId, deviceId, day, providerId]
     ).catch(() => [[]]);
     const [hourlyBuckets] = await this.pool.query(
-      "SELECT * FROM usage_sync_buckets_hourly WHERE participantId = ? AND day = ? AND providerId = ?",
-      [participantId, day, providerId]
+      "SELECT * FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?",
+      [participantId, deviceId, day, providerId]
     ).catch(() => [[]]);
     this.db.usageDaily = Object.fromEntries(dailyRows.map((row) => [row.usageKey, usageFromRow(row)]));
     this.db.usageHourly = Object.fromEntries(hourlyRows.map((row) => [row.usageKey, usageFromRow(row)]));
@@ -743,6 +743,7 @@ export class MySqlStore extends Store {
     );
     const participantIds = rows.map((row) => row.participantId);
     const breakdowns = { models: new Map(), workdirs: new Map(), providers: new Map() };
+    const devicesByParticipant = new Map();
     if (participantIds.length) {
       const placeholders = participantIds.map(() => "?").join(",");
       const scopedWhere = whereSql
@@ -762,6 +763,26 @@ export class MySqlStore extends Store {
           scopedParams
         );
         breakdowns[field] = groupBreakdowns(breakdownRows, "participantId", { includeCost });
+      }
+      const [deviceRows] = await this.pool.query(
+        `SELECT u.participantId, u.deviceId,
+                COALESCE(d.os, '') AS clientPlatform,
+                COALESCE(SUM(u.totalTokens), 0) AS totalTokens
+         FROM usage_daily u
+         LEFT JOIN devices d ON d.id = u.deviceId
+         ${scopedWhere}
+         GROUP BY u.participantId, u.deviceId, d.os
+         ORDER BY totalTokens DESC, u.deviceId ASC`,
+        scopedParams
+      );
+      for (const row of deviceRows) {
+        const devices = devicesByParticipant.get(row.participantId) || [];
+        devices.push({
+          deviceId: row.deviceId,
+          clientPlatform: row.clientPlatform || "",
+          totalTokens: Number(row.totalTokens || 0)
+        });
+        devicesByParticipant.set(row.participantId, devices);
       }
     }
     const bounds = days
@@ -798,7 +819,8 @@ export class MySqlStore extends Store {
           ...(includeCost ? mysqlCostFields(row) : {}),
           models: breakdowns.models.get(row.participantId) || [],
           workdirs: breakdowns.workdirs.get(row.participantId) || [],
-          providers: breakdowns.providers.get(row.participantId) || []
+          providers: breakdowns.providers.get(row.participantId) || [],
+          devices: devicesByParticipant.get(row.participantId) || []
         };
       })
     };
@@ -1013,7 +1035,8 @@ export class MySqlStore extends Store {
         const derivedFingerprint = derivedRows.length ? computeBucketFingerprint(derivedRows) : "";
         if (!serverBucket && !derivedFingerprint) missing.push(bucket);
         else {
-          const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+          // Facts are authoritative: metadata can survive an interrupted or legacy write.
+          const serverFingerprint = derivedFingerprint || serverBucket?.bucketFingerprint || "";
           if (serverFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint });
           else matched.push(bucket);
         }
@@ -1051,7 +1074,8 @@ export class MySqlStore extends Store {
         const derivedFingerprint = derivedRows.length ? computeDailyBucketFingerprint(derivedRows) : "";
         if (!serverBucket && !derivedFingerprint) missing.push(bucket);
         else {
-          const serverFingerprint = serverBucket?.bucketFingerprint || derivedFingerprint;
+          // Facts are authoritative: metadata can survive an interrupted or legacy write.
+          const serverFingerprint = derivedFingerprint || serverBucket?.bucketFingerprint || "";
           if (serverFingerprint !== bucket.fingerprint) different.push({ ...bucket, serverFingerprint });
           else matched.push(bucket);
         }
@@ -1064,6 +1088,170 @@ export class MySqlStore extends Store {
       result.checkedBucketCount = (buckets || []).length;
     }
     return result;
+  }
+
+  async listReconcileDailyScopes(participantId, deviceId, { cursor = "", limit = 250 } = {}) {
+    const boundedLimit = Math.max(1, Math.min(Number(limit) || 250, 250));
+    const [rows] = await this.pool.query(
+      `SELECT day, providerId
+       FROM (
+         SELECT day, providerId FROM usage_daily WHERE participantId = ? AND deviceId = ?
+         UNION
+         SELECT day, providerId FROM usage_hourly WHERE participantId = ? AND deviceId = ?
+         UNION
+         SELECT day, providerId FROM usage_sync_buckets WHERE participantId = ? AND deviceId = ?
+         UNION
+         SELECT day, providerId FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ?
+       ) AS reconcile_scopes
+       WHERE CONCAT(DATE_FORMAT(day, '%Y-%m-%d'), '|', providerId) > ?
+       ORDER BY day ASC, providerId ASC
+       LIMIT ?`,
+      [participantId, deviceId, participantId, deviceId, participantId, deviceId, participantId, deviceId, cursor, boundedLimit + 1]
+    );
+    const page = rows.slice(0, boundedLimit).map((row) => ({
+      day: toDayString(row.day),
+      providerId: row.providerId
+    }));
+    const items = [];
+    for (const scope of page) {
+      const state = await this.readReconcileDailyScope(participantId, deviceId, scope.day, scope.providerId);
+      items.push({ ...scope, fingerprint: state.fingerprint });
+    }
+    return {
+      items,
+      nextCursor: rows.length > boundedLimit ? reconcileDailyScopeKey(page.at(-1).day, page.at(-1).providerId) : "",
+      hasMore: rows.length > boundedLimit
+    };
+  }
+
+  async listReconcileHourlyScopes(participantId, deviceId, { cursor = "", limit = 250 } = {}) {
+    const boundedLimit = Math.max(1, Math.min(Number(limit) || 250, 250));
+    const [rows] = await this.pool.query(
+      `SELECT day, hour, providerId
+       FROM (
+         SELECT day, hour, providerId FROM usage_hourly WHERE participantId = ? AND deviceId = ?
+         UNION
+         SELECT day, hour, providerId FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ?
+       ) AS reconcile_hourly_scopes
+       WHERE CONCAT(DATE_FORMAT(day, '%Y-%m-%d'), '|', LPAD(hour, 2, '0'), '|', providerId) > ?
+       ORDER BY day ASC, hour ASC, providerId ASC
+       LIMIT ?`,
+      [participantId, deviceId, participantId, deviceId, cursor, boundedLimit + 1]
+    );
+    const page = rows.slice(0, boundedLimit).map((row) => ({ day: toDayString(row.day), hour: Number(row.hour || 0), providerId: row.providerId }));
+    const items = [];
+    for (const scope of page) {
+      const state = await this.readReconcileHourlyScope(participantId, deviceId, scope.day, scope.hour, scope.providerId);
+      items.push({ ...scope, fingerprint: state.fingerprint });
+    }
+    return { items, nextCursor: rows.length > boundedLimit ? reconcileHourlyScopeKey(page.at(-1).day, page.at(-1).hour, page.at(-1).providerId) : "", hasMore: rows.length > boundedLimit };
+  }
+
+  async reconcileHourlyScopes(participantId, deviceId, actions = []) {
+    const safeActions = Array.isArray(actions) ? actions.slice(0, 25) : [];
+    return this.withWriteLock(async () => {
+      const items = [];
+      for (const action of safeActions) {
+        const day = toDayString(action?.day);
+        const hour = Number(action?.hour);
+        const providerId = String(action?.providerId || "");
+        const key = reconcileHourlyScopeKey(day, hour, providerId);
+        if (!isReconcileHourlyScope(day, hour, providerId) || action?.action !== "prune_hourly") { items.push({ key, status: "invalid" }); continue; }
+        const current = await this.readReconcileHourlyScope(participantId, deviceId, day, hour, providerId);
+        if (!current.exists) { items.push({ key, status: "absent" }); continue; }
+        if (current.fingerprint !== action.expectedFingerprint) { items.push({ key, status: "conflict" }); continue; }
+        await this.loadWriteScope(participantId, deviceId, { day, providerId });
+        Store.prototype.reconcileHourlyScopes.call(this, participantId, deviceId, [{
+          ...action,
+          expectedFingerprint: this.reconcileHourlyScopeFingerprint(participantId, deviceId, day, hour, providerId)
+        }]);
+        await withTransaction(this.pool, async (conn) => {
+          await conn.query("DELETE FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND hour = ? AND providerId = ?", [participantId, deviceId, day, hour, providerId]);
+          await conn.query("DELETE FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND hour = ? AND providerId = ?", [participantId, deviceId, day, hour, providerId]);
+          await conn.query("DELETE FROM usage_sync_buckets WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+          await this.syncDailyScope(conn, participantId, deviceId, day, providerId);
+        });
+        items.push({ key, status: "pruned" });
+      }
+      this.invalidateAggregateCache();
+      return summarizeReconcileDailyScopeResults(items);
+    });
+  }
+
+  async reconcileDailyScopes(participantId, deviceId, actions = []) {
+    const safeActions = Array.isArray(actions) ? actions.slice(0, 25) : [];
+    return this.withWriteLock(async () => {
+      const items = [];
+      for (const action of safeActions) {
+        const day = toDayString(action?.day);
+        const providerId = String(action?.providerId || "");
+        const mode = action?.action;
+        const key = reconcileDailyScopeKey(day, providerId);
+        if (!isReconcileDailyScope(day, providerId) || !["prune", "rebuild"].includes(mode)) {
+          items.push({ key, status: "invalid" });
+          continue;
+        }
+        const current = await this.readReconcileDailyScope(participantId, deviceId, day, providerId);
+        if (!current.exists) {
+          items.push({ key, status: "absent" });
+          continue;
+        }
+        if (current.fingerprint !== action.expectedFingerprint) {
+          items.push({ key, status: "conflict" });
+          continue;
+        }
+        if (mode === "prune") {
+          await withTransaction(this.pool, async (conn) => {
+            await conn.query("DELETE FROM usage_sync_buckets WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+            await conn.query("DELETE FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+            await conn.query("DELETE FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+            await conn.query("DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+          });
+          items.push({ key, status: "pruned" });
+          continue;
+        }
+        if (!current.hourlyRows.length) {
+          items.push({ key, status: "conflict" });
+          continue;
+        }
+        await this.loadWriteScope(participantId, deviceId, { day, providerId });
+        Store.prototype.reconcileDailyScopes.call(this, participantId, deviceId, [{
+          ...action,
+          expectedFingerprint: this.reconcileDailyScopeFingerprint(participantId, deviceId, day, providerId)
+        }]);
+        await withTransaction(this.pool, async (conn) => {
+          await conn.query("DELETE FROM usage_sync_buckets WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+          await this.syncDailyScope(conn, participantId, deviceId, day, providerId);
+        });
+        items.push({ key, status: "rebuilt" });
+      }
+      this.invalidateAggregateCache();
+      return summarizeReconcileDailyScopeResults(items);
+    });
+  }
+
+  async readReconcileDailyScope(participantId, deviceId, day, providerId) {
+    const [dailyRows] = await this.pool.query("SELECT * FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+    const [hourlyRows] = await this.pool.query("SELECT * FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+    const [dailyMeta] = await this.pool.query("SELECT bucketFingerprint FROM usage_sync_buckets WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+    const [hourlyMeta] = await this.pool.query("SELECT hour, bucketFingerprint FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?", [participantId, deviceId, day, providerId]);
+    const normalizedDaily = dailyRows.map(usageFromRow);
+    const normalizedHourly = hourlyRows.map(usageFromRow);
+    return {
+      exists: Boolean(dailyRows.length || hourlyRows.length || dailyMeta.length || hourlyMeta.length),
+      hourlyRows: normalizedHourly,
+      fingerprint: reconcileDailyScopeFingerprint(normalizedDaily, normalizedHourly, dailyMeta, hourlyMeta)
+    };
+  }
+
+  async readReconcileHourlyScope(participantId, deviceId, day, hour, providerId) {
+    const [hourlyRows] = await this.pool.query("SELECT * FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND hour = ? AND providerId = ?", [participantId, deviceId, day, hour, providerId]);
+    const [hourlyMeta] = await this.pool.query("SELECT bucketFingerprint FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND hour = ? AND providerId = ?", [participantId, deviceId, day, hour, providerId]);
+    const normalizedHourly = hourlyRows.map(usageFromRow);
+    return {
+      exists: Boolean(hourlyRows.length || hourlyMeta.length),
+      fingerprint: sha256Hex(computeBucketFingerprint(normalizedHourly))
+    };
   }
 
   async serverFingerprint() {
@@ -2250,6 +2438,41 @@ function mysqlStartOfUtcWeek(date) {
 
 function mysqlIsDay(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function reconcileDailyScopeKey(day, providerId) {
+  return `${day}|${providerId}`;
+}
+
+function isReconcileDailyScope(day, providerId) {
+  return mysqlIsDay(day) && typeof providerId === "string" && providerId.length > 0 && providerId.length <= 96;
+}
+
+function reconcileHourlyScopeKey(day, hour, providerId) {
+  return `${day}|${String(hour).padStart(2, "0")}|${providerId}`;
+}
+
+function isReconcileHourlyScope(day, hour, providerId) {
+  return isReconcileDailyScope(day, providerId) && Number.isInteger(hour) && hour >= 0 && hour <= 23;
+}
+
+function reconcileDailyScopeFingerprint(dailyRows, hourlyRows, dailyMeta, hourlyMeta) {
+  return JSON.stringify({
+    daily: computeDailyBucketFingerprint(dailyRows),
+    hourly: computeBucketFingerprint(hourlyRows)
+  });
+}
+
+function summarizeReconcileDailyScopeResults(items) {
+  const count = (status) => items.filter((item) => item.status === status).length;
+  return {
+    items,
+    pruned: count("pruned"),
+    rebuilt: count("rebuilt"),
+    conflicts: count("conflict"),
+    absent: count("absent"),
+    invalid: count("invalid")
+  };
 }
 
 function nonNegativeNumber(value) {

@@ -1,6 +1,6 @@
 import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
 import { formatTokenCompact } from "/shared/display.js";
-import { escapeHtml, sourceName, formatCost, renderTrendChart as sharedRenderTrendChart, renderGauge as sharedRenderGauge, renderBarChart as sharedRenderBarChart } from "/shared/chart-helpers.js";
+import { escapeHtml, sourceName, formatCost, renderTrendChart as sharedRenderTrendChart, renderGauge as sharedRenderGauge, renderBarChart as sharedRenderBarChart, renderParticipantTreemap as sharedRenderParticipantTreemap } from "/shared/chart-helpers.js";
 
 const isEmbedded = window.self !== window.top;
 if (isEmbedded) {
@@ -163,6 +163,7 @@ async function loadAnalytics() {
   renderHeatmap();
   renderTrendChart();
   renderBarCharts();
+  renderParticipantTreemapPanel();
 }
 
 function renderGauge() {
@@ -184,6 +185,22 @@ function renderTrendChart() {
 function renderBarCharts() {
   sharedRenderBarChart(document.querySelector("#model-chart"), state.data.models, { collapseAfter: 4, localeTokenCompact });
   sharedRenderBarChart(document.querySelector("#provider-chart"), state.data.providers.map(p => ({ ...p, name: sourceName(p.name) })), { localeTokenCompact });
+}
+
+function renderParticipantTreemapPanel() {
+  const card = document.querySelector("#participant-ranking-card");
+  const svg = document.querySelector("#participant-treemap-svg");
+  const labels = document.querySelector("#participant-treemap-labels");
+  if (!card || !svg || !labels) return;
+
+  const isCommunityScope = !state.participantId;
+  card.hidden = !isCommunityScope;
+  sharedRenderParticipantTreemap(
+    svg,
+    labels,
+    isCommunityScope ? state.data?.participantRanking || [] : [],
+    { localeTokenCompact, tooltip: document.querySelector("#chart-tooltip") }
+  );
 }
 
 // 1. Render KPI Stats Panel

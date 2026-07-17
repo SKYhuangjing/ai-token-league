@@ -137,7 +137,11 @@ pub async fn run(cmd: crate::Commands) -> Result<(), String> {
                     "missing": reconcile_result.missing_bucket_count,
                     "different": reconcile_result.different_bucket_count,
                     "repaired": reconcile_result.repair_uploaded_bucket_count,
-                    "queued": reconcile_result.queued_bucket_count
+                    "queued": reconcile_result.queued_bucket_count,
+                    "serverOnlyScopes": reconcile_result.server_only_scope_count,
+                    "prunedScopes": reconcile_result.pruned_scope_count,
+                    "rebuiltDailyScopes": reconcile_result.rebuilt_daily_scope_count,
+                    "conflictedScopes": reconcile_result.conflicted_scope_count
                 }))
                 .unwrap()
             );

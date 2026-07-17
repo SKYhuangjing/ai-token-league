@@ -189,7 +189,7 @@ type ShareCardData = {
   - `GET /api/board/my-identity?participantId=...` → 获取身份模式。
   - `GET /api/board/analytics?period=...&participantId=...` → 获取分析数据和排名。
   - 匿名用户使用 `publicId` 查询。
-  - 云端 `analytics` 接口返回：`summary`、`models`、`providers`、`timeSeries`、`timeGrain`、`heatmap`、`rankStats`。
+  - 云端 `analytics` 接口返回：`summary`、`models`、`providers`、`timeSeries`、`timeGrain`、`heatmap`、`rankStats`；全社区范围额外返回按 `totalTokens` 排序的 `participantRanking`，公开响应使用 display identity。
 - `fetchBrandLogo()`：获取品牌 Logo，通过 `FileReader.readAsDataURL` 转为 data URL——html2canvas 导出时无法访问跨域 blob URL，必须使用 data URL 才能正确渲染到 canvas。
 
 ### 10.3 渲染和导出

@@ -5,7 +5,7 @@ import {
   escapeHtml, escapeAttribute, sourceName, formatCost, formatTokenRaw,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
   renderModelSegments, renderCost, renderTrendChart, renderGauge,
-  renderBarChart
+  renderBarChart, renderParticipantTreemap
 } from "/shared/chart-helpers.js";
 
 const currentLang = initI18n();
@@ -101,6 +101,23 @@ function homeRenderBarChart(containerId, items, opts) {
   const container = document.querySelector(containerId);
   if (!container) return;
   renderBarChart(container, items, { localeTokenCompact, ...opts });
+}
+
+function homeRenderParticipantTreemap() {
+  const svg = document.querySelector("#home-participant-treemap-svg");
+  const labels = document.querySelector("#home-participant-treemap-labels");
+  if (!svg || !labels) return;
+  renderParticipantTreemap(svg, labels, state.analyticsData?.participantRanking || [], {
+    localeTokenCompact,
+    tooltip: document.querySelector("#chart-tooltip")
+  });
+}
+
+function renderHomeParticipantTreemapFallback() {
+  const fallback = document.querySelector("#home-participant-treemap-fallback");
+  if (!fallback) return;
+  fallback.hidden = false;
+  fallback.innerHTML = `<div class="meter-empty">${t("web.analytics.noData")}</div>`;
 }
 
 // --- Leaderboard Preview ---
@@ -384,24 +401,32 @@ async function loadSummary() {
 
 async function loadAnalytics() {
   try {
-    const params = new URLSearchParams({ range: "last30" });
+    const params = new URLSearchParams({ range: "this_month" });
     const response = await fetch(`/api/board/analytics?${params.toString()}`);
     if (!response.ok) {
       renderAuthFallback("#home-trend-chart");
       renderAuthFallback("#home-model-chart");
       renderAuthFallback("#home-provider-chart");
+      renderHomeParticipantTreemapFallback();
       return;
     }
     const data = await response.json();
     state.analyticsData = data;
+    const fallback = document.querySelector("#home-participant-treemap-fallback");
+    if (fallback) {
+      fallback.hidden = true;
+      fallback.innerHTML = "";
+    }
     homeRenderTrendChart();
     homeRenderGauge();
     homeRenderBarChart("#home-model-chart", data.models, { collapseAfter: 4 });
     homeRenderBarChart("#home-provider-chart", (data.providers || []).map(p => ({ ...p, name: sourceName(p.name) })));
+    homeRenderParticipantTreemap();
   } catch {
     renderAuthFallback("#home-trend-chart");
     renderAuthFallback("#home-model-chart");
     renderAuthFallback("#home-provider-chart");
+    renderHomeParticipantTreemapFallback();
   }
 }
 

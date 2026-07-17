@@ -134,6 +134,19 @@
             <h3 data-i18n="web.detail.sources">Sources</h3>
             <div id="home-provider-chart" class="bar-chart-container"></div>
           </article>
+          <article class="analytics-card home-participant-treemap-card">
+            <h3 data-i18n="web.analytics.participantTreemap">Participant Token Distribution</h3>
+            <p class="subtitle" data-i18n="web.home.participantTreemapSubtitle">Participant Token usage this month</p>
+            <div class="participant-treemap-chart">
+              <svg id="home-participant-treemap-svg" viewBox="0 0 900 360" preserveAspectRatio="none" class="participant-treemap-svg"
+                role="img" aria-labelledby="home-participant-treemap-svg-title home-participant-treemap-svg-desc">
+                <title id="home-participant-treemap-svg-title"></title>
+                <desc id="home-participant-treemap-svg-desc"></desc>
+              </svg>
+              <div id="home-participant-treemap-labels" class="participant-treemap-labels" role="list"></div>
+            </div>
+            <div id="home-participant-treemap-fallback" class="participant-treemap-fallback" hidden></div>
+          </article>
         </div>
       </section>
 

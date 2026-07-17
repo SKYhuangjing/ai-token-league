@@ -6,11 +6,18 @@ use crate::crypto::sign_payload;
 use crate::schema::{compute_bucket_fingerprint, compute_daily_bucket_fingerprint};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 const DEFAULT_COMPARE_BATCH_SIZE: usize = 250;
 const DEFAULT_UPLOAD_BATCH_SIZE: usize = 25;
+const INVENTORY_PAGE_SIZE: usize = 50;
+const INVENTORY_ACTION_BATCH_SIZE: usize = 10;
+// Recent data is continuously owned by ordinary sync. Full reconcile must never
+// prune it from a snapshot that could have become stale while the job yielded.
+const RECENT_SCOPE_PROTECTION_DAYS: i64 = 2;
+const AUTO_RETRY_BASE_SECONDS: i64 = 30;
+const AUTO_RETRY_MAX_SECONDS: i64 = 30 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +70,22 @@ pub struct FullReconcileState {
     pub queued_bucket_count: usize,
     #[serde(default)]
     pub unknown_legacy_bucket_count: usize,
+    #[serde(default)]
+    pub inventory_cursor: String,
+    #[serde(default)]
+    pub inventory_phase: String,
+    #[serde(default)]
+    pub server_only_scope_count: usize,
+    #[serde(default)]
+    pub pruned_scope_count: usize,
+    #[serde(default)]
+    pub rebuilt_daily_scope_count: usize,
+    #[serde(default)]
+    pub conflicted_scope_count: usize,
+    #[serde(default)]
+    pub failure_count: u32,
+    #[serde(default)]
+    pub next_retry_at: String,
     pub last_error: String,
 }
 
@@ -96,6 +119,10 @@ pub struct FullReconcileResult {
     pub repair_uploaded_bucket_count: usize,
     pub queued_bucket_count: usize,
     pub unknown_legacy_bucket_count: usize,
+    pub server_only_scope_count: usize,
+    pub pruned_scope_count: usize,
+    pub rebuilt_daily_scope_count: usize,
+    pub conflicted_scope_count: usize,
 }
 
 pub fn load_full_reconcile_state(api_base_url: &str) -> FullReconcileState {
@@ -165,12 +192,22 @@ pub fn mark_full_reconcile_pending(
     if state.status == FullReconcileStatus::Running {
         return state;
     }
+    if state.status == FullReconcileStatus::Failed
+        && !matches!(
+            trigger,
+            FullReconcileTrigger::PreviousFailed
+                | FullReconcileTrigger::ApiBaseUrlChanged
+                | FullReconcileTrigger::BackupRestore
+        )
+    {
+        return state;
+    }
     if state.status == FullReconcileStatus::Unrecoverable && !can_reset_unrecoverable(&trigger) {
         return state;
     }
     let reset_progress = should_reset_pending_progress(state.status, &trigger);
     state.status = FullReconcileStatus::Pending;
-    state.trigger = Some(trigger);
+    state.trigger = Some(trigger.clone());
     if reset_progress {
         state.last_error = String::new();
         state.cursor = FullReconcileCursor::default();
@@ -185,9 +222,20 @@ pub fn mark_full_reconcile_pending(
         state.repair_uploaded_bucket_count = 0;
         state.queued_bucket_count = 0;
         state.unknown_legacy_bucket_count = 0;
+        state.inventory_cursor = String::new();
+        state.inventory_phase = String::new();
+        state.server_only_scope_count = 0;
+        state.pruned_scope_count = 0;
+        state.rebuilt_daily_scope_count = 0;
+        state.conflicted_scope_count = 0;
+        state.failure_count = 0;
+        state.next_retry_at = String::new();
     } else {
         state.completed_at = String::new();
         state.updated_at = now_iso();
+        if matches!(trigger, FullReconcileTrigger::PreviousFailed) {
+            state.next_retry_at = String::new();
+        }
     }
     save_full_reconcile_state(api_base_url, &state);
     state
@@ -228,6 +276,31 @@ pub fn full_reconcile_should_auto_run(status: FullReconcileStatus) -> bool {
     )
 }
 
+pub fn full_reconcile_auto_retry_due(state: &FullReconcileState) -> bool {
+    if !full_reconcile_should_auto_run(state.status) {
+        return false;
+    }
+    if state.status != FullReconcileStatus::Failed || state.next_retry_at.is_empty() {
+        return true;
+    }
+    chrono::DateTime::parse_from_rfc3339(&state.next_retry_at)
+        .map(|next_retry_at| chrono::Utc::now() >= next_retry_at.with_timezone(&chrono::Utc))
+        .unwrap_or(true)
+}
+
+pub fn record_full_reconcile_failure(state: &mut FullReconcileState, error: String) {
+    state.status = FullReconcileStatus::Failed;
+    state.last_error = error;
+    state.failure_count = state.failure_count.saturating_add(1);
+    let exponent = state.failure_count.saturating_sub(1).min(16);
+    let delay_seconds = AUTO_RETRY_BASE_SECONDS
+        .saturating_mul(2_i64.saturating_pow(exponent))
+        .min(AUTO_RETRY_MAX_SECONDS);
+    state.next_retry_at = (chrono::Utc::now() + chrono::Duration::seconds(delay_seconds))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    state.updated_at = now_iso();
+}
+
 pub async fn full_reconcile_usage(
     config: &AppConfig,
     items: &[Value],
@@ -264,6 +337,9 @@ pub async fn full_reconcile_usage(
     // Build sorted bucket manifest from current local facts plus legacy manifest metadata.
     let all_buckets = build_full_reconcile_manifest(items, &manifest);
     let total_bucket_count = all_buckets.len();
+    let local_daily_scopes = local_daily_scope_keys(items);
+    let local_hourly_scopes = local_hourly_scope_keys(items);
+    let protected_recent_days = protected_recent_reconcile_days(&crate::date::local_day());
 
     // Find cursor position
     let start_index = resolve_start_index(&mut state, &all_buckets);
@@ -281,9 +357,7 @@ pub async fn full_reconcile_usage(
 
     // Register device (required for compare/upload)
     if let Err(error) = crate::sync::register_device(&client, config, api_base_url).await {
-        state.status = FullReconcileStatus::Failed;
-        state.last_error = error.clone();
-        state.updated_at = now_iso();
+        record_full_reconcile_failure(&mut state, error.clone());
         save_full_reconcile_state(api_base_url, &state);
         return Err(error);
     }
@@ -297,6 +371,10 @@ pub async fn full_reconcile_usage(
         repair_uploaded_bucket_count: state.repair_uploaded_bucket_count,
         queued_bucket_count: state.queued_bucket_count,
         unknown_legacy_bucket_count: state.unknown_legacy_bucket_count,
+        server_only_scope_count: state.server_only_scope_count,
+        pruned_scope_count: state.pruned_scope_count,
+        rebuilt_daily_scope_count: state.rebuilt_daily_scope_count,
+        conflicted_scope_count: state.conflicted_scope_count,
     };
 
     let buckets_to_process = &all_buckets[start_index..];
@@ -389,10 +467,12 @@ pub async fn full_reconcile_usage(
                 if repair_failed_count > 0 {
                     state.repair_uploaded_bucket_count = cumulative.repair_uploaded_bucket_count;
                     state.queued_bucket_count = cumulative.queued_bucket_count;
-                    state.status = FullReconcileStatus::Failed;
-                    state.last_error = format!(
-                        "repair upload queued {} bucket(s); full reconcile will retry",
-                        repair_failed_count
+                    record_full_reconcile_failure(
+                        &mut state,
+                        format!(
+                            "repair upload queued {} bucket(s); full reconcile will retry",
+                            repair_failed_count
+                        ),
                     );
                     save_full_reconcile_state(api_base_url, &state);
                     cumulative.status = FullReconcileStatus::Failed;
@@ -438,13 +518,79 @@ pub async fn full_reconcile_usage(
                 }
             }
             Err(error) => {
-                state.status = FullReconcileStatus::Failed;
-                state.last_error = error.clone();
-                state.updated_at = now_iso();
+                record_full_reconcile_failure(&mut state, error.clone());
                 save_full_reconcile_state(api_base_url, &state);
                 return Err(error);
             }
         }
+    }
+
+    let hourly_inventory_outcome = match reconcile_device_hourly_inventory(
+        &client,
+        config,
+        api_base_url,
+        &local_hourly_scopes,
+        &protected_recent_days,
+        &mut state,
+        options.max_batches_per_run > 0,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            record_full_reconcile_failure(&mut state, error.clone());
+            save_full_reconcile_state(api_base_url, &state);
+            return Err(error);
+        }
+    };
+    if hourly_inventory_outcome.needs_resume {
+        cumulative.server_only_scope_count += hourly_inventory_outcome.server_only;
+        cumulative.pruned_scope_count += hourly_inventory_outcome.pruned;
+        cumulative.conflicted_scope_count += hourly_inventory_outcome.conflicts;
+        state.server_only_scope_count = cumulative.server_only_scope_count;
+        state.pruned_scope_count = cumulative.pruned_scope_count;
+        state.conflicted_scope_count = cumulative.conflicted_scope_count;
+        state.status = FullReconcileStatus::Pending;
+        state.updated_at = now_iso();
+        save_full_reconcile_state(api_base_url, &state);
+        cumulative.status = FullReconcileStatus::Pending;
+        return Ok(cumulative);
+    }
+    let inventory_outcome = match reconcile_device_daily_inventory(
+        &client,
+        config,
+        api_base_url,
+        &local_daily_scopes,
+        &protected_recent_days,
+        &mut state,
+        options.max_batches_per_run > 0,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            record_full_reconcile_failure(&mut state, error.clone());
+            save_full_reconcile_state(api_base_url, &state);
+            return Err(error);
+        }
+    };
+    cumulative.server_only_scope_count +=
+        hourly_inventory_outcome.server_only + inventory_outcome.server_only;
+    cumulative.pruned_scope_count += hourly_inventory_outcome.pruned + inventory_outcome.pruned;
+    cumulative.rebuilt_daily_scope_count += inventory_outcome.rebuilt;
+    cumulative.conflicted_scope_count +=
+        hourly_inventory_outcome.conflicts + inventory_outcome.conflicts;
+    state.server_only_scope_count = cumulative.server_only_scope_count;
+    state.pruned_scope_count = cumulative.pruned_scope_count;
+    state.rebuilt_daily_scope_count = cumulative.rebuilt_daily_scope_count;
+    state.conflicted_scope_count = cumulative.conflicted_scope_count;
+
+    if inventory_outcome.needs_resume {
+        state.status = FullReconcileStatus::Pending;
+        state.updated_at = now_iso();
+        save_full_reconcile_state(api_base_url, &state);
+        cumulative.status = FullReconcileStatus::Pending;
+        return Ok(cumulative);
     }
 
     // Completed
@@ -457,6 +603,8 @@ pub async fn full_reconcile_usage(
     state.completed_at = now_iso();
     state.updated_at = now_iso();
     state.last_error = String::new();
+    state.failure_count = 0;
+    state.next_retry_at = String::new();
     save_full_reconcile_state(api_base_url, &state);
 
     cumulative.status = FullReconcileStatus::Completed;
@@ -571,6 +719,418 @@ fn parse_compare_response(response_body: &Value) -> CompareResponse {
         unknown_legacy,
         server_fingerprint,
     }
+}
+
+#[derive(Default)]
+struct InventoryReconcileOutcome {
+    server_only: usize,
+    pruned: usize,
+    rebuilt: usize,
+    conflicts: usize,
+    needs_resume: bool,
+}
+
+fn protected_recent_reconcile_days(reference_day: &str) -> HashSet<String> {
+    (0..RECENT_SCOPE_PROTECTION_DAYS)
+        .filter_map(|offset| crate::date::add_days(reference_day, -offset))
+        .collect()
+}
+
+fn local_daily_scope_keys(items: &[Value]) -> HashSet<String> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let day = item.get("day").and_then(|v| v.as_str())?;
+            let provider_id = item.get("providerId").and_then(|v| v.as_str())?;
+            if day.is_empty() || provider_id.is_empty() {
+                None
+            } else {
+                Some(daily_bucket_key(day, provider_id))
+            }
+        })
+        .collect()
+}
+
+fn local_hourly_scope_keys(items: &[Value]) -> HashSet<String> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let day = item.get("day").and_then(|v| v.as_str())?;
+            let hour = item.get("hour").and_then(|v| v.as_i64())?;
+            let provider_id = item.get("providerId").and_then(|v| v.as_str())?;
+            if day.is_empty() || provider_id.is_empty() || !(0..=23).contains(&hour) {
+                None
+            } else {
+                Some(format!("{}|{:02}|{}", day, hour, provider_id))
+            }
+        })
+        .collect()
+}
+
+async fn reconcile_device_hourly_inventory(
+    client: &reqwest::Client,
+    config: &AppConfig,
+    api_base_url: &str,
+    local_hourly_scopes: &HashSet<String>,
+    protected_recent_days: &HashSet<String>,
+    state: &mut FullReconcileState,
+    single_page: bool,
+) -> Result<InventoryReconcileOutcome, String> {
+    if state.inventory_phase == "daily" {
+        return Ok(InventoryReconcileOutcome::default());
+    }
+    state.inventory_phase = "hourly".to_string();
+    let mut total_outcome = InventoryReconcileOutcome::default();
+    loop {
+        let inventory = request_reconcile_inventory(
+            client,
+            config,
+            api_base_url,
+            &state.inventory_cursor,
+            "hourly",
+        )
+        .await?;
+        let items = inventory
+            .get("items")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if items.is_empty() {
+            state.inventory_cursor.clear();
+            state.inventory_phase = "daily".to_string();
+            state.updated_at = now_iso();
+            save_full_reconcile_state(api_base_url, state);
+            total_outcome.needs_resume = single_page;
+            break;
+        }
+        let mut page_outcome = InventoryReconcileOutcome::default();
+        let mut actions = Vec::new();
+        for item in items {
+            let day = item.get("day").and_then(|v| v.as_str()).unwrap_or("");
+            let hour = item.get("hour").and_then(|v| v.as_i64()).unwrap_or(-1);
+            let provider_id = item
+                .get("providerId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let fingerprint = item
+                .get("fingerprint")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if day.is_empty()
+                || provider_id.is_empty()
+                || fingerprint.is_empty()
+                || !(0..=23).contains(&hour)
+            {
+                return Err("invalid hourly reconcile inventory response".to_string());
+            }
+            let key = format!("{}|{:02}|{}", day, hour, provider_id);
+            if !local_hourly_scopes.contains(&key) && !protected_recent_days.contains(day) {
+                page_outcome.server_only += 1;
+                actions.push(json!({"day": day, "hour": hour, "providerId": provider_id, "action": "prune_hourly", "expectedFingerprint": fingerprint}));
+            }
+        }
+        for action_chunk in actions.chunks(INVENTORY_ACTION_BATCH_SIZE) {
+            let response =
+                apply_reconcile_scope_actions(client, config, api_base_url, action_chunk).await?;
+            let response_items = response
+                .get("items")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if response_items.len() != action_chunk.len() {
+                return Err("incomplete hourly reconcile scope response".to_string());
+            }
+            for item in response_items {
+                match item
+                    .get("status")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                {
+                    "pruned" => page_outcome.pruned += 1,
+                    "absent" => {}
+                    "conflict" => page_outcome.conflicts += 1,
+                    status => {
+                        return Err(format!("invalid hourly reconcile scope status: {}", status))
+                    }
+                }
+            }
+            if page_outcome.conflicts > 0 {
+                return Err(
+                    "hourly reconcile scope changed while processing; retry full reconcile"
+                        .to_string(),
+                );
+            }
+        }
+        let has_more = inventory
+            .get("hasMore")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        state.inventory_cursor = if has_more {
+            inventory
+                .get("nextCursor")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            String::new()
+        };
+        if has_more && state.inventory_cursor.is_empty() {
+            return Err("hourly reconcile inventory response missing next cursor".to_string());
+        }
+        state.server_only_scope_count += page_outcome.server_only;
+        state.pruned_scope_count += page_outcome.pruned;
+        state.conflicted_scope_count += page_outcome.conflicts;
+        total_outcome.server_only += page_outcome.server_only;
+        total_outcome.pruned += page_outcome.pruned;
+        total_outcome.conflicts += page_outcome.conflicts;
+        state.updated_at = now_iso();
+        save_full_reconcile_state(api_base_url, state);
+        if !has_more {
+            state.inventory_phase = "daily".to_string();
+            state.updated_at = now_iso();
+            save_full_reconcile_state(api_base_url, state);
+        }
+        if single_page {
+            total_outcome.needs_resume = true;
+            break;
+        }
+        if !has_more {
+            break;
+        }
+    }
+    Ok(total_outcome)
+}
+
+async fn reconcile_device_daily_inventory(
+    client: &reqwest::Client,
+    config: &AppConfig,
+    api_base_url: &str,
+    local_daily_scopes: &HashSet<String>,
+    protected_recent_days: &HashSet<String>,
+    state: &mut FullReconcileState,
+    single_page: bool,
+) -> Result<InventoryReconcileOutcome, String> {
+    state.inventory_phase = "daily".to_string();
+    let mut outcome = InventoryReconcileOutcome::default();
+    let mut total_outcome = InventoryReconcileOutcome::default();
+    loop {
+        let inventory = request_reconcile_inventory(
+            client,
+            config,
+            api_base_url,
+            &state.inventory_cursor,
+            "daily",
+        )
+        .await?;
+        let items = inventory
+            .get("items")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if items.is_empty() {
+            state.inventory_cursor.clear();
+            state.inventory_phase.clear();
+            state.updated_at = now_iso();
+            save_full_reconcile_state(api_base_url, state);
+            break;
+        }
+
+        let mut actions = Vec::new();
+        for item in items {
+            let day = item.get("day").and_then(|v| v.as_str()).unwrap_or("");
+            let provider_id = item
+                .get("providerId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let fingerprint = item
+                .get("fingerprint")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if day.is_empty() || provider_id.is_empty() || fingerprint.is_empty() {
+                return Err("invalid reconcile inventory response".to_string());
+            }
+            let key = daily_bucket_key(day, provider_id);
+            if !local_daily_scopes.contains(&key) && !protected_recent_days.contains(day) {
+                // Local facts are reconciled by the hourly/daily bucket pass before this
+                // inventory pass. Rebuilding every matching daily scope here would turn an
+                // otherwise read-only inventory check into hundreds of needless writes.
+                outcome.server_only += 1;
+                actions.push(json!({
+                    "day": day,
+                    "providerId": provider_id,
+                    "action": "prune",
+                    "expectedFingerprint": fingerprint
+                }));
+            }
+        }
+
+        for action_chunk in actions.chunks(INVENTORY_ACTION_BATCH_SIZE) {
+            let response =
+                apply_reconcile_scope_actions(client, config, api_base_url, action_chunk).await?;
+            let response_items = response
+                .get("items")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if response_items.len() != action_chunk.len() {
+                return Err("incomplete reconcile scope response".to_string());
+            }
+            for item in response_items {
+                match item
+                    .get("status")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                {
+                    "pruned" => outcome.pruned += 1,
+                    "rebuilt" => outcome.rebuilt += 1,
+                    "absent" => {}
+                    "conflict" => outcome.conflicts += 1,
+                    status => return Err(format!("invalid reconcile scope status: {}", status)),
+                }
+            }
+            if outcome.conflicts > 0 {
+                return Err(
+                    "reconcile scope changed while processing; retry full reconcile".to_string(),
+                );
+            }
+        }
+
+        let has_more = inventory
+            .get("hasMore")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        state.inventory_cursor = if has_more {
+            inventory
+                .get("nextCursor")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            String::new()
+        };
+        if has_more && state.inventory_cursor.is_empty() {
+            return Err("reconcile inventory response missing next cursor".to_string());
+        }
+        state.server_only_scope_count += outcome.server_only;
+        state.pruned_scope_count += outcome.pruned;
+        state.rebuilt_daily_scope_count += outcome.rebuilt;
+        state.conflicted_scope_count += outcome.conflicts;
+        total_outcome.server_only += outcome.server_only;
+        total_outcome.pruned += outcome.pruned;
+        total_outcome.rebuilt += outcome.rebuilt;
+        total_outcome.conflicts += outcome.conflicts;
+        outcome = InventoryReconcileOutcome::default();
+        state.updated_at = now_iso();
+        save_full_reconcile_state(api_base_url, state);
+        if !has_more {
+            state.inventory_phase.clear();
+            state.updated_at = now_iso();
+            save_full_reconcile_state(api_base_url, state);
+        }
+        if single_page && has_more {
+            total_outcome.needs_resume = true;
+            break;
+        }
+        if !has_more {
+            break;
+        }
+    }
+    Ok(total_outcome)
+}
+
+async fn request_reconcile_inventory(
+    client: &reqwest::Client,
+    config: &AppConfig,
+    api_base_url: &str,
+    cursor: &str,
+    granularity: &str,
+) -> Result<Value, String> {
+    let client_generated_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let payload = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "cursor": cursor,
+        "limit": INVENTORY_PAGE_SIZE,
+        "granularity": granularity
+    });
+    let signature = sign_payload(&config.identity_private_key, &payload);
+    let body = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "cursor": cursor,
+        "limit": INVENTORY_PAGE_SIZE,
+        "granularity": granularity,
+        "signature": signature
+    });
+    let response = client
+        .post(format!(
+            "{}/api/usage/reconcile-inventory",
+            api_base_url.trim_end_matches('/')
+        ))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("reconcile inventory request failed: {}", error))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        return Err(format!(
+            "reconcile inventory failed: {} {}",
+            status,
+            response.text().await.unwrap_or_default()
+        ));
+    }
+    response
+        .json()
+        .await
+        .map_err(|error| format!("invalid reconcile inventory response: {}", error))
+}
+
+async fn apply_reconcile_scope_actions(
+    client: &reqwest::Client,
+    config: &AppConfig,
+    api_base_url: &str,
+    actions: &[Value],
+) -> Result<Value, String> {
+    let client_generated_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let payload = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "actions": actions
+    });
+    let signature = sign_payload(&config.identity_private_key, &payload);
+    let body = json!({
+        "participantId": config.participant_id,
+        "deviceId": config.device_id,
+        "clientGeneratedAt": client_generated_at,
+        "actions": actions,
+        "signature": signature
+    });
+    let response = client
+        .post(format!(
+            "{}/api/usage/reconcile-scopes",
+            api_base_url.trim_end_matches('/')
+        ))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("reconcile scope request failed: {}", error))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        return Err(format!(
+            "reconcile scope request failed: {} {}",
+            status,
+            response.text().await.unwrap_or_default()
+        ));
+    }
+    response
+        .json()
+        .await
+        .map_err(|error| format!("invalid reconcile scope response: {}", error))
 }
 
 struct UploadRepairResult {
@@ -817,6 +1377,12 @@ fn resolve_start_index(state: &mut FullReconcileState, all_buckets: &[(String, V
     state.repair_uploaded_bucket_count = 0;
     state.queued_bucket_count = 0;
     state.unknown_legacy_bucket_count = 0;
+    state.inventory_cursor = String::new();
+    state.inventory_phase = String::new();
+    state.server_only_scope_count = 0;
+    state.pruned_scope_count = 0;
+    state.rebuilt_daily_scope_count = 0;
+    state.conflicted_scope_count = 0;
     0
 }
 
@@ -1131,12 +1697,17 @@ mod tests {
             repair_uploaded_bucket_count: 18,
             queued_bucket_count: 2,
             unknown_legacy_bucket_count: 0,
+            server_only_scope_count: 3,
+            pruned_scope_count: 2,
+            rebuilt_daily_scope_count: 4,
+            conflicted_scope_count: 0,
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["checkedBucketCount"], 100);
         assert_eq!(json["matchedBucketCount"], 80);
         assert_eq!(json["repairUploadedBucketCount"], 18);
         assert_eq!(json["unknownLegacyBucketCount"], 0);
+        assert_eq!(json["prunedScopeCount"], 2);
         assert_eq!(json["status"], "completed");
     }
 
@@ -1324,6 +1895,28 @@ mod tests {
             compute_daily_bucket_fingerprint(&with_hour),
             compute_daily_bucket_fingerprint(&without_hour)
         );
+    }
+
+    #[test]
+    fn recent_reconcile_protection_covers_today_and_previous_day() {
+        let protected = protected_recent_reconcile_days("2026-07-17");
+        assert!(protected.contains("2026-07-17"));
+        assert!(protected.contains("2026-07-16"));
+        assert!(!protected.contains("2026-07-15"));
+    }
+
+    #[test]
+    fn failed_reconcile_waits_for_persisted_retry_deadline() {
+        let mut state = FullReconcileState::default();
+        record_full_reconcile_failure(&mut state, "temporary server error".to_string());
+
+        assert_eq!(state.status, FullReconcileStatus::Failed);
+        assert_eq!(state.failure_count, 1);
+        assert!(!state.next_retry_at.is_empty());
+        assert!(!full_reconcile_auto_retry_due(&state));
+
+        state.next_retry_at = "invalid".to_string();
+        assert!(full_reconcile_auto_retry_due(&state));
     }
 
     #[test]

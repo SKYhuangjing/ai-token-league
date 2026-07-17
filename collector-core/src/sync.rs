@@ -271,8 +271,7 @@ pub async fn sync_usage(
     );
 
     let reconcile_state = crate::reconcile::load_full_reconcile_state(api_base_url);
-    let full_reconcile_pending =
-        crate::reconcile::full_reconcile_should_auto_run(reconcile_state.status);
+    let full_reconcile_pending = crate::reconcile::full_reconcile_auto_retry_due(&reconcile_state);
 
     Ok(SyncResult {
         accepted,

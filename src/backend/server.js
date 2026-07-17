@@ -128,6 +128,11 @@ function shouldLogUsageUploadSuccess(result, writeMode, durationMs) {
   return USAGE_UPLOAD_SUCCESS_LOG || writeMode === "legacyMirrorSync" || (result?.rejected || 0) > 0 || durationMs >= SLOW_USAGE_UPLOAD_LOG_MS;
 }
 
+function isFreshReconcileRequest(timestamp) {
+  const ageMs = Date.now() - new Date(timestamp || "").getTime();
+  return Number.isFinite(ageMs) && Math.abs(ageMs) <= 5 * 60 * 1000;
+}
+
 function transformBoardDetail(detail) {
   if (!detail) return detail;
   const { participantId, nickname, ...rest } = detail;
@@ -444,6 +449,56 @@ async function handleApi(req, res) {
       throw error;
     }
   }
+  if (req.method === "POST" && req.url === "/api/usage/reconcile-inventory") {
+    const body = await readBody(req);
+    const participant = store.getParticipant(body.participantId);
+    const device = await store.getDeviceById(body.deviceId);
+    if (!participant || !device || device.participantId !== body.participantId) {
+      return sendJson(res, 404, { error: "participant or device not found" });
+    }
+    const limit = Math.max(1, Math.min(Number(body.limit) || 250, 250));
+    const granularity = body.granularity === "hourly" ? "hourly" : body.granularity === "daily" || !body.granularity ? "daily" : "";
+    if (!granularity) return sendJson(res, 400, { error: "granularity must be hourly or daily" });
+    const payload = {
+      participantId: body.participantId,
+      deviceId: body.deviceId,
+      clientGeneratedAt: body.clientGeneratedAt,
+      cursor: body.cursor || "",
+      limit,
+      granularity
+    };
+    if (!isFreshReconcileRequest(body.clientGeneratedAt) || !verifyPayload(participant.identityPublicKey, payload, body.signature)) {
+      return sendJson(res, 401, { error: "invalid reconcile inventory request" });
+    }
+    const method = granularity === "hourly" ? "listReconcileHourlyScopes" : "listReconcileDailyScopes";
+    return sendJson(res, 200, await store[method](body.participantId, body.deviceId, { cursor: payload.cursor, limit }));
+  }
+  if (req.method === "POST" && req.url === "/api/usage/reconcile-scopes") {
+    const body = await readBody(req);
+    const participant = store.getParticipant(body.participantId);
+    const device = await store.getDeviceById(body.deviceId);
+    if (!participant || !device || device.participantId !== body.participantId) {
+      return sendJson(res, 404, { error: "participant or device not found" });
+    }
+    if (!Array.isArray(body.actions) || body.actions.length > 25) {
+      return sendJson(res, 400, { error: "actions must contain at most 25 scope actions" });
+    }
+    const hourlyActions = body.actions.filter((action) => action?.action === "prune_hourly").length;
+    if (hourlyActions && hourlyActions !== body.actions.length) {
+      return sendJson(res, 400, { error: "hourly and daily reconcile actions must not be mixed" });
+    }
+    const payload = {
+      participantId: body.participantId,
+      deviceId: body.deviceId,
+      clientGeneratedAt: body.clientGeneratedAt,
+      actions: body.actions
+    };
+    if (!isFreshReconcileRequest(body.clientGeneratedAt) || !verifyPayload(participant.identityPublicKey, payload, body.signature)) {
+      return sendJson(res, 401, { error: "invalid reconcile scope request" });
+    }
+    const method = hourlyActions ? "reconcileHourlyScopes" : "reconcileDailyScopes";
+    return sendJson(res, 200, await store[method](body.participantId, body.deviceId, body.actions));
+  }
   if (req.method === "POST" && req.url === "/api/usage/sync-state") {
     const body = await readBody(req);
     const participant = store.getParticipant(body.participantId);
@@ -725,7 +780,13 @@ async function handleApi(req, res) {
       identity = { displayName: "Community", displayId: "" };
     }
 
-    return sendJson(res, 200, withBusinessDay({ ...data, ...identity }));
+    const safeData = data.participantRanking
+      ? {
+          ...data,
+          participantRanking: data.participantRanking.map((item) => transformBoardItem(item))
+        }
+      : data;
+    return sendJson(res, 200, withBusinessDay({ ...safeData, ...identity }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/analytics")) {
     const url = new URL(req.url, "http://localhost");

@@ -659,14 +659,21 @@ async fn handle_command(
                     _ => collector_core::reconcile::FullReconcileTrigger::MissingHistoryDetected,
                 }
             } else {
-                collector_core::reconcile::FullReconcileTrigger::MissingHistoryDetected
+                collector_core::reconcile::FullReconcileTrigger::PreviousFailed
             };
             collector_core::reconcile::mark_full_reconcile_pending(&cfg.api_base_url, trigger);
             let reconcile_running = Arc::clone(&runtime.full_reconcile_running);
             let worker_lock = Arc::clone(&runtime.worker_lock);
             let sync_running = Arc::clone(&runtime.sync_running);
             write_bool_state(&reconcile_running, true);
-            spawn_full_reconcile_job(cfg, None, reconcile_running, worker_lock, sync_running);
+            spawn_full_reconcile_job(
+                cfg,
+                None,
+                reconcile_running,
+                worker_lock,
+                sync_running,
+                true,
+            );
             Ok(serde_json::json!({"ok": true, "status": "started"}))
         }
         Command::UsageFullReconcileStatus => {
@@ -687,6 +694,14 @@ async fn handle_command(
                 "repairUploadedBucketCount": state.repair_uploaded_bucket_count,
                 "queuedBucketCount": state.queued_bucket_count,
                 "unknownLegacyBucketCount": state.unknown_legacy_bucket_count,
+                "inventoryCursor": state.inventory_cursor,
+                "inventoryPhase": state.inventory_phase,
+                "serverOnlyScopeCount": state.server_only_scope_count,
+                "prunedScopeCount": state.pruned_scope_count,
+                "rebuiltDailyScopeCount": state.rebuilt_daily_scope_count,
+                "conflictedScopeCount": state.conflicted_scope_count,
+                "failureCount": state.failure_count,
+                "nextRetryAt": state.next_retry_at,
                 "lastError": state.last_error,
                 "running": running
             }))
@@ -917,6 +932,7 @@ fn trigger_full_reconcile_if_pending(
         Arc::clone(reconcile_running),
         Arc::clone(worker_lock),
         Arc::clone(sync_running),
+        false,
     );
 }
 
@@ -926,53 +942,61 @@ fn spawn_full_reconcile_job(
     reconcile_running: Arc<Mutex<bool>>,
     worker_lock: Arc<tokio::sync::Mutex<()>>,
     sync_running: Arc<Mutex<bool>>,
+    continue_until_done: bool,
 ) {
     tokio::spawn(async move {
-        let result_items = if let Some(items) = initial_items {
-            items
-        } else {
-            match collector_core::local_usage_store::LocalUsageStore::open_default()
-                .and_then(|store| store.all_usage_items())
-            {
-                Ok(items) => items,
-                Err(error) => {
-                    mark_full_reconcile_failed(
-                        &cfg.api_base_url,
-                        format!(
-                            "cannot load local usage facts for full reconcile: {}",
-                            error
-                        ),
-                    );
-                    write_bool_state(&reconcile_running, false);
-                    return;
-                }
-            }
-        };
+        // A reconcile slice may yield to an ordinary sync. Reload the persisted
+        // local facts after acquiring the shared worker lock so destructive
+        // inventory actions never rely on the slice's original, stale snapshot.
+        let mut initial_items_fallback = initial_items;
         loop {
             while read_bool_state(&sync_running) {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
+            let _worker_guard = worker_lock.lock().await;
+            if read_bool_state(&sync_running) {
+                continue;
+            }
+            let result_items =
+                match collector_core::local_usage_store::LocalUsageStore::open_default()
+                    .and_then(|store| store.all_usage_items())
+                {
+                    Ok(items) => items,
+                    Err(error) => match initial_items_fallback.take() {
+                        Some(items) => items,
+                        None => {
+                            mark_full_reconcile_failed(
+                                &cfg.api_base_url,
+                                format!(
+                                    "cannot load current local usage facts for full reconcile: {}",
+                                    error
+                                ),
+                            );
+                            break;
+                        }
+                    },
+                };
             let options = collector_core::reconcile::FullReconcileOptions {
                 resume: true,
                 max_batches_per_run: 1,
                 ..Default::default()
             };
-            let result = {
-                let _worker_guard = worker_lock.lock().await;
-                collector_core::reconcile::full_reconcile_usage(
-                    &cfg,
-                    &result_items,
-                    &cfg.api_base_url,
-                    options,
-                )
-                .await
-            };
+            let result = collector_core::reconcile::full_reconcile_usage(
+                &cfg,
+                &result_items,
+                &cfg.api_base_url,
+                options,
+            )
+            .await;
             match result {
                 Ok(result)
                     if result.status == collector_core::reconcile::FullReconcileStatus::Pending =>
                 {
-                    tokio::task::yield_now().await;
-                    continue;
+                    if continue_until_done {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                    break;
                 }
                 _ => break,
             }
@@ -991,9 +1015,7 @@ fn snapshot_items(snapshot: &serde_json::Value) -> Vec<serde_json::Value> {
 
 fn mark_full_reconcile_failed(api_base_url: &str, error: String) {
     let mut state = collector_core::reconcile::load_full_reconcile_state(api_base_url);
-    state.status = collector_core::reconcile::FullReconcileStatus::Failed;
-    state.last_error = error;
-    state.updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    collector_core::reconcile::record_full_reconcile_failure(&mut state, error);
     collector_core::reconcile::save_full_reconcile_state(api_base_url, &state);
 }
 
