@@ -4,7 +4,7 @@ import mysql from "mysql2/promise";
 import { Store } from "./store.js";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
-import { normalizeModelName } from "../shared/pricing.js";
+import { createPriceMap, normalizeModelName } from "../shared/pricing.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { CLOUD_PROVIDER_IDS, STORAGE_SCHEMA_VERSION, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
@@ -520,12 +520,14 @@ export class MySqlStore extends Store {
         ${mysqlRangeSum("totalTokens", "lastWeek", ranges.lastWeek)} AS lastWeekTokens,
         ${mysqlRangeSum("totalTokens", "thisMonth", ranges.thisMonth)} AS thisMonthTokens,
         ${mysqlRangeSum("totalTokens", "lastMonth", ranges.lastMonth)} AS lastMonthTokens,
+        COALESCE(SUM(totalTokens), 0) AS allTimeTokens,
         ${mysqlRangeSum("estimatedCostUsd", "today", ranges.today)} AS todayCost,
         ${mysqlRangeSum("estimatedCostUsd", "yesterday", ranges.yesterday)} AS yesterdayCost,
         ${mysqlRangeSum("estimatedCostUsd", "week", ranges.week)} AS weekCost,
         ${mysqlRangeSum("estimatedCostUsd", "lastWeek", ranges.lastWeek)} AS lastWeekCost,
         ${mysqlRangeSum("estimatedCostUsd", "thisMonth", ranges.thisMonth)} AS thisMonthCost,
-       ${mysqlRangeSum("estimatedCostUsd", "lastMonth", ranges.lastMonth)} AS lastMonthCost
+        ${mysqlRangeSum("estimatedCostUsd", "lastMonth", ranges.lastMonth)} AS lastMonthCost,
+        COALESCE(SUM(estimatedCostUsd), 0) AS allTimeCost
        FROM usage_daily`,
       [...rangeOrder, ...rangeOrder].flatMap((range) => [range.from, range.to])
     );
@@ -538,12 +540,14 @@ export class MySqlStore extends Store {
       lastWeekTokens: Number(row.lastWeekTokens || 0),
       thisMonthTokens: Number(row.thisMonthTokens || 0),
       lastMonthTokens: Number(row.lastMonthTokens || 0),
+      allTimeTokens: Number(row.allTimeTokens || 0),
       todayCost: Number(row.todayCost || 0),
       yesterdayCost: Number(row.yesterdayCost || 0),
       weekCost: Number(row.weekCost || 0),
       lastWeekCost: Number(row.lastWeekCost || 0),
       thisMonthCost: Number(row.thisMonthCost || 0),
-      lastMonthCost: Number(row.lastMonthCost || 0)
+      lastMonthCost: Number(row.lastMonthCost || 0),
+      allTimeCost: Number(row.allTimeCost || 0)
     };
   }
 
@@ -583,17 +587,24 @@ export class MySqlStore extends Store {
   }
 
   async analytics(args = {}) {
+    if (args.period === "all" || args.range === "all") {
+      const hit = this.readAnalyticsAllCache(args);
+      if (hit) return hit;
+    }
+
     const businessDay = this.currentBusinessDay();
     const cacheArgs = { ...args, businessDay };
     const cacheKey = `analytics|${STORAGE_SCHEMA_VERSION}|${JSON.stringify(cacheArgs)}`;
-    if (this.aggregateCache?.[cacheKey]) return this.aggregateCache[cacheKey].value;
+    if (!(args.period === "all" || args.range === "all") && this.aggregateCache?.[cacheKey]) {
+      return this.aggregateCache[cacheKey].value;
+    }
 
     let periodDays;
-    if (args.period === "all") {
+    if (args.period === "all" || args.range === "all") {
       const [allDayRows] = await this.pool.query("SELECT DISTINCT day FROM usage_daily ORDER BY day");
       periodDays = allDayRows.map(r => toDayString(r.day));
     } else {
-      periodDays = mysqlDaysForQuery(args, { businessDay });
+      periodDays = mysqlDaysForQuery(args, { businessDay }) || [];
     }
     const heatmapDays = mysqlTrailingDays(90, { businessDay });
     const unionDays = [...new Set([...periodDays, ...heatmapDays])];
@@ -636,16 +647,19 @@ export class MySqlStore extends Store {
             row
           ]));
           try {
-            return Store.prototype.analytics.call(this, args);
+            return this.computeAnalytics(args);
           } finally {
             this.db.usageHourly = previousHourly;
           }
         }
-        return Store.prototype.analytics.call(this, args);
+        return this.computeAnalytics(args);
       }
     );
     if (args.participantId && periodDays.length) {
       result.rankStats = await this.mysqlAnalyticsRankStats(args.participantId, periodDays, { businessDay });
+    }
+    if (args.period === "all" || args.range === "all") {
+      return this.writeAnalyticsAllCache(args, result);
     }
     this.aggregateCache ||= {};
     this.aggregateCache[cacheKey] = { value: result };
@@ -1610,12 +1624,25 @@ export class MySqlStore extends Store {
 
   async upsertModelPriceAlias(input) {
     return this.withWriteLock(async () => {
+      // Reimplemented instead of delegating to the base method: the base
+      // upsertModelPriceAlias recalculates via `this.recalculateCosts`, which on
+      // this subclass resolves to the async batching override and is never awaited
+      // by the synchronous base method. That leaves the in-memory rows unpriced,
+      // so the alias appears to have no effect until a later background pass.
       const model = normalizeModelName(input.model || input.sourceModel || "");
-      await this.loadUsageDailyForModels(model ? [model] : []);
-      const result = Store.prototype.upsertModelPriceAlias.call(this, input);
+      const targetModel = normalizeModelName(input.targetModel || "");
+      if (!model) throw new Error("model is required");
+      if (!targetModel) throw new Error("targetModel is required");
+      if (model === targetModel) throw new Error("model alias must target a different model");
+      const basePriceMap = createPriceMap(this.db.modelPrices, this.db.modelPriceCache?.prices);
+      if (!basePriceMap[targetModel]) throw new Error(`target model price not found: ${targetModel}`);
+      await this.loadUsageDailyForModels([model]);
+      this.db.modelPriceAliases[model] = targetModel;
+      this.invalidatePriceMap();
+      const recalculated = Store.prototype.recalculateCosts.call(this, { models: [model] });
       await this.syncPricingTables();
       await this.syncUsageDailyRows();
-      return result;
+      return { alias: { model, targetModel }, recalculated };
     });
   }
 
@@ -1624,10 +1651,12 @@ export class MySqlStore extends Store {
       const normalized = normalizeModelName(model || "");
       if (!normalized || !this.db.modelPriceAliases[normalized]) return { deleted: false };
       await this.loadUsageDailyForModels([normalized]);
-      const result = Store.prototype.deleteModelPriceAlias.call(this, model);
+      delete this.db.modelPriceAliases[normalized];
+      this.invalidatePriceMap();
+      const recalculated = Store.prototype.recalculateCosts.call(this, { models: [normalized] });
       await this.syncPricingTables();
       await this.syncUsageDailyRows();
-      return result;
+      return { deleted: true, recalculated };
     });
   }
 
@@ -2359,6 +2388,7 @@ function mysqlDayPredicate(days, prefix = "") {
 
 function mysqlDaysForPeriod(period, { businessDay = localDay() } = {}) {
   const today = businessDay;
+  if (period === "all") return null;
   if (period === "today") return [today];
   if (period === "yesterday") return [addDays(today, -1)];
   if (period === "this_week" || period === "last_week") {

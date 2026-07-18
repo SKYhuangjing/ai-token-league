@@ -5,19 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Token League Admin</title>
     <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
-    <main class="shell">
+  <body class="admin-tone">
+    <main class="shell admin-shell">
       <section class="masthead admin-masthead">
         <div class="masthead-copy">
           <h1 data-i18n="admin.usageOps">Usage operations</h1>
           <span class="identity-pill" data-i18n="admin.workbench">Admin workbench</span>
         </div>
-        <div class="admin-header-meta">
+        <button type="button" class="admin-header-meta admin-cost-chip" id="admin-cost-status" title="" data-i18n-title="admin.cost.openPricing">
           <span class="label" data-i18n="admin.costStatus">Cost status</span>
           <strong data-i18n="admin.estimatedMissing">Estimated + missing price</strong>
-        </div>
+          <small id="admin-cost-missing-count"></small>
+        </button>
         <div class="masthead-nav">
           <a href="/" class="nav-link" data-i18n="nav.home">← Home</a>
           <div class="lang-switcher-container" id="lang-switcher-container"></div>
@@ -33,42 +37,61 @@
       </nav>
 
       <section class="board admin-panel active" data-admin-panel="usage">
-        <section class="toolbar admin-toolbar usage-toolbar" aria-label="Usage ranking filters">
-          <button class="date-range-display" id="date-range-display" type="button" data-i18n="admin.usage.thisMonth">This month</button>
-          <div class="segmented quick-range" data-filter="quick-range">
-            <button data-value="today">1d</button>
-            <button data-value="last7">7d</button>
-            <button data-value="last30">30d</button>
-            <button data-value="month" class="active" data-i18n="admin.usage.mtd">MTD</button>
-            <button data-value="last_month" data-i18n="admin.usage.lastMonth">Last month</button>
-            <button data-value="all" data-i18n="admin.usage.allTime">All</button>
+        <section class="usage-toolbar" aria-label="Usage ranking filters">
+          <div class="usage-toolbar-primary">
+            <div class="segmented quick-range" data-filter="quick-range">
+              <button data-value="today">1d</button>
+              <button data-value="last7">7d</button>
+              <button data-value="last30">30d</button>
+              <button data-value="month" class="active" data-i18n="admin.usage.mtd">MTD</button>
+              <button data-value="last_month" data-i18n="admin.usage.lastMonth">Last month</button>
+              <button data-value="all" data-i18n="admin.usage.allTime">All</button>
+            </div>
+            <div class="date-filter">
+              <div class="atl-select admin-participant-select" data-admin-participant-select>
+                <select id="participant-filter" class="atl-select-native" data-i18n-aria-label="admin.usage.allUsers" aria-hidden="true" tabindex="-1">
+                  <option value="" data-i18n="admin.usage.allUsers">All users</option>
+                </select>
+                <button type="button" class="atl-select-trigger analytics-select" id="participant-filter-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="atl-select-value" data-i18n="admin.usage.allUsers">All users</span>
+                </button>
+                <ul class="atl-select-menu" id="participant-filter-menu" role="listbox" hidden></ul>
+              </div>
+              <input id="start-date" type="date" data-i18n-aria-label="admin.usage.startDate" />
+              <input id="end-date" type="date" data-i18n-aria-label="admin.usage.endDate" />
+              <button id="apply-custom-range" type="button" data-i18n="admin.usage.apply">Apply</button>
+              <span id="range-pending-hint" class="range-pending-hint" hidden data-i18n="admin.usage.pendingRangeHint">Date changed · pending apply</span>
+            </div>
           </div>
-          <div class="date-filter">
-            <select id="participant-filter">
-              <option value="" data-i18n="admin.usage.allUsers">All users</option>
-            </select>
-            <input id="start-date" type="date" />
-            <input id="end-date" type="date" />
-            <button id="apply-custom-range" data-i18n="admin.usage.apply">Apply</button>
+          <div class="usage-toolbar-secondary">
+            <label class="inline-toggle subtle-toggle">
+              <input id="raw-tokens" type="checkbox" />
+              <span data-i18n="admin.usage.rawTokens">Raw tokens</span>
+            </label>
+            <label class="inline-toggle subtle-toggle">
+              <input id="show-cost" type="checkbox" />
+              <span data-i18n="admin.usage.estCost">Estimated cost</span>
+            </label>
+            <button type="button" id="export-csv" class="export-csv-btn" data-i18n="admin.usage.exportCsv">Export CSV</button>
           </div>
-          <label class="inline-toggle">
-            <input id="raw-tokens" type="checkbox" />
-            <span data-i18n="admin.usage.rawTokens">Raw tokens</span>
-          </label>
-          <label class="inline-toggle">
-            <input id="show-cost" type="checkbox" />
-            <span data-i18n="admin.usage.estCost">Estimated cost</span>
-          </label>
-          <button type="button" id="export-csv" class="export-csv-btn" data-i18n="admin.usage.exportCsv">Export CSV</button>
         </section>
-        <nav class="usage-view-tabs" aria-label="Usage views">
-          <button type="button" data-usage-view="ranking" class="active" data-i18n="admin.usage.ranking">Usage ranking</button>
-          <button type="button" data-usage-view="aggregate" data-i18n="admin.usage.aggregates">Usage aggregates</button>
-        </nav>
+        <div class="usage-view-bar">
+          <nav class="usage-view-tabs view-segments" aria-label="Usage views">
+            <button type="button" data-usage-view="ranking" class="active" data-i18n="admin.usage.ranking">Usage ranking</button>
+            <button type="button" data-usage-view="aggregate" data-i18n="admin.usage.aggregates">Usage aggregates</button>
+          </nav>
+          <div class="usage-view-controls" data-grain-controls hidden>
+            <div class="segmented grain-segmented" data-filter="grain">
+              <button type="button" data-value="auto" class="active" data-i18n="admin.usage.grainAuto">Auto</button>
+              <button type="button" data-value="day" data-i18n="admin.usage.grainDay">Day</button>
+              <button type="button" data-value="week" data-i18n="admin.usage.grainWeek">Week</button>
+              <button type="button" data-value="month" data-i18n="admin.usage.grainMonth">Month</button>
+            </div>
+          </div>
+        </div>
         <section class="usage-view-panel active" data-usage-panel="ranking">
-          <div class="board-header">
-            <h2 data-i18n="admin.usage.ranking">Usage ranking</h2>
-            <p id="ranking-status" data-i18n="admin.loading">Loading...</p>
+          <div class="board-header compact-header">
+            <p id="ranking-status" class="board-summary" data-i18n="admin.loading">Loading...</p>
           </div>
           <div class="table-wrap">
             <table>
@@ -77,7 +100,7 @@
                   <th data-i18n="admin.usage.rank">Rank</th>
                   <th data-i18n="admin.usage.user">User</th>
                   <th data-i18n="admin.usage.totalTokens">Total tokens</th>
-                  <th data-i18n="admin.usage.costQuality">Cost quality</th>
+                  <th class="cost-col" hidden data-i18n="admin.usage.costQuality">Cost quality</th>
                   <th data-i18n="admin.usage.topWorkdir">Top workdir</th>
                   <th data-i18n="admin.usage.topModel">Top model</th>
                   <th data-i18n="admin.usage.action">Action</th>
@@ -93,17 +116,8 @@
           </div>
         </section>
         <section class="usage-view-panel" data-usage-panel="aggregate">
-          <div class="board-header">
-            <h2 data-i18n="admin.usage.aggregates">Usage aggregates</h2>
-            <p id="status" data-i18n="admin.loading">Loading...</p>
-          </div>
-          <div class="usage-view-controls">
-            <div class="segmented" data-filter="grain">
-              <button data-value="auto" class="active" data-i18n="admin.usage.grainAuto">Auto</button>
-              <button data-value="day" data-i18n="admin.usage.grainDay">Day</button>
-              <button data-value="week" data-i18n="admin.usage.grainWeek">Week</button>
-              <button data-value="month" data-i18n="admin.usage.grainMonth">Month</button>
-            </div>
+          <div class="board-header compact-header">
+            <p id="status" class="board-summary" data-i18n="admin.loading">Loading...</p>
           </div>
           <div class="table-wrap">
             <table>
@@ -112,7 +126,7 @@
                   <th data-i18n="admin.usage.period">Period</th>
                   <th data-i18n="admin.usage.user">User</th>
                   <th data-i18n="admin.usage.totalTokens">Total tokens</th>
-                  <th data-i18n="admin.usage.costQuality">Cost quality</th>
+                  <th class="cost-col" hidden data-i18n="admin.usage.costQuality">Cost quality</th>
                   <th data-i18n="admin.usage.topWorkdir">Top workdir</th>
                   <th data-i18n="admin.usage.topModel">Top model</th>
                   <th data-i18n="admin.usage.action">Action</th>
@@ -127,36 +141,76 @@
       <section class="board pricing-board admin-panel" data-admin-panel="pricing">
         <div class="board-header">
           <h2 data-i18n="admin.pricing.title">Model pricing</h2>
-          <p id="pricing-status" data-i18n="admin.loading">Loading...</p>
+          <p id="pricing-status" aria-live="polite" data-i18n="admin.loading">Loading...</p>
         </div>
-        <div class="pricing-actions">
-          <button id="refresh-openrouter" type="button" data-i18n="admin.pricing.refreshOpenRouter">Refresh OpenRouter</button>
-          <button id="refresh-openrouter-recalculate" type="button" data-i18n="admin.pricing.refreshRecalculate">Refresh + recalculate</button>
+        <section class="pricing-priority" aria-labelledby="missing-price-title">
+          <button type="button" class="pricing-section-heading pricing-priority-toggle" id="missing-prices-toggle" aria-expanded="true" aria-controls="missing-prices">
+            <span class="pricing-priority-title-row">
+              <h3 id="missing-price-title" data-i18n="admin.pricing.missingPriceTasks">Missing price tasks</h3>
+              <span id="missing-prices-count" class="pricing-priority-count" hidden></span>
+            </span>
+            <span class="pricing-priority-meta">
+              <span data-i18n="admin.pricing.priorityHint">Resolve these first to improve cost coverage.</span>
+              <span class="pricing-priority-chevron" aria-hidden="true"></span>
+            </span>
+          </button>
+          <div id="missing-prices" class="breakdown"></div>
+        </section>
+        <div class="pricing-management">
+          <div class="pricing-actions">
+            <button id="refresh-openrouter" type="button" data-i18n="admin.pricing.refreshOpenRouter">Refresh OpenRouter</button>
+            <button id="refresh-openrouter-recalculate" type="button" data-i18n="admin.pricing.refreshRecalculate">Refresh + recalculate</button>
+          </div>
+          <div id="remote-pricing-status" class="empty-state" data-i18n="admin.pricing.remoteNotLoaded">Remote pricing not loaded.</div>
+          <form id="pricing-form" class="pricing-form">
+            <label class="pricing-field pricing-field-model">
+              <span data-i18n="admin.pricing.modelLabel">Model</span>
+              <input id="price-model" data-i18n-placeholder="admin.pricing.modelPlaceholder" placeholder="model, e.g. gpt-5" autocomplete="off" />
+            </label>
+            <label class="pricing-field">
+              <span data-i18n="admin.pricing.inputLabel">Input price</span>
+              <input id="price-input" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.inputPlaceholder" placeholder="Input $/1M" />
+            </label>
+            <label class="pricing-field">
+              <span data-i18n="admin.pricing.outputLabel">Output price</span>
+              <input id="price-output" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.outputPlaceholder" placeholder="Output $/1M" />
+            </label>
+            <label class="pricing-field">
+              <span data-i18n="admin.pricing.cacheReadLabel">Cache read price</span>
+              <input id="price-cache-read" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.cacheReadPlaceholder" placeholder="Cache read $/1M" />
+            </label>
+            <label class="pricing-field">
+              <span data-i18n="admin.pricing.cacheWriteLabel">Cache write price</span>
+              <input id="price-cache-write" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.cacheWritePlaceholder" placeholder="Cache write $/1M" />
+            </label>
+            <button type="submit" data-i18n="admin.pricing.savePrice">Save price</button>
+          </form>
         </div>
-        <div id="remote-pricing-status" class="empty-state" data-i18n="admin.pricing.remoteNotLoaded">Remote pricing not loaded.</div>
-        <form id="pricing-form" class="pricing-form">
-          <input id="price-model" data-i18n-placeholder="admin.pricing.modelPlaceholder" placeholder="model, e.g. gpt-5" autocomplete="off" />
-          <input id="price-input" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.inputPlaceholder" placeholder="Input $/1M" />
-          <input id="price-output" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.outputPlaceholder" placeholder="Output $/1M" />
-          <input id="price-cache-read" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.cacheReadPlaceholder" placeholder="Cache read $/1M" />
-          <input id="price-cache-write" type="number" step="0.000001" min="0" data-i18n-placeholder="admin.pricing.cacheWritePlaceholder" placeholder="Cache write $/1M" />
-          <button type="submit" data-i18n="admin.pricing.savePrice">Save price</button>
-        </form>
         <div class="pricing-grid">
-          <div>
-            <h3 data-i18n="admin.pricing.missingPriceTasks">Missing price tasks</h3>
-            <div id="missing-prices" class="breakdown"></div>
-          </div>
-          <div>
-            <h3 data-i18n="admin.pricing.customPrices">Custom prices</h3>
-            <div id="custom-prices" class="breakdown"></div>
-            <h3 data-i18n="admin.pricing.modelAliases">Model aliases</h3>
-            <div id="price-aliases" class="breakdown"></div>
-          </div>
-          <div>
-            <h3 data-i18n="admin.pricing.openRouterCache">OpenRouter cache</h3>
-            <div id="openrouter-prices" class="breakdown"></div>
-          </div>
+          <section class="pricing-library-panel">
+            <div class="pricing-library-head">
+              <h3 data-i18n="admin.pricing.customPrices">Custom prices</h3>
+              <span id="custom-prices-count" class="pricing-library-count"></span>
+            </div>
+            <input class="pricing-library-search" type="search" data-pricing-search="custom" data-i18n-placeholder="admin.pricing.searchModels" data-i18n-aria-label="admin.pricing.searchCustom" placeholder="Search models" />
+            <div id="custom-prices" class="breakdown pricing-scroll-list"></div>
+          </section>
+          <section class="pricing-library-panel">
+            <div class="pricing-library-head">
+              <h3 data-i18n="admin.pricing.modelAliases">Model aliases</h3>
+              <span id="price-aliases-count" class="pricing-library-count"></span>
+            </div>
+            <input class="pricing-library-search" type="search" data-pricing-search="aliases" data-i18n-placeholder="admin.pricing.searchModels" data-i18n-aria-label="admin.pricing.searchAliases" placeholder="Search models" />
+            <div id="price-aliases" class="breakdown pricing-scroll-list"></div>
+          </section>
+          <section class="pricing-library-panel">
+            <div class="pricing-library-head">
+              <h3 data-i18n="admin.pricing.openRouterCache">OpenRouter cache</h3>
+              <span id="openrouter-prices-count" class="pricing-library-count"></span>
+            </div>
+            <input class="pricing-library-search" type="search" data-pricing-search="openrouter" data-i18n-placeholder="admin.pricing.searchModels" data-i18n-aria-label="admin.pricing.searchOpenRouter" placeholder="Search models" />
+            <div id="openrouter-prices" class="breakdown pricing-scroll-list"></div>
+          </section>
         </div>
       </section>
 
@@ -211,11 +265,11 @@
         </div>
       </section>
 
-      <section class="board admin-panel" data-admin-panel="analytics" style="padding: 0; overflow: hidden; border: none; box-shadow: none; background: transparent;">
-        <iframe src="/analytics.html" style="width: 100%; height: 600px; border: none; border-radius: 0; box-shadow: none; background: transparent;" id="analytics-iframe"></iframe>
+      <section class="board admin-panel admin-analytics-panel" data-admin-panel="analytics">
+        <iframe src="/analytics.html" class="admin-analytics-frame" id="analytics-iframe" title="Visual analytics" data-i18n-title="admin.tab.analytics"></iframe>
       </section>
 
-      <section class="board detail-board" id="detail-board" hidden>
+      <section class="board detail-board" id="detail-board" hidden role="dialog" aria-modal="true" aria-labelledby="detail-title">
         <div class="board-header">
           <div>
             <h2 id="detail-title" data-i18n="admin.detail.total">Detail</h2>

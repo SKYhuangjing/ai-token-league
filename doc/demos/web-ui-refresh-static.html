@@ -1,0 +1,2437 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Token League · UI 刷新静态 Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #161512;
+      --paper: #f7f4ec;
+      --paper-2: #fffdf7;
+      --muted: #706c63;
+      --line: #d8d0bf;
+      --line-soft: #e8e1d2;
+      --green: #1c7c54;
+      --red: #ba3b46;
+      --blue: #006d77;
+      --gold: #b67810;
+      --teal: #058f7e;
+      --yellow: #f4b000;
+      --violet: #9d78dc;
+      --font-display: "Fraunces", ui-serif, Georgia, serif;
+      --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+      --font-data: "IBM Plex Mono", ui-monospace, monospace;
+      --admin-bg: #f3f1ea;
+      --heat: 5, 143, 126;
+    }
+
+    /* —— Theme presets (demo switcher) —— */
+    html[data-theme="moqing"] {
+      --ink: #161512;
+      --paper: #f7f4ec;
+      --paper-2: #fffdf7;
+      --muted: #706c63;
+      --line: #d8d0bf;
+      --line-soft: #e8e1d2;
+      --green: #1c7c54;
+      --red: #ba3b46;
+      --blue: #006d77;
+      --gold: #b67810;
+      --teal: #058f7e;
+      --yellow: #f4b000;
+      --violet: #6b5b95;
+      --admin-bg: #f3f1ea;
+      --heat: 5, 143, 126;
+    }
+    html[data-theme="mojin"] {
+      --ink: #1a1510;
+      --paper: #f6f0e4;
+      --paper-2: #fffaf0;
+      --muted: #7a6f5f;
+      --line: #dccfba;
+      --line-soft: #ebe1d0;
+      --green: #3d6b45;
+      --red: #b54a3c;
+      --blue: #6b5a3e;
+      --gold: #b67810;
+      --teal: #9a6b12;
+      --yellow: #d4a017;
+      --violet: #7a6548;
+      --admin-bg: #f0ebe2;
+      --heat: 154, 107, 18;
+    }
+    html[data-theme="lengshi"] {
+      --ink: #1c1d1f;
+      --paper: #f1f2f0;
+      --paper-2: #fafafa;
+      --muted: #6a6e72;
+      --line: #d2d5d3;
+      --line-soft: #e4e6e4;
+      --green: #2f6b55;
+      --red: #a84848;
+      --blue: #3d5c66;
+      --gold: #8a7340;
+      --teal: #2f5d56;
+      --yellow: #a08a3c;
+      --violet: #5c6570;
+      --admin-bg: #eceeed;
+      --heat: 47, 93, 86;
+    }
+    html[data-theme="xianwang"] {
+      --ink: #161512;
+      --paper: #f7f4ec;
+      --paper-2: #fffaf0;
+      --muted: #706c63;
+      --line: #d8d0bf;
+      --line-soft: #e8e1d2;
+      --green: #1c7c54;
+      --red: #ba3b46;
+      --blue: #006d77;
+      --gold: #b67810;
+      --teal: #058f7e;
+      --yellow: #f4b000;
+      --violet: #9d78dc;
+      --admin-bg: #f7f4ec;
+      --heat: 5, 143, 126;
+    }
+
+    body.admin-tone { background: var(--admin-bg); }
+
+    .demo-themes {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .demo-themes .lab {
+      font-size: 11px;
+      color: #a8a195;
+      font-weight: 600;
+      margin-right: 2px;
+    }
+    .demo-themes button {
+      border: 1px solid #4a4740;
+      background: transparent;
+      color: #d8d0bf;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font: 600 11px/1 var(--font-ui);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .demo-themes button.active {
+      background: #f3eee3;
+      color: #1a1916;
+      border-color: #f3eee3;
+    }
+    .demo-themes button .sw {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font-ui);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    /* —— Demo chrome (not product) —— */
+    .demo-bar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 16px;
+      padding: 10px 18px;
+      background: #1a1916;
+      color: #f3eee3;
+      border-bottom: 1px solid #000;
+    }
+    .demo-bar strong {
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .demo-bar .hint {
+      color: #a8a195;
+      font-size: 12px;
+    }
+    .demo-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .demo-tabs button {
+      border: 1px solid #4a4740;
+      background: transparent;
+      color: #d8d0bf;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font: 600 12px/1 var(--font-ui);
+      cursor: pointer;
+    }
+    .demo-tabs button.active {
+      background: #f3eee3;
+      color: #1a1916;
+      border-color: #f3eee3;
+    }
+    .demo-note {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 14px 16px 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .demo-note code {
+      font-family: var(--font-data);
+      font-size: 12px;
+      background: var(--paper-2);
+      border: 1px solid var(--line-soft);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .shell {
+      width: min(1100px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 20px 0 72px;
+    }
+
+    /* —— Shared product primitives (AFTER) —— */
+    .masthead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 8px 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .brand-row h1 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 26px;
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: -0.02em;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--paper-2);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .nav a {
+      text-decoration: none;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 10px;
+      border-radius: 6px;
+    }
+    .nav a:hover { color: var(--ink); background: rgba(22,21,18,0.04); }
+    .nav a.current {
+      color: var(--ink);
+      background: rgba(22,21,18,0.06);
+    }
+    .lang {
+      margin-left: 6px;
+      border: 1px solid var(--line);
+      background: var(--paper-2);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font: 500 12px/1 var(--font-ui);
+      color: var(--ink);
+    }
+
+    /* —— HOME (AFTER) · data-first —— */
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      background: var(--ink);
+      color: var(--paper);
+      border-radius: 8px;
+      padding: 11px 16px;
+      font: 600 13px/1 var(--font-ui);
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 0;
+      margin: 18px 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper-2);
+      overflow: hidden;
+    }
+    .kpi {
+      padding: 14px 12px 12px;
+      border-right: 1px solid var(--line-soft);
+      min-width: 0;
+    }
+    .kpi:last-child { border-right: 0; }
+    .kpi .lab {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .kpi .val {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+    .kpi .delta {
+      display: block;
+      margin-top: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-data);
+    }
+    .kpi .delta.up { color: var(--green); }
+    .kpi .delta.flat { color: var(--muted); }
+
+    .dash-grid {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .dash-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: var(--paper-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 14px 12px;
+      min-width: 0;
+    }
+    .card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .card-head h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .card-head .meta {
+      color: var(--muted);
+      font-size: 11px;
+      font-family: var(--font-data);
+    }
+
+    .burn-chart {
+      width: 100%;
+      height: 160px;
+      display: block;
+    }
+    .burn-legend {
+      display: flex;
+      gap: 14px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .burn-legend i {
+      display: inline-block;
+      width: 14px;
+      height: 3px;
+      border-radius: 2px;
+      margin-right: 5px;
+      vertical-align: middle;
+    }
+
+    .top-today { display: grid; gap: 8px; }
+    .top-row {
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .top-row .n {
+      font-family: var(--font-data);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .top-row .nm { font-weight: 700; color: var(--teal); font-size: 13px; }
+    .top-row .tv {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .mini-bar {
+      grid-column: 2 / 4;
+      height: 4px;
+      background: var(--line-soft);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .mini-bar > i {
+      display: block;
+      height: 100%;
+      background: var(--ink);
+      opacity: 0.75;
+      border-radius: 99px;
+    }
+
+    .share-list { display: grid; gap: 10px; }
+    .share-row .lbl {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .share-row .lbl span:last-child {
+      font-family: var(--font-data);
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .share-track {
+      height: 8px;
+      background: var(--line-soft);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .share-track > i { display: block; height: 100%; border-radius: 99px; }
+
+    .donut-wrap {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    .donut {
+      width: 110px;
+      height: 110px;
+    }
+    .donut-legend { display: grid; gap: 6px; }
+    .donut-legend div {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .donut-legend b {
+      margin-left: auto;
+      font-family: var(--font-data);
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .swatch {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .heat {
+      display: grid;
+      grid-template-columns: repeat(14, 1fr);
+      gap: 3px;
+    }
+    .heat i {
+      aspect-ratio: 1;
+      border-radius: 2px;
+      background: var(--line-soft);
+    }
+    .heat i.l1 { background: rgba(var(--heat), 0.22); }
+    .heat i.l2 { background: rgba(var(--heat), 0.42); }
+    .heat i.l3 { background: rgba(var(--heat), 0.65); }
+    .heat i.l4 { background: rgba(var(--heat), 0.9); }
+    .heat-foot {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 10px;
+      font-family: var(--font-data);
+    }
+
+    .treemap-card {
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+    }
+    .dist-split {
+      display: grid;
+      grid-template-columns: 1.45fr 0.9fr;
+      gap: 14px;
+      align-items: stretch;
+    }
+    .tm-board {
+      background: #efeae0;
+      border-radius: 10px;
+      padding: 8px;
+      min-height: 280px;
+    }
+    .treemap-svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      aspect-ratio: 640 / 360;
+    }
+    .treemap-svg .tm-name {
+      fill: #fffdf7;
+      font-family: var(--font-ui);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .treemap-svg .tm-val {
+      fill: rgba(255,253,247,0.85);
+      font-family: var(--font-data);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .treemap-svg .tm-name-sm { font-size: 11px; }
+    .treemap-svg .tm-val-sm { font-size: 10px; }
+    .treemap-svg .tm-dark .tm-name,
+    .treemap-svg .tm-dark .tm-val { fill: var(--ink); }
+    .treemap-svg .tm-dark .tm-val { fill: var(--muted); }
+    .treemap-svg rect.tm-cell {
+      stroke: none;
+    }
+    .dist-side {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+    }
+    .insight-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .insight-chips span {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(22,21,18,0.05);
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .insight-chips span em {
+      font-style: normal;
+      font-family: var(--font-data);
+      color: var(--teal);
+      font-weight: 700;
+    }
+    .conc-box {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fbfaf6;
+    }
+    .conc-box .c-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .conc-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .conc-metrics div {
+      text-align: center;
+    }
+    .conc-metrics strong {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .conc-metrics small {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .rank-mini {
+      display: grid;
+      gap: 7px;
+      flex: 1;
+    }
+    .rank-mini-row {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      gap: 6px;
+      align-items: center;
+      font-size: 12px;
+    }
+    .rank-mini-row .n {
+      font-family: var(--font-data);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .rank-mini-row .nm {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .rank-mini-row .pct {
+      font-family: var(--font-data);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .rank-mini-bar {
+      grid-column: 2 / 4;
+      height: 3px;
+      background: var(--line-soft);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .rank-mini-bar > i {
+      display: block;
+      height: 100%;
+      background: var(--teal);
+      border-radius: 99px;
+    }
+
+    .comp-stack {
+      display: flex;
+      height: 28px;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .comp-stack > i { display: block; height: 100%; }
+    .comp-legend {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 12px;
+    }
+    .comp-legend div {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .comp-legend b {
+      margin-left: auto;
+      font-family: var(--font-data);
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .pareto {
+      display: grid;
+      gap: 6px;
+    }
+    .pareto-row {
+      display: grid;
+      grid-template-columns: 64px 1fr 40px;
+      gap: 8px;
+      align-items: center;
+      font-size: 11px;
+    }
+    .pareto-row .lab { font-weight: 600; color: var(--muted); }
+    .pareto-track {
+      height: 10px;
+      background: var(--line-soft);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    .pareto-track .bar {
+      height: 100%;
+      background: var(--ink);
+      opacity: 0.72;
+      border-radius: 4px;
+    }
+    .pareto-track .cum {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--gold);
+    }
+    .pareto-row .pct {
+      font-family: var(--font-data);
+      font-weight: 600;
+      text-align: right;
+    }
+
+    .weekday {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 6px;
+      align-items: end;
+      height: 120px;
+      padding-top: 8px;
+    }
+    .weekday .d {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      height: 100%;
+      justify-content: flex-end;
+    }
+    .weekday .col {
+      width: 100%;
+      max-width: 28px;
+      border-radius: 5px 5px 2px 2px;
+      background: var(--teal);
+      opacity: 0.85;
+    }
+    .weekday .d.peak .col { background: var(--ink); opacity: 1; }
+    .weekday .d span {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .weekday .d.peak span { color: var(--ink); }
+
+    .an-insights {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .an-insights span {
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line-soft);
+      background: var(--paper-2);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .an-insights span em {
+      font-style: normal;
+      font-family: var(--font-data);
+      color: var(--teal);
+    }
+
+
+    .src-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .src-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .src-legend i {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      display: inline-block;
+    }
+
+    /* —— ANALYTICS (AFTER) —— */
+    .an-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 0 12px;
+    }
+    .an-toolbar .who {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .an-toolbar .who select {
+      border: 1px solid var(--line);
+      background: var(--paper-2);
+      border-radius: 7px;
+      padding: 7px 10px;
+      font: 500 12px/1.2 var(--font-ui);
+      color: var(--ink);
+      min-width: 160px;
+    }
+    .an-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper-2);
+      overflow: hidden;
+    }
+    .an-kpi {
+      padding: 14px 14px 12px;
+      border-right: 1px solid var(--line-soft);
+      min-width: 0;
+    }
+    .an-kpi:last-child { border-right: 0; }
+    .an-kpi .lab {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .an-kpi .val {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+    .an-kpi.savings .val { color: var(--green); }
+    .an-kpi .sub {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-family: var(--font-data);
+    }
+    .an-main {
+      display: grid;
+      grid-template-columns: 1.55fr 0.9fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .gauge-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 0 4px;
+    }
+    .gauge-block svg { width: 100%; max-width: 240px; }
+    .gauge-block .g-val {
+      fill: var(--ink);
+      font-family: var(--font-display);
+      font-size: 22px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+    .gauge-block .g-lab {
+      fill: var(--muted);
+      font-family: var(--font-ui);
+      font-size: 10px;
+      font-weight: 600;
+      text-anchor: middle;
+    }
+    .an-secondary {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .an-section-label {
+      margin: 18px 0 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .heat90 {
+      display: grid;
+      grid-template-columns: repeat(30, 1fr);
+      gap: 3px;
+    }
+    .heat90 i {
+      aspect-ratio: 1;
+      border-radius: 2px;
+      background: var(--line-soft);
+    }
+    .heat90 i.l1 { background: rgba(var(--heat), 0.2); }
+    .heat90 i.l2 { background: rgba(var(--heat), 0.4); }
+    .heat90 i.l3 { background: rgba(var(--heat), 0.65); }
+    .heat90 i.l4 { background: rgba(var(--heat), 0.9); }
+    .heat90 i.dim { opacity: 0.35; }
+    .heat90 i.hi {
+      outline: 1.5px solid var(--ink);
+      outline-offset: 0;
+    }
+
+    .dl-footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 14px;
+      padding: 12px 0 0;
+      border-top: 1px solid var(--line-soft);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .dl-footer strong {
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .dl-footer a {
+      color: var(--muted);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .dl-footer a:hover { color: var(--teal); }
+    .dl-footer .ver {
+      margin-left: auto;
+      font-family: var(--font-data);
+      font-size: 11px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 14px;
+    }
+    .section-head h2 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .section-head a {
+      color: var(--teal);
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    /* —— LEADERBOARD (AFTER) —— */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 0;
+    }
+    .period-pills {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 3px;
+      background: rgba(22,21,18,0.04);
+      border-radius: 999px;
+    }
+    .period-pills button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font: 600 12px/1 var(--font-ui);
+      cursor: pointer;
+    }
+    .period-pills button.active {
+      background: var(--ink);
+      color: var(--paper);
+    }
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .seg-lite {
+      display: inline-flex;
+      border-bottom: 1px solid var(--line);
+      gap: 0;
+    }
+    .seg-lite button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 12px 10px;
+      font: 600 12px/1 var(--font-ui);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .seg-lite button.active {
+      color: var(--ink);
+      border-bottom-color: var(--ink);
+    }
+    .toggle-lite {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .toggle-lite input { accent-color: var(--ink); }
+
+    .board-status {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .board-status .title {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .board-status .meta {
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--font-data);
+    }
+
+    .top3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .medal {
+      border-radius: 12px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      background: linear-gradient(165deg, #fff8e8 0%, var(--paper-2) 70%);
+    }
+    .medal.gold {
+      border-color: #e2c48a;
+      background: linear-gradient(165deg, #fff1cc 0%, #fffaf0 65%);
+      box-shadow: 0 14px 28px rgba(182, 120, 16, 0.12);
+    }
+    .medal .rank {
+      color: var(--gold);
+      font-family: var(--font-data);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+    .medal .name {
+      margin: 6px 0 10px;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--teal);
+    }
+    .medal .tokens {
+      font-family: var(--font-display);
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .strip {
+      display: flex;
+      height: 6px;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 12px;
+      background: var(--line-soft);
+    }
+    .strip span:nth-child(1) { background: var(--teal); flex: 4; }
+    .strip span:nth-child(2) { background: var(--yellow); flex: 2; }
+    .strip span:nth-child(3) { background: var(--violet); flex: 1; }
+
+    .rank-list { display: grid; gap: 0; }
+    .rank-row {
+      display: grid;
+      grid-template-columns: 48px 1fr 120px;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 4px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .rank-row.top10 .rn {
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .rn {
+      font-family: var(--font-data);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .rnick {
+      font-weight: 700;
+      color: var(--teal);
+    }
+    .rbar {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--line-soft);
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    .rbar > i {
+      display: block;
+      height: 100%;
+      background: var(--ink);
+      border-radius: 999px;
+      opacity: 0.78;
+    }
+    .rval {
+      text-align: right;
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    /* —— ADMIN (AFTER) —— */
+    body.admin-tone .shell {
+      width: min(1180px, calc(100vw - 28px));
+    }
+
+    .admin-masthead .cost-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid #ebc4c7;
+      background: #fff5f5;
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .admin-masthead .cost-chip small {
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .admin-nav {
+      display: flex;
+      gap: 0;
+      margin: 14px 0 18px;
+      border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+    }
+    .admin-nav button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 14px 12px;
+      font: 600 13px/1 var(--font-ui);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      white-space: nowrap;
+    }
+    .admin-nav button.active {
+      color: var(--ink);
+      border-bottom-color: var(--ink);
+    }
+
+    .panel {
+      background: var(--paper-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .filters {
+      display: grid;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #fbfaf6;
+    }
+    .filters-main,
+    .filters-sub {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .filters-sub {
+      justify-content: space-between;
+      padding-top: 2px;
+    }
+    .filters-sub .left,
+    .filters-sub .right {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .quick {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      padding: 2px;
+      background: rgba(22,21,18,0.05);
+      border-radius: 8px;
+    }
+    .quick button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font: 600 12px/1 var(--font-ui);
+      cursor: pointer;
+    }
+    .quick button.active {
+      background: var(--ink);
+      color: var(--paper);
+    }
+
+    .field {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 7px;
+      padding: 7px 10px;
+      font: 500 12px/1.2 var(--font-ui);
+      color: var(--ink);
+      height: 32px;
+    }
+    .btn-apply {
+      border: 0;
+      background: var(--ink);
+      color: var(--paper);
+      border-radius: 7px;
+      padding: 0 12px;
+      height: 32px;
+      font: 600 12px/1 var(--font-ui);
+      cursor: pointer;
+    }
+    .btn-export {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 7px;
+      padding: 0 12px;
+      height: 32px;
+      font: 600 12px/1 var(--font-ui);
+      cursor: pointer;
+    }
+    .pending {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--gold);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .pending::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--gold);
+    }
+
+    .view-tabs {
+      display: flex;
+      gap: 2px;
+      padding: 10px 16px 0;
+    }
+    .view-tabs button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 12px 10px;
+      font: 600 12px/1 var(--font-ui);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    .view-tabs button.active {
+      color: var(--ink);
+      border-bottom-color: var(--ink);
+    }
+
+    .result-bar {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px 8px;
+    }
+    .result-bar h2 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .result-bar .meta {
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--font-data);
+    }
+
+    table.admin-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    table.admin-table th {
+      text-align: left;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfaf6;
+    }
+    table.admin-table td {
+      padding: 12px;
+      border-bottom: 1px solid var(--line-soft);
+      vertical-align: top;
+    }
+    table.admin-table tr:hover td {
+      background: rgba(22,21,18,0.015);
+    }
+    .rank-cell {
+      font-family: var(--font-data);
+      color: var(--muted);
+      font-weight: 600;
+      width: 44px;
+    }
+    .user-link {
+      color: var(--teal);
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .token-cell {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.missing {
+      background: #fdecee;
+      color: var(--red);
+      border: 1px solid #f0c9cd;
+    }
+    .badge.estimated {
+      background: #e8f4f5;
+      color: var(--blue);
+      border: 1px solid #c5dde0;
+    }
+    .badge.exact {
+      background: #e8f5ef;
+      color: var(--green);
+      border: 1px solid #c5e2d3;
+    }
+    .slice {
+      display: grid;
+      gap: 2px;
+    }
+    .slice strong {
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .slice small {
+      color: var(--muted);
+      font-family: var(--font-data);
+      font-size: 11px;
+    }
+    .action-link {
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      cursor: pointer;
+    }
+
+    .compare {
+      margin-top: 28px;
+      padding: 16px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      background: rgba(22,21,18,0.02);
+    }
+    .compare h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .compare ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .compare li { margin: 4px 0; }
+
+    @media (max-width: 900px) {
+      .kpi-row { grid-template-columns: repeat(3, 1fr); }
+      .kpi:nth-child(3n) { border-right: 0; }
+      .kpi:nth-child(n+4) { border-top: 1px solid var(--line-soft); }
+      .dash-grid, .dash-grid-2, .an-main, .an-secondary, .dist-split { grid-template-columns: 1fr; }
+      .an-kpis { grid-template-columns: 1fr 1fr; }
+      .an-kpi:nth-child(2n) { border-right: 0; }
+      .an-kpi:nth-child(n+3) { border-top: 1px solid var(--line-soft); }
+      .top3 { grid-template-columns: 1fr; }
+      .rank-row { grid-template-columns: 40px 1fr 90px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-bar">
+    <strong>UI 刷新 · 静态 Demo</strong>
+    <span class="hint">假数据 · 主题可切换对比</span>
+    <div class="demo-themes" id="demo-themes" role="group" aria-label="主题色">
+      <span class="lab">主题</span>
+      <button type="button" data-theme="moqing" class="active" title="纸黄底 + 青绿强调"><i class="sw" style="background:#058f7e"></i>墨青</button>
+      <button type="button" data-theme="mojin" title="纸黄底 + 金强调"><i class="sw" style="background:#9a6b12"></i>墨金</button>
+      <button type="button" data-theme="lengshi" title="冷灰纸 + 沉青绿"><i class="sw" style="background:#2f5d56"></i>冷石</button>
+      <button type="button" data-theme="xianwang" title="更接近现网硬对比"><i class="sw" style="background:#161512"></i>现网感</button>
+    </div>
+    <div class="demo-tabs" id="demo-tabs">
+      <button type="button" data-view="home" class="active">改后 · 首页</button>
+      <button type="button" data-view="board">改后 · 排行榜</button>
+      <button type="button" data-view="analytics">改后 · 分析</button>
+      <button type="button" data-view="admin">改后 · Admin 使用量</button>
+    </div>
+  </div>
+
+  <p class="demo-note">
+    对比现网：打开 <code>http://127.0.0.1:8787/</code>、<code>/leaderboard.html</code>、<code>/analytics.html</code>、<code>/admin.html</code>。
+    公开站方向：少文案、多数字与图表；下载弱化。顶栏可切换「墨青 / 墨金 / 冷石 / 现网感」主题对比。
+  </p>
+
+  <!-- HOME -->
+  <div class="view active" id="view-home">
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand-row">
+          <h1>AI Token League</h1>
+          <span class="pill">Community</span>
+        </div>
+        <nav class="nav">
+          <a href="#" class="current">首页</a>
+          <a href="#">排行榜</a>
+          <a href="#">分析</a>
+          <select class="lang" aria-label="语言"><option>中文</option><option>English</option></select>
+        </nav>
+      </header>
+
+      <section class="kpi-row" aria-label="周期总量">
+        <div class="kpi">
+          <span class="lab">今日</span>
+          <span class="val">12.8 亿</span>
+          <span class="delta up">+18%</span>
+        </div>
+        <div class="kpi">
+          <span class="lab">昨日</span>
+          <span class="val">9.4 亿</span>
+          <span class="delta flat">—</span>
+        </div>
+        <div class="kpi">
+          <span class="lab">本周</span>
+          <span class="val">61.2 亿</span>
+          <span class="delta up">+27%</span>
+        </div>
+        <div class="kpi">
+          <span class="lab">上周</span>
+          <span class="val">48.1 亿</span>
+          <span class="delta flat">—</span>
+        </div>
+        <div class="kpi">
+          <span class="lab">本月</span>
+          <span class="val">186 亿</span>
+          <span class="delta up">+22%</span>
+        </div>
+        <div class="kpi">
+          <span class="lab">上月</span>
+          <span class="val">152 亿</span>
+          <span class="delta flat">—</span>
+        </div>
+      </section>
+
+      <div class="dash-grid">
+        <article class="card">
+          <div class="card-head">
+            <h2>Token 燃烧趋势</h2>
+            <span class="meta">近 30 天</span>
+          </div>
+          <svg class="burn-chart" viewBox="0 0 560 160" role="img" aria-label="30天燃烧趋势">
+            <defs>
+              <linearGradient id="burnFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--teal)" stop-opacity="0.28"/>
+                <stop offset="100%" stop-color="var(--teal)" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <g stroke="#e8e1d2" stroke-width="1">
+              <line x1="0" y1="40" x2="560" y2="40"/>
+              <line x1="0" y1="80" x2="560" y2="80"/>
+              <line x1="0" y1="120" x2="560" y2="120"/>
+            </g>
+            <path d="M0,118 C40,110 60,96 90,92 C130,86 150,104 190,88 C230,70 250,62 290,58 C330,54 350,78 390,64 C430,48 460,36 500,42 C530,46 545,38 560,30 L560,160 L0,160 Z" fill="url(#burnFill)"/>
+            <path d="M0,118 C40,110 60,96 90,92 C130,86 150,104 190,88 C230,70 250,62 290,58 C330,54 350,78 390,64 C430,48 460,36 500,42 C530,46 545,38 560,30" fill="none" stroke="var(--teal)" stroke-width="2.5"/>
+            <path d="M0,132 C50,128 80,120 120,122 C170,124 200,108 240,112 C290,116 320,98 360,100 C410,102 450,90 500,94 C530,96 545,88 560,86" fill="none" stroke="var(--gold)" stroke-width="1.75" stroke-dasharray="4 4"/>
+          </svg>
+          <div class="burn-legend">
+            <span><i style="background:var(--teal)"></i>totalTokens</span>
+            <span><i style="background:var(--gold)"></i>活跃用户（相对）</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>今日 Top</h2>
+            <span class="meta">42 人</span>
+          </div>
+          <div class="top-today">
+            <div class="top-row">
+              <span class="n">1</span>
+              <span class="nm">小凯</span>
+              <span class="tv">2.41 亿</span>
+              <div class="mini-bar"><i style="width:100%"></i></div>
+            </div>
+            <div class="top-row">
+              <span class="n">2</span>
+              <span class="nm">seayu</span>
+              <span class="tv">1.86 亿</span>
+              <div class="mini-bar"><i style="width:77%"></i></div>
+            </div>
+            <div class="top-row">
+              <span class="n">3</span>
+              <span class="nm">iris</span>
+              <span class="tv">1.52 亿</span>
+              <div class="mini-bar"><i style="width:63%"></i></div>
+            </div>
+            <div class="top-row">
+              <span class="n">4</span>
+              <span class="nm">Ai-Service</span>
+              <span class="tv">1.21 亿</span>
+              <div class="mini-bar"><i style="width:50%"></i></div>
+            </div>
+            <div class="top-row">
+              <span class="n">5</span>
+              <span class="nm">felix</span>
+              <span class="tv">0.98 亿</span>
+              <div class="mini-bar"><i style="width:41%"></i></div>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <article class="card treemap-card">
+        <div class="card-head">
+          <h2>本月人员 Token 分布</h2>
+          <span class="meta">面积 ∝ 用量 · 颜色 = 主要来源</span>
+        </div>
+
+          <div class="src-legend">
+            <span><i style="background:#1f6f66"></i>Claude</span>
+            <span><i style="background:#b67810"></i>Codex</span>
+            <span><i style="background:#6b5b95"></i>Cursor</span>
+            <span><i style="background:#8a8478"></i>其他来源 / 聚合</span>
+          </div>
+<div class="dist-split">
+          <div class="tm-board">
+            <svg class="treemap-svg" viewBox="0 0 640 360" role="img" aria-label="本月人员 Token 分布">
+              <!-- Claude -->
+              <rect class="tm-cell" x="4" y="4" width="248" height="200" rx="8" fill="#1f6f66"/>
+              <text class="tm-name" x="18" y="28">以人为本</text>
+              <text class="tm-val" x="18" y="48">55.5亿 · 18.8%</text>
+              <!-- Codex -->
+              <rect class="tm-cell" x="260" y="4" width="168" height="200" rx="8" fill="#b67810"/>
+              <text class="tm-name" x="274" y="28">柴达星 2</text>
+              <text class="tm-val" x="274" y="48">29.4亿 · 10.0%</text>
+              <!-- Cursor -->
+              <rect class="tm-cell" x="436" y="4" width="96" height="96" rx="8" fill="#6b5b95"/>
+              <text class="tm-name tm-name-sm" x="448" y="24">GDPS</text>
+              <text class="tm-val tm-val-sm" x="448" y="40">13.3亿</text>
+              <!-- Claude -->
+              <rect class="tm-cell" x="540" y="4" width="96" height="96" rx="8" fill="#2a8a80"/>
+              <text class="tm-name tm-name-sm" x="552" y="24">开放并简单2</text>
+              <text class="tm-val tm-val-sm" x="552" y="40">12.8亿</text>
+              <!-- Codex lighter -->
+              <rect class="tm-cell" x="436" y="108" width="96" height="96" rx="8" fill="#c9922e"/>
+              <g class="tm-dark">
+                <text class="tm-name tm-name-sm" x="448" y="128">以人为本 2</text>
+                <text class="tm-val tm-val-sm" x="448" y="144">12.3亿</text>
+              </g>
+              <!-- Cursor lighter -->
+              <rect class="tm-cell" x="540" y="108" width="96" height="96" rx="8" fill="#8574ad"/>
+              <text class="tm-name tm-name-sm" x="552" y="128">M78星云 4</text>
+              <text class="tm-val tm-val-sm" x="552" y="144">12.1亿</text>
+              <!-- Claude -->
+              <rect class="tm-cell" x="4" y="212" width="188" height="144" rx="8" fill="#247a70"/>
+              <text class="tm-name" x="18" y="236">快乐星球 3</text>
+              <text class="tm-val" x="18" y="256">26.0亿 · 8.8%</text>
+              <!-- Other/OpenCode stone -->
+              <rect class="tm-cell" x="200" y="212" width="112" height="70" rx="8" fill="#8a8478"/>
+              <text class="tm-name tm-name-sm" x="212" y="232">北斗七星 2</text>
+              <text class="tm-val tm-val-sm" x="212" y="248">22.1亿</text>
+              <!-- Codex -->
+              <rect class="tm-cell" x="200" y="290" width="112" height="66" rx="8" fill="#d4a84a"/>
+              <g class="tm-dark">
+                <text class="tm-name tm-name-sm" x="212" y="310">柴达星</text>
+                <text class="tm-val tm-val-sm" x="212" y="326">19.9亿</text>
+              </g>
+              <!-- Aggregated other - warm stone -->
+              <rect class="tm-cell" x="320" y="212" width="152" height="144" rx="8" fill="#9a9488"/>
+              <g class="tm-dark">
+                <text class="tm-name" x="334" y="236">其他人员</text>
+                <text class="tm-val" x="334" y="256">30.5亿 · 10.3%</text>
+              </g>
+              <!-- Cursor -->
+              <rect class="tm-cell" x="480" y="212" width="76" height="70" rx="8" fill="#6b5b95"/>
+              <text class="tm-name tm-name-sm" x="490" y="232">SCL 2</text>
+              <text class="tm-val tm-val-sm" x="490" y="248">11.7亿</text>
+              <!-- Claude light -->
+              <rect class="tm-cell" x="564" y="212" width="72" height="70" rx="8" fill="#3d9e93"/>
+              <text class="tm-name tm-name-sm" x="572" y="232">担当且极致</text>
+              <text class="tm-val tm-val-sm" x="572" y="248">11.5亿</text>
+              <!-- Tail stone -->
+              <rect class="tm-cell" x="480" y="290" width="156" height="66" rx="8" fill="#b5aea0"/>
+              <g class="tm-dark">
+                <text class="tm-name tm-name-sm" x="492" y="314">尾部 · 其余 31 人</text>
+                <text class="tm-val tm-val-sm" x="492" y="330">42.1亿 · 14.3%</text>
+              </g>
+
+            </svg>
+          </div>
+          <div class="dist-side">
+            <div class="insight-chips">
+              <span>Top1 <em>18.8%</em></span>
+              <span>Top5 <em>52%</em></span>
+              <span>前五名合计 <em>52%</em></span>
+            </div>
+            <div class="conc-box">
+              <div class="c-title">用量集中度</div>
+              <div class="conc-metrics">
+                <div><strong>18.8%</strong><small>第一名</small></div>
+                <div><strong>52%</strong><small>前五名</small></div>
+                <div><strong>71%</strong><small>前十名</small></div>
+              </div>
+            </div>
+            <div class="rank-mini">
+              <div class="rank-mini-row">
+                <span class="n">1</span><span class="nm">以人为本</span><span class="pct">18.8%</span>
+                <div class="rank-mini-bar"><i style="width:100%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">2</span><span class="nm">其他人员</span><span class="pct">10.3%</span>
+                <div class="rank-mini-bar"><i style="width:55%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">3</span><span class="nm">柴达星 2</span><span class="pct">10.0%</span>
+                <div class="rank-mini-bar"><i style="width:53%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">4</span><span class="nm">快乐星球 3</span><span class="pct">8.8%</span>
+                <div class="rank-mini-bar"><i style="width:47%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">5</span><span class="nm">北斗七星 2</span><span class="pct">7.5%</span>
+                <div class="rank-mini-bar"><i style="width:40%"></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="dash-grid-2">
+        <article class="card">
+          <div class="card-head">
+            <h2>模型占比</h2>
+            <span class="meta">本月</span>
+          </div>
+          <div class="share-list">
+            <div class="share-row">
+              <div class="lbl"><span>claude-opus</span><span>38%</span></div>
+              <div class="share-track"><i style="width:38%;background:var(--teal)"></i></div>
+            </div>
+            <div class="share-row">
+              <div class="lbl"><span>gpt-5</span><span>24%</span></div>
+              <div class="share-track"><i style="width:24%;background:var(--yellow)"></i></div>
+            </div>
+            <div class="share-row">
+              <div class="lbl"><span>claude-sonnet</span><span>18%</span></div>
+              <div class="share-track"><i style="width:18%;background:var(--violet)"></i></div>
+            </div>
+            <div class="share-row">
+              <div class="lbl"><span>其他</span><span>20%</span></div>
+              <div class="share-track"><i style="width:20%;background:var(--blue)"></i></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>来源构成</h2>
+            <span class="meta">本月</span>
+          </div>
+          <div class="donut-wrap">
+            <svg class="donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#e8e1d2" stroke-width="6"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="var(--teal)" stroke-width="6"
+                stroke-dasharray="42 97.4" stroke-dashoffset="0" transform="rotate(-90 21 21)"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#f4b000" stroke-width="6"
+                stroke-dasharray="28 97.4" stroke-dashoffset="-42" transform="rotate(-90 21 21)"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#9d78dc" stroke-width="6"
+                stroke-dasharray="18 97.4" stroke-dashoffset="-70" transform="rotate(-90 21 21)"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#006d77" stroke-width="6"
+                stroke-dasharray="9.4 97.4" stroke-dashoffset="-88" transform="rotate(-90 21 21)"/>
+            </svg>
+            <div class="donut-legend">
+              <div><span class="swatch" style="background:var(--teal)"></span>Claude <b>43%</b></div>
+              <div><span class="swatch" style="background:var(--yellow)"></span>Codex <b>29%</b></div>
+              <div><span class="swatch" style="background:var(--violet)"></span>Cursor <b>18%</b></div>
+              <div><span class="swatch" style="background:var(--blue)"></span>其他 <b>10%</b></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>活跃热力</h2>
+            <span class="meta">近 14 天 × 用户抽样</span>
+          </div>
+          <div class="heat" aria-hidden="true">
+            <i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l4"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i><i class="l4"></i><i class="l3"></i><i class="l1"></i>
+            <i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i><i class="l4"></i><i class="l3"></i><i class="l2"></i><i class="l1"></i><i class="l3"></i><i class="l4"></i><i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l2"></i>
+            <i class="l3"></i><i class="l4"></i><i class="l2"></i><i class="l1"></i><i class="l3"></i><i class="l4"></i><i class="l3"></i><i class="l2"></i><i class="l4"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><i class="l2"></i>
+            <i class="l2"></i><i class="l1"></i><i class="l4"></i><i class="l3"></i><i class="l2"></i><i class="l1"></i><i class="l3"></i><i class="l4"></i><i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l4"></i><i class="l2"></i><i class="l3"></i>
+            <i class="l4"></i><i class="l3"></i><i class="l2"></i><i class="l4"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l4"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i><i class="l1"></i><i class="l4"></i>
+          </div>
+          <div class="heat-foot"><span>低</span><span>高</span></div>
+        </article>
+      </div>
+
+      <footer class="dl-footer">
+        <strong>客户端</strong>
+        <a href="#">macOS</a>
+        <a href="#">Windows</a>
+        <a href="#">Linux</a>
+        <span class="ver">v0.7.7</span>
+      </footer>
+
+      <div class="compare">
+        <h3>相对上一版 demo / 现网首页</h3>
+        <ul>
+          <li>去掉营销长文案与大 CTA；第一屏就是 6 周期数字</li>
+          <li>主内容含燃烧趋势、今日 Top、<strong>本月人员 Token 分布 treemap</strong>、模型/来源占比、热力</li>
+          <li>下载收成页脚一行弱链接，不再占三张大卡</li>
+        </ul>
+      </div>
+    </main>
+  </div>
+
+  <!-- LEADERBOARD -->
+  <div class="view" id="view-board">
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand-row">
+          <h1>AI Token League</h1>
+          <span class="pill">Public board</span>
+        </div>
+        <nav class="nav">
+          <a href="#">首页</a>
+          <a href="#" class="current">排行榜</a>
+          <a href="#">分析</a>
+          <select class="lang" aria-label="语言"><option>中文</option><option>English</option></select>
+        </nav>
+      </header>
+
+      <div class="toolbar">
+        <div class="period-pills">
+          <button type="button" class="active">今日</button>
+          <button type="button">昨日</button>
+          <button type="button">本周</button>
+          <button type="button">上周</button>
+          <button type="button">本月</button>
+          <button type="button">上月</button>
+        </div>
+        <div class="toolbar-right">
+          <div class="seg-lite">
+            <button type="button" class="active">Meter</button>
+            <button type="button">List</button>
+          </div>
+          <label class="toggle-lite"><input type="checkbox" /> 预估成本</label>
+        </div>
+      </div>
+
+      <div class="board-status">
+        <div class="title">社区排行榜</div>
+        <div class="meta">今日 · 42 人</div>
+      </div>
+
+      <div class="top3">
+        <article class="medal gold">
+          <div class="rank">#1</div>
+          <div class="name">小凯</div>
+          <div class="tokens">2.41 亿</div>
+          <div class="strip"><span></span><span></span><span></span></div>
+        </article>
+        <article class="medal">
+          <div class="rank">#2</div>
+          <div class="name">seayu</div>
+          <div class="tokens">1.86 亿</div>
+          <div class="strip"><span></span><span></span><span></span></div>
+        </article>
+        <article class="medal">
+          <div class="rank">#3</div>
+          <div class="name">iris</div>
+          <div class="tokens">1.52 亿</div>
+          <div class="strip"><span></span><span></span><span></span></div>
+        </article>
+      </div>
+
+      <div class="rank-list">
+        <div class="rank-row top10">
+          <div class="rn">#4</div>
+          <div>
+            <div class="rnick">Ai-Service</div>
+            <div class="rbar"><i style="width:72%"></i></div>
+          </div>
+          <div class="rval">1.21 亿</div>
+        </div>
+        <div class="rank-row top10">
+          <div class="rn">#5</div>
+          <div>
+            <div class="rnick">felix</div>
+            <div class="rbar"><i style="width:58%"></i></div>
+          </div>
+          <div class="rval">0.98 亿</div>
+        </div>
+        <div class="rank-row top10">
+          <div class="rn">#6</div>
+          <div>
+            <div class="rnick">Aurora</div>
+            <div class="rbar"><i style="width:44%"></i></div>
+          </div>
+          <div class="rval">0.74 亿</div>
+        </div>
+        <div class="rank-row">
+          <div class="rn">#11</div>
+          <div>
+            <div class="rnick">anonymous</div>
+            <div class="rbar"><i style="width:18%"></i></div>
+          </div>
+          <div class="rval">0.21 亿</div>
+        </div>
+      </div>
+
+      <div class="compare">
+        <h3>相对现网排行榜，你应看到的变化</h3>
+        <ul>
+          <li>周期筛选改成轻 pill，不再是厚黑框 segmented</li>
+          <li>名次用灰色，红色留给告警；Top3 仍是唯一暖色高光</li>
+          <li>#4–#10 仍有强调，避免「前三庆典、后面报表」断崖</li>
+        </ul>
+      </div>
+    </main>
+  </div>
+
+  <!-- ANALYTICS -->
+  <div class="view" id="view-analytics">
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand-row">
+          <h1>AI Token League</h1>
+          <span class="pill">Analytics</span>
+        </div>
+        <nav class="nav">
+          <a href="#">首页</a>
+          <a href="#">排行榜</a>
+          <a href="#" class="current">分析</a>
+          <select class="lang" aria-label="语言"><option>中文</option><option>English</option></select>
+        </nav>
+      </header>
+
+      <div class="an-toolbar">
+        <div class="period-pills">
+          <button type="button">今日</button>
+          <button type="button">昨日</button>
+          <button type="button">本周</button>
+          <button type="button">上周</button>
+          <button type="button" class="active">本月</button>
+          <button type="button">上月</button>
+        </div>
+        <label class="who">
+          分析对象
+          <select>
+            <option>全社区</option>
+            <option>以人为本</option>
+            <option>柴达星 2</option>
+          </select>
+        </label>
+      </div>
+
+      <section class="an-kpis" aria-label="KPI">
+        <div class="an-kpi">
+          <span class="lab">总令牌</span>
+          <span class="val">186 亿</span>
+          <span class="sub">2026-07-01 — 07-17</span>
+        </div>
+        <div class="an-kpi savings">
+          <span class="lab">缓存节省</span>
+          <span class="val">$1,284</span>
+          <span class="sub">命中率 64%</span>
+        </div>
+        <div class="an-kpi">
+          <span class="lab">单位成本</span>
+          <span class="val">$20.2</span>
+          <span class="sub">每亿 tokens</span>
+        </div>
+        <div class="an-kpi">
+          <span class="lab">预估成本</span>
+          <span class="val">$3,760</span>
+          <span class="sub">含缺失价格*</span>
+        </div>
+      </section>
+
+      <div class="an-insights">
+        <span>Top5 贡献 <em>52%</em></span>
+        <span>缓存读取 <em>41%</em></span>
+        <span>峰值日 <em>周三</em></span>
+        <span>活跃 <em>42 / 68</em> 人</span>
+        <span>周末占比 <em>12%</em></span>
+      </div>
+
+      <div class="an-main">
+        <article class="card">
+          <div class="card-head">
+            <h2>Token 燃烧趋势</h2>
+            <span class="meta">日粒度 · 本月</span>
+          </div>
+          <svg class="burn-chart" viewBox="0 0 560 160" role="img" aria-label="燃烧趋势">
+            <defs>
+              <linearGradient id="anBurnFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--teal)" stop-opacity="0.28"/>
+                <stop offset="100%" stop-color="var(--teal)" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <g stroke="#e8e1d2" stroke-width="1">
+              <line x1="0" y1="40" x2="560" y2="40"/>
+              <line x1="0" y1="80" x2="560" y2="80"/>
+              <line x1="0" y1="120" x2="560" y2="120"/>
+            </g>
+            <path d="M0,122 C35,118 55,98 85,90 C120,80 145,108 180,86 C220,62 250,54 290,50 C335,45 355,72 395,58 C435,42 465,34 505,38 C530,40 545,32 560,28 L560,160 L0,160 Z" fill="url(#anBurnFill)"/>
+            <path d="M0,122 C35,118 55,98 85,90 C120,80 145,108 180,86 C220,62 250,54 290,50 C335,45 355,72 395,58 C435,42 465,34 505,38 C530,40 545,32 560,28" fill="none" stroke="var(--teal)" stroke-width="2.5"/>
+            <path d="M0,138 C40,134 70,128 110,130 C160,132 200,118 245,120 C300,122 340,108 385,110 C430,112 470,100 510,102 C535,103 548,96 560,94" fill="none" stroke="var(--gold)" stroke-width="1.75" stroke-dasharray="4 4"/>
+          </svg>
+          <div class="burn-legend">
+            <span><i style="background:var(--teal)"></i>totalTokens</span>
+            <span><i style="background:var(--gold)"></i>预估成本（相对）</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>Token 构成</h2>
+            <span class="meta">排名口径拆解</span>
+          </div>
+          <div class="comp-stack" aria-hidden="true">
+            <i style="width:28%;background:#0f4f4c"></i>
+            <i style="width:18%;background:#1c7570"></i>
+            <i style="width:41%;background:#35aaa0"></i>
+            <i style="width:13%;background:#8fddd4"></i>
+          </div>
+          <div class="comp-legend">
+            <div><span class="swatch" style="background:#0f4f4c"></span>Input <b>28%</b></div>
+            <div><span class="swatch" style="background:#1c7570"></span>Output <b>18%</b></div>
+            <div><span class="swatch" style="background:#35aaa0"></span>Cache read <b>41%</b></div>
+            <div><span class="swatch" style="background:#8fddd4"></span>Cache write <b>13%</b></div>
+          </div>
+          <p style="margin:12px 0 0;color:var(--muted);font-size:11px;line-height:1.4">
+            totalTokens = input + output + cacheRead + cacheWrite。缓存读取高 = Prompt Caching 在吃重复上下文。
+          </p>
+        </article>
+      </div>
+
+      <article class="card treemap-card">
+        <div class="card-head">
+          <h2>人员 Token 分布</h2>
+          <span class="meta">面积 ∝ 用量 · 颜色 = 主要来源</span>
+        </div>
+
+          <div class="src-legend">
+            <span><i style="background:#1f6f66"></i>Claude</span>
+            <span><i style="background:#b67810"></i>Codex</span>
+            <span><i style="background:#6b5b95"></i>Cursor</span>
+            <span><i style="background:#8a8478"></i>其他来源 / 聚合</span>
+          </div>
+<div class="dist-split">
+          <div class="tm-board">
+            <svg class="treemap-svg" viewBox="0 0 640 360" role="img" aria-label="人员 Token 分布">
+              <!-- Claude -->
+              <rect class="tm-cell" x="4" y="4" width="248" height="200" rx="8" fill="#1f6f66"/>
+              <text class="tm-name" x="18" y="28">以人为本</text>
+              <text class="tm-val" x="18" y="48">55.5亿 · 18.8%</text>
+              <!-- Codex -->
+              <rect class="tm-cell" x="260" y="4" width="168" height="200" rx="8" fill="#b67810"/>
+              <text class="tm-name" x="274" y="28">柴达星 2</text>
+              <text class="tm-val" x="274" y="48">29.4亿 · 10.0%</text>
+              <!-- Cursor -->
+              <rect class="tm-cell" x="436" y="4" width="96" height="96" rx="8" fill="#6b5b95"/>
+              <text class="tm-name tm-name-sm" x="448" y="24">GDPS</text>
+              <text class="tm-val tm-val-sm" x="448" y="40">13.3亿</text>
+              <!-- Claude -->
+              <rect class="tm-cell" x="540" y="4" width="96" height="96" rx="8" fill="#2a8a80"/>
+              <text class="tm-name tm-name-sm" x="552" y="24">开放并简单2</text>
+              <text class="tm-val tm-val-sm" x="552" y="40">12.8亿</text>
+              <!-- Codex lighter -->
+              <rect class="tm-cell" x="436" y="108" width="96" height="96" rx="8" fill="#c9922e"/>
+              <g class="tm-dark">
+                <text class="tm-name tm-name-sm" x="448" y="128">以人为本 2</text>
+                <text class="tm-val tm-val-sm" x="448" y="144">12.3亿</text>
+              </g>
+              <!-- Cursor lighter -->
+              <rect class="tm-cell" x="540" y="108" width="96" height="96" rx="8" fill="#8574ad"/>
+              <text class="tm-name tm-name-sm" x="552" y="128">M78星云 4</text>
+              <text class="tm-val tm-val-sm" x="552" y="144">12.1亿</text>
+              <!-- Claude -->
+              <rect class="tm-cell" x="4" y="212" width="188" height="144" rx="8" fill="#247a70"/>
+              <text class="tm-name" x="18" y="236">快乐星球 3</text>
+              <text class="tm-val" x="18" y="256">26.0亿 · 8.8%</text>
+              <!-- Other/OpenCode stone -->
+              <rect class="tm-cell" x="200" y="212" width="112" height="70" rx="8" fill="#8a8478"/>
+              <text class="tm-name tm-name-sm" x="212" y="232">北斗七星 2</text>
+              <text class="tm-val tm-val-sm" x="212" y="248">22.1亿</text>
+              <!-- Codex -->
+              <rect class="tm-cell" x="200" y="290" width="112" height="66" rx="8" fill="#d4a84a"/>
+              <g class="tm-dark">
+                <text class="tm-name tm-name-sm" x="212" y="310">柴达星</text>
+                <text class="tm-val tm-val-sm" x="212" y="326">19.9亿</text>
+              </g>
+              <!-- Aggregated other - warm stone -->
+              <rect class="tm-cell" x="320" y="212" width="152" height="144" rx="8" fill="#9a9488"/>
+              <g class="tm-dark">
+                <text class="tm-name" x="334" y="236">其他人员</text>
+                <text class="tm-val" x="334" y="256">30.5亿 · 10.3%</text>
+              </g>
+              <!-- Cursor -->
+              <rect class="tm-cell" x="480" y="212" width="76" height="70" rx="8" fill="#6b5b95"/>
+              <text class="tm-name tm-name-sm" x="490" y="232">SCL 2</text>
+              <text class="tm-val tm-val-sm" x="490" y="248">11.7亿</text>
+              <!-- Claude light -->
+              <rect class="tm-cell" x="564" y="212" width="72" height="70" rx="8" fill="#3d9e93"/>
+              <text class="tm-name tm-name-sm" x="572" y="232">担当且极致</text>
+              <text class="tm-val tm-val-sm" x="572" y="248">11.5亿</text>
+              <!-- Tail stone -->
+              <rect class="tm-cell" x="480" y="290" width="156" height="66" rx="8" fill="#b5aea0"/>
+              <g class="tm-dark">
+                <text class="tm-name tm-name-sm" x="492" y="314">尾部 · 其余 31 人</text>
+                <text class="tm-val tm-val-sm" x="492" y="330">42.1亿 · 14.3%</text>
+              </g>
+
+            </svg>
+          </div>
+          <div class="dist-side">
+            <div class="conc-box">
+              <div class="c-title">用量集中度</div>
+              <div class="conc-metrics">
+                <div><strong>18.8%</strong><small>第一名</small></div>
+                <div><strong>52%</strong><small>前五名</small></div>
+                <div><strong>71%</strong><small>前十名</small></div>
+              </div>
+            </div>
+            <div class="rank-mini">
+              <div class="rank-mini-row">
+                <span class="n">1</span><span class="nm">以人为本</span><span class="pct">18.8%</span>
+                <div class="rank-mini-bar"><i style="width:100%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">2</span><span class="nm">其他人员</span><span class="pct">10.3%</span>
+                <div class="rank-mini-bar"><i style="width:55%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">3</span><span class="nm">柴达星 2</span><span class="pct">10.0%</span>
+                <div class="rank-mini-bar"><i style="width:53%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">4</span><span class="nm">快乐星球 3</span><span class="pct">8.8%</span>
+                <div class="rank-mini-bar"><i style="width:47%"></i></div>
+              </div>
+              <div class="rank-mini-row">
+                <span class="n">5</span><span class="nm">北斗七星 2</span><span class="pct">7.5%</span>
+                <div class="rank-mini-bar"><i style="width:40%"></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="an-secondary">
+        <article class="card">
+          <div class="card-head">
+            <h2>累计贡献（Pareto）</h2>
+            <span class="meta">金线 = 累计占比</span>
+          </div>
+          <div class="pareto">
+            <div class="pareto-row">
+              <span class="lab">Top 1</span>
+              <div class="pareto-track"><div class="bar" style="width:19%"></div><div class="cum" style="left:19%"></div></div>
+              <span class="pct">19%</span>
+            </div>
+            <div class="pareto-row">
+              <span class="lab">Top 3</span>
+              <div class="pareto-track"><div class="bar" style="width:39%"></div><div class="cum" style="left:39%"></div></div>
+              <span class="pct">39%</span>
+            </div>
+            <div class="pareto-row">
+              <span class="lab">Top 5</span>
+              <div class="pareto-track"><div class="bar" style="width:52%"></div><div class="cum" style="left:52%"></div></div>
+              <span class="pct">52%</span>
+            </div>
+            <div class="pareto-row">
+              <span class="lab">Top 10</span>
+              <div class="pareto-track"><div class="bar" style="width:71%"></div><div class="cum" style="left:71%"></div></div>
+              <span class="pct">71%</span>
+            </div>
+            <div class="pareto-row">
+              <span class="lab">全部</span>
+              <div class="pareto-track"><div class="bar" style="width:100%"></div><div class="cum" style="left:100%"></div></div>
+              <span class="pct">100%</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>周内节奏</h2>
+            <span class="meta">本月按星期聚合</span>
+          </div>
+          <div class="weekday">
+            <div class="d"><div class="col" style="height:42%"></div><span>一</span></div>
+            <div class="d"><div class="col" style="height:58%"></div><span>二</span></div>
+            <div class="d peak"><div class="col" style="height:100%"></div><span>三</span></div>
+            <div class="d"><div class="col" style="height:86%"></div><span>四</span></div>
+            <div class="d"><div class="col" style="height:74%"></div><span>五</span></div>
+            <div class="d"><div class="col" style="height:28%"></div><span>六</span></div>
+            <div class="d"><div class="col" style="height:18%"></div><span>日</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="an-secondary">
+        <article class="card">
+          <div class="card-head">
+            <h2>模型市场份额</h2>
+            <span class="meta">本月</span>
+          </div>
+          <div class="share-list">
+            <div class="share-row">
+              <div class="lbl"><span>claude-opus</span><span>38%</span></div>
+              <div class="share-track"><i style="width:38%;background:var(--teal)"></i></div>
+            </div>
+            <div class="share-row">
+              <div class="lbl"><span>gpt-5</span><span>24%</span></div>
+              <div class="share-track"><i style="width:24%;background:var(--yellow)"></i></div>
+            </div>
+            <div class="share-row">
+              <div class="lbl"><span>claude-sonnet</span><span>18%</span></div>
+              <div class="share-track"><i style="width:18%;background:var(--violet)"></i></div>
+            </div>
+            <div class="share-row">
+              <div class="lbl"><span>其他</span><span>20%</span></div>
+              <div class="share-track"><i style="width:20%;background:var(--blue)"></i></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>数据来源</h2>
+            <span class="meta">本月</span>
+          </div>
+          <div class="donut-wrap">
+            <svg class="donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#e8e1d2" stroke-width="6"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="var(--teal)" stroke-width="6"
+                stroke-dasharray="42 97.4" stroke-dashoffset="0" transform="rotate(-90 21 21)"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#f4b000" stroke-width="6"
+                stroke-dasharray="28 97.4" stroke-dashoffset="-42" transform="rotate(-90 21 21)"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#9d78dc" stroke-width="6"
+                stroke-dasharray="18 97.4" stroke-dashoffset="-70" transform="rotate(-90 21 21)"/>
+              <circle cx="21" cy="21" r="15.5" fill="none" stroke="#006d77" stroke-width="6"
+                stroke-dasharray="9.4 97.4" stroke-dashoffset="-88" transform="rotate(-90 21 21)"/>
+            </svg>
+            <div class="donut-legend">
+              <div><span class="swatch" style="background:var(--teal)"></span>Claude <b>43%</b></div>
+              <div><span class="swatch" style="background:var(--yellow)"></span>Codex <b>29%</b></div>
+              <div><span class="swatch" style="background:var(--violet)"></span>Cursor <b>18%</b></div>
+              <div><span class="swatch" style="background:var(--blue)"></span>其他 <b>10%</b></div>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div class="an-section-label">长期行为</div>
+      <article class="card">
+        <div class="card-head">
+          <h2>编码活动热力图</h2>
+          <span class="meta">近 90 天 · 高亮 = 本月</span>
+        </div>
+        <div class="heat90" id="an-heat90" aria-hidden="true"></div>
+        <div class="heat-foot"><span>Less</span><span>More · 区间外半透明</span></div>
+      </article>
+
+      <div class="compare">
+        <h3>本版分析页增量</h3>
+        <ul>
+          <li>人员分布：按主要来源着色（Claude/Codex/Cursor/其他）+ 圆角间隙 + 侧栏集中度</li>
+          <li>新增：洞察条、Token 构成、Pareto 累计贡献、周内节奏、单位成本 KPI</li>
+          <li>保留：燃烧趋势、模型/来源、热力（去掉说教文案）</li>
+        </ul>
+      </div>
+    </main>
+  </div>
+
+  <!-- ADMIN -->
+  <div class="view" id="view-admin">
+    <main class="shell">
+      <header class="masthead admin-masthead">
+        <div class="brand-row">
+          <h1>使用量运营</h1>
+          <span class="pill">管理工作台</span>
+        </div>
+        <a class="cost-chip" href="#" title="跳转到模型价格 · 缺价任务">
+          成本状态
+          <span>预估 + 缺失价格</span>
+          <small>12 模型 →</small>
+        </a>
+        <nav class="nav">
+          <a href="#">← 首页</a>
+          <select class="lang" aria-label="语言"><option>中文</option><option>English</option></select>
+        </nav>
+      </header>
+
+      <nav class="admin-nav" aria-label="Admin sections">
+        <button type="button" class="active">使用量</button>
+        <button type="button">模型价格</button>
+        <button type="button">质量</button>
+        <button type="button">设备</button>
+        <button type="button">可视化看板</button>
+      </nav>
+
+      <section class="panel">
+        <div class="filters">
+          <div class="filters-main">
+            <div class="quick">
+              <button type="button">1d</button>
+              <button type="button">7d</button>
+              <button type="button">30d</button>
+              <button type="button" class="active">本月至今</button>
+              <button type="button">上月</button>
+              <button type="button">全部</button>
+            </div>
+            <select class="field">
+              <option>所有用户</option>
+              <option>小凯</option>
+              <option>seayu</option>
+            </select>
+            <input class="field" type="text" value="2026-07-01" readonly />
+            <input class="field" type="text" value="2026-07-17" readonly />
+            <button class="btn-apply" type="button">应用</button>
+            <span class="pending">日期已改 · 待应用</span>
+          </div>
+          <div class="filters-sub">
+            <div class="left">
+              <label class="toggle-lite"><input type="checkbox" /> 原始令牌</label>
+              <label class="toggle-lite"><input type="checkbox" /> 预估成本</label>
+            </div>
+            <div class="right">
+              <button class="btn-export" type="button">导出 CSV</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="view-tabs">
+          <button type="button" class="active">排名</button>
+          <button type="button">聚合</button>
+        </div>
+
+        <div class="result-bar">
+          <h2>42 个用户</h2>
+          <div class="meta">2026-07-01 至 2026-07-17</div>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>用户</th>
+                <th>总令牌数</th>
+                <th>成本质量</th>
+                <th>主要工作目录</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="rank-cell">1</td>
+                <td><a class="user-link" href="#">小凯</a></td>
+                <td class="token-cell">55.5 亿</td>
+                <td><span class="badge missing">缺失价格</span></td>
+                <td class="slice"><strong>aic</strong><small>24.2 亿 · +16</small></td>
+                <td><span class="action-link">详情</span></td>
+              </tr>
+              <tr>
+                <td class="rank-cell">2</td>
+                <td><a class="user-link" href="#">seayu</a></td>
+                <td class="token-cell">29.4 亿</td>
+                <td><span class="badge missing">缺失价格</span></td>
+                <td class="slice"><strong>workbench_web</strong><small>19.1 亿 · +10</small></td>
+                <td><span class="action-link">详情</span></td>
+              </tr>
+              <tr>
+                <td class="rank-cell">3</td>
+                <td><a class="user-link" href="#">Ai-Service</a></td>
+                <td class="token-cell">25.6 亿</td>
+                <td><span class="badge estimated">预估</span></td>
+                <td class="slice"><strong>Projects</strong><small>25.6 亿 · +1</small></td>
+                <td><span class="action-link">详情</span></td>
+              </tr>
+              <tr>
+                <td class="rank-cell">4</td>
+                <td><a class="user-link" href="#">iris</a></td>
+                <td class="token-cell">22.0 亿</td>
+                <td><span class="badge exact">精确价格</span></td>
+                <td class="slice"><strong>ccl-project-workspace</strong><small>21.8 亿 · +4</small></td>
+                <td><span class="action-link">详情</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="compare">
+        <h3>相对你截图里的 Admin，你应看到的变化</h3>
+        <ul>
+          <li>去掉「本月至今」假按钮；标题不再重复三遍「使用量排名」</li>
+          <li>筛选拆成两行：主筛选 / 次选项；未 Apply 有「待应用」提示</li>
+          <li>主 Tab 改 underline；成本状态可点；缺价用徽章；名次不再抢红色</li>
+          <li>无网格底 + 细边框面板，密度更高、装饰更少</li>
+        </ul>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    document.documentElement.setAttribute("data-theme", "moqing");
+
+    const themes = document.getElementById("demo-themes");
+    themes.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-theme]");
+      if (!btn) return;
+      const name = btn.dataset.theme;
+      document.documentElement.setAttribute("data-theme", name);
+      themes.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
+    });
+
+    const tabs = document.getElementById("demo-tabs");
+    const views = {
+      home: document.getElementById("view-home"),
+      board: document.getElementById("view-board"),
+      analytics: document.getElementById("view-analytics"),
+      admin: document.getElementById("view-admin"),
+    };
+
+    (function fillHeat90() {
+      const el = document.getElementById("an-heat90");
+      if (!el) return;
+      const levels = ["", "l1", "l2", "l3", "l4"];
+      let html = "";
+      for (let i = 0; i < 90; i++) {
+        const lv = levels[Math.floor(Math.random() * levels.length)];
+        const inMonth = i >= 45;
+        const cls = [lv, inMonth ? "hi" : "dim"].filter(Boolean).join(" ");
+        html += `<i class="${cls}"></i>`;
+      }
+      el.innerHTML = html;
+    })();
+
+    function show(name) {
+      Object.entries(views).forEach(([key, el]) => {
+        el.classList.toggle("active", key === name);
+      });
+      tabs.querySelectorAll("button").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.view === name);
+      });
+      document.body.classList.toggle("admin-tone", name === "admin");
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+
+    tabs.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-view]");
+      if (!btn) return;
+      show(btn.dataset.view);
+    });
+  </script>
+</body>
+</html>

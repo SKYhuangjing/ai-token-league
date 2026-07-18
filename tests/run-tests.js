@@ -4,7 +4,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { Store } from "../src/backend/store.js";
+import { Store, ANALYTICS_ALL_CACHE_TTL_MS } from "../src/backend/store.js";
 import { MySqlStore } from "../src/backend/mysql-store.js";
 import { canonicalJson, sha256Hex, generateIdentity, newId, signPayload, hmacSha256Hex, verifyPayload, normalizeLegacyEd25519Pem } from "../src/shared/crypto.js";
 import { BoardAnonymizer, loadOrGenerateSalt, loadNames, todayStr } from "../src/backend/board-anonymizer.js";
@@ -538,6 +538,7 @@ function testStoreBusinessDayScopedCache() {
   const d2Summary = store.boardSummary();
   assert.equal(d2Summary.todayTokens, 200);
   assert.equal(d2Summary.yesterdayTokens, 100);
+  assert.equal(d2Summary.allTimeTokens, 300);
   assert.equal(Object.values(store.aggregateCache).some((entry) => entry.args.businessDay === "2026-05-11"), true);
 
   const customD1 = store.publicLeaderboard({ range: "custom", startDay: "2026-05-10", endDay: "2026-05-10" });
@@ -4740,8 +4741,18 @@ function testDesktopHtmlDataI18n() {
 
 function testWebLeaderboardStructure() {
   const html = fs.readFileSync("src/web/leaderboard.html", "utf8");
+  const js = fs.readFileSync("src/web/leaderboard.js", "utf8");
+  const styles = fs.readFileSync("src/web/styles.css", "utf8");
   assert.match(html, /leaderboard/i);
   assert.match(html, /period/i);
+  assert.match(html, /board-title-block/);
+  assert.match(html, /data-i18n="web\.leaderboard\.title"/);
+  assert.match(html, /href="\/leaderboard\.html"/);
+  assert.match(html, /id="leaderboard-surface"[^>]*aria-busy="true"/);
+  assert.match(js, /function setLeaderboardLoading/);
+  assert.match(js, /surface\?\.classList\.toggle\("is-refreshing", on\)/);
+  assert.match(js, /surface\.classList\.add\("is-settled"\)/);
+  assert.match(styles, /\.motion-surface\.is-refreshing::before/);
   console.log("  testWebLeaderboardStructure passed");
 }
 
@@ -4752,9 +4763,17 @@ function testWebAnalyticsParticipantRankingStructure() {
   assert.match(html, /id="participant-ranking-card"/);
   assert.match(html, /id="participant-treemap-svg"/);
   assert.match(html, /id="participant-treemap-labels"/);
+  assert.match(html, /class="an-main"/);
+  assert.match(html, /class="[^"]*\ban-composition-card\b/);
+  assert.match(html, /id="analytics-loading"[^>]*aria-live="polite"/);
   assert.match(js, /function renderParticipantTreemapPanel/);
   assert.match(js, /sharedRenderParticipantTreemap/);
+  assert.match(js, /classList\.add\("is-embedded"\)/);
+  assert.match(js, /analytics-resize/);
+  assert.match(js, /shell\?\.classList\.toggle\("is-refreshing", on\)/);
+  assert.match(js, /setLoading\(true\)[\s\S]*loadParticipantDropdown\(\)[\s\S]*setLoading\(false\)/);
   assert.match(shared, /export function renderParticipantTreemap/);
+  assert.match(shared, /linePath\.setAttribute\("pathLength", "1"\)/);
   assert.match(shared, /TREEMAP_MAX_PARTICIPANTS = 30/);
   assert.match(shared, /Math\.min\(\s*rankings\.length,\s*TREEMAP_MAX_PARTICIPANTS/);
   assert.match(js, /card\.hidden = !isCommunityScope/);
@@ -4763,6 +4782,7 @@ function testWebAnalyticsParticipantRankingStructure() {
 
 function testWebAdminStructure() {
   const html = fs.readFileSync("src/web/admin.html", "utf8");
+  const styles = fs.readFileSync("src/web/styles.css", "utf8");
   assert.match(html, /admin/i);
   assert.match(html, /usage/i);
   assert.match(html, /pricing/i);
@@ -4774,8 +4794,25 @@ function testWebAdminStructure() {
   assert.match(html, /data-usage-panel="ranking"/i);
   assert.match(html, /data-usage-panel="aggregate"/i);
   assert.match(html, /data-value="all"/i);
+  assert.match(html, /admin-analytics-panel/);
+  assert.match(html, /admin-analytics-frame/);
+  assert.match(html, /class="pricing-priority"/);
+  assert.ok(html.indexOf("pricing-priority") < html.indexOf('id="pricing-form"'), "missing-price tasks should precede secondary pricing management");
+  for (const field of ["model", "input", "output", "cacheRead", "cacheWrite"]) {
+    assert.match(html, new RegExp(`data-i18n="admin\\.pricing\\.${field}Label"`));
+  }
+  assert.doesNotMatch(styles, /\.admin-shell \.admin-analytics-frame\s*\{[^}]*height:\s*(?:600|720|760)px/is);
+  assert.match(styles, /body\.is-embedded \.public-masthead\s*\{\s*display:\s*none/);
   const js = fs.readFileSync("src/web/admin.js", "utf8");
   assert.match(js, /state\.range === "all"\) return "month"/);
+  assert.match(js, /analytics-resize/);
+  assert.match(js, /Number\.isFinite\(height\)/);
+  assert.match(js, /event\.origin !== window\.location\.origin/);
+  assert.match(js, /event\.source !== iframe\?\.contentWindow/);
+  assert.match(js, /function setAdminPanelBusy/);
+  assert.match(js, /panel\.classList\.toggle\("is-refreshing", on\)/);
+  assert.match(js, /panel\.classList\.add\("is-entering"\)/);
+  assert.match(styles, /\.admin-shell \.admin-panel\.is-entering/);
   console.log("  testWebAdminStructure passed");
 }
 
@@ -4783,28 +4820,42 @@ function testWebDownloadStructure() {
   const html = fs.readFileSync("src/web/download.html", "utf8");
   const js = fs.readFileSync("src/web/download.js", "utf8");
   const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
-  assert.match(html, /download-actions/);
+  assert.match(html, /download-cards/);
+  assert.match(html, /kpi-scoreboard/);
+  assert.strictEqual((html.match(/class="kpi-pair"/g) || []).length, 3, "home should group six KPIs into three pairs");
+  assert.match(html, /class="card-head-link"/);
+  assert.match(html, /href="\/leaderboard\.html"/);
+  assert.doesNotMatch(html, /site-footer/);
   assert.match(html, /home-hero-grid/);
   assert.match(html, /home-trend-chart/);
-  assert.match(html, /home-top-three/);
+  assert.match(html, /home-top-today/);
   assert.match(html, /home-model-chart/);
-  assert.match(html, /home-provider-chart/);
+  assert.match(html, /home-provider-donut/);
+  assert.match(html, /home-heatmap-grid/);
+  assert.match(html, /burn-legend/);
   assert.match(html, /home-participant-treemap-svg/);
   assert.match(html, /home-participant-treemap-labels/);
   assert.match(js, /loadSummary/);
   assert.match(js, /loadAnalytics/);
   assert.match(js, /loadLeaderboard/);
-  assert.match(js, /range:\s*"this_month"/);
+  assert.match(js, /range=this_month/);
+  assert.match(js, /range=last30/);
   assert.match(js, /renderParticipantTreemap/);
+  assert.match(js, /renderDonutChart/);
+  assert.match(js, /renderActivityHeatmap/);
+  assert.match(js, /document\.body\.classList\.add\("is-refreshing"\)/);
+  assert.match(js, /document\.body\.classList\.add\("is-settled"\)/);
   assert.match(js, /from\s+["']\/shared\/chart-helpers\.js["']/);
   assert.match(shared, /export function renderTrendChart/);
   assert.match(shared, /export function renderBarChart/);
-  assert.match(shared, /export function renderGauge/);
+  assert.match(shared, /export function renderDonutChart/);
+  assert.match(shared, /export function renderActivityHeatmap/);
   assert.match(shared, /export function renderParticipantTreemap/);
   assert.match(shared, /export function formatCost/);
   assert.match(shared, /export function sourceName/);
   assert.match(shared, /export function normalizeModelSegments/);
   assert.match(js, /darwin|windows|platform/i);
+  assert.match(fs.readFileSync("src/web/styles.css", "utf8"), /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation-duration: 0\.01ms/);
   console.log("  testWebDownloadStructure passed");
 }
 
@@ -4974,6 +5025,8 @@ function testStoreBoardSummary() {
   const summary = store.boardSummary();
   assert.ok(summary.todayTokens === 0 || typeof summary.todayTokens === "number");
   assert.ok(summary.yesterdayTokens === 0 || typeof summary.yesterdayTokens === "number");
+  assert.ok(summary.allTimeTokens === 0 || typeof summary.allTimeTokens === "number");
+  assert.ok(summary.allTimeCost === 0 || typeof summary.allTimeCost === "number");
   assert.ok(typeof summary.participantCount === "number");
   console.log("  testStoreBoardSummary passed");
 }
@@ -5037,6 +5090,7 @@ function testStoreAnalytics() {
   assert.equal(data.timeSeries.length, 1);
   assert.equal(data.timeGrain, "day");
   assert.equal(data.timeSeries[0].totalTokens, 210000);
+  assert.equal(data.timeSeries[0].activeCount, 1);
   assert.equal(data.heatmap.length, 90);
   assert.equal(data.heatmap.find(h => h.day === day).totalTokens, 210000);
 
@@ -5415,6 +5469,92 @@ function testStoreAnalyticsRankStats() {
   console.log("  testStoreAnalyticsRankStats passed");
 }
 
+function testStoreAnalyticsAllPeriodCache() {
+  assert.equal(ANALYTICS_ALL_CACHE_TTL_MS, 2 * 60 * 60 * 1000);
+
+  const store = new Store(path.join(tmp, "db-analytics-all-cache.json"), {
+    persist: false,
+    businessDayProvider: () => "2026-07-17"
+  });
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "all-cache-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [
+      makeSnapshotItem({
+        day: "2026-06-01",
+        workdirHash: "all_a",
+        inputTokens: 100,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 100
+      }),
+      makeSnapshotItem({
+        day: "2026-07-01",
+        workdirHash: "all_b",
+        inputTokens: 200,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 200
+      })
+    ]
+  });
+
+  const first = store.analytics({ period: "all" });
+  assert.equal(first.summary.totalTokens, 300);
+  assert.equal(Object.keys(store.analyticsAllCache).length, 1);
+  const cacheKey = Object.keys(store.analyticsAllCache)[0];
+  assert.ok(store.analyticsAllCache[cacheKey].expiresAt > Date.now());
+  assert.ok(
+    store.analyticsAllCache[cacheKey].expiresAt <= Date.now() + ANALYTICS_ALL_CACHE_TTL_MS + 1000
+  );
+
+  // Fresh upload + aggregate-cache invalidation must not drop the 2h all-period cache.
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items: [
+      makeSnapshotItem({
+        day: "2026-07-10",
+        workdirHash: "all_c",
+        inputTokens: 999,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 999
+      })
+    ]
+  });
+  store.invalidateAggregateCache();
+  const second = store.analytics({ period: "all" });
+  assert.equal(second.summary.totalTokens, 300, "all-period cache should survive invalidateAggregateCache");
+  assert.equal(Object.keys(store.aggregateCache).length, 0);
+
+  store.analyticsAllCache[cacheKey].expiresAt = Date.now() - 1;
+  const third = store.analytics({ period: "all" });
+  assert.equal(third.summary.totalTokens, 1299, "expired all-period cache should recompute");
+
+  const byRange = store.analytics({ range: "all" });
+  assert.equal(byRange.summary.totalTokens, 1299);
+  assert.ok(Object.keys(store.analyticsAllCache).length >= 1);
+
+  console.log("  testStoreAnalyticsAllPeriodCache passed");
+}
+
 function testNormalizeTokenNumberIntegration() {
   const identity = generateIdentity();
   const store = new Store(path.join(tmp, "db-normalize.json"));
@@ -5570,6 +5710,7 @@ testStoreAnalyticsHeatmap();
 testStoreAnalyticsEmptyStore();
 testStoreAnalyticsDateRanges();
 testStoreAnalyticsRankStats();
+testStoreAnalyticsAllPeriodCache();
 testNormalizeTokenNumberIntegration();
 
 // ── Cloud provider dedup tests ──

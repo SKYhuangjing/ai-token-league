@@ -4,16 +4,28 @@ import { parseLatestChangelog } from "/shared/changelog.js";
 import {
   escapeHtml, escapeAttribute, sourceName, formatCost, formatTokenRaw,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
-  renderModelSegments, renderCost, renderTrendChart, renderGauge,
-  renderBarChart, renderParticipantTreemap
+  renderModelSegments, renderCost, renderTrendChart,
+  renderBarChart, renderDonutChart, renderActivityHeatmap, renderParticipantTreemap
 } from "/shared/chart-helpers.js";
 
-const currentLang = initI18n();
+initI18n();
 
-const state = { summaryData: null, analyticsData: null, leaderboardData: null };
+const state = { summaryData: null, analyticsData: null, trendData: null, leaderboardData: null };
 
 function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
+}
+
+function applyBoardIdentityEyebrow(mode) {
+  const eyebrowKey = {
+    anonymous: "web.publicBoardAnonymous",
+    public: "web.publicBoardPublic",
+    authenticated: "web.publicBoardAuthenticated"
+  }[mode] || "web.publicBoard";
+  const eyebrow = document.querySelector("#board-identity-eyebrow");
+  if (!eyebrow) return;
+  eyebrow.setAttribute("data-i18n", eyebrowKey);
+  eyebrow.textContent = t(eyebrowKey);
 }
 
 function tokenSizeClass(value) {
@@ -27,6 +39,14 @@ function tokenSizeClass(value) {
 function renderAuthFallback(selector) {
   const el = document.querySelector(selector);
   if (el) el.innerHTML = `<div class="meter-empty">${t("web.analytics.noData") || "Data unavailable"}</div>`;
+  if (selector === "#home-trend-chart") {
+    const peakEl = document.querySelector("#home-trend-peak");
+    if (peakEl) {
+      peakEl.hidden = true;
+      peakEl.textContent = "";
+      peakEl.removeAttribute("title");
+    }
+  }
 }
 
 // --- 6 Period Preview Cards (original) ---
@@ -39,12 +59,20 @@ function renderPreview(data) {
     if (el) {
       if (tokens != null) {
         el.textContent = formatTokenCompact(tokens, lang);
-        el.className = `preview-value ${tokenSizeClass(tokens)}`;
+        el.className = `val ${tokenSizeClass(tokens)}`;
       } else {
         el.textContent = "--";
       }
     }
-    if (costEl) costEl.textContent = cost != null && cost > 0 ? formatCost(cost) : "";
+    if (costEl) {
+      if (cost != null && Number(cost) > 0) {
+        costEl.textContent = formatCost(cost);
+        costEl.hidden = false;
+      } else {
+        costEl.textContent = "";
+        costEl.hidden = true;
+      }
+    }
   };
 
   setTokens("preview-today-tokens", "preview-today-cost", data.todayTokens, data.todayCost);
@@ -53,6 +81,7 @@ function renderPreview(data) {
   setTokens("preview-last-week-tokens", "preview-last-week-cost", data.lastWeekTokens, data.lastWeekCost);
   setTokens("preview-month-tokens", "preview-month-cost", data.thisMonthTokens, data.thisMonthCost);
   setTokens("preview-last-month-tokens", "preview-last-month-cost", data.lastMonthTokens, data.lastMonthCost);
+  setTokens("preview-all-time-tokens", "preview-all-time-cost", data.allTimeTokens, data.allTimeCost);
 
   renderDelta("delta-today", data.todayTokens, data.yesterdayTokens);
   renderDelta("delta-week", data.weekTokens, data.lastWeekTokens);
@@ -62,16 +91,27 @@ function renderPreview(data) {
   if (participantsEl) participantsEl.textContent = data.participantCount ?? "--";
 }
 
+function renderFlatDelta(elId) {
+  const el = document.querySelector(`#${elId}`);
+  if (!el) return;
+  el.textContent = "--";
+  el.className = "delta flat";
+  el.hidden = false;
+}
+
 function renderDelta(elId, current, previous) {
   const el = document.querySelector(`#${elId}`);
   if (!el) return;
   const cur = Number(current) || 0;
   const prev = Number(previous) || 0;
-  if (!prev || !cur || cur === prev) { el.hidden = true; return; }
+  if (!prev || !cur || cur === prev) {
+    renderFlatDelta(elId);
+    return;
+  }
   const pct = Math.round(((cur - prev) / prev) * 100);
   const up = pct > 0;
-  el.textContent = `${up ? "+" : ""}${pct}% ${up ? "↑" : "↓"}`;
-  el.className = `preview-delta delta-${up ? "up" : "down"}`;
+  el.textContent = `${up ? "+" : ""}${pct}%`;
+  el.className = `delta ${up ? "up" : "down"}`;
   el.hidden = false;
 }
 
@@ -80,21 +120,91 @@ function renderDelta(elId, current, previous) {
 function homeRenderTrendChart() {
   const svg = document.querySelector("#home-trend-chart");
   if (!svg) return;
-  const data = state.analyticsData;
+  const data = state.trendData || state.analyticsData;
   if (!data) return;
+  const series = data.timeSeries || [];
   const tooltip = document.querySelector("#chart-tooltip");
-  renderTrendChart(svg, data.timeSeries || [], data.timeGrain || "day", tooltip, localeTokenCompact);
+  renderTrendChart(svg, series, data.timeGrain || "day", tooltip, localeTokenCompact, {
+    showActiveSeries: true,
+    highlightPeak: true,
+    height: 260,
+    padding: { left: 52, right: 10, top: 8, bottom: 22 }
+  });
+  renderHomeTrendPeak(series, data.timeGrain || "day");
 }
 
-function homeRenderGauge() {
+function renderHomeTrendPeak(series = [], grain = "day") {
+  const peakEl = document.querySelector("#home-trend-peak");
+  if (!peakEl) return;
+  let tokenPeak = null;
+  let activePeak = null;
+  for (const point of series) {
+    const tokens = Number(point.totalTokens || 0);
+    const activeCount = Number(point.activeCount || 0);
+    if (!tokenPeak || tokens > tokenPeak.totalTokens) {
+      tokenPeak = { ...point, totalTokens: tokens };
+    }
+    if (!activePeak || activeCount > activePeak.activeCount) {
+      activePeak = { ...point, activeCount };
+    }
+  }
+  if (!tokenPeak || !(tokenPeak.totalTokens > 0)) {
+    peakEl.hidden = true;
+    peakEl.textContent = "";
+    peakEl.removeAttribute("title");
+    return;
+  }
+  const tokenDay = formatTrendPeakLabel(tokenPeak, grain);
+  const value = localeTokenCompact(tokenPeak.totalTokens);
+  const activeCount = Number(activePeak?.activeCount || 0);
+  const activeDay = activeCount > 0 ? formatTrendPeakLabel(activePeak, grain) : "";
+  peakEl.hidden = false;
+  peakEl.textContent = activeCount > 0
+    ? t("web.home.trendPeakWithActive", { day: tokenDay, value, activeDay, active: activeCount })
+    : t("web.home.trendPeak", { day: tokenDay, value });
+  peakEl.title = t("web.home.trendPeakTitle", {
+    day: tokenDay,
+    value,
+    activeDay: activeDay || "-",
+    active: activeCount || "-"
+  });
+}
+
+function formatTrendPeakLabel(point = {}, grain = "day") {
+  if (grain === "hour") return `${point.day || ""} ${point.label || ""}`.trim();
+  if (grain === "week") return point.label || point.day || "";
+  return formatTrendPeakDay(point.day);
+}
+
+function formatTrendPeakDay(day = "") {
+  const parts = String(day || "").split("-");
+  return parts.length >= 3 ? `${parts[1]}-${parts[2]}` : day;
+}
+
+function homeRenderDonut() {
   const data = state.analyticsData;
   if (!data) return;
-  const summary = data.summary || {};
-  renderGauge(
-    document.querySelector("#home-gauge-fill"),
-    document.querySelector("#home-gauge-val"),
-    summary.cacheHitRate || 0
+  renderDonutChart(
+    document.querySelector("#home-provider-donut"),
+    (data.providers || []).map((provider) => ({
+      id: provider.name,
+      label: sourceName(provider.name),
+      ratio: provider.ratio
+    })),
+    { collapseAfter: 4, collapseLabel: t("web.analytics.otherSources") }
   );
+}
+
+function homeRenderHeatmap() {
+  const data = state.analyticsData;
+  if (!data) return;
+  renderActivityHeatmap(document.querySelector("#home-heatmap-grid"), data.heatmap || [], {
+    from: data.from,
+    to: data.to,
+    businessDay: data.businessDay,
+    tooltip: document.querySelector("#chart-tooltip"),
+    localeTokenCompact
+  });
 }
 
 function homeRenderBarChart(containerId, items, opts) {
@@ -109,7 +219,9 @@ function homeRenderParticipantTreemap() {
   if (!svg || !labels) return;
   renderParticipantTreemap(svg, labels, state.analyticsData?.participantRanking || [], {
     localeTokenCompact,
-    tooltip: document.querySelector("#chart-tooltip")
+    tooltip: document.querySelector("#chart-tooltip"),
+    sideContainer: document.querySelector("#home-treemap-side"),
+    legendContainer: document.querySelector("#home-treemap-legend")
   });
 }
 
@@ -122,75 +234,34 @@ function renderHomeParticipantTreemapFallback() {
 
 // --- Leaderboard Preview ---
 
-function rankIcon(rank) {
-  const trophy = `<svg class="lucide lucide-trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978"/><path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978"/><path d="M18 9h1.5a1 1 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"/><path d="M6 9H4.5a1 1 0 0 1 0-5H6"/></svg>`;
-  const medal = `<svg class="lucide lucide-medal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
-  return rank === 1 ? trophy : medal;
-}
+const HOME_TOP_LIMIT = 5;
 
-function orderPodium(items) {
-  if (items.length < 3) return items;
-  return [items[1], items[0], items[2]];
-}
-
-function renderTopThree(items) {
-  const el = document.querySelector("#home-top-three");
+function renderLeaderboardPreview(items) {
+  const el = document.querySelector("#home-top-today");
   if (!el) return;
-  if (!items.length) {
+  const countEl = document.querySelector("#home-top-count");
+  if (countEl) {
+    countEl.textContent = items.length
+      ? t("web.leaderboard.participantCount", { count: items.length, plural: items.length === 1 ? "" : "s" })
+      : "--";
+  }
+  const preview = items.slice(0, HOME_TOP_LIMIT);
+  if (!preview.length) {
     el.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noUsage")}</div>`;
     return;
   }
-  el.innerHTML = items
-    .map((item) => `<article class="medal-card medal-rank-${Math.min(item.rank, 3)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
-      <span class="medal-icon" aria-hidden="true">${rankIcon(item.rank)}</span>
-      <div class="medal-card-head">
-        <span class="medal-rank">#${item.rank}</span>
-        <span class="participant-link">${escapeHtml(item.displayName)}</span>
-      </div>
-      <strong class="medal-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
-      <span class="medal-cost">${renderCost(item)}</span>
-      ${renderModelSegments(item, { className: "composition-strip", title: modelUsageTitle(item, localeTokenCompact) })}
-    </article>`)
-    .join("");
-}
-
-function renderMeterView(items) {
-  const el = document.querySelector("#home-meter-rest");
-  if (!el) return;
-  if (!items.length) {
-    el.innerHTML = "";
-    return;
-  }
-  const max = Math.max(...items.map((item) => item.totalTokens), 1);
-  const colorCycle = ["", "meter-yellow", "meter-violet"];
-  el.innerHTML = items
+  const max = Math.max(...preview.map((item) => item.totalTokens), 1);
+  el.innerHTML = preview
     .map((item) => {
-      const pct = Math.max(3, (item.totalTokens / max) * 100);
-      const colorClass = colorCycle[(item.rank - 1) % colorCycle.length];
-      return `<div class="meter-row" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
-        <span class="meter-name">
-          <span class="rank">#${item.rank}</span>
-          <span class="participant-link">${escapeHtml(item.displayName)}</span>
-        </span>
-        <div class="meter-bar ${colorClass}">
-          <div class="meter-fill" style="width:${pct}%">
-            ${renderModelSegmentItems(item)}
-          </div>
-        </div>
-        <span class="meter-value">
-          <strong title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
-          <span class="cost-amount">${renderCost(item)}</span>
-        </span>
-      </div>`;
+      const pct = Math.max(6, (item.totalTokens / max) * 100);
+      return `<article class="top-row" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+        <span class="n">${item.rank}</span>
+        <span class="nm">${escapeHtml(item.displayName)}</span>
+        <span class="tv" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</span>
+        <div class="mini-bar"><i style="width:${pct}%"></i></div>
+      </article>`;
     })
     .join("");
-}
-
-function renderLeaderboardPreview(items) {
-  const top = orderPodium(items.slice(0, 3));
-  const rest = items.slice(3, 5);
-  renderTopThree(top);
-  renderMeterView(rest);
 }
 
 // --- Download Cards ---
@@ -230,24 +301,24 @@ function preferredPlatform() {
 }
 
 async function loadReleaseConfig() {
-  const el = document.querySelector("#download-actions");
-  if (!el) return;
+  const cardsEl = document.querySelector("#download-cards");
+  if (!cardsEl) return;
   try {
     const response = await fetch("/api/release/config");
     const data = await response.json();
     if (!data.ok) {
-      el.innerHTML = `<span class="download-placeholder">${escapeHtml(data.error || "release unavailable")}</span>`;
+      cardsEl.innerHTML = `<span class="download-placeholder">${escapeHtml(data.error || "release unavailable")}</span>`;
       return;
     }
     renderPlatformCards(data.release || {});
   } catch (error) {
-    el.innerHTML = `<span class="download-placeholder">${escapeHtml(error.message)}</span>`;
+    cardsEl.innerHTML = `<span class="download-placeholder">${escapeHtml(error.message)}</span>`;
   }
 }
 
 function renderPlatformCards(release) {
-  const el = document.querySelector("#download-actions");
-  if (!el) return;
+  const cardsEl = document.querySelector("#download-cards");
+  if (!cardsEl) return;
   const installers = release.installers || {};
   const platforms = Object.entries(installers)
     .filter(([, info]) => info?.url)
@@ -255,29 +326,22 @@ function renderPlatformCards(release) {
   const preferred = preferredPlatform();
 
   if (!platforms.length) {
-    el.innerHTML = `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
+    cardsEl.innerHTML = `<span class="download-placeholder">${t("web.releaseMetadata")}</span>`;
     return;
   }
 
-  el.innerHTML = platforms.map(([platform, info]) => {
+  cardsEl.innerHTML = platforms.map(([platform, info]) => {
     const meta = PLATFORM_META[platform] || { os: platform, arch: "", icon: "win", desc: () => "", ext: "" };
     const isRecommended = platform === preferred;
-    const recommendedBadge = isRecommended ? `<span class="recommend-badge">${t("web.download.recommended")}</span>` : `<span class="dl-arch">${escapeHtml(meta.arch)}</span>`;
-    const cardStyle = isRecommended ? ` style="border-color: var(--blue); border-width: 1.5px;"` : "";
-    return `<div class="dl-card"${cardStyle}>
-      <div class="dl-card-head">
-        <span class="dl-icon">${PLATFORM_ICONS[meta.icon] || ""}</span>
-        <span class="dl-os">${escapeHtml(meta.os)}</span>
-        ${recommendedBadge}
-      </div>
-      <div class="dl-divider"></div>
-      <div class="dl-meta">
-        <span>${escapeHtml(meta.desc())}</span>
-      </div>
-      <a class="dl-btn" href="${escapeAttribute(info.url)}" target="_blank" rel="noreferrer">
-        ${DOWNLOAD_ICON}<span>${t("web.download.downloadBtn")} ${escapeHtml(meta.ext)}</span>
-      </a>
-    </div>`;
+    return `<a class="download-card${isRecommended ? " recommended" : ""}" href="${escapeAttribute(info.url)}" target="_blank" rel="noreferrer">
+      <span class="download-card-icon">${PLATFORM_ICONS[meta.icon] || PLATFORM_ICONS.win}</span>
+      <span class="download-card-copy">
+        <strong>${escapeHtml(meta.os)}${meta.arch ? ` · ${escapeHtml(meta.arch)}` : ""}</strong>
+        <small>${escapeHtml(meta.desc())}</small>
+        ${isRecommended ? `<span class="download-card-badge">${escapeHtml(t("web.download.recommended"))}</span>` : ""}
+      </span>
+      <span class="download-card-action">${DOWNLOAD_ICON}</span>
+    </a>`;
   }).join("");
 }
 
@@ -313,6 +377,12 @@ function renderGallery() {
     const img = e.target.closest(".gallery-main-image");
     if (img) openLightbox(img.src, img.alt);
   };
+  galleryScrollEl.onmouseenter = () => stopGalleryTimer();
+  galleryScrollEl.onmouseleave = () => startGalleryTimer();
+  galleryScrollEl.onfocusin = () => stopGalleryTimer();
+  galleryScrollEl.onfocusout = (e) => {
+    if (!galleryScrollEl.contains(e.relatedTarget)) startGalleryTimer();
+  };
   startGalleryTimer();
 }
 
@@ -325,8 +395,16 @@ function rotateGallery(step) {
   selectGallery(activeScreenshotIndex + step);
 }
 
+function stopGalleryTimer() {
+  if (galleryTimer) {
+    window.clearInterval(galleryTimer);
+    galleryTimer = null;
+  }
+}
+
 function startGalleryTimer() {
-  if (galleryTimer) window.clearInterval(galleryTimer);
+  stopGalleryTimer();
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   galleryTimer = window.setInterval(() => rotateGallery(1), 5200);
 }
 
@@ -392,6 +470,7 @@ async function loadSummary() {
     const response = await fetch("/api/board/summary");
     const data = await response.json();
     state.summaryData = data;
+    if (data.identityMode) applyBoardIdentityEyebrow(data.identityMode);
     renderPreview(data);
   } catch {
     const section = document.querySelector("#preview-section");
@@ -401,31 +480,36 @@ async function loadSummary() {
 
 async function loadAnalytics() {
   try {
-    const params = new URLSearchParams({ range: "this_month" });
-    const response = await fetch(`/api/board/analytics?${params.toString()}`);
-    if (!response.ok) {
+    const [monthResponse, trendResponse] = await Promise.all([
+      fetch("/api/board/analytics?range=this_month"),
+      fetch("/api/board/analytics?range=last30")
+    ]);
+    if (!monthResponse.ok) {
       renderAuthFallback("#home-trend-chart");
       renderAuthFallback("#home-model-chart");
-      renderAuthFallback("#home-provider-chart");
+      renderAuthFallback("#home-provider-donut");
+      renderAuthFallback("#home-heatmap-grid");
       renderHomeParticipantTreemapFallback();
       return;
     }
-    const data = await response.json();
-    state.analyticsData = data;
+    const monthData = await monthResponse.json();
+    state.analyticsData = monthData;
+    state.trendData = trendResponse.ok ? await trendResponse.json() : monthData;
     const fallback = document.querySelector("#home-participant-treemap-fallback");
     if (fallback) {
       fallback.hidden = true;
       fallback.innerHTML = "";
     }
     homeRenderTrendChart();
-    homeRenderGauge();
-    homeRenderBarChart("#home-model-chart", data.models, { collapseAfter: 4 });
-    homeRenderBarChart("#home-provider-chart", (data.providers || []).map(p => ({ ...p, name: sourceName(p.name) })));
+    homeRenderBarChart("#home-model-chart", monthData.models, { collapseAfter: 4 });
+    homeRenderDonut();
+    homeRenderHeatmap();
     homeRenderParticipantTreemap();
   } catch {
     renderAuthFallback("#home-trend-chart");
     renderAuthFallback("#home-model-chart");
-    renderAuthFallback("#home-provider-chart");
+    renderAuthFallback("#home-provider-donut");
+    renderAuthFallback("#home-heatmap-grid");
     renderHomeParticipantTreemapFallback();
   }
 }
@@ -435,14 +519,14 @@ async function loadLeaderboard() {
     const params = new URLSearchParams({ period: "today", includeCost: "1" });
     const response = await fetch(`/api/board/leaderboard?${params.toString()}`);
     if (!response.ok) {
-      renderAuthFallback("#home-top-three");
+      renderAuthFallback("#home-top-today");
       return;
     }
     const data = await response.json();
     state.leaderboardData = data;
     renderLeaderboardPreview(data.items || []);
   } catch {
-    renderAuthFallback("#home-top-three");
+    renderAuthFallback("#home-top-today");
   }
 }
 
@@ -456,16 +540,20 @@ if (langContainer) {
 updatePageTranslations();
 
 async function init() {
-  await Promise.allSettled([
-    loadSummary(),
-    loadAnalytics(),
-    loadLeaderboard()
-  ]);
-  await Promise.allSettled([
-    loadReleaseConfig(),
-    fetchAndRenderChangelog()
-  ]);
-  renderGallery();
+  document.body.classList.add("is-refreshing");
+  try {
+    await Promise.allSettled([
+      loadSummary(),
+      loadAnalytics(),
+      loadLeaderboard(),
+      loadReleaseConfig(),
+      fetchAndRenderChangelog()
+    ]);
+    renderGallery();
+  } finally {
+    document.body.classList.remove("is-refreshing");
+    requestAnimationFrame(() => document.body.classList.add("is-settled"));
+  }
 }
 
 init().catch(err => console.error("Init failed:", err));

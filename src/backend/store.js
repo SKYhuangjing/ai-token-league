@@ -8,6 +8,8 @@ import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../s
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 import { currentBusinessDay } from "./day-context.js";
 
+export const ANALYTICS_ALL_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+
 export const DEFAULT_DB = {
   schemaVersion: STORAGE_SCHEMA_VERSION,
   serverInstanceId: "",
@@ -50,6 +52,7 @@ export class Store {
     this.db.usageHourly ||= {};
     this.db.usageSyncBucketsHourly ||= {};
     this.aggregateCache = {};
+    this.analyticsAllCache = {};
     this.priceMapCache = null;
     this.deferSaveDepth = 0;
     this.pendingDeferredSave = false;
@@ -697,6 +700,39 @@ export class Store {
     this.db.aggregateCache = {};
   }
 
+  analyticsAllCacheKey({ participantId = "" } = {}) {
+    return `analytics-all|${STORAGE_SCHEMA_VERSION}|${JSON.stringify({ participantId: participantId || "" })}`;
+  }
+
+  readAnalyticsAllCache(args = {}) {
+    const key = this.analyticsAllCacheKey(args);
+    const cached = this.analyticsAllCache?.[key];
+    if (!cached) return null;
+    if (cached.expiresAt <= Date.now()) {
+      delete this.analyticsAllCache[key];
+      return null;
+    }
+    return cached.value;
+  }
+
+  writeAnalyticsAllCache(args = {}, value) {
+    const key = this.analyticsAllCacheKey(args);
+    this.analyticsAllCache ||= {};
+    this.analyticsAllCache[key] = {
+      key,
+      createdAt: new Date().toISOString(),
+      expiresAt: Date.now() + ANALYTICS_ALL_CACHE_TTL_MS,
+      value
+    };
+    return value;
+  }
+
+  cachedAnalyticsAll(args, compute) {
+    const hit = this.readAnalyticsAllCache(args);
+    if (hit) return hit;
+    return this.writeAnalyticsAllCache(args, compute());
+  }
+
   bucketSyncKey(participantId, deviceId, day, providerId) {
     return [participantId, deviceId, day, providerId].join("|");
   }
@@ -1137,7 +1173,10 @@ export class Store {
     const totals = Object.fromEntries(
       Object.keys(ranges).map((key) => [key, { tokens: 0, cost: 0 }])
     );
+    totals.allTime = { tokens: 0, cost: 0 };
     for (const item of Object.values(this.db.usageDaily || {})) {
+      totals.allTime.tokens += item.totalTokens || 0;
+      totals.allTime.cost += item.estimatedCostUsd || 0;
       for (const [key, days] of Object.entries(ranges)) {
         if (!days.has(item.day)) continue;
         totals[key].tokens += item.totalTokens || 0;
@@ -1152,12 +1191,14 @@ export class Store {
       lastWeekTokens: totals.lastWeek.tokens,
       thisMonthTokens: totals.thisMonth.tokens,
       lastMonthTokens: totals.lastMonth.tokens,
+      allTimeTokens: totals.allTime.tokens,
       todayCost: totals.today.cost,
       yesterdayCost: totals.yesterday.cost,
       weekCost: totals.week.cost,
       lastWeekCost: totals.lastWeek.cost,
       thisMonthCost: totals.thisMonth.cost,
-      lastMonthCost: totals.lastMonth.cost
+      lastMonthCost: totals.lastMonth.cost,
+      allTimeCost: totals.allTime.cost
     };
   }
 
@@ -1324,7 +1365,10 @@ export class Store {
 
   analytics({ period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = {}) {
     const args = { period, range, startDay, endDay, participantId };
-    return this.cachedAggregate("analytics", args, () => this.computeAnalytics(args), { dayScoped: isDayScopedRange({ period, range, startDay, endDay }) });
+    if (isAnalyticsAllPeriod(args)) {
+      return this.cachedAnalyticsAll(args, () => this.computeAnalytics(args));
+    }
+    return this.cachedAggregate("analytics", args, () => this.computeAnalytics(args), { dayScoped: isDayScopedRange(args) });
   }
 
   computeAnalytics({ period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = {}) {
@@ -1371,8 +1415,10 @@ export class Store {
     const providerBreakdown = {};
 
     const dailySeries = {};
+    const activeParticipantsByDay = {};
     for (const day of days) {
-      dailySeries[day] = { day, totalTokens: 0, estimatedCostUsd: 0 };
+      dailySeries[day] = { day, totalTokens: 0, estimatedCostUsd: 0, activeCount: 0 };
+      activeParticipantsByDay[day] = new Set();
     }
 
     for (const item of rows) {
@@ -1396,6 +1442,7 @@ export class Store {
       if (dailySeries[item.day]) {
         dailySeries[item.day].totalTokens += tokens;
         dailySeries[item.day].estimatedCostUsd += item.estimatedCostUsd || 0;
+        if (item.participantId) activeParticipantsByDay[item.day].add(item.participantId);
       }
 
       const pricing = priceMap[normalizeModelName(item.model)];
@@ -1422,6 +1469,9 @@ export class Store {
       .map(([name, val]) => ({ name, tokens: val, ratio: totalTokens ? val / totalTokens : 0 }))
       .sort((a, b) => b.tokens - a.tokens);
 
+    for (const day of days) {
+      dailySeries[day].activeCount = activeParticipantsByDay[day]?.size || 0;
+    }
     const timeSeries = Object.values(dailySeries).sort((a, b) => a.day.localeCompare(b.day));
 
     // Build hourly time series for today/yesterday
@@ -1495,17 +1545,31 @@ export class Store {
       heatmap
     };
     if (!participantId) {
+      const providerTotalsByParticipant = new Map();
+      for (const row of rows) {
+        const bucket = providerTotalsByParticipant.get(row.participantId) || {};
+        const providerId = row.providerId || "unknown";
+        bucket[providerId] = (bucket[providerId] || 0) + (row.totalTokens || 0);
+        providerTotalsByParticipant.set(row.participantId, bucket);
+      }
       result.participantRanking = rankParticipantsForRows(rows, this.db.participants)
-        .map((item) => ({
-          rank: item.rank,
-          participantId: item.participantId,
-          nickname: this.db.participants[item.participantId]?.nickname || item.participantId,
-          totalTokens: item.totalTokens
-        }));
+        .map((item) => {
+          const providerTotals = providerTotalsByParticipant.get(item.participantId) || {};
+          const primaryProvider = Object.entries(providerTotals)
+            .sort((a, b) => b[1] - a[1])[0]?.[0] || "other";
+          return {
+            rank: item.rank,
+            participantId: item.participantId,
+            nickname: this.db.participants[item.participantId]?.nickname || item.participantId,
+            totalTokens: item.totalTokens,
+            primaryProvider
+          };
+        });
     }
     if (participantId) {
       result.rankStats = this.analyticsRankStats(participantId, days, { businessDay });
     }
+    result.participantCount = Object.keys(this.db.participants || {}).length;
     return result;
   }
 
@@ -2096,6 +2160,7 @@ function daysForQuery({ period = "", range = "today", startDay = "", endDay = ""
 
 function daysForPeriod(period, { businessDay = localDay() } = {}) {
   const today = businessDay;
+  if (period === "all") return null;
   if (period === "today") return [today];
   if (period === "yesterday") {
     return [addDays(today, -1)];
@@ -2405,6 +2470,10 @@ function isDayScopedRange({ period = "", range = "today", startDay = "", endDay 
   if (period === "all" || range === "all") return false;
   if (range === "custom" && isDay(startDay) && isDay(endDay)) return false;
   return true;
+}
+
+function isAnalyticsAllPeriod({ period = "", range = "" } = {}) {
+  return period === "all" || range === "all";
 }
 
 function sortedBreakdown(obj) {

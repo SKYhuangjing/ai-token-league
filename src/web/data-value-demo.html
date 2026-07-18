@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>AI Token League 数据价值 Demo</title>
+    <style>
+      :root {
+        --bg: #f1f3f0;
+        --surface: #f9faf7;
+        --surface-strong: #fcfdfb;
+        --ink: #18201d;
+        --muted: #68726d;
+        --faint: #929b96;
+        --line: #d8ded9;
+        --line-strong: #bfc8c2;
+        --accent: #087f6d;
+        --accent-soft: #d8eee8;
+        --accent-ink: #075e53;
+        --positive: #087f6d;
+        --negative: #b54c4c;
+        --warning: #9a6815;
+        --shadow: 0 18px 50px rgba(28, 48, 40, 0.08);
+        --radius: 14px;
+        --font-ui: "Avenir Next", "SF Pro Display", "PingFang SC", system-ui, sans-serif;
+        --font-data: "SFMono-Regular", "Cascadia Code", "Roboto Mono", monospace;
+      }
+
+      html[data-theme="dark"] {
+        --bg: #111715;
+        --surface: #17201d;
+        --surface-strong: #1d2723;
+        --ink: #edf4f0;
+        --muted: #a1afa8;
+        --faint: #728078;
+        --line: #2d3a35;
+        --line-strong: #405049;
+        --accent: #5cc5ad;
+        --accent-soft: #193d35;
+        --accent-ink: #8ee0cd;
+        --positive: #65cbb3;
+        --negative: #ec8d8d;
+        --warning: #e1b65f;
+        --shadow: 0 22px 60px rgba(0, 0, 0, 0.24);
+      }
+
+      * { box-sizing: border-box; }
+      html { background: var(--bg); scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 82% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30rem),
+          var(--bg);
+        font-family: var(--font-ui);
+        min-height: 100dvh;
+      }
+      button { color: inherit; font: inherit; }
+      button, [role="button"] { -webkit-tap-highlight-color: transparent; }
+      button:focus-visible, [tabindex]:focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
+        outline-offset: 3px;
+      }
+      .mono, .metric-value, .table-number, .rank-number { font-family: var(--font-data); }
+
+      .app-header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: grid;
+        grid-template-columns: minmax(190px, 1fr) auto minmax(190px, 1fr);
+        align-items: center;
+        min-height: 70px;
+        padding: 0 28px;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(18px);
+      }
+      .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        color: white;
+        background: var(--accent);
+        font-family: var(--font-data);
+        font-size: 12px;
+        font-weight: 800;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
+      }
+      .brand-copy { min-width: 0; }
+      .brand-copy strong { display: block; font-size: 14px; line-height: 1.1; white-space: nowrap; }
+      .brand-copy small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; letter-spacing: .02em; }
+
+      .view-nav {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+      .view-nav button {
+        min-width: 76px;
+        height: 34px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 10px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 650;
+        transition: background .18s ease, color .18s ease, transform .18s ease;
+      }
+      .view-nav button:hover { color: var(--ink); }
+      .view-nav button:active { transform: translateY(1px); }
+      .view-nav button.active { color: var(--surface-strong); background: var(--ink); }
+      html[data-theme="dark"] .view-nav button.active { color: var(--bg); }
+
+      .header-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+      .ghost-button, .refresh-button {
+        height: 36px;
+        padding: 0 13px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 650;
+        white-space: nowrap;
+        transition: border-color .18s ease, background .18s ease, transform .18s ease;
+      }
+      .ghost-button:hover, .refresh-button:hover { border-color: var(--line-strong); background: var(--surface-strong); }
+      .ghost-button:active, .refresh-button:active { transform: translateY(1px); }
+      .refresh-button { color: white; border-color: var(--accent); background: var(--accent); }
+      .refresh-button:hover { border-color: var(--accent); background: var(--accent-ink); }
+
+      .demo-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        max-width: 1440px;
+        margin: 18px auto 0;
+        padding: 10px 18px;
+        color: var(--accent-ink);
+        border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+        border-radius: var(--radius);
+        background: var(--accent-soft);
+        font-size: 12px;
+      }
+      .demo-banner strong { font-weight: 750; }
+      .demo-banner span:last-child { color: var(--muted); }
+
+      .shell { width: min(1440px, calc(100% - 40px)); margin: 0 auto; padding: 28px 0 64px; }
+      .view { display: none; }
+      .view.active { display: block; animation: view-enter .34s cubic-bezier(.16, 1, .3, 1) both; }
+      @keyframes view-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+      .page-heading {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 24px;
+      }
+      .page-heading h1 { max-width: 760px; margin: 0; font-size: clamp(30px, 4vw, 56px); line-height: .98; letter-spacing: -.055em; }
+      .page-heading p { max-width: 52ch; margin: 10px 0 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+      .scope {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .scope button {
+        padding: 8px 11px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--muted);
+        background: var(--surface);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .scope button.active { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); background: var(--accent-soft); }
+
+      .metric-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+      .metric { position: relative; min-height: 146px; padding: 20px; border-right: 1px solid var(--line); }
+      .metric:last-child { border-right: 0; }
+      .metric-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
+      .metric-value { display: block; margin-top: 18px; font-size: clamp(27px, 3vw, 42px); font-weight: 700; letter-spacing: -.055em; }
+      .metric-meta { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 11px; }
+      .delta-up { color: var(--positive); font-weight: 750; }
+      .delta-down { color: var(--negative); font-weight: 750; }
+      .cost-note { color: var(--faint); }
+
+      .grid-main { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(310px, .7fr); gap: 18px; margin-top: 18px; }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .panel-elevated { background: var(--surface-strong); box-shadow: var(--shadow); }
+      .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 19px 20px 15px; }
+      .panel-head h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
+      .panel-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .panel-meta { color: var(--faint); font-family: var(--font-data); font-size: 10px; white-space: nowrap; }
+
+      .lead-insight { display: grid; grid-template-columns: 1.05fr 1fr; min-height: 380px; }
+      .insight-copy { display: flex; flex-direction: column; justify-content: space-between; padding: 28px; border-right: 1px solid var(--line); }
+      .insight-copy h2 { max-width: 14ch; margin: 0; font-size: clamp(29px, 4vw, 54px); line-height: 1.02; letter-spacing: -.06em; }
+      .insight-copy h2 em { color: var(--accent); font-style: normal; }
+      .insight-copy p { max-width: 48ch; margin: 22px 0 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+      .insight-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 28px; }
+      .insight-fact { padding-top: 12px; border-top: 1px solid var(--line); }
+      .insight-fact strong { display: block; font-family: var(--font-data); font-size: 20px; }
+      .insight-fact span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+
+      .chart-wrap { display: flex; flex-direction: column; justify-content: space-between; padding: 24px 22px 18px; min-width: 0; }
+      .chart-caption { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }
+      .line-chart { width: 100%; height: 250px; overflow: visible; }
+      .chart-grid line { stroke: var(--line); stroke-width: 1; }
+      .chart-area { fill: color-mix(in srgb, var(--accent) 12%, transparent); }
+      .chart-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .chart-point { fill: var(--surface-strong); stroke: var(--accent); stroke-width: 3; }
+      .chart-annotation { fill: var(--ink); font-family: var(--font-data); font-size: 10px; }
+      .chart-sub { fill: var(--muted); font-family: var(--font-data); font-size: 9px; }
+
+      .story-list { padding: 0 20px 16px; }
+      .story-item { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 12px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+      .story-item:last-child { border-bottom: 0; }
+      .story-index { color: var(--faint); font-family: var(--font-data); font-size: 11px; }
+      .story-item strong { display: block; font-size: 13px; }
+      .story-item small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+      .story-value { text-align: right; font-family: var(--font-data); font-size: 12px; font-weight: 750; }
+
+      .source-composition { display: grid; grid-template-columns: 138px 1fr; align-items: center; gap: 22px; padding: 20px; }
+      .donut {
+        display: grid;
+        place-items: center;
+        width: 138px;
+        aspect-ratio: 1;
+        border-radius: 50%;
+        background: conic-gradient(var(--accent) 0 54%, color-mix(in srgb, var(--accent) 60%, var(--muted)) 54% 84%, color-mix(in srgb, var(--accent) 24%, var(--line)) 84% 100%);
+      }
+      .donut::after { content: "来源"; display: grid; place-items: center; width: 76px; aspect-ratio: 1; border-radius: 50%; color: var(--muted); background: var(--surface); font-size: 11px; }
+      .legend-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 9px 0; font-size: 12px; }
+      .legend-row span:last-child { font-family: var(--font-data); font-weight: 750; }
+
+      .full-panel { margin-top: 18px; }
+      .data-table { width: 100%; border-collapse: collapse; }
+      .data-table th { padding: 11px 18px; color: var(--faint); background: color-mix(in srgb, var(--surface) 72%, var(--bg)); font-size: 10px; font-weight: 700; text-align: left; letter-spacing: .03em; }
+      .data-table td { padding: 15px 18px; border-top: 1px solid var(--line); font-size: 12px; }
+      .data-table tbody tr { cursor: pointer; transition: background .16s ease; }
+      .data-table tbody tr:hover { background: var(--accent-soft); }
+      .data-table tbody tr.selected { background: color-mix(in srgb, var(--accent-soft) 78%, var(--surface)); }
+      .rank-number { color: var(--muted); font-weight: 750; }
+      .person-name { font-weight: 700; }
+      .person-name small { display: block; margin-top: 3px; color: var(--muted); font-weight: 500; }
+      .table-number { font-weight: 650; white-space: nowrap; }
+      .source-label { color: var(--accent-ink); font-weight: 700; }
+
+      .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+      .summary-card { padding: 17px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+      .summary-card span { display: block; color: var(--muted); font-size: 11px; }
+      .summary-card strong { display: block; margin-top: 9px; font-family: var(--font-data); font-size: 22px; }
+
+      .leader-grid { display: grid; grid-template-columns: minmax(270px, .62fr) minmax(0, 1.5fr); gap: 18px; }
+      .podium { padding: 20px; }
+      .podium-title { margin: 0 0 18px; font-size: 14px; }
+      .podium-entry { padding: 18px 0; border-bottom: 1px solid var(--line); }
+      .podium-entry:last-child { border-bottom: 0; }
+      .podium-entry .place { color: var(--faint); font-family: var(--font-data); font-size: 11px; }
+      .podium-entry h3 { margin: 8px 0 4px; font-size: 20px; }
+      .podium-entry p { margin: 0; color: var(--muted); font-size: 11px; }
+      .podium-entry strong { display: block; margin-top: 13px; color: var(--accent-ink); font-family: var(--font-data); font-size: 25px; }
+      .detail-drawer { margin-top: 18px; padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-strong); }
+      .detail-drawer h3 { margin: 0; font-size: 14px; }
+      .detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+      .detail-stat { padding: 12px; border-radius: 10px; background: var(--surface); }
+      .detail-stat span { display: block; color: var(--muted); font-size: 10px; }
+      .detail-stat strong { display: block; margin-top: 7px; font-family: var(--font-data); font-size: 14px; }
+
+      .insight-rail { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+      .insight-card { min-height: 158px; padding: 19px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+      .insight-card.primary { color: white; border-color: var(--accent); background: var(--accent); }
+      .insight-card .number { display: block; font-family: var(--font-data); font-size: 28px; font-weight: 800; }
+      .insight-card h3 { margin: 20px 0 6px; font-size: 14px; }
+      .insight-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+      .insight-card.primary p { color: rgba(255, 255, 255, .76); }
+
+      .analysis-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(290px, .65fr); gap: 18px; }
+      .large-chart { min-height: 430px; padding-bottom: 18px; }
+      .large-chart .line-chart { height: 320px; padding: 0 18px; }
+      .driver-list { padding: 4px 20px 18px; }
+      .driver { display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+      .driver:last-child { border-bottom: 0; }
+      .driver strong { display: block; font-size: 12px; }
+      .driver small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+      .driver-value { font-family: var(--font-data); font-size: 12px; font-weight: 750; }
+      .driver-value.negative { color: var(--negative); }
+
+      .analysis-lower { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+      .heatmap { display: grid; grid-template-columns: repeat(14, 1fr); gap: 5px; padding: 20px; }
+      .heatmap i { aspect-ratio: 1; border-radius: 4px; background: color-mix(in srgb, var(--accent) calc(var(--level) * 18%), var(--surface)); }
+      .mix-bars { padding: 8px 20px 20px; }
+      .mix-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) 58px; align-items: center; gap: 12px; padding: 12px 0; }
+      .mix-row span { font-size: 11px; }
+      .mix-row strong { text-align: right; font-family: var(--font-data); font-size: 11px; }
+      .thin-bar { height: 5px; overflow: hidden; border-radius: 4px; background: var(--line); }
+      .thin-bar i { display: block; width: var(--value); height: 100%; border-radius: inherit; background: var(--accent); transform-origin: left; }
+
+      .admin-heading h1 { font-size: clamp(28px, 3vw, 44px); }
+      .admin-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr); gap: 18px; }
+      .task-list { padding: 0 20px 16px; }
+      .task { display: grid; grid-template-columns: 1fr auto; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+      .task:last-child { border-bottom: 0; }
+      .task strong { display: block; font-size: 13px; }
+      .task p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .task button { align-self: center; padding: 8px 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-strong); cursor: pointer; font-size: 11px; font-weight: 700; white-space: nowrap; }
+      .task button:hover { color: white; border-color: var(--accent); background: var(--accent); }
+      .status-stack { padding: 0 20px 18px; }
+      .status-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+      .status-row:last-child { border-bottom: 0; }
+      .status-row span { color: var(--muted); font-size: 11px; }
+      .status-row strong { font-family: var(--font-data); font-size: 12px; }
+      .status-row strong.ok { color: var(--positive); }
+      .status-row strong.warn { color: var(--warning); }
+      .admin-table { margin-top: 18px; }
+
+      .loading-mask { display: none; position: fixed; inset: 70px 0 0; z-index: 9; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(3px); }
+      body.loading .loading-mask { display: grid; place-items: start center; padding-top: 11vh; }
+      .loading-card { width: min(720px, calc(100% - 36px)); padding: 24px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-strong); box-shadow: var(--shadow); }
+      .loading-card strong { font-size: 14px; }
+      .loading-card p { margin: 6px 0 18px; color: var(--muted); font-size: 11px; }
+      .skeleton { height: 12px; margin-top: 10px; border-radius: 6px; background: linear-gradient(90deg, var(--line) 25%, color-mix(in srgb, var(--line) 55%, var(--surface-strong)) 50%, var(--line) 75%); background-size: 220% 100%; animation: shimmer 1s linear infinite; }
+      .skeleton.short { width: 58%; }
+      .skeleton.medium { width: 78%; }
+      @keyframes shimmer { to { background-position: -220% 0; } }
+
+      .demo-footer { display: flex; justify-content: space-between; gap: 18px; margin-top: 26px; padding: 18px 2px; color: var(--faint); border-top: 1px solid var(--line); font-size: 10px; }
+
+      @media (max-width: 980px) {
+        .app-header { grid-template-columns: 1fr auto; gap: 12px; padding: 10px 18px; }
+        .view-nav { grid-column: 1 / -1; grid-row: 2; width: 100%; overflow-x: auto; }
+        .view-nav button { flex: 1; min-width: 72px; }
+        .header-actions { grid-column: 2; grid-row: 1; }
+        .metric-strip { grid-template-columns: 1fr 1fr; }
+        .metric:nth-child(2) { border-right: 0; }
+        .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+        .grid-main, .leader-grid, .analysis-grid, .admin-grid { grid-template-columns: 1fr; }
+        .lead-insight { grid-template-columns: 1fr; }
+        .insight-copy { border-right: 0; border-bottom: 1px solid var(--line); }
+      }
+
+      @media (max-width: 680px) {
+        .app-header { min-height: auto; }
+        .brand-copy small, .refresh-button { display: none; }
+        .ghost-button { width: 38px; padding: 0; font-size: 0; }
+        .ghost-button::after { content: "◐"; font-size: 15px; }
+        .demo-banner { width: calc(100% - 24px); margin-top: 12px; padding: 9px 12px; }
+        .demo-banner span:last-child { display: none; }
+        .shell { width: calc(100% - 24px); padding-top: 22px; }
+        .page-heading { align-items: flex-start; flex-direction: column; }
+        .page-heading h1 { font-size: 35px; }
+        .scope { justify-content: flex-start; width: 100%; overflow-x: auto; flex-wrap: nowrap; }
+        .scope button { flex: 0 0 auto; }
+        .metric-strip { grid-template-columns: 1fr 1fr; }
+        .metric { min-height: 126px; padding: 15px; }
+        .metric-value { font-size: 25px; }
+        .lead-insight { min-height: auto; }
+        .insight-copy, .chart-wrap { padding: 20px 17px; }
+        .insight-copy h2 { font-size: 35px; }
+        .line-chart { height: 220px; }
+        .source-composition { grid-template-columns: 110px 1fr; gap: 14px; }
+        .donut { width: 110px; }
+        .donut::after { width: 62px; }
+        .summary-grid, .insight-rail { grid-template-columns: 1fr 1fr; }
+        .insight-card.primary { grid-column: 1 / -1; }
+        .analysis-lower { grid-template-columns: 1fr; }
+        .detail-grid { grid-template-columns: 1fr; }
+        .table-scroll { overflow-x: auto; }
+        .data-table { min-width: 720px; }
+        .heatmap { gap: 3px; }
+        .demo-footer { flex-direction: column; }
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .view.active .chart-line { stroke-dasharray: 1400; stroke-dashoffset: 1400; animation: draw-line 1.1s cubic-bezier(.16, 1, .3, 1) .12s forwards; }
+        .view.active .thin-bar i { animation: grow-bar .72s cubic-bezier(.16, 1, .3, 1) both; }
+        .view.active .metric { animation: metric-in .42s cubic-bezier(.16, 1, .3, 1) both; }
+        .view.active .metric:nth-child(2) { animation-delay: .05s; }
+        .view.active .metric:nth-child(3) { animation-delay: .1s; }
+        .view.active .metric:nth-child(4) { animation-delay: .15s; }
+        @keyframes draw-line { to { stroke-dashoffset: 0; } }
+        @keyframes grow-bar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+        @keyframes metric-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-mark">ATL</div>
+        <div class="brand-copy">
+          <strong>AI Token League</strong>
+          <small>数据价值静态 Demo</small>
+        </div>
+      </div>
+      <nav class="view-nav" aria-label="Demo 页面" role="tablist">
+        <button class="active" data-view-target="home" role="tab" aria-selected="true">首页</button>
+        <button data-view-target="leaderboard" role="tab" aria-selected="false">排行榜</button>
+        <button data-view-target="analytics" role="tab" aria-selected="false">分析</button>
+        <button data-view-target="admin" role="tab" aria-selected="false">Admin</button>
+      </nav>
+      <div class="header-actions">
+        <button class="ghost-button" id="theme-toggle" aria-label="切换明暗主题" aria-pressed="false">深色</button>
+        <button class="refresh-button" id="refresh-demo">刷新数据</button>
+      </div>
+    </header>
+
+    <div class="demo-banner">
+      <strong>这是隔离的静态设计原型，不会修改线上页面或业务数据。</strong>
+      <span>示例数据基于当前公开页面快照，用于验证信息层级与交互方向。</span>
+    </div>
+
+    <main class="shell">
+      <section class="view active" data-view="home" role="tabpanel">
+        <div class="page-heading">
+          <div>
+            <h1>社区用量脉搏</h1>
+            <p>先看规模和变化，再进入贡献者、模型、来源与长期规律。</p>
+          </div>
+          <div class="scope" aria-label="首页时间范围">
+            <button class="active">今天</button><button>本周</button><button>本月</button><button>累计</button>
+          </div>
+        </div>
+
+        <section class="metric-strip" aria-label="社区核心指标">
+          <article class="metric">
+            <span class="metric-label">社区今日 Token <span class="mono">07-18</span></span>
+            <strong class="metric-value">1.05亿</strong>
+            <span class="metric-meta"><b class="delta-down">-96%</b> 较昨日 25.4 亿</span>
+          </article>
+          <article class="metric">
+            <span class="metric-label">社区本周 Token <span class="mono">7D</span></span>
+            <strong class="metric-value">162.0亿</strong>
+            <span class="metric-meta"><b class="delta-up">+39%</b> 较上周增加 45.4 亿</span>
+          </article>
+          <article class="metric">
+            <span class="metric-label">今日活跃参与者 <span class="mono">当前</span></span>
+            <strong class="metric-value">4</strong>
+            <span class="metric-meta"><b class="delta-down">-37%</b> 较近 7 日均值</span>
+          </article>
+          <article class="metric">
+            <span class="metric-label">预估成本 <span class="cost-note">不参与排名</span></span>
+            <strong class="metric-value">$54.05</strong>
+            <span class="metric-meta">价格覆盖率 <b class="delta-up">93.8%</b></span>
+          </article>
+        </section>
+
+        <div class="grid-main">
+          <article class="panel panel-elevated lead-insight">
+            <div class="insight-copy">
+              <div>
+                <h2>今日骤降，但<em>周趋势仍增长</em></h2>
+                <p>单日用量较昨日下降 96%，主要因为活跃参与者减少。本周累计仍高于上周，暂未形成持续下行趋势。</p>
+              </div>
+              <div class="insight-facts">
+                <div class="insight-fact"><strong>96.1%</strong><span>Top 1 今日贡献占比</span></div>
+                <div class="insight-fact"><strong>+45.4亿</strong><span>本周较上周净增长</span></div>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <div class="chart-caption"><span>近 14 日 Token</span><span class="mono">单位：亿</span></div>
+              <svg class="line-chart" viewBox="0 0 520 250" role="img" aria-label="近十四日社区 Token 趋势">
+                <g class="chart-grid"><line x1="20" y1="50" x2="500" y2="50"/><line x1="20" y1="125" x2="500" y2="125"/><line x1="20" y1="200" x2="500" y2="200"/></g>
+                <path class="chart-area" d="M20 182 L58 155 L96 170 L134 132 L172 160 L210 105 L248 82 L286 142 L324 116 L362 36 L400 74 L438 95 L476 145 L500 195 L500 220 L20 220 Z"/>
+                <path class="chart-line" d="M20 182 L58 155 L96 170 L134 132 L172 160 L210 105 L248 82 L286 142 L324 116 L362 36 L400 74 L438 95 L476 145 L500 195"/>
+                <circle class="chart-point" cx="362" cy="36" r="5"/><text class="chart-annotation" x="346" y="18">43.1亿</text><text class="chart-sub" x="344" y="30">07-14 峰值</text>
+                <circle class="chart-point" cx="500" cy="195" r="5"/><text class="chart-annotation" x="455" y="185">1.05亿</text>
+              </svg>
+              <div class="chart-caption"><span>07-05</span><span>07-18</span></div>
+            </div>
+          </article>
+
+          <div>
+            <article class="panel">
+              <div class="panel-head"><div><h2>今日变化由谁贡献</h2><p>从总量继续下钻到贡献者。</p></div><span class="panel-meta">4 位参与者</span></div>
+              <div class="story-list">
+                <div class="story-item"><span class="story-index">01</span><div><strong>把货运好 4</strong><small>Codex 为主要来源</small></div><span class="story-value">1.01亿<br><b class="delta-up">96.1%</b></span></div>
+                <div class="story-item"><span class="story-index">02</span><div><strong>健康可持续 2</strong><small>Claude Code 为主要来源</small></div><span class="story-value">288.4万<br>2.7%</span></div>
+                <div class="story-item"><span class="story-index">03</span><div><strong>第七宇宙</strong><small>Cursor 为主要来源</small></div><span class="story-value">133.5万<br>1.3%</span></div>
+                <div class="story-item"><span class="story-index">04</span><div><strong>健康可持续</strong><small>Codex 为主要来源</small></div><span class="story-value">2.7万<br>&lt;0.1%</span></div>
+              </div>
+            </article>
+
+            <article class="panel full-panel">
+              <div class="panel-head"><div><h2>来源结构</h2><p>增长来自工具结构还是参与人数。</p></div></div>
+              <div class="source-composition">
+                <div class="donut" aria-label="来源占比分布"></div>
+                <div><div class="legend-row"><span>Codex</span><span>54%</span></div><div class="legend-row"><span>Claude Code</span><span>30%</span></div><div class="legend-row"><span>其他来源</span><span>16%</span></div></div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <article class="panel full-panel">
+          <div class="panel-head"><div><h2>本周贡献变化</h2><p>名次只是结果，贡献占比和变化方向才解释结果。</p></div><span class="panel-meta">点击行查看参与者</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>排名</th><th>参与者</th><th>本周 Token</th><th>社区贡献</th><th>较上周</th><th>主要来源</th></tr></thead><tbody>
+            <tr data-person="巴斯光年"><td class="rank-number">01</td><td class="person-name">巴斯光年<small>连续活跃 7 天</small></td><td class="table-number">55.5亿</td><td class="table-number">16.0%</td><td class="delta-up">+4.2%</td><td class="source-label">Codex</td></tr>
+            <tr data-person="担当且极致 3"><td class="rank-number">02</td><td class="person-name">担当且极致 3<small>连续活跃 5 天</small></td><td class="table-number">29.4亿</td><td class="table-number">8.5%</td><td class="delta-up">+12.8%</td><td class="source-label">Claude Code</td></tr>
+            <tr data-person="以客为先 2"><td class="rank-number">03</td><td class="person-name">以客为先 2<small>连续活跃 6 天</small></td><td class="table-number">27.3亿</td><td class="table-number">7.9%</td><td class="delta-down">-3.1%</td><td class="source-label">Cursor</td></tr>
+          </tbody></table></div>
+        </article>
+      </section>
+
+      <section class="view" data-view="leaderboard" role="tabpanel">
+        <div class="page-heading">
+          <div><h1>贡献排行榜</h1><p>按 totalTokens 排名，同时展示贡献占比、变化方向和主要来源。预估成本不影响名次。</p></div>
+          <div class="scope"><button>今天</button><button class="active">本周</button><button>本月</button><button>累计</button></div>
+        </div>
+        <div class="summary-grid">
+          <article class="summary-card"><span>本周社区 Token</span><strong>162.0亿</strong></article>
+          <article class="summary-card"><span>活跃参与者</span><strong>41</strong></article>
+          <article class="summary-card"><span>Top 1 贡献</span><strong>16.0%</strong></article>
+          <article class="summary-card"><span>Top 3 集中度</span><strong>32.4%</strong></article>
+        </div>
+        <div class="leader-grid">
+          <article class="panel podium">
+            <h2 class="podium-title">本周领先者</h2>
+            <div class="podium-entry"><span class="place">第 1 名</span><h3>巴斯光年</h3><p>较上周上升 2 位，连续活跃 7 天</p><strong>55.5亿</strong></div>
+            <div class="podium-entry"><span class="place">第 2 名</span><h3>担当且极致 3</h3><p>本周新增贡献最多</p><strong>29.4亿</strong></div>
+            <div class="podium-entry"><span class="place">第 3 名</span><h3>以客为先 2</h3><p>主要来源从 Codex 转为 Cursor</p><strong>27.3亿</strong></div>
+          </article>
+          <div>
+            <article class="panel panel-elevated">
+              <div class="panel-head"><div><h2>完整排名与贡献</h2><p>点击任意参与者查看当前周期的结构。</p></div><span class="panel-meta">41 位参与者</span></div>
+              <div class="table-scroll"><table class="data-table"><thead><tr><th>排名</th><th>参与者</th><th>Token</th><th>贡献</th><th>排名变化</th><th>主要来源</th></tr></thead><tbody id="leaderboard-body">
+                <tr class="selected" data-person="巴斯光年"><td class="rank-number">01</td><td class="person-name">巴斯光年<small>7 天活跃</small></td><td class="table-number">55.5亿</td><td class="table-number">16.0%</td><td class="delta-up">↑ 2</td><td class="source-label">Codex</td></tr>
+                <tr data-person="担当且极致 3"><td class="rank-number">02</td><td class="person-name">担当且极致 3<small>5 天活跃</small></td><td class="table-number">29.4亿</td><td class="table-number">8.5%</td><td class="delta-up">↑ 4</td><td class="source-label">Claude Code</td></tr>
+                <tr data-person="以客为先 2"><td class="rank-number">03</td><td class="person-name">以客为先 2<small>6 天活跃</small></td><td class="table-number">27.3亿</td><td class="table-number">7.9%</td><td class="delta-down">↓ 1</td><td class="source-label">Cursor</td></tr>
+                <tr data-person="狮城 2"><td class="rank-number">04</td><td class="person-name">狮城 2<small>4 天活跃</small></td><td class="table-number">25.0亿</td><td class="table-number">7.2%</td><td class="delta-up">↑ 1</td><td class="source-label">Codex</td></tr>
+                <tr data-person="以智为驱"><td class="rank-number">05</td><td class="person-name">以智为驱<small>7 天活跃</small></td><td class="table-number">19.9亿</td><td class="table-number">5.8%</td><td>持平</td><td class="source-label">Claude Code</td></tr>
+              </tbody></table></div>
+            </article>
+            <aside class="detail-drawer" id="person-detail">
+              <h3><span id="detail-person">巴斯光年</span>，本周结构</h3>
+              <div class="detail-grid"><div class="detail-stat"><span>主要模型</span><strong>gpt-5.4</strong></div><div class="detail-stat"><span>主要来源</span><strong>Codex 71%</strong></div><div class="detail-stat"><span>峰值日期</span><strong>07-14</strong></div></div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="analytics" role="tabpanel">
+        <div class="page-heading">
+          <div><h1>变化为什么发生</h1><p>把趋势、贡献者、模型和来源放在同一分析上下文中。</p></div>
+          <div class="scope"><button>全部社区</button><button class="active">本月</button><button>对比上月</button></div>
+        </div>
+        <div class="insight-rail">
+          <article class="insight-card primary"><span class="number">+39%</span><h3>本周仍保持增长</h3><p>尽管今日下降明显，本周累计较上周增加 45.4 亿 Token。</p></article>
+          <article class="insight-card"><span class="number">63%</span><h3>增长来自人均用量</h3><p>活跃人数贡献 37%，现有参与者使用强度贡献 63%。</p></article>
+          <article class="insight-card"><span class="number">+8.7%</span><h3>Codex 占比上升</h3><p>主要由前三名参与者在 07-14 的集中使用推动。</p></article>
+        </div>
+        <div class="analysis-grid">
+          <article class="panel panel-elevated large-chart">
+            <div class="panel-head"><div><h2>社区 Token 与活跃人数</h2><p>同时观察规模变化与参与广度。</p></div><span class="panel-meta">本月对比上月</span></div>
+            <svg class="line-chart" viewBox="0 0 800 300" role="img" aria-label="本月社区 Token 和活跃人数趋势">
+              <g class="chart-grid"><line x1="25" y1="45" x2="775" y2="45"/><line x1="25" y1="130" x2="775" y2="130"/><line x1="25" y1="215" x2="775" y2="215"/></g>
+              <path class="chart-area" d="M25 220 L75 180 L125 196 L175 145 L225 170 L275 110 L325 126 L375 82 L425 150 L475 112 L525 44 L575 76 L625 98 L675 160 L725 138 L775 214 L775 250 L25 250 Z"/>
+              <path class="chart-line" d="M25 220 L75 180 L125 196 L175 145 L225 170 L275 110 L325 126 L375 82 L425 150 L475 112 L525 44 L575 76 L625 98 L675 160 L725 138 L775 214"/>
+              <circle class="chart-point" cx="525" cy="44" r="5"/><text class="chart-annotation" x="501" y="25">峰值 43.1亿</text>
+            </svg>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><h2>增长贡献拆解</h2><p>区分人数增长与使用强度。</p></div></div>
+            <div class="driver-list">
+              <div class="driver"><div><strong>现有参与者用量增加</strong><small>主要来自 Top 10</small></div><span class="driver-value">+28.6亿</span></div>
+              <div class="driver"><div><strong>新增参与者</strong><small>本周新增 6 位</small></div><span class="driver-value">+16.8亿</span></div>
+              <div class="driver"><div><strong>流失参与者</strong><small>3 位本周无活动</small></div><span class="driver-value negative">-4.9亿</span></div>
+              <div class="driver"><div><strong>净变化</strong><small>较上周</small></div><span class="driver-value">+40.5亿</span></div>
+            </div>
+          </article>
+        </div>
+        <div class="analysis-lower">
+          <article class="panel"><div class="panel-head"><div><h2>模型结构变化</h2><p>查看哪些模型推动总量变化。</p></div></div><div class="mix-bars">
+            <div class="mix-row"><span>gpt-5.4</span><div class="thin-bar" style="--value:72%"><i></i></div><strong>+12.4%</strong></div>
+            <div class="mix-row"><span>claude-opus</span><div class="thin-bar" style="--value:54%"><i></i></div><strong>+4.1%</strong></div>
+            <div class="mix-row"><span>gpt-5.3-codex</span><div class="thin-bar" style="--value:38%"><i></i></div><strong>-3.8%</strong></div>
+            <div class="mix-row"><span>其他模型</span><div class="thin-bar" style="--value:27%"><i></i></div><strong>-1.2%</strong></div>
+          </div></article>
+          <article class="panel"><div class="panel-head"><div><h2>活跃节奏</h2><p>颜色越深，社区用量越高。</p></div><span class="panel-meta">最近 14 周</span></div><div class="heatmap" id="heatmap"></div></article>
+        </div>
+      </section>
+
+      <section class="view" data-view="admin" role="tabpanel">
+        <div class="page-heading admin-heading">
+          <div><h1>今天有 8 项需要处理</h1><p>管理聚合用量、模型价格、数据质量和客户端设备。</p></div>
+          <div class="scope"><button class="active">运营总览</button><button>价格</button><button>质量</button><button>设备</button></div>
+        </div>
+        <div class="summary-grid">
+          <article class="summary-card"><span>数据新鲜度</span><strong class="delta-up">2 分钟</strong></article>
+          <article class="summary-card"><span>今日上传设备</span><strong>38 / 43</strong></article>
+          <article class="summary-card"><span>价格覆盖率</span><strong>93.8%</strong></article>
+          <article class="summary-card"><span>待处理问题</span><strong class="delta-down">8</strong></article>
+        </div>
+        <div class="admin-grid">
+          <article class="panel panel-elevated">
+            <div class="panel-head"><div><h2>运营待办</h2><p>按数据影响范围排序，而不是按问题类型堆叠。</p></div><span class="panel-meta">影响 8.2 亿 Token</span></div>
+            <div class="task-list">
+              <div class="task"><div><strong>8 个模型缺少价格</strong><p>影响 6.3% 的成本估算，优先处理 gpt-5.4-mini。</p></div><button>处理价格</button></div>
+              <div class="task"><div><strong>3 台设备超过 24 小时未同步</strong><p>其中 1 台属于本周 Top 10 参与者，可能影响榜单完整性。</p></div><button>查看设备</button></div>
+              <div class="task"><div><strong>1 位参与者出现异常峰值</strong><p>07-14 单日 Token 达近 30 日均值的 4.7 倍。</p></div><button>检查明细</button></div>
+              <div class="task"><div><strong>2 条上传记录等待重试</strong><p>签名有效，服务端返回临时存储错误。</p></div><button>查看队列</button></div>
+            </div>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><h2>系统状态</h2><p>先判断数据是否值得信任。</p></div></div>
+            <div class="status-stack">
+              <div class="status-row"><span>公开数据更新时间</span><strong class="ok">2 分钟前</strong></div>
+              <div class="status-row"><span>上传成功率</span><strong class="ok">99.4%</strong></div>
+              <div class="status-row"><span>价格覆盖率</span><strong class="warn">93.8%</strong></div>
+              <div class="status-row"><span>设备版本覆盖</span><strong class="warn">88.4%</strong></div>
+              <div class="status-row"><span>异常数据占比</span><strong class="ok">0.07%</strong></div>
+            </div>
+          </article>
+        </div>
+        <article class="panel admin-table">
+          <div class="panel-head"><div><h2>设备同步与数据影响</h2><p>把设备问题直接关联到排行榜和分析完整性。</p></div><span class="panel-meta">43 台设备</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>设备</th><th>参与者</th><th>最后同步</th><th>客户端版本</th><th>本周 Token</th><th>状态</th></tr></thead><tbody>
+            <tr><td class="mono">mac-a19f</td><td class="person-name">巴斯光年</td><td>2 分钟前</td><td class="mono">0.7.7</td><td class="table-number">55.5亿</td><td class="delta-up">正常</td></tr>
+            <tr><td class="mono">win-7c31</td><td class="person-name">担当且极致 3</td><td>18 分钟前</td><td class="mono">0.7.7</td><td class="table-number">29.4亿</td><td class="delta-up">正常</td></tr>
+            <tr><td class="mono">mac-42bd</td><td class="person-name">狮城 2</td><td>26 小时前</td><td class="mono">0.7.5</td><td class="table-number">25.0亿</td><td class="delta-down">同步中断</td></tr>
+            <tr><td class="mono">win-e102</td><td class="person-name">以智为驱</td><td>31 小时前</td><td class="mono">0.7.6</td><td class="table-number">19.9亿</td><td class="delta-down">需要关注</td></tr>
+          </tbody></table></div>
+        </article>
+      </section>
+
+      <footer class="demo-footer"><span>AI Token League 数据价值原型</span><span>首页发现变化，排行榜识别贡献，分析解释原因，Admin 处理问题。</span></footer>
+    </main>
+
+    <div class="loading-mask" role="status" aria-live="polite">
+      <div class="loading-card"><strong>正在更新数据视图</strong><p>保留当前结构，只更新发生变化的内容。</p><div class="skeleton medium"></div><div class="skeleton"></div><div class="skeleton short"></div></div>
+    </div>
+
+    <script>
+      const viewButtons = [...document.querySelectorAll("[data-view-target]")];
+      const views = [...document.querySelectorAll("[data-view]")];
+      const themeToggle = document.querySelector("#theme-toggle");
+      const refreshButton = document.querySelector("#refresh-demo");
+      const detailPerson = document.querySelector("#detail-person");
+
+      function showView(name) {
+        viewButtons.forEach((button) => {
+          const isActive = button.dataset.viewTarget === name;
+          button.classList.toggle("active", isActive);
+          button.setAttribute("aria-selected", String(isActive));
+        });
+        views.forEach((view) => view.classList.toggle("active", view.dataset.view === name));
+        history.replaceState(null, "", `#${name}`);
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+      }
+
+      viewButtons.forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewTarget)));
+      document.querySelectorAll(".scope").forEach((scope) => {
+        const buttons = [...scope.querySelectorAll("button")];
+        buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.classList.contains("active"))));
+        scope.addEventListener("click", (event) => {
+          const button = event.target.closest("button");
+          if (!button) return;
+          buttons.forEach((item) => {
+            const isActive = item === button;
+            item.classList.toggle("active", isActive);
+            item.setAttribute("aria-pressed", String(isActive));
+          });
+        });
+      });
+
+      themeToggle.addEventListener("click", () => {
+        const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        themeToggle.textContent = next === "dark" ? "浅色" : "深色";
+        themeToggle.setAttribute("aria-pressed", String(next === "dark"));
+      });
+
+      refreshButton.addEventListener("click", () => {
+        if (document.body.classList.contains("loading")) return;
+        document.body.classList.add("loading");
+        refreshButton.textContent = "更新中";
+        refreshButton.setAttribute("aria-busy", "true");
+        window.setTimeout(() => {
+          document.body.classList.remove("loading");
+          refreshButton.textContent = "刷新数据";
+          refreshButton.removeAttribute("aria-busy");
+        }, 780);
+      });
+
+      document.querySelectorAll("#leaderboard-body tr").forEach((row) => row.addEventListener("click", () => {
+        document.querySelectorAll("#leaderboard-body tr").forEach((item) => item.classList.toggle("selected", item === row));
+        detailPerson.textContent = row.dataset.person;
+      }));
+
+      const heatmap = document.querySelector("#heatmap");
+      const heatLevels = [1,0,2,1,3,4,2,1,0,2,4,5,3,1,2,3,1,4,5,2,0,1,3,4,2,5,4,1,0,2,3,5,4,2,1,3,4,5,2,1,0,2,3,4,5,3,1,2,4,2,5,4,3,1,0,2,4,5,3,2,1,3,5,4,2,1,2,4,3,5,1,0,2,3,4,5,2,1,3,4,2,5,4,1,0,2,3,5,4,2,1,3,4,5,2,1,0,2];
+      heatmap.innerHTML = heatLevels.map((level) => `<i style="--level:${level}" title="用量等级 ${level}"></i>`).join("");
+
+      const initialView = location.hash.slice(1);
+      if (["home", "leaderboard", "analytics", "admin"].includes(initialView)) showView(initialView);
+      window.addEventListener("hashchange", () => {
+        const nextView = location.hash.slice(1);
+        if (["home", "leaderboard", "analytics", "admin"].includes(nextView)) showView(nextView);
+      });
+    </script>
+  </body>
+</html>

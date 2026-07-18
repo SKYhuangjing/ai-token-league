@@ -21,7 +21,8 @@ const state = {
   detailTab: "period",
   historyView: "daily",
   showCost: false,
-  viewMode: "meter"
+  viewMode: "meter",
+  loading: false
 };
 const storageKeys = {
   showCost: "ai-token-league.public.showCost",
@@ -33,6 +34,8 @@ const statusEl = document.querySelector("#status");
 const detailEl = document.querySelector("#participant-detail");
 const detailBackdrop = document.querySelector("#detail-backdrop");
 let detailCloseTimer = null;
+let detailTrigger = null;
+let leaderboardSettleTimer = null;
 
 hydratePreferences();
 applyToggleState();
@@ -40,7 +43,7 @@ applyToggleState();
 document.querySelectorAll("[data-filter='period']").forEach((group) => {
   group.addEventListener("click", (event) => {
     const button = event.target.closest("button");
-    if (!button) return;
+    if (!button || state.loading) return;
     setActive(group, button);
     state.period = button.dataset.value;
     loadLeaderboard();
@@ -68,6 +71,10 @@ document.querySelector("[data-history-view]").addEventListener("click", (event) 
 document.querySelector("#close-detail").addEventListener("click", closeDetail);
 detailBackdrop.addEventListener("click", closeDetail);
 
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !detailEl.hidden) closeDetail();
+});
+
 document.querySelector("#show-cost").addEventListener("change", (event) => {
   state.showCost = event.target.checked;
   persistPreference(storageKeys.showCost, state.showCost);
@@ -88,33 +95,57 @@ document.querySelectorAll("[data-view-mode]").forEach((group) => {
 });
 
 async function loadLeaderboard() {
-  statusEl.textContent = t("loading");
-  const params = new URLSearchParams({ period: state.period });
-  if (state.showCost) params.set("includeCost", "1");
-  const response = await fetch(`/api/board/leaderboard?${params.toString()}`);
-  const data = await response.json();
-  if (data.identityMode) {
-    state.identityMode = data.identityMode;
-    applyIdentityMode(data.identityMode);
+  setLeaderboardLoading(true);
+  try {
+    statusEl.textContent = t("loading");
+    const params = new URLSearchParams({ period: state.period });
+    if (state.showCost) params.set("includeCost", "1");
+    const response = await fetch(`/api/board/leaderboard?${params.toString()}`);
+    if (!response.ok) throw new Error(t("web.analytics.noData"));
+    const data = await response.json();
+    if (data.identityMode) {
+      state.identityMode = data.identityMode;
+      applyIdentityMode(data.identityMode);
+    }
+    render(data.items || []);
+    statusEl.textContent = t("web.leaderboard.participantCount", { count: data.items.length, plural: data.items.length === 1 ? "" : "s" });
+  } finally {
+    setLeaderboardLoading(false);
   }
-  render(data.items || []);
-  statusEl.textContent = t("web.leaderboard.participantCount", { count: data.items.length, plural: data.items.length === 1 ? "" : "s" });
+}
+
+function setLeaderboardLoading(on) {
+  state.loading = on;
+  const surface = document.querySelector("#leaderboard-surface");
+  surface?.classList.toggle("is-refreshing", on);
+  surface?.setAttribute("aria-busy", on ? "true" : "false");
+  document.querySelectorAll("[data-filter='period'] button, #show-cost").forEach((control) => {
+    control.disabled = on;
+  });
+  if (on || !surface) return;
+  if (leaderboardSettleTimer) window.clearTimeout(leaderboardSettleTimer);
+  surface.classList.remove("is-settled");
+  requestAnimationFrame(() => surface.classList.add("is-settled"));
+  leaderboardSettleTimer = window.setTimeout(() => surface.classList.remove("is-settled"), 560);
 }
 
 function applyIdentityMode(mode) {
+  applyBoardIdentityEyebrow(mode);
+  const colName = document.querySelector("#col-name");
+  colName.setAttribute("data-i18n", mode === "anonymous" ? "web.leaderboard.colAlias" : "web.leaderboard.colNickname");
+  colName.textContent = t(colName.getAttribute("data-i18n"));
+}
+
+function applyBoardIdentityEyebrow(mode) {
   const eyebrowKey = {
     anonymous: "web.publicBoardAnonymous",
     public: "web.publicBoardPublic",
     authenticated: "web.publicBoardAuthenticated"
   }[mode] || "web.publicBoard";
   const eyebrow = document.querySelector("#board-identity-eyebrow");
-  if (eyebrow) {
-    eyebrow.setAttribute("data-i18n", eyebrowKey);
-    eyebrow.textContent = t(eyebrowKey);
-  }
-  const colName = document.querySelector("#col-name");
-  colName.setAttribute("data-i18n", mode === "anonymous" ? "web.leaderboard.colAlias" : "web.leaderboard.colNickname");
-  colName.textContent = t(colName.getAttribute("data-i18n"));
+  if (!eyebrow) return;
+  eyebrow.setAttribute("data-i18n", eyebrowKey);
+  eyebrow.textContent = t(eyebrowKey);
 }
 
 function render(items) {
@@ -151,7 +182,7 @@ function renderListView(items) {
     )
     .join("");
   tbody.querySelectorAll("[data-display-id]").forEach((button) => {
-    button.addEventListener("click", () => loadDetail(button.dataset.displayId));
+    button.addEventListener("click", () => loadDetail(button.dataset.displayId, button));
   });
 }
 
@@ -162,7 +193,7 @@ function renderTopThree(items) {
     return;
   }
   topThree.innerHTML = items
-    .map((item) => `<article class="medal-card medal-rank-${item.rank}" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+    .map((item) => `<article class="medal-card medal-rank-${item.rank}" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}" tabindex="0" role="button">
       <span class="medal-icon" aria-hidden="true">${rankIcon(item.rank)}</span>
       <div class="medal-card-head">
         <span class="medal-rank">#${item.rank}</span>
@@ -174,7 +205,12 @@ function renderTopThree(items) {
     </article>`)
     .join("");
   topThree.querySelectorAll(".medal-card[data-display-id]").forEach((el) => {
-    el.addEventListener("click", () => loadDetail(el.dataset.displayId));
+    el.addEventListener("click", () => loadDetail(el.dataset.displayId, el));
+    el.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      loadDetail(el.dataset.displayId, el);
+    });
   });
 }
 
@@ -185,17 +221,16 @@ function renderMeterView(items) {
     return;
   }
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
-  const colorCycle = ["", "meter-yellow", "meter-violet"];
   meterView.innerHTML = items
     .map((item) => {
       const pct = Math.max(3, (item.totalTokens / max) * 100);
-      const colorClass = colorCycle[(item.rank - 1) % colorCycle.length];
-      return `<div class="meter-row" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+      const rankClass = item.rank <= 10 ? `meter-rank-${Math.min(item.rank, 10)}` : "";
+      return `<div class="meter-row ${rankClass}" data-display-id="${escapeHtml(item.displayId)}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}" tabindex="0" role="button">
         <span class="meter-name">
           <span class="rank">#${item.rank}</span>
           <button class="link-button participant-link" type="button">${renderDisplayName(item.displayName)}</button>
         </span>
-        <div class="meter-bar ${colorClass}">
+        <div class="meter-bar">
           <div class="meter-fill" style="width:${pct}%">
             ${renderModelSegmentItems(item)}
           </div>
@@ -208,7 +243,12 @@ function renderMeterView(items) {
     })
     .join("");
   meterView.querySelectorAll(".meter-row[data-display-id]").forEach((el) => {
-    el.addEventListener("click", () => loadDetail(el.dataset.displayId));
+    el.addEventListener("click", () => loadDetail(el.dataset.displayId, el));
+    el.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      loadDetail(el.dataset.displayId, el);
+    });
   });
 }
 
@@ -218,8 +258,9 @@ function rankIcon(rank) {
   return rank === 1 ? trophy : medal;
 }
 
-async function loadDetail(participantId) {
+async function loadDetail(participantId, trigger = document.activeElement) {
   if (detailCloseTimer) clearTimeout(detailCloseTimer);
+  detailTrigger = trigger && typeof trigger.focus === "function" ? trigger : null;
   state.detailParticipantId = participantId;
   state.detailTab = "period";
   setActive(document.querySelector("[data-detail-tab]"), document.querySelector("[data-detail-tab] [data-value='period']"));
@@ -229,6 +270,7 @@ async function loadDetail(participantId) {
     detailEl.classList.add("is-open");
     detailBackdrop.classList.add("is-open");
     document.body.classList.add("detail-open");
+    document.querySelector("#close-detail")?.focus({ preventScroll: true });
   });
   document.querySelector("#detail-status").textContent = t("loading");
   const params = new URLSearchParams({ period: state.period });
@@ -343,6 +385,10 @@ function closeDetail() {
   detailCloseTimer = setTimeout(() => {
     detailEl.hidden = true;
     detailBackdrop.hidden = true;
+    if (detailTrigger && typeof detailTrigger.focus === "function") {
+      detailTrigger.focus({ preventScroll: true });
+    }
+    detailTrigger = null;
   }, 180);
 }
 
@@ -512,7 +558,8 @@ function periodLabel(period) {
     this_week: t("web.period.thisWeek"),
     last_week: t("web.period.lastWeek"),
     this_month: t("web.period.thisMonth"),
-    last_month: t("web.period.lastMonth")
+    last_month: t("web.period.lastMonth"),
+    all: t("web.period.all")
   };
   return labels[period] || period;
 }
@@ -549,6 +596,9 @@ function applyViewMode() {
   const isMeter = state.viewMode === "meter";
   meterView.hidden = !isMeter;
   listView.hidden = isMeter;
+  const activeView = isMeter ? meterView : listView;
+  activeView.classList.remove("view-enter");
+  requestAnimationFrame(() => activeView.classList.add("view-enter"));
   // sync segmented button state
   document.querySelectorAll("[data-view-mode]").forEach((group) => {
     group.querySelectorAll("button").forEach((btn) => {
