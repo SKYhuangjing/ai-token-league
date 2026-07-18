@@ -49,7 +49,7 @@ describe("smoothLinePath", () => {
 });
 
 describe("renderBarChart", () => {
-  it("renders the share-list design using actual percentage widths", () => {
+  it("renders percentage rows using actual widths", () => {
     const container = document.createElement("div");
     renderBarChart(container, [
       { name: "claude-opus", tokens: 380, ratio: 0.38 },

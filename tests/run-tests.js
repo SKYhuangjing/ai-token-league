@@ -4776,6 +4776,8 @@ function testWebAnalyticsParticipantRankingStructure() {
   const js = fs.readFileSync("src/web/analytics.js", "utf8");
   const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
   assert.match(html, /id="participant-ranking-card"/);
+  assert.match(html, /usage-share-chart/);
+  assert.doesNotMatch(html, /share-list/);
   assert.match(html, /id="participant-treemap-svg"/);
   assert.match(html, /id="participant-treemap-labels"/);
   assert.match(html, /class="an-main"/);
@@ -4839,6 +4841,8 @@ function testWebDownloadStructure() {
   const js = fs.readFileSync("src/web/download.js", "utf8");
   const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
   assert.match(html, /download-cards/);
+  assert.match(html, /usage-share-chart/);
+  assert.doesNotMatch(html, /share-list/);
   assert.match(html, /kpi-scoreboard/);
   assert.strictEqual((html.match(/class="kpi-pair"/g) || []).length, 3, "home should group six KPIs into three pairs");
   assert.match(html, /class="card-head-link"/);

@@ -4627,7 +4627,7 @@ body.page-home .shell {
   min-height: 0;
 }
 
-.landing-shell .dash-grid-2 > .card > .share-list,
+.landing-shell .dash-grid-2 > .card > .usage-share-chart,
 .landing-shell .dash-grid-2 > .card > .donut-host,
 .landing-shell .dash-grid-2 > .card > .heatmap-container {
   flex: 1;
@@ -5235,7 +5235,7 @@ body.page-home .chart-tooltip::after {
 
 .an-secondary > .card > .pareto,
 .an-secondary > .card > .weekday,
-.an-secondary > .card > .share-list,
+.an-secondary > .card > .usage-share-chart,
 .an-secondary > .card > .bar-chart-container {
   flex: 1;
   min-height: 0;
