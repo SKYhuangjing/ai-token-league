@@ -768,14 +768,14 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
     const barWidth = Math.max(0, Math.min(100, ratio * 100));
     const tokenLabel = localeTokenCompact(item.tokens);
     const row = document.createElement("div");
-    row.className = "share-row";
+    row.className = "usage-share-row";
     row.title = `${item.name}: ${tokenLabel} (${ratioPct}%)`;
     row.innerHTML = `
       <div class="lbl">
         <span>${escapeHtml(item.name)}</span>
-        <span class="share-value"><strong>${tokenLabel}</strong><span>${ratioPct}%</span></span>
+        <span class="usage-share-value"><strong>${tokenLabel}</strong><span>${ratioPct}%</span></span>
       </div>
-      <div class="share-track">
+      <div class="usage-share-track">
         <i style="width:${barWidth}%"></i>
       </div>
     `;

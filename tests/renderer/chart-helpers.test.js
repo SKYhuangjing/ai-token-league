@@ -56,11 +56,11 @@ describe("renderBarChart", () => {
       { name: "gpt-5", tokens: 240, ratio: 0.24 }
     ], { localeTokenCompact: (value) => String(value) });
 
-    const rows = container.querySelectorAll(".share-row");
+    const rows = container.querySelectorAll(".usage-share-row");
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelector(".lbl")?.textContent).toContain("38%");
-    expect(rows[0].querySelector(".share-value strong")?.textContent).toBe("380");
-    expect(rows[0].querySelector(".share-track > i")?.style.width).toBe("38%");
-    expect(rows[1].querySelector(".share-track > i")?.style.width).toBe("24%");
+    expect(rows[0].querySelector(".usage-share-value strong")?.textContent).toBe("380");
+    expect(rows[0].querySelector(".usage-share-track > i")?.style.width).toBe("38%");
+    expect(rows[1].querySelector(".usage-share-track > i")?.style.width).toBe("24%");
   });
 });

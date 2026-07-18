@@ -3276,11 +3276,11 @@ h3 {
   padding: 6px 0;
 }
 
-.share-row {
+.usage-share-row {
   min-width: 0;
 }
 
-.share-row .lbl {
+.usage-share-row .lbl {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -3289,7 +3289,7 @@ h3 {
   font: 600 13px/1.3 var(--font-ui);
 }
 
-.share-row .lbl span:first-child {
+.usage-share-row .lbl span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3297,7 +3297,7 @@ h3 {
   color: var(--ink);
 }
 
-.share-row .share-value {
+.usage-share-row .usage-share-value {
   display: inline-flex;
   align-items: baseline;
   gap: 7px;
@@ -3307,23 +3307,23 @@ h3 {
   color: var(--muted);
 }
 
-.share-row .share-value strong {
+.usage-share-row .usage-share-value strong {
   color: var(--ink);
   font: inherit;
 }
 
-.share-row .share-value span {
+.usage-share-row .usage-share-value span {
   color: var(--muted);
 }
 
-.share-track {
+.usage-share-track {
   height: 8px;
   background: var(--line-soft);
   border-radius: 99px;
   overflow: hidden;
 }
 
-.share-track > i {
+.usage-share-track > i {
   display: block;
   height: 100%;
   border-radius: 99px;
@@ -3331,15 +3331,15 @@ h3 {
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.share-row:nth-child(4n + 2) .share-track > i {
+.usage-share-row:nth-child(4n + 2) .usage-share-track > i {
   background: var(--yellow);
 }
 
-.share-row:nth-child(4n + 3) .share-track > i {
+.usage-share-row:nth-child(4n + 3) .usage-share-track > i {
   background: var(--violet);
 }
 
-.share-row:nth-child(4n) .share-track > i {
+.usage-share-row:nth-child(4n) .usage-share-track > i {
   background: var(--blue);
 }
 
@@ -4669,13 +4669,13 @@ body.page-home .shell {
   font-variant-numeric: tabular-nums;
 }
 
-.landing-shell .share-track {
+.landing-shell .usage-share-track {
   height: 7px;
   background: rgba(232, 225, 210, 0.95);
   border-radius: 99px;
 }
 
-.landing-shell .share-track > i {
+.landing-shell .usage-share-track > i {
   border-radius: 99px;
 }
 
