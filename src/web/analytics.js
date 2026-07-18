@@ -14,13 +14,25 @@ if (isEmbedded) {
     document.body.classList.add("is-embedded");
   });
 
+  let lastReportedHeight = 0;
+  let resizeFramePending = false;
+
   function notifyHeight() {
     const bodyHeight = document.body ? document.body.scrollHeight : 0;
     const height = Math.ceil(Math.max(document.documentElement.scrollHeight, bodyHeight));
+    if (height === lastReportedHeight) return;
+    lastReportedHeight = height;
     window.parent.postMessage({ type: "analytics-resize", height }, window.location.origin);
   }
 
-  const resizeObserver = new ResizeObserver(() => notifyHeight());
+  const resizeObserver = new ResizeObserver(() => {
+    if (resizeFramePending) return;
+    resizeFramePending = true;
+    requestAnimationFrame(() => {
+      resizeFramePending = false;
+      notifyHeight();
+    });
+  });
   window.addEventListener("load", () => {
     notifyHeight();
     resizeObserver.observe(document.body);

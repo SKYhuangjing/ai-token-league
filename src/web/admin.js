@@ -137,7 +137,11 @@ window.addEventListener("message", (event) => {
   if (event.data?.type === "analytics-resize") {
     const height = Number(event.data.height);
     if (iframe && Number.isFinite(height) && height > 0) {
-      iframe.style.height = `${Math.ceil(height)}px`;
+      const nextHeight = Math.ceil(height);
+      const currentHeight = Number.parseFloat(iframe.style.height) || 0;
+      if (Math.abs(currentHeight - nextHeight) > 1) {
+        iframe.style.height = `${nextHeight}px`;
+      }
     }
   }
 });
@@ -1047,10 +1051,11 @@ function switchAdminTab(tabId) {
   }
   if (tabId === "analytics") {
     const iframe = document.querySelector("#analytics-iframe");
-    if (iframe) {
+    if (iframe && !iframe.dataset.loaded) {
       setAdminPanelBusy("analytics", true);
       iframe.addEventListener("load", () => setAdminPanelBusy("analytics", false), { once: true });
-      iframe.src = iframe.src;
+      iframe.src = iframe.dataset.src;
+      iframe.dataset.loaded = "true";
     }
   }
   if (tabId === "pricing") {

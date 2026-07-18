@@ -4787,6 +4787,9 @@ function testWebAnalyticsParticipantRankingStructure() {
   assert.match(js, /sharedRenderParticipantTreemap/);
   assert.match(js, /classList\.add\("is-embedded"\)/);
   assert.match(js, /analytics-resize/);
+  assert.match(js, /let lastReportedHeight = 0/);
+  assert.match(js, /height === lastReportedHeight/);
+  assert.match(js, /requestAnimationFrame/);
   assert.match(js, /shell\?\.classList\.toggle\("is-refreshing", on\)/);
   assert.match(js, /setLoading\(true\)[\s\S]*loadParticipantDropdown\(\)[\s\S]*setLoading\(false\)/);
   assert.match(shared, /export function renderParticipantTreemap/);
@@ -4814,6 +4817,7 @@ function testWebAdminStructure() {
   assert.match(html, /data-value="all"/i);
   assert.match(html, /admin-analytics-panel/);
   assert.match(html, /admin-analytics-frame/);
+  assert.match(html, /data-src="\/analytics\.html"/);
   assert.match(html, /class="pricing-priority"/);
   assert.ok(html.indexOf("pricing-priority") < html.indexOf('id="pricing-form"'), "missing-price tasks should precede secondary pricing management");
   for (const field of ["model", "input", "output", "cacheRead", "cacheWrite"]) {
@@ -4827,6 +4831,8 @@ function testWebAdminStructure() {
   assert.match(js, /Number\.isFinite\(height\)/);
   assert.match(js, /event\.origin !== window\.location\.origin/);
   assert.match(js, /event\.source !== iframe\?\.contentWindow/);
+  assert.match(js, /Math\.abs\(currentHeight - nextHeight\) > 1/);
+  assert.match(js, /iframe && !iframe\.dataset\.loaded/);
   assert.match(js, /function setAdminPanelBusy/);
   assert.strictEqual((js.match(/renderPrimarySource\(item\.providers\)/g) || []).length, 2, "ranking and aggregate rows should render provider data");
   assert.match(js, /codex_local:\s*"Codex"/);
