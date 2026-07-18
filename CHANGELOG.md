@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.8] - 2026-07-18
+
+### Added
+
+- [Web] Added contribution percentages across public leaderboard podium, meter, and list views.
+- [Web] Added community participant ranking to analytics, including an anonymous-safe public representation.
+
+### Changed
+
+- [Web] Refreshed the public download, leaderboard, analytics, and admin surfaces with a unified responsive visual system and clearer loading feedback.
+- Reworked cloud usage synchronization around signed per-device usage snapshots, incremental bucket updates, and safe legacy-client compatibility.
+
+### Fixed
+
+- [Desktop] Fixed workdir alias saves so the edited public name persists after refresh and restart.
+- [Web] Fixed admin usage-detail loading when the selected record is not present in the currently loaded list.
+
 ## [0.7.7] - 2026-06-12
 
 ### Added
