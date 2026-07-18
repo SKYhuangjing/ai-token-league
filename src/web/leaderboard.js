@@ -1,6 +1,6 @@
 import { dominantComposition, tokenCompositionDetails } from "/shared/composition.js";
 import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
-import { formatTokenCompact } from "/shared/display.js";
+import { formatContributionPercent, formatTokenCompact } from "/shared/display.js";
 import {
   escapeHtml, sourceName, formatCost, formatTokenRaw,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
@@ -149,11 +149,12 @@ function applyBoardIdentityEyebrow(mode) {
 }
 
 function render(items) {
+  const communityTotal = items.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
   const top = orderPodium(items.slice(0, 3));
   const rest = items.slice(3);
-  renderTopThree(top);
-  renderMeterView(rest);
-  renderListView(rest);
+  renderTopThree(top, communityTotal);
+  renderMeterView(rest, communityTotal);
+  renderListView(rest, communityTotal);
 }
 
 function orderPodium(items) {
@@ -161,9 +162,9 @@ function orderPodium(items) {
   return [items[1], items[0], items[2]];
 }
 
-function renderListView(items) {
+function renderListView(items, communityTotal) {
   if (!items.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 5 : 4}">${t("web.leaderboard.noMoreUsage")}</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="${state.showCost ? 6 : 5}">${t("web.leaderboard.noMoreUsage")}</td></tr>`;
     return;
   }
   tbody.innerHTML = items
@@ -176,6 +177,7 @@ function renderListView(items) {
           </button>
         </td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
+        <td class="contribution-cell">${formatContributionPercent(item.totalTokens, communityTotal)}</td>
         ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
         <td>${renderModels(item.models)}</td>
       </tr>`
@@ -186,7 +188,7 @@ function renderListView(items) {
   });
 }
 
-function renderTopThree(items) {
+function renderTopThree(items, communityTotal) {
   const topThree = document.querySelector("#top-three");
   if (!items.length) {
     topThree.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noUsage")}</div>`;
@@ -200,7 +202,7 @@ function renderTopThree(items) {
         <button class="link-button participant-link">${renderDisplayName(item.displayName)}</button>
       </div>
       <strong class="medal-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
-      ${state.showCost ? `<span class="medal-cost">${renderCost(item)}</span>` : ""}
+      ${renderLeaderboardValueMeta(item, communityTotal, "medal-meta")}
       ${renderModelSegments(item, { className: "composition-strip", title: modelUsageTitle(item, localeTokenCompact) })}
     </article>`)
     .join("");
@@ -214,7 +216,7 @@ function renderTopThree(items) {
   });
 }
 
-function renderMeterView(items) {
+function renderMeterView(items, communityTotal) {
   const meterView = document.querySelector("#meter-view");
   if (!items.length) {
     meterView.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noMoreUsage")}</div>`;
@@ -235,9 +237,10 @@ function renderMeterView(items) {
             ${renderModelSegmentItems(item)}
           </div>
         </div>
-        <span class="meter-value">
-          <strong title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
-          ${state.showCost ? `<span class="cost-amount">${renderCost(item)}</span>` : ""}
+        <span class="meter-value${state.showCost ? " has-cost" : ""}">
+          <strong class="meter-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+          <span class="meter-share"><span>${t("web.leaderboard.contribution")}</span><b>${formatContributionPercent(item.totalTokens, communityTotal)}</b></span>
+          ${state.showCost ? `<span class="meter-cost">${renderCost(item)}</span>` : ""}
         </span>
       </div>`;
     })
@@ -250,6 +253,13 @@ function renderMeterView(items) {
       loadDetail(el.dataset.displayId, el);
     });
   });
+}
+
+function renderLeaderboardValueMeta(item, communityTotal, className) {
+  return `<span class="leaderboard-value-meta ${className}">
+    <span class="contribution-stat">${t("web.leaderboard.contribution")} <strong>${formatContributionPercent(item.totalTokens, communityTotal)}</strong></span>
+    ${state.showCost ? `<span class="value-meta-divider" aria-hidden="true">·</span><span class="value-meta-cost">${renderCost(item)}</span>` : ""}
+  </span>`;
 }
 
 function rankIcon(rank) {

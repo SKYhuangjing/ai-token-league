@@ -32,7 +32,7 @@ import {
   verifyFileChecksum
 } from "../src/shared/update.js";
 import { parseLatestChangelog, parseChangelogVersion } from "../src/shared/changelog.js";
-import { formatTokenCompact, formatTokenRaw, formatUsd } from "../src/shared/display.js";
+import { formatContributionPercent, formatTokenCompact, formatTokenRaw, formatUsd } from "../src/shared/display.js";
 import {
   compositionRatio, createEmptyComposition, dominantComposition,
   mergeTokenComposition, tokenCompositionSummary, tokenCompositionDetails,
@@ -4749,6 +4749,21 @@ function testWebLeaderboardStructure() {
   assert.match(html, /data-i18n="web\.leaderboard\.title"/);
   assert.match(html, /href="\/leaderboard\.html"/);
   assert.match(html, /id="leaderboard-surface"[^>]*aria-busy="true"/);
+  assert.match(html, /data-i18n="web\.leaderboard\.contribution"/);
+  assert.match(js, /renderTopThree\(top, communityTotal\)/);
+  assert.match(js, /renderMeterView\(rest, communityTotal\)/);
+  assert.match(js, /renderListView\(rest, communityTotal\)/);
+  assert.strictEqual(
+    (js.match(/\$\{renderLeaderboardValueMeta\(item, communityTotal,/g) || []).length,
+    1,
+    "Top 3 should keep the compact contribution and cost layout"
+  );
+  assert.match(js, /class="meter-value\$\{state\.showCost \? " has-cost" : ""\}"/);
+  assert.match(js, /class="meter-total"/);
+  assert.match(js, /class="leaderboard-value-meta \$\{className\}"/);
+  assert.match(styles, /\.leaderboard-value-meta/);
+  assert.match(styles, /grid-template-areas:\s*"share total"/);
+  assert.match(styles, /\.meter-value > strong/);
   assert.match(js, /function setLeaderboardLoading/);
   assert.match(js, /surface\?\.classList\.toggle\("is-refreshing", on\)/);
   assert.match(js, /surface\.classList\.add\("is-settled"\)/);
@@ -4793,6 +4808,7 @@ function testWebAdminStructure() {
   assert.match(html, /usage-view-tabs/i);
   assert.match(html, /data-usage-panel="ranking"/i);
   assert.match(html, /data-usage-panel="aggregate"/i);
+  assert.strictEqual((html.match(/data-i18n="admin\.usage\.topSource"/g) || []).length, 2, "ranking and aggregate tables should include the top source column");
   assert.match(html, /data-value="all"/i);
   assert.match(html, /admin-analytics-panel/);
   assert.match(html, /admin-analytics-frame/);
@@ -4810,6 +4826,8 @@ function testWebAdminStructure() {
   assert.match(js, /event\.origin !== window\.location\.origin/);
   assert.match(js, /event\.source !== iframe\?\.contentWindow/);
   assert.match(js, /function setAdminPanelBusy/);
+  assert.strictEqual((js.match(/renderPrimarySource\(item\.providers\)/g) || []).length, 2, "ranking and aggregate rows should render provider data");
+  assert.match(js, /codex_local:\s*"Codex"/);
   assert.match(js, /panel\.classList\.toggle\("is-refreshing", on\)/);
   assert.match(js, /panel\.classList\.add\("is-entering"\)/);
   assert.match(styles, /\.admin-shell \.admin-panel\.is-entering/);
@@ -6864,6 +6882,15 @@ function testFormatTokenCompactEdgeCases() {
   console.log("  testFormatTokenCompactEdgeCases passed");
 }
 
+function testFormatContributionPercent() {
+  assert.equal(formatContributionPercent(16, 100), "16.0%");
+  assert.equal(formatContributionPercent(1, 2000), "<0.1%");
+  assert.equal(formatContributionPercent(0, 100), "0.0%");
+  assert.equal(formatContributionPercent(100, 0), "0.0%");
+  assert.equal(formatContributionPercent(Number.NaN, 100), "0.0%");
+  console.log("  testFormatContributionPercent passed");
+}
+
 function testFormatTokenRaw() {
   const result = formatTokenRaw(1234567);
   assert.ok(result.includes("1,234,567") || result.includes("1234567"));
@@ -7956,6 +7983,7 @@ testPackageVersionAndBaseline();
 
 // Display edge cases
 testFormatTokenCompactEdgeCases();
+testFormatContributionPercent();
 testFormatTokenRaw();
 testFormatUsdEdgeCases();
 

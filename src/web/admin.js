@@ -85,8 +85,8 @@ function showAuthRequired() {
   statusEl.textContent = message;
   rankingStatus.textContent = message;
   pricingStatus.textContent = message;
-  rankingTbody.innerHTML = `<tr><td class="empty" colspan="7">${message}</td></tr>`;
-  tbody.innerHTML = `<tr><td class="empty" colspan="7">${message}</td></tr>`;
+  rankingTbody.innerHTML = `<tr><td class="empty" colspan="8">${message}</td></tr>`;
+  tbody.innerHTML = `<tr><td class="empty" colspan="8">${message}</td></tr>`;
 }
 
 function applyUsageView() {
@@ -797,7 +797,7 @@ function renderRanking(data) {
     to: data.to || "-"
   });
   if (!items.length) {
-    rankingTbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.usage.noUsage")}</td></tr>`;
+    rankingTbody.innerHTML = `<tr><td class="empty" colspan="8">${t("admin.usage.noUsage")}</td></tr>`;
     return;
   }
   rankingTbody.innerHTML = items
@@ -811,6 +811,7 @@ function renderRanking(data) {
       <td class="cost-col" ${state.showCost ? "" : "hidden"}>${renderCostQuality(item)}</td>
       <td>${renderPrimarySlice(item.workdirs)}</td>
       <td>${renderPrimarySlice(item.models)}</td>
+      <td>${renderPrimarySource(item.providers)}</td>
       <td>
         <div class="row-actions">
           <button type="button" class="link-button" data-expand-ranking-row="${escapeHtml(key)}">${expanded ? t("admin.usage.collapseRow") : t("admin.usage.expandRow")}</button>
@@ -818,7 +819,7 @@ function renderRanking(data) {
         </div>
       </td>
     </tr>
-    ${expanded ? `<tr class="expanded-row"><td colspan="7">${renderExpandedUsage(item)}</td></tr>` : ""}`;
+    ${expanded ? `<tr class="expanded-row"><td colspan="8">${renderExpandedUsage(item)}</td></tr>` : ""}`;
     })
     .join("");
   rankingTbody.querySelectorAll("[data-ranking-participant], [data-ranking-detail]").forEach((button) => {
@@ -837,7 +838,7 @@ function renderRanking(data) {
 
 function render(items) {
   if (!items.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.usage.noUsage")}</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="8">${t("admin.usage.noUsage")}</td></tr>`;
     return;
   }
   tbody.innerHTML = items
@@ -851,13 +852,14 @@ function render(items) {
         <td class="cost-col" ${state.showCost ? "" : "hidden"}>${renderCostQuality(item)}</td>
         <td>${renderPrimarySlice(item.workdirs)}</td>
         <td>${renderPrimarySlice(item.models)}</td>
+        <td>${renderPrimarySource(item.providers)}</td>
         <td>
           <div class="row-actions">
             <button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? t("admin.usage.collapseRow") : t("admin.usage.expandRow")}</button>
           </div>
         </td>
       </tr>
-      ${expanded ? `<tr class="expanded-row"><td colspan="7">
+      ${expanded ? `<tr class="expanded-row"><td colspan="8">
         ${renderExpandedUsage(item)}
       </td></tr>` : ""}`;
     })
@@ -1509,6 +1511,23 @@ function renderPrimarySlice(items = []) {
     <strong>${escapeHtml(first.name)}</strong>
     <small>${formatToken(first.totalTokens)}${rest.length ? ` · +${rest.length}` : ""}</small>
   </span>`;
+}
+
+const providerDisplayNames = {
+  codex_local: "Codex",
+  claude_code_local: "Claude Code",
+  cursor_dashboard_usage: "Cursor",
+  mimocode_local: "MiMoCode",
+  opencode_local: "OpenCode",
+  hermes_local: "Hermes",
+  openclaw_local: "OpenClaw"
+};
+
+function renderPrimarySource(items = []) {
+  return renderPrimarySlice(items.map((item) => ({
+    ...item,
+    name: providerDisplayNames[item.name] || item.name
+  })));
 }
 
 function formatPeriod(item) {

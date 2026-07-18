@@ -1618,7 +1618,15 @@ table {
 }
 
 .public-table {
-  min-width: 820px;
+  min-width: 900px;
+}
+
+.public-table .contribution-cell {
+  color: var(--jade-deep, var(--teal));
+  font-family: var(--font-data);
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .public-table td:first-child strong {
@@ -1861,9 +1869,34 @@ td {
   line-height: 1;
 }
 
-.medal-cost {
-  margin-top: -4px;
-  font-size: 12px;
+.leaderboard-value-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 700 11px/1.2 var(--font-ui);
+  white-space: nowrap;
+}
+
+.leaderboard-value-meta .contribution-stat strong {
+  color: var(--jade-deep, var(--teal));
+  font: 850 13px/1 var(--font-data);
+}
+
+.leaderboard-value-meta .value-meta-divider {
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  font-weight: 900;
+}
+
+.leaderboard-value-meta .value-meta-cost {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+}
+
+.medal-meta {
+  width: fit-content;
+  margin-top: -3px;
 }
 
 .composition-strip {
@@ -1987,18 +2020,58 @@ td {
 
 .meter-value {
   display: grid;
-  justify-items: end;
-  gap: 2px;
+  grid-template-columns: minmax(54px, 0.8fr) minmax(66px, 1fr);
+  grid-template-areas: "share total";
+  align-items: center;
+  gap: 2px 10px;
+  min-width: 148px;
   line-height: 1.1;
 }
 
-.meter-value strong {
+.meter-value.has-cost {
+  grid-template-areas:
+    "share total"
+    "share cost";
+}
+
+.meter-value > strong {
+  grid-area: total;
+  justify-self: end;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 17px;
 }
 
-.meter-value .cost-amount {
-  font-size: 12px;
+.meter-share {
+  grid-area: share;
+  align-self: stretch;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 3px;
+  padding-right: 10px;
+  border-right: 1px solid color-mix(in srgb, var(--jade) 22%, transparent);
+  color: var(--muted);
+  font: 750 9px/1 var(--font-ui);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.meter-share b {
+  color: var(--jade-deep, var(--teal));
+  font: 900 17px/1 var(--font-data);
+  letter-spacing: -0.03em;
+}
+
+.meter-cost {
+  grid-area: cost;
+  justify-self: end;
+  color: var(--cost-accent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.meter-cost .cost-amount {
+  font-size: 11px;
 }
 
 .meter-empty {
@@ -2815,7 +2888,7 @@ h3 {
     font-size: 13px;
   }
 
-  .meter-value strong {
+  .meter-value > strong {
     font-size: 13px;
   }
 
@@ -6359,13 +6432,13 @@ body.page-home::before {
   background: rgba(8, 127, 121, 0.08);
 }
 
-.public-shell .meter-value strong {
+.public-shell .meter-value > strong {
   color: var(--ink-deep);
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .public-shell .public-table {
-  min-width: 740px;
+  min-width: 840px;
 }
 
 .public-shell .public-table th {
@@ -6632,6 +6705,10 @@ body.page-home::before {
 .admin-shell table {
   min-width: 980px;
   margin: 0;
+}
+
+.admin-shell [data-usage-panel] table {
+  min-width: 1120px;
 }
 
 .admin-shell th {
@@ -7272,9 +7349,13 @@ body.is-embedded .an-main {
   }
 
   .public-shell .meter-row {
-    grid-template-columns: minmax(100px, 0.9fr) minmax(90px, 1.2fr) minmax(72px, auto);
+    grid-template-columns: minmax(100px, 0.9fr) minmax(90px, 1.2fr) minmax(138px, auto);
     gap: 0 8px;
     font-size: 12px;
+  }
+
+  .public-shell .meter-value {
+    min-width: 138px;
   }
 
   .analytics-shell .an-composition-card .card-head h2 {

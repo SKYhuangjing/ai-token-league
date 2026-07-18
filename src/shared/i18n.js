@@ -162,6 +162,7 @@ const translations = {
     // Web 端 - 排行榜
     "web.leaderboard.title": "社区排行榜",
     "web.leaderboard.totalTokens": "总令牌数",
+    "web.leaderboard.contribution": "贡献",
     "web.leaderboard.estCost": "预估成本",
     "web.leaderboard.models": "模型",
     "web.leaderboard.noUsage": "暂无使用数据上传",
@@ -732,6 +733,7 @@ const translations = {
     "admin.usage.costQuality": "成本质量",
     "admin.usage.topWorkdir": "主要工作目录",
     "admin.usage.topModel": "主要模型",
+    "admin.usage.topSource": "主要来源",
     "admin.usage.action": "操作",
     "admin.usage.noUsage": "该查询无使用量上传。",
     "admin.usage.rankingRows": "{count} 个用户 · {from} 至 {to}",
@@ -1167,6 +1169,7 @@ const translations = {
     // Web - Leaderboard
     "web.leaderboard.title": "Community Leaderboard",
     "web.leaderboard.totalTokens": "Total tokens",
+    "web.leaderboard.contribution": "Contribution",
     "web.leaderboard.estCost": "Est. cost",
     "web.leaderboard.models": "Models",
     "web.leaderboard.noUsage": "No usage uploaded yet",
@@ -1735,6 +1738,7 @@ const translations = {
     "admin.usage.costQuality": "Cost quality",
     "admin.usage.topWorkdir": "Top workdir",
     "admin.usage.topModel": "Top model",
+    "admin.usage.topSource": "Top source",
     "admin.usage.action": "Action",
     "admin.usage.noUsage": "No usage uploaded for this query.",
     "admin.usage.rankingRows": "{count} user{plural} · {from} to {to}",

@@ -334,6 +334,9 @@
       .task p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
       .task button { align-self: center; padding: 8px 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-strong); cursor: pointer; font-size: 11px; font-weight: 700; white-space: nowrap; }
       .task button:hover { color: white; border-color: var(--accent); background: var(--accent); }
+      .task-status { align-self: center; padding: 7px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 10px; font-weight: 750; white-space: nowrap; }
+      .task-status.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 9%, var(--surface)); }
+      .task-status.ok { color: var(--positive); background: color-mix(in srgb, var(--positive) 9%, var(--surface)); }
       .status-stack { padding: 0 20px 18px; }
       .status-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
       .status-row:last-child { border-bottom: 0; }
@@ -423,7 +426,7 @@
         <div class="brand-mark">ATL</div>
         <div class="brand-copy">
           <strong>AI Token League</strong>
-          <small>数据价值静态 Demo</small>
+          <small>真实数据实验</small>
         </div>
       </div>
       <nav class="view-nav" aria-label="Demo 页面" role="tablist">
@@ -439,8 +442,8 @@
     </header>
 
     <div class="demo-banner">
-      <strong>这是隔离的静态设计原型，不会修改线上页面或业务数据。</strong>
-      <span>示例数据基于当前公开页面快照，用于验证信息层级与交互方向。</span>
+      <strong>当前页面直接读取本机服务真实数据，不会写入或修改业务数据。</strong>
+      <span id="live-data-status">公开端使用匿名展示名，Admin 使用真实用户昵称。</span>
     </div>
 
     <main class="shell">
@@ -450,31 +453,31 @@
             <h1>社区用量脉搏</h1>
             <p>先看规模和变化，再进入贡献者、模型、来源与长期规律。</p>
           </div>
-          <div class="scope" aria-label="首页时间范围">
-            <button class="active">今天</button><button>本周</button><button>本月</button><button>累计</button>
+          <div class="scope" aria-label="首页时间范围" data-public-period>
+            <button class="active" data-period="today">今天</button><button data-period="this_week">本周</button><button data-period="this_month">本月</button><button data-period="all">累计</button>
           </div>
         </div>
 
         <section class="metric-strip" aria-label="社区核心指标">
           <article class="metric">
-            <span class="metric-label">社区今日 Token <span class="mono">07-18</span></span>
-            <strong class="metric-value">1.05亿</strong>
-            <span class="metric-meta"><b class="delta-down">-96%</b> 较昨日 25.4 亿</span>
+            <span class="metric-label"><span id="home-current-label">社区今日 Token</span> <span class="mono" id="home-business-day">--</span></span>
+            <strong class="metric-value" id="home-current-value">--</strong>
+            <span class="metric-meta" id="home-current-meta">正在读取真实数据</span>
           </article>
           <article class="metric">
-            <span class="metric-label">社区本周 Token <span class="mono">7D</span></span>
-            <strong class="metric-value">162.0亿</strong>
-            <span class="metric-meta"><b class="delta-up">+39%</b> 较上周增加 45.4 亿</span>
+            <span class="metric-label"><span id="home-compare-label">对比周期</span> <span class="mono" id="home-range-code">--</span></span>
+            <strong class="metric-value" id="home-compare-value">--</strong>
+            <span class="metric-meta" id="home-compare-meta">--</span>
           </article>
           <article class="metric">
-            <span class="metric-label">今日活跃参与者 <span class="mono">当前</span></span>
-            <strong class="metric-value">4</strong>
-            <span class="metric-meta"><b class="delta-down">-37%</b> 较近 7 日均值</span>
+            <span class="metric-label"><span id="home-active-label">活跃参与者</span> <span class="mono">当前</span></span>
+            <strong class="metric-value" id="home-active-value">--</strong>
+            <span class="metric-meta" id="home-active-meta">当前周期有用量记录</span>
           </article>
           <article class="metric">
             <span class="metric-label">预估成本 <span class="cost-note">不参与排名</span></span>
-            <strong class="metric-value">$54.05</strong>
-            <span class="metric-meta">价格覆盖率 <b class="delta-up">93.8%</b></span>
+            <strong class="metric-value" id="home-cost-value">--</strong>
+            <span class="metric-meta" id="home-cost-meta">成本仅为估算</span>
           </article>
         </section>
 
@@ -482,90 +485,73 @@
           <article class="panel panel-elevated lead-insight">
             <div class="insight-copy">
               <div>
-                <h2>今日骤降，但<em>周趋势仍增长</em></h2>
-                <p>单日用量较昨日下降 96%，主要因为活跃参与者减少。本周累计仍高于上周，暂未形成持续下行趋势。</p>
+                <h2 id="home-insight-title">正在形成真实数据结论</h2>
+                <p id="home-insight-copy">页面会基于所选周期的总量、贡献者与来源结构生成摘要。</p>
               </div>
               <div class="insight-facts">
-                <div class="insight-fact"><strong>96.1%</strong><span>Top 1 今日贡献占比</span></div>
-                <div class="insight-fact"><strong>+45.4亿</strong><span>本周较上周净增长</span></div>
+                <div class="insight-fact"><strong id="home-fact-one-value">--</strong><span id="home-fact-one-label">Top 1 贡献占比</span></div>
+                <div class="insight-fact"><strong id="home-fact-two-value">--</strong><span id="home-fact-two-label">周期净变化</span></div>
               </div>
             </div>
             <div class="chart-wrap">
-              <div class="chart-caption"><span>近 14 日 Token</span><span class="mono">单位：亿</span></div>
-              <svg class="line-chart" viewBox="0 0 520 250" role="img" aria-label="近十四日社区 Token 趋势">
+              <div class="chart-caption"><span id="home-chart-label">当前周期 Token</span><span class="mono">单位：Token</span></div>
+              <svg class="line-chart" viewBox="0 0 520 250" role="img" aria-label="所选周期社区 Token 趋势">
                 <g class="chart-grid"><line x1="20" y1="50" x2="500" y2="50"/><line x1="20" y1="125" x2="500" y2="125"/><line x1="20" y1="200" x2="500" y2="200"/></g>
-                <path class="chart-area" d="M20 182 L58 155 L96 170 L134 132 L172 160 L210 105 L248 82 L286 142 L324 116 L362 36 L400 74 L438 95 L476 145 L500 195 L500 220 L20 220 Z"/>
-                <path class="chart-line" d="M20 182 L58 155 L96 170 L134 132 L172 160 L210 105 L248 82 L286 142 L324 116 L362 36 L400 74 L438 95 L476 145 L500 195"/>
-                <circle class="chart-point" cx="362" cy="36" r="5"/><text class="chart-annotation" x="346" y="18">43.1亿</text><text class="chart-sub" x="344" y="30">07-14 峰值</text>
-                <circle class="chart-point" cx="500" cy="195" r="5"/><text class="chart-annotation" x="455" y="185">1.05亿</text>
+                <path class="chart-area" id="home-chart-area" d=""/>
+                <path class="chart-line" id="home-chart-line" d=""/>
+                <circle class="chart-point" id="home-chart-peak" cx="20" cy="200" r="5"/><text class="chart-annotation" id="home-chart-peak-value" x="20" y="180">--</text><text class="chart-sub" id="home-chart-peak-date" x="20" y="192">--</text>
               </svg>
-              <div class="chart-caption"><span>07-05</span><span>07-18</span></div>
+              <div class="chart-caption"><span id="home-chart-from">--</span><span id="home-chart-to">--</span></div>
             </div>
           </article>
 
           <div>
             <article class="panel">
-              <div class="panel-head"><div><h2>今日变化由谁贡献</h2><p>从总量继续下钻到贡献者。</p></div><span class="panel-meta">4 位参与者</span></div>
-              <div class="story-list">
-                <div class="story-item"><span class="story-index">01</span><div><strong>把货运好 4</strong><small>Codex 为主要来源</small></div><span class="story-value">1.01亿<br><b class="delta-up">96.1%</b></span></div>
-                <div class="story-item"><span class="story-index">02</span><div><strong>健康可持续 2</strong><small>Claude Code 为主要来源</small></div><span class="story-value">288.4万<br>2.7%</span></div>
-                <div class="story-item"><span class="story-index">03</span><div><strong>第七宇宙</strong><small>Cursor 为主要来源</small></div><span class="story-value">133.5万<br>1.3%</span></div>
-                <div class="story-item"><span class="story-index">04</span><div><strong>健康可持续</strong><small>Codex 为主要来源</small></div><span class="story-value">2.7万<br>&lt;0.1%</span></div>
-              </div>
+              <div class="panel-head"><div><h2 id="home-contributor-title">当前周期由谁贡献</h2><p>从总量继续下钻到贡献者。</p></div><span class="panel-meta" id="home-contributor-count">--</span></div>
+              <div class="story-list" id="home-contributors"></div>
             </article>
 
             <article class="panel full-panel">
-              <div class="panel-head"><div><h2>来源结构</h2><p>增长来自工具结构还是参与人数。</p></div></div>
+              <div class="panel-head"><div><h2>来源结构</h2><p>观察工具结构是否过度集中。</p></div></div>
               <div class="source-composition">
-                <div class="donut" aria-label="来源占比分布"></div>
-                <div><div class="legend-row"><span>Codex</span><span>54%</span></div><div class="legend-row"><span>Claude Code</span><span>30%</span></div><div class="legend-row"><span>其他来源</span><span>16%</span></div></div>
+                <div class="donut" id="home-provider-donut" aria-label="来源占比分布"></div>
+                <div id="home-provider-legend"></div>
               </div>
             </article>
           </div>
         </div>
 
         <article class="panel full-panel">
-          <div class="panel-head"><div><h2>本周贡献变化</h2><p>名次只是结果，贡献占比和变化方向才解释结果。</p></div><span class="panel-meta">点击行查看参与者</span></div>
-          <div class="table-scroll"><table class="data-table"><thead><tr><th>排名</th><th>参与者</th><th>本周 Token</th><th>社区贡献</th><th>较上周</th><th>主要来源</th></tr></thead><tbody>
-            <tr data-person="巴斯光年"><td class="rank-number">01</td><td class="person-name">巴斯光年<small>连续活跃 7 天</small></td><td class="table-number">55.5亿</td><td class="table-number">16.0%</td><td class="delta-up">+4.2%</td><td class="source-label">Codex</td></tr>
-            <tr data-person="担当且极致 3"><td class="rank-number">02</td><td class="person-name">担当且极致 3<small>连续活跃 5 天</small></td><td class="table-number">29.4亿</td><td class="table-number">8.5%</td><td class="delta-up">+12.8%</td><td class="source-label">Claude Code</td></tr>
-            <tr data-person="以客为先 2"><td class="rank-number">03</td><td class="person-name">以客为先 2<small>连续活跃 6 天</small></td><td class="table-number">27.3亿</td><td class="table-number">7.9%</td><td class="delta-down">-3.1%</td><td class="source-label">Cursor</td></tr>
-          </tbody></table></div>
+          <div class="panel-head"><div><h2 id="home-table-title">当前周期贡献排名</h2><p>名次只是结果，贡献占比和组成结构才解释结果。</p></div><span class="panel-meta">真实公开数据</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>排名</th><th>参与者</th><th>Token</th><th>社区贡献</th><th>Token 组成</th><th>主要模型</th></tr></thead><tbody id="home-ranking-body"></tbody></table></div>
         </article>
       </section>
 
       <section class="view" data-view="leaderboard" role="tabpanel">
         <div class="page-heading">
-          <div><h1>贡献排行榜</h1><p>按 totalTokens 排名，同时展示贡献占比、变化方向和主要来源。预估成本不影响名次。</p></div>
-          <div class="scope"><button>今天</button><button class="active">本周</button><button>本月</button><button>累计</button></div>
+          <div><h1>贡献排行榜</h1><p>按 totalTokens 排名，同时展示贡献占比、Token 组成和主要模型。预估成本不影响名次。</p></div>
+          <div class="scope" data-public-period><button class="active" data-period="today">今天</button><button data-period="this_week">本周</button><button data-period="this_month">本月</button><button data-period="all">累计</button></div>
         </div>
         <div class="summary-grid">
-          <article class="summary-card"><span>本周社区 Token</span><strong>162.0亿</strong></article>
-          <article class="summary-card"><span>活跃参与者</span><strong>41</strong></article>
-          <article class="summary-card"><span>Top 1 贡献</span><strong>16.0%</strong></article>
-          <article class="summary-card"><span>Top 3 集中度</span><strong>32.4%</strong></article>
+          <article class="summary-card"><span id="leader-summary-label">当前周期 Token</span><strong id="leader-summary-tokens">--</strong></article>
+          <article class="summary-card"><span>活跃参与者</span><strong id="leader-summary-participants">--</strong></article>
+          <article class="summary-card"><span>Top 1 贡献</span><strong id="leader-summary-top1">--</strong></article>
+          <article class="summary-card"><span>Top 3 集中度</span><strong id="leader-summary-top3">--</strong></article>
         </div>
         <div class="leader-grid">
           <article class="panel podium">
-            <h2 class="podium-title">本周领先者</h2>
-            <div class="podium-entry"><span class="place">第 1 名</span><h3>巴斯光年</h3><p>较上周上升 2 位，连续活跃 7 天</p><strong>55.5亿</strong></div>
-            <div class="podium-entry"><span class="place">第 2 名</span><h3>担当且极致 3</h3><p>本周新增贡献最多</p><strong>29.4亿</strong></div>
-            <div class="podium-entry"><span class="place">第 3 名</span><h3>以客为先 2</h3><p>主要来源从 Codex 转为 Cursor</p><strong>27.3亿</strong></div>
+            <h2 class="podium-title" id="leader-podium-title">当前周期领先者</h2>
+            <div id="leader-podium"></div>
           </article>
           <div>
             <article class="panel panel-elevated">
-              <div class="panel-head"><div><h2>完整排名与贡献</h2><p>点击任意参与者查看当前周期的结构。</p></div><span class="panel-meta">41 位参与者</span></div>
-              <div class="table-scroll"><table class="data-table"><thead><tr><th>排名</th><th>参与者</th><th>Token</th><th>贡献</th><th>排名变化</th><th>主要来源</th></tr></thead><tbody id="leaderboard-body">
-                <tr class="selected" data-person="巴斯光年"><td class="rank-number">01</td><td class="person-name">巴斯光年<small>7 天活跃</small></td><td class="table-number">55.5亿</td><td class="table-number">16.0%</td><td class="delta-up">↑ 2</td><td class="source-label">Codex</td></tr>
-                <tr data-person="担当且极致 3"><td class="rank-number">02</td><td class="person-name">担当且极致 3<small>5 天活跃</small></td><td class="table-number">29.4亿</td><td class="table-number">8.5%</td><td class="delta-up">↑ 4</td><td class="source-label">Claude Code</td></tr>
-                <tr data-person="以客为先 2"><td class="rank-number">03</td><td class="person-name">以客为先 2<small>6 天活跃</small></td><td class="table-number">27.3亿</td><td class="table-number">7.9%</td><td class="delta-down">↓ 1</td><td class="source-label">Cursor</td></tr>
-                <tr data-person="狮城 2"><td class="rank-number">04</td><td class="person-name">狮城 2<small>4 天活跃</small></td><td class="table-number">25.0亿</td><td class="table-number">7.2%</td><td class="delta-up">↑ 1</td><td class="source-label">Codex</td></tr>
-                <tr data-person="以智为驱"><td class="rank-number">05</td><td class="person-name">以智为驱<small>7 天活跃</small></td><td class="table-number">19.9亿</td><td class="table-number">5.8%</td><td>持平</td><td class="source-label">Claude Code</td></tr>
+              <div class="panel-head"><div><h2>完整排名与贡献</h2><p>点击任意参与者查看真实模型与 Token 组成。</p></div><span class="panel-meta" id="leader-count">--</span></div>
+              <div class="table-scroll"><table class="data-table"><thead><tr><th>排名</th><th>参与者</th><th>Token</th><th>贡献</th><th>Token 组成</th><th>主要模型</th></tr></thead><tbody id="leaderboard-body">
               </tbody></table></div>
             </article>
             <aside class="detail-drawer" id="person-detail">
-              <h3><span id="detail-person">巴斯光年</span>，本周结构</h3>
-              <div class="detail-grid"><div class="detail-stat"><span>主要模型</span><strong>gpt-5.4</strong></div><div class="detail-stat"><span>主要来源</span><strong>Codex 71%</strong></div><div class="detail-stat"><span>峰值日期</span><strong>07-14</strong></div></div>
+              <h3><span id="detail-person">选择参与者</span>，当前周期结构</h3>
+              <div class="detail-grid"><div class="detail-stat"><span>主要模型</span><strong id="detail-model">--</strong></div><div class="detail-stat"><span>Token 组成</span><strong id="detail-composition">--</strong></div><div class="detail-stat"><span>社区贡献</span><strong id="detail-share">--</strong></div></div>
             </aside>
           </div>
         </div>
@@ -574,84 +560,62 @@
       <section class="view" data-view="analytics" role="tabpanel">
         <div class="page-heading">
           <div><h1>变化为什么发生</h1><p>把趋势、贡献者、模型和来源放在同一分析上下文中。</p></div>
-          <div class="scope"><button>全部社区</button><button class="active">本月</button><button>对比上月</button></div>
+          <div class="scope" data-public-period><button class="active" data-period="today">今天</button><button data-period="this_week">本周</button><button data-period="this_month">本月</button><button data-period="all">累计</button></div>
         </div>
         <div class="insight-rail">
-          <article class="insight-card primary"><span class="number">+39%</span><h3>本周仍保持增长</h3><p>尽管今日下降明显，本周累计较上周增加 45.4 亿 Token。</p></article>
-          <article class="insight-card"><span class="number">63%</span><h3>增长来自人均用量</h3><p>活跃人数贡献 37%，现有参与者使用强度贡献 63%。</p></article>
-          <article class="insight-card"><span class="number">+8.7%</span><h3>Codex 占比上升</h3><p>主要由前三名参与者在 07-14 的集中使用推动。</p></article>
+          <article class="insight-card primary"><span class="number" id="analytics-delta">--</span><h3 id="analytics-delta-title">周期变化</h3><p id="analytics-delta-copy">正在读取真实数据。</p></article>
+          <article class="insight-card"><span class="number" id="analytics-cache-rate">--</span><h3>缓存读取占比</h3><p id="analytics-cache-copy">衡量重复上下文被缓存复用的程度。</p></article>
+          <article class="insight-card"><span class="number" id="analytics-primary-source-ratio">--</span><h3 id="analytics-primary-source-title">主要来源</h3><p id="analytics-primary-source-copy">当前周期贡献最大的采集来源。</p></article>
         </div>
         <div class="analysis-grid">
           <article class="panel panel-elevated large-chart">
-            <div class="panel-head"><div><h2>社区 Token 与活跃人数</h2><p>同时观察规模变化与参与广度。</p></div><span class="panel-meta">本月对比上月</span></div>
-            <svg class="line-chart" viewBox="0 0 800 300" role="img" aria-label="本月社区 Token 和活跃人数趋势">
+            <div class="panel-head"><div><h2>社区 Token 与活跃人数</h2><p>同时观察规模变化与参与广度。</p></div><span class="panel-meta" id="analytics-range">--</span></div>
+            <svg class="line-chart" viewBox="0 0 800 300" role="img" aria-label="所选周期社区 Token 趋势">
               <g class="chart-grid"><line x1="25" y1="45" x2="775" y2="45"/><line x1="25" y1="130" x2="775" y2="130"/><line x1="25" y1="215" x2="775" y2="215"/></g>
-              <path class="chart-area" d="M25 220 L75 180 L125 196 L175 145 L225 170 L275 110 L325 126 L375 82 L425 150 L475 112 L525 44 L575 76 L625 98 L675 160 L725 138 L775 214 L775 250 L25 250 Z"/>
-              <path class="chart-line" d="M25 220 L75 180 L125 196 L175 145 L225 170 L275 110 L325 126 L375 82 L425 150 L475 112 L525 44 L575 76 L625 98 L675 160 L725 138 L775 214"/>
-              <circle class="chart-point" cx="525" cy="44" r="5"/><text class="chart-annotation" x="501" y="25">峰值 43.1亿</text>
+              <path class="chart-area" id="analytics-chart-area" d=""/>
+              <path class="chart-line" id="analytics-chart-line" d=""/>
+              <circle class="chart-point" id="analytics-chart-peak" cx="25" cy="215" r="5"/><text class="chart-annotation" id="analytics-chart-peak-label" x="25" y="200">--</text>
             </svg>
           </article>
           <article class="panel">
-            <div class="panel-head"><div><h2>增长贡献拆解</h2><p>区分人数增长与使用强度。</p></div></div>
-            <div class="driver-list">
-              <div class="driver"><div><strong>现有参与者用量增加</strong><small>主要来自 Top 10</small></div><span class="driver-value">+28.6亿</span></div>
-              <div class="driver"><div><strong>新增参与者</strong><small>本周新增 6 位</small></div><span class="driver-value">+16.8亿</span></div>
-              <div class="driver"><div><strong>流失参与者</strong><small>3 位本周无活动</small></div><span class="driver-value negative">-4.9亿</span></div>
-              <div class="driver"><div><strong>净变化</strong><small>较上周</small></div><span class="driver-value">+40.5亿</span></div>
-            </div>
+            <div class="panel-head"><div><h2>当前结构拆解</h2><p>用真实贡献者和来源解释当前总量。</p></div></div>
+            <div class="driver-list" id="analytics-drivers"></div>
           </article>
         </div>
         <div class="analysis-lower">
-          <article class="panel"><div class="panel-head"><div><h2>模型结构变化</h2><p>查看哪些模型推动总量变化。</p></div></div><div class="mix-bars">
-            <div class="mix-row"><span>gpt-5.4</span><div class="thin-bar" style="--value:72%"><i></i></div><strong>+12.4%</strong></div>
-            <div class="mix-row"><span>claude-opus</span><div class="thin-bar" style="--value:54%"><i></i></div><strong>+4.1%</strong></div>
-            <div class="mix-row"><span>gpt-5.3-codex</span><div class="thin-bar" style="--value:38%"><i></i></div><strong>-3.8%</strong></div>
-            <div class="mix-row"><span>其他模型</span><div class="thin-bar" style="--value:27%"><i></i></div><strong>-1.2%</strong></div>
-          </div></article>
+          <article class="panel"><div class="panel-head"><div><h2>模型结构</h2><p>查看哪些模型构成当前周期总量。</p></div></div><div class="mix-bars" id="analytics-models"></div></article>
           <article class="panel"><div class="panel-head"><div><h2>活跃节奏</h2><p>颜色越深，社区用量越高。</p></div><span class="panel-meta">最近 14 周</span></div><div class="heatmap" id="heatmap"></div></article>
         </div>
       </section>
 
       <section class="view" data-view="admin" role="tabpanel">
         <div class="page-heading admin-heading">
-          <div><h1>今天有 8 项需要处理</h1><p>管理聚合用量、模型价格、数据质量和客户端设备。</p></div>
-          <div class="scope"><button class="active">运营总览</button><button>价格</button><button>质量</button><button>设备</button></div>
+          <div><h1>真实用户使用量运营</h1><p>保留使用量排名，同时关联模型价格、数据质量和客户端设备。</p></div>
+          <div class="scope" data-admin-range><button data-range="today">今天</button><button data-range="last7">近 7 日</button><button class="active" data-range="month">本月</button><button data-range="all">累计</button></div>
         </div>
         <div class="summary-grid">
-          <article class="summary-card"><span>数据新鲜度</span><strong class="delta-up">2 分钟</strong></article>
-          <article class="summary-card"><span>今日上传设备</span><strong>38 / 43</strong></article>
-          <article class="summary-card"><span>价格覆盖率</span><strong>93.8%</strong></article>
-          <article class="summary-card"><span>待处理问题</span><strong class="delta-down">8</strong></article>
+          <article class="summary-card"><span>当前周期 Token</span><strong id="admin-total-tokens">--</strong></article>
+          <article class="summary-card"><span>排名用户</span><strong id="admin-user-count">--</strong></article>
+          <article class="summary-card"><span>价格覆盖率</span><strong id="admin-pricing-coverage">--</strong></article>
+          <article class="summary-card"><span>已登记设备</span><strong id="admin-device-count">--</strong></article>
         </div>
+        <article class="panel panel-elevated full-panel">
+          <div class="panel-head"><div><h2>使用量排名</h2><p>直接呈现 Admin 真实用户昵称、Token 组成、来源质量和最后同步时间。</p></div><span class="panel-meta" id="admin-ranking-range">--</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>排名</th><th>真实用户</th><th>Token</th><th>主要模型</th><th>主要来源</th><th>来源质量</th><th>最后同步</th></tr></thead><tbody id="admin-ranking-body"></tbody></table></div>
+        </article>
         <div class="admin-grid">
           <article class="panel panel-elevated">
-            <div class="panel-head"><div><h2>运营待办</h2><p>按数据影响范围排序，而不是按问题类型堆叠。</p></div><span class="panel-meta">影响 8.2 亿 Token</span></div>
-            <div class="task-list">
-              <div class="task"><div><strong>8 个模型缺少价格</strong><p>影响 6.3% 的成本估算，优先处理 gpt-5.4-mini。</p></div><button>处理价格</button></div>
-              <div class="task"><div><strong>3 台设备超过 24 小时未同步</strong><p>其中 1 台属于本周 Top 10 参与者，可能影响榜单完整性。</p></div><button>查看设备</button></div>
-              <div class="task"><div><strong>1 位参与者出现异常峰值</strong><p>07-14 单日 Token 达近 30 日均值的 4.7 倍。</p></div><button>检查明细</button></div>
-              <div class="task"><div><strong>2 条上传记录等待重试</strong><p>签名有效，服务端返回临时存储错误。</p></div><button>查看队列</button></div>
-            </div>
+            <div class="panel-head"><div><h2>运营待办</h2><p>从真实质量与设备数据中提取值得处理的问题。</p></div><span class="panel-meta" id="admin-task-meta">--</span></div>
+            <div class="task-list" id="admin-tasks"></div>
           </article>
           <article class="panel">
             <div class="panel-head"><div><h2>系统状态</h2><p>先判断数据是否值得信任。</p></div></div>
-            <div class="status-stack">
-              <div class="status-row"><span>公开数据更新时间</span><strong class="ok">2 分钟前</strong></div>
-              <div class="status-row"><span>上传成功率</span><strong class="ok">99.4%</strong></div>
-              <div class="status-row"><span>价格覆盖率</span><strong class="warn">93.8%</strong></div>
-              <div class="status-row"><span>设备版本覆盖</span><strong class="warn">88.4%</strong></div>
-              <div class="status-row"><span>异常数据占比</span><strong class="ok">0.07%</strong></div>
-            </div>
+            <div class="status-stack" id="admin-status"></div>
           </article>
         </div>
         <article class="panel admin-table">
-          <div class="panel-head"><div><h2>设备同步与数据影响</h2><p>把设备问题直接关联到排行榜和分析完整性。</p></div><span class="panel-meta">43 台设备</span></div>
-          <div class="table-scroll"><table class="data-table"><thead><tr><th>设备</th><th>参与者</th><th>最后同步</th><th>客户端版本</th><th>本周 Token</th><th>状态</th></tr></thead><tbody>
-            <tr><td class="mono">mac-a19f</td><td class="person-name">巴斯光年</td><td>2 分钟前</td><td class="mono">0.7.7</td><td class="table-number">55.5亿</td><td class="delta-up">正常</td></tr>
-            <tr><td class="mono">win-7c31</td><td class="person-name">担当且极致 3</td><td>18 分钟前</td><td class="mono">0.7.7</td><td class="table-number">29.4亿</td><td class="delta-up">正常</td></tr>
-            <tr><td class="mono">mac-42bd</td><td class="person-name">狮城 2</td><td>26 小时前</td><td class="mono">0.7.5</td><td class="table-number">25.0亿</td><td class="delta-down">同步中断</td></tr>
-            <tr><td class="mono">win-e102</td><td class="person-name">以智为驱</td><td>31 小时前</td><td class="mono">0.7.6</td><td class="table-number">19.9亿</td><td class="delta-down">需要关注</td></tr>
-          </tbody></table></div>
+          <div class="panel-head"><div><h2>设备同步状态</h2><p>设备信息作为排名完整性的辅助判断，不取代使用量排名。</p></div><span class="panel-meta" id="admin-device-meta">--</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>设备</th><th>真实用户</th><th>最后同步</th><th>客户端版本</th><th>平台</th><th>状态</th></tr></thead><tbody id="admin-device-body"></tbody></table></div>
         </article>
       </section>
 
@@ -662,74 +626,6 @@
       <div class="loading-card"><strong>正在更新数据视图</strong><p>保留当前结构，只更新发生变化的内容。</p><div class="skeleton medium"></div><div class="skeleton"></div><div class="skeleton short"></div></div>
     </div>
 
-    <script>
-      const viewButtons = [...document.querySelectorAll("[data-view-target]")];
-      const views = [...document.querySelectorAll("[data-view]")];
-      const themeToggle = document.querySelector("#theme-toggle");
-      const refreshButton = document.querySelector("#refresh-demo");
-      const detailPerson = document.querySelector("#detail-person");
-
-      function showView(name) {
-        viewButtons.forEach((button) => {
-          const isActive = button.dataset.viewTarget === name;
-          button.classList.toggle("active", isActive);
-          button.setAttribute("aria-selected", String(isActive));
-        });
-        views.forEach((view) => view.classList.toggle("active", view.dataset.view === name));
-        history.replaceState(null, "", `#${name}`);
-        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
-      }
-
-      viewButtons.forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewTarget)));
-      document.querySelectorAll(".scope").forEach((scope) => {
-        const buttons = [...scope.querySelectorAll("button")];
-        buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.classList.contains("active"))));
-        scope.addEventListener("click", (event) => {
-          const button = event.target.closest("button");
-          if (!button) return;
-          buttons.forEach((item) => {
-            const isActive = item === button;
-            item.classList.toggle("active", isActive);
-            item.setAttribute("aria-pressed", String(isActive));
-          });
-        });
-      });
-
-      themeToggle.addEventListener("click", () => {
-        const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-        document.documentElement.dataset.theme = next;
-        themeToggle.textContent = next === "dark" ? "浅色" : "深色";
-        themeToggle.setAttribute("aria-pressed", String(next === "dark"));
-      });
-
-      refreshButton.addEventListener("click", () => {
-        if (document.body.classList.contains("loading")) return;
-        document.body.classList.add("loading");
-        refreshButton.textContent = "更新中";
-        refreshButton.setAttribute("aria-busy", "true");
-        window.setTimeout(() => {
-          document.body.classList.remove("loading");
-          refreshButton.textContent = "刷新数据";
-          refreshButton.removeAttribute("aria-busy");
-        }, 780);
-      });
-
-      document.querySelectorAll("#leaderboard-body tr").forEach((row) => row.addEventListener("click", () => {
-        document.querySelectorAll("#leaderboard-body tr").forEach((item) => item.classList.toggle("selected", item === row));
-        detailPerson.textContent = row.dataset.person;
-      }));
-
-      const heatmap = document.querySelector("#heatmap");
-      const heatLevels = [1,0,2,1,3,4,2,1,0,2,4,5,3,1,2,3,1,4,5,2,0,1,3,4,2,5,4,1,0,2,3,5,4,2,1,3,4,5,2,1,0,2,3,4,5,3,1,2,4,2,5,4,3,1,0,2,4,5,3,2,1,3,5,4,2,1,2,4,3,5,1,0,2,3,4,5,2,1,3,4,2,5,4,1,0,2,3,5,4,2,1,3,4,5,2,1,0,2];
-      heatmap.innerHTML = heatLevels.map((level) => `<i style="--level:${level}" title="用量等级 ${level}"></i>`).join("");
-
-      const initialView = location.hash.slice(1);
-      if (["home", "leaderboard", "analytics", "admin"].includes(initialView)) showView(initialView);
-      window.addEventListener("hashchange", () => {
-        const nextView = location.hash.slice(1);
-        if (["home", "leaderboard", "analytics", "admin"].includes(nextView)) showView(nextView);
-      });
-    </script>
+    <script type="module" src="/data-value-demo-live.js"></script>
   </body>
 </html>

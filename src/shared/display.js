@@ -16,6 +16,14 @@ export function formatTokenRaw(value, locale = undefined) {
   return `${new Intl.NumberFormat(locale).format(value || 0)} ${t("unit.tokens")}`;
 }
 
+export function formatContributionPercent(value, total) {
+  const amount = Number(value || 0);
+  const denominator = Number(total || 0);
+  if (!Number.isFinite(amount) || !Number.isFinite(denominator) || amount <= 0 || denominator <= 0) return "0.0%";
+  const contribution = amount / denominator * 100;
+  return contribution < 0.1 ? "<0.1%" : `${contribution.toFixed(1)}%`;
+}
+
 export function formatUsd(value) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "-";
   const n = Number(value);
