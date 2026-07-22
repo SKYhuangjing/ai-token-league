@@ -48,17 +48,11 @@
             <input id="show-cost" type="checkbox" />
             <span data-i18n="web.estimatedCost">Estimated cost</span>
           </label>
+          <span id="status" class="leaderboard-status" aria-live="polite" data-i18n="loading">Loading...</span>
         </div>
       </section>
 
       <section class="board motion-surface" id="leaderboard-surface" aria-busy="true">
-        <div class="board-header compact-header">
-          <div class="board-title-block">
-            <span class="section-kicker" data-i18n="web.home.communityBadge">Community</span>
-            <h2 data-i18n="web.leaderboard.title">Community Leaderboard</h2>
-          </div>
-          <p id="status" class="board-summary" data-i18n="loading">Loading...</p>
-        </div>
         <div id="top-three" class="top-three-grid"></div>
         <div id="meter-view" class="meter-stack"></div>
         <div id="list-view" class="table-wrap" hidden>

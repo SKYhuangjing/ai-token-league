@@ -4745,8 +4745,8 @@ function testWebLeaderboardStructure() {
   const styles = fs.readFileSync("src/web/styles.css", "utf8");
   assert.match(html, /leaderboard/i);
   assert.match(html, /period/i);
-  assert.match(html, /board-title-block/);
-  assert.match(html, /data-i18n="web\.leaderboard\.title"/);
+  assert.doesNotMatch(html, /board-title-block/);
+  assert.match(html, /toolbar-right[\s\S]*id="status"[^>]*class="leaderboard-status"/);
   assert.match(html, /href="\/leaderboard\.html"/);
   assert.match(html, /id="leaderboard-surface"[^>]*aria-busy="true"/);
   assert.match(html, /data-i18n="web\.leaderboard\.contribution"/);

@@ -7676,6 +7676,458 @@ body.page-home.is-refreshing::after {
   }
 }
 
+/* Visual focus correction: let telemetry be the texture, not the backdrop. */
+:root {
+  --paper: #f6f2ea;
+  --paper-2: #fffefb;
+  --admin-bg: #f3efe7;
+  --ink: #17211f;
+  --ink-deep: #13201e;
+  --muted: #6c716a;
+  --line: #d8d1c4;
+  --line-soft: #ebe5da;
+  --surface-quiet: #fffefb;
+  --surface-soft: #f5f1e9;
+  --surface-tint: #edf5f1;
+  --rule-strong: rgba(19, 32, 30, 0.2);
+  --rule-soft: rgba(19, 32, 30, 0.09);
+}
+
+body,
+body.page-home,
+body.admin-tone {
+  background-color: var(--paper);
+  background-image: linear-gradient(180deg, #fbf9f4 0, var(--paper) 42rem, #f2eee5 100%);
+  background-size: auto;
+}
+
+body.admin-tone {
+  background-color: var(--admin-bg);
+  background-image: linear-gradient(180deg, #f9f7f1 0, var(--admin-bg) 38rem, #efebe3 100%);
+}
+
+body.page-home::before {
+  display: none;
+}
+
+.public-masthead,
+.admin-masthead {
+  border-bottom-color: rgba(19, 32, 30, 0.28);
+}
+
+.public-shell .card,
+.public-shell .board,
+.admin-shell .board {
+  border-color: rgba(19, 32, 30, 0.16);
+  background: var(--surface-quiet);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.95) inset, 0 8px 22px rgba(26, 35, 32, 0.055);
+}
+
+.landing-shell .kpi-pair,
+.landing-shell .kpi.kpi-total {
+  border-color: rgba(19, 32, 30, 0.18);
+  background: var(--surface-quiet);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.95) inset, 0 6px 16px rgba(26, 35, 32, 0.04);
+}
+
+.landing-shell .kpi.kpi-current {
+  background: linear-gradient(180deg, rgba(235, 247, 241, 0.94), rgba(255, 254, 251, 0) 78%);
+}
+
+.landing-shell .kpi.kpi-compare {
+  background: #faf8f3;
+}
+
+.landing-shell .kpi-compare .val {
+  color: #59645e;
+}
+
+.landing-shell .home-trend-card .chart-frame {
+  border-color: rgba(19, 32, 30, 0.1);
+  background: #fdfcf8;
+}
+
+.landing-shell .home-top-card,
+.public-shell .board-header.compact-header,
+.admin-shell .usage-toolbar,
+.admin-shell .usage-view-bar {
+  background: var(--surface-soft);
+}
+
+.landing-shell .home-top-card {
+  background: linear-gradient(160deg, #fffefb, #f5f6ef);
+}
+
+.public-shell .chart-grid-line {
+  stroke: #e7e1d6;
+}
+
+.admin-shell .admin-tabs {
+  background: rgba(255, 254, 251, 0.7);
+}
+
+.admin-shell th,
+.admin-shell .pricing-library-panel,
+.admin-shell .summary-tile,
+.admin-shell .bar-row,
+.admin-shell .trend-line,
+.admin-shell .top-contributors article,
+.admin-shell .empty-state {
+  background: #f8f5ee;
+}
+
+/* Data typography: editorial headings, precise telemetry figures. */
+:root {
+  --data-primary: #18332e;
+  --data-secondary: #657069;
+  --data-positive: #06756d;
+  --data-negative: #ad4c50;
+  --data-cost: #92631c;
+  --data-rank: #7b827b;
+}
+
+.landing-shell :is(.kpi .val, .kpi.kpi-total .val),
+.analytics-shell .an-kpi .val,
+.summary-tile strong,
+.medal-total,
+.meter-value > strong,
+.tokens,
+.token-accounting,
+.cost-amount {
+  color: var(--data-primary);
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.045em;
+}
+
+.landing-shell .kpi .val,
+.landing-shell .kpi.kpi-total .val,
+.analytics-shell .an-kpi .val {
+  font-weight: 600;
+}
+
+.landing-shell .kpi .lab,
+.analytics-shell .an-kpi .lab,
+.summary-tile span,
+.admin-shell th {
+  color: var(--data-secondary);
+  font-weight: 700;
+}
+
+.landing-shell .kpi .delta,
+.landing-shell .kpi .sub:not([hidden]),
+.landing-shell .kpi-row .kpi .sub:not([hidden]) {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.landing-shell .kpi .delta.up {
+  color: var(--data-positive);
+}
+
+.landing-shell .kpi .delta.down {
+  color: var(--data-negative);
+}
+
+.landing-shell .kpi .sub:not([hidden]),
+.landing-shell .kpi-row .kpi .sub:not([hidden]),
+.meter-cost,
+.cost-amount {
+  color: var(--data-cost);
+}
+
+.landing-shell .kpi-compare .val,
+.landing-shell .kpi .delta.flat,
+.rank,
+small.pct {
+  color: var(--data-secondary);
+}
+
+.meter-value > strong,
+.medal-total,
+.tokens {
+  font-weight: 600;
+}
+
+.meter-share {
+  color: var(--data-secondary);
+}
+
+.meter-share b,
+.leaderboard-value-meta .contribution-stat strong,
+.public-table .contribution-cell {
+  color: var(--data-positive);
+}
+
+.leaderboard-value-meta,
+.meter-cost,
+.cost-amount,
+small.pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-shell td {
+  color: var(--data-secondary);
+}
+
+.admin-shell :is(.tokens, .primary-slice strong, .primary-slice small, .link-button, .cost-quality) {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.admin-shell .tokens,
+.admin-shell .primary-slice strong {
+  color: var(--data-primary);
+  font-weight: 600;
+}
+
+.admin-shell .primary-slice small,
+.admin-shell .truncated-cell {
+  color: var(--data-secondary);
+}
+
+/* Dashboard color coding: each time horizon owns one calm, memorable hue. */
+.landing-shell .kpi-pair {
+  --period-accent: #087f79;
+  --period-wash: #e5f4ef;
+}
+
+.landing-shell .kpi-pair[data-period-pair="week"] {
+  --period-accent: #466cae;
+  --period-wash: #e9effc;
+}
+
+.landing-shell .kpi-pair[data-period-pair="month"] {
+  --period-accent: #b36f27;
+  --period-wash: #fbefd9;
+}
+
+.landing-shell .kpi-pair::before {
+  width: 4px;
+  background: var(--period-accent);
+}
+
+.landing-shell .kpi-pair .kpi-current {
+  background: linear-gradient(150deg, var(--period-wash), rgba(255, 254, 251, 0) 74%) !important;
+}
+
+.landing-shell .kpi-pair .kpi-current .lab,
+.landing-shell .kpi-pair .kpi-current .val {
+  color: var(--period-accent);
+}
+
+.landing-shell .kpi.kpi-total {
+  border-color: rgba(100, 70, 143, 0.28);
+  background: linear-gradient(145deg, #f1ebfa, #fffefb 70%);
+}
+
+.landing-shell .kpi.kpi-total::before {
+  width: 4px;
+  background: #76558f;
+}
+
+.landing-shell .kpi.kpi-total .lab,
+.landing-shell .kpi.kpi-total .val {
+  color: #644577;
+}
+
+.landing-shell .home-trend-card {
+  border-top: 3px solid #087f79;
+}
+
+.landing-shell .home-trend-card .chart-frame {
+  background: linear-gradient(180deg, #e8f5f0, #fdfcf8 74%);
+}
+
+.landing-shell .home-top-card {
+  border-top: 3px solid #466cae;
+  background: linear-gradient(155deg, #edf2fd, #fffefb 64%);
+}
+
+.landing-shell .home-top-card .card-head-link,
+.landing-shell .home-top-card .top-row:hover .nm {
+  color: #365d9e;
+}
+
+.landing-shell .mini-bar > i {
+  background: linear-gradient(90deg, #5378bb, #7c5a9d);
+}
+
+.landing-shell .treemap-card {
+  border-top: 3px solid #76558f;
+}
+
+.landing-shell .treemap-card .card-head h2 {
+  color: #513765;
+}
+
+.landing-shell .dash-grid-2 > .card:nth-child(1) {
+  border-top: 3px solid #b36f27;
+}
+
+.landing-shell .dash-grid-2 > .card:nth-child(2) {
+  border-top: 3px solid #087f79;
+}
+
+.landing-shell .dash-grid-2 > .card:nth-child(3) {
+  border-top: 3px solid #466cae;
+}
+
+.admin-shell .admin-tabs button.active {
+  border-color: rgba(8, 127, 121, 0.24);
+  box-shadow: inset 0 2px 0 #087f79, 0 2px 5px rgba(20, 33, 31, 0.06);
+}
+
+/* Carry the colour system through leaderboard, analytics, and operations. */
+.public-shell:not(.landing-shell) .period-toolbar {
+  border-top: 3px solid #466cae;
+  background: linear-gradient(105deg, #edf2fd, rgba(255, 254, 251, 0.82) 62%);
+}
+
+.public-shell:not(.landing-shell) .board-header.compact-header {
+  border-left: 4px solid #76558f;
+  background: linear-gradient(100deg, #f1edfa, #fffefb 72%);
+}
+
+.public-shell .top-three-grid {
+  background: linear-gradient(150deg, #eef3fd, #f8f3ec 76%);
+}
+
+.public-shell .medal-rank-1 {
+  border-top: 3px solid #c38a24;
+}
+
+.public-shell .medal-rank-2 {
+  border-top: 3px solid #16897f;
+}
+
+.public-shell .medal-rank-3 {
+  border-top: 3px solid #c27041;
+}
+
+.public-shell .meter-row.meter-rank-4,
+.public-shell .meter-row.meter-rank-5,
+.public-shell .meter-row.meter-rank-6 {
+  background: linear-gradient(90deg, rgba(70, 108, 174, 0.08), transparent 58%);
+}
+
+.public-shell .meter-row.meter-rank-7,
+.public-shell .meter-row.meter-rank-8,
+.public-shell .meter-row.meter-rank-9,
+.public-shell .meter-row.meter-rank-10 {
+  background: linear-gradient(90deg, rgba(8, 127, 121, 0.065), transparent 58%);
+}
+
+.public-shell .meter-row.meter-rank-4 .rank,
+.public-shell .meter-row.meter-rank-5 .rank,
+.public-shell .meter-row.meter-rank-6 .rank {
+  color: #466cae;
+}
+
+.public-shell .meter-row:is(.meter-rank-4, .meter-rank-5, .meter-rank-6) .participant-link {
+  color: #365d9e;
+  text-decoration-color: rgba(54, 93, 158, 0.45);
+}
+
+.public-shell .meter-row:is(.meter-rank-4, .meter-rank-5, .meter-rank-6) .participant-link:hover {
+  color: #25487f;
+}
+
+.public-shell .meter-row.meter-rank-7 .rank,
+.public-shell .meter-row.meter-rank-8 .rank,
+.public-shell .meter-row.meter-rank-9 .rank,
+.public-shell .meter-row.meter-rank-10 .rank {
+  color: #087f79;
+}
+
+.public-shell .meter-row:is(.meter-rank-7, .meter-rank-8, .meter-rank-9, .meter-rank-10) .participant-link {
+  color: #08756f;
+  text-decoration-color: rgba(8, 117, 111, 0.42);
+}
+
+.public-shell .public-table th {
+  border-top: 3px solid #466cae;
+  background: #edf2fd;
+  color: #466cae;
+}
+
+.public-shell .public-table tbody tr:hover td {
+  background: #f4f7fe;
+}
+
+.analytics-shell .an-toolbar {
+  border-top: 3px solid #76558f;
+  background: linear-gradient(105deg, #f2edfb, rgba(255, 254, 251, 0.82) 62%);
+}
+
+.analytics-shell .an-kpi {
+  border-top: 3px solid #087f79;
+  background: linear-gradient(155deg, #e8f5f0, #fffefb 68%);
+}
+
+.analytics-shell .an-kpi:nth-child(2) {
+  border-top-color: #3f8a61;
+  background: linear-gradient(155deg, #eaf5ec, #fffefb 68%);
+}
+
+.analytics-shell .an-kpi:nth-child(3) {
+  border-top-color: #b36f27;
+  background: linear-gradient(155deg, #fbefd9, #fffefb 68%);
+}
+
+.analytics-shell .an-kpi:nth-child(4) {
+  border-top-color: #76558f;
+  background: linear-gradient(155deg, #f1ebfa, #fffefb 68%);
+}
+
+.analytics-shell .an-kpi:nth-child(1) .val { color: #087f79; }
+.analytics-shell .an-kpi:nth-child(2) .val { color: #3f8a61; }
+.analytics-shell .an-kpi:nth-child(3) .val { color: #a76622; }
+.analytics-shell .an-kpi:nth-child(4) .val { color: #644577; }
+
+.analytics-shell .an-trend-card { border-top: 3px solid #087f79; }
+.analytics-shell .an-composition-card { border-top: 3px solid #76558f; }
+.analytics-shell .treemap-card { border-top: 3px solid #76558f; }
+.analytics-shell .an-secondary:nth-of-type(1) > .card:first-child { border-top: 3px solid #b36f27; }
+.analytics-shell .an-secondary:nth-of-type(1) > .card:last-child { border-top: 3px solid #466cae; }
+.analytics-shell .an-secondary:nth-of-type(2) > .card:first-child { border-top: 3px solid #c27041; }
+.analytics-shell .an-secondary:nth-of-type(2) > .card:last-child { border-top: 3px solid #087f79; }
+.analytics-shell .heatmap-full-width { border-top: 3px solid #466cae; }
+
+.admin-shell .admin-panel[data-admin-panel="usage"] { border-top: 3px solid #087f79; }
+.admin-shell .admin-panel[data-admin-panel="pricing"] { border-top: 3px solid #b36f27; }
+.admin-shell .admin-panel[data-admin-panel="quality"] { border-top: 3px solid #76558f; }
+.admin-shell .admin-panel[data-admin-panel="devices"] { border-top: 3px solid #466cae; }
+.admin-shell .admin-panel[data-admin-panel="analytics"] { border-top: 3px solid #087f79; }
+
+.admin-shell .admin-tabs button[data-admin-tab="pricing"].active {
+  border-color: rgba(179, 111, 39, 0.28);
+  box-shadow: inset 0 2px 0 #b36f27, 0 2px 5px rgba(20, 33, 31, 0.06);
+}
+
+.admin-shell .admin-tabs button[data-admin-tab="quality"].active {
+  border-color: rgba(118, 85, 143, 0.28);
+  box-shadow: inset 0 2px 0 #76558f, 0 2px 5px rgba(20, 33, 31, 0.06);
+}
+
+.admin-shell .admin-tabs button[data-admin-tab="devices"].active {
+  border-color: rgba(70, 108, 174, 0.28);
+  box-shadow: inset 0 2px 0 #466cae, 0 2px 5px rgba(20, 33, 31, 0.06);
+}
+
+/* Participant count belongs with view controls, not in a separate title band. */
+.public-shell:not(.landing-shell) .toolbar-right .leaderboard-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin-left: 2px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(70, 108, 174, 0.22);
+  color: #5d6f8e;
+  font: 650 11px/1 var(--font-data);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .page-home.is-refreshing .kpi .val,
   .page-home.is-refreshing .kpi .sub:empty {
