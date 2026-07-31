@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub const PROVIDER_ID: &str = "claude_code_local";
 pub const TOOL_CODE: &str = "claude_code";
-pub const VERSION: &str = "0.2.0";
+pub const VERSION: &str = "0.3.0";
 
 pub struct ClaudeCodeLocalProvider;
 
@@ -268,6 +268,72 @@ impl ClaudeCodeLocalProvider {
                 "parserVersion": source.parser_version,
                 "_dedupKey": dedup_key,
             }));
+
+            for (index, (advisor_model, advisor_usage)) in
+                advisor_usages_from_value(usage).into_iter().enumerate()
+            {
+                let advisor_input_tokens = token_field(
+                    &advisor_usage,
+                    &["input_tokens", "inputTokens", "prompt_tokens"],
+                );
+                let advisor_output_tokens = token_field(
+                    &advisor_usage,
+                    &["output_tokens", "outputTokens", "completion_tokens"],
+                );
+                let advisor_cache_read_tokens = token_field(
+                    &advisor_usage,
+                    &[
+                        "cache_read_input_tokens",
+                        "cacheReadTokens",
+                        "cache_read_tokens",
+                    ],
+                );
+                let advisor_cache_write_tokens = token_field(
+                    &advisor_usage,
+                    &[
+                        "cache_creation_input_tokens",
+                        "cacheWriteTokens",
+                        "cache_write_tokens",
+                    ],
+                );
+                let advisor_reasoning_tokens =
+                    token_field(&advisor_usage, &["reasoning_tokens", "reasoningTokens"]);
+                let advisor_total = advisor_input_tokens
+                    + advisor_output_tokens
+                    + advisor_cache_read_tokens
+                    + advisor_cache_write_tokens;
+                if advisor_total == 0 {
+                    continue;
+                }
+
+                let advisor_dedup_key = if dedup_key.is_empty() {
+                    format!("{}:advisor:{}", event_session_id, index)
+                } else {
+                    format!("{}:advisor:{}", dedup_key, index)
+                };
+                events.push(json!({
+                    "providerId": PROVIDER_ID,
+                    "providerVersion": VERSION,
+                    "toolCode": TOOL_CODE,
+                    "sourceKind": "local_log",
+                    "sourceQuality": if advisor_input_tokens > 0 || advisor_output_tokens > 0 { "exact" } else { "partial" },
+                    "sessionId": event_session_id,
+                    "day": day_from_record(row, mtime_ms),
+                    "hour": hour_from_record(row, mtime_ms),
+                    "workdirCandidate": workdir_candidate,
+                    "model": advisor_model,
+                    "inputTokens": advisor_input_tokens,
+                    "outputTokens": advisor_output_tokens,
+                    "cacheReadTokens": advisor_cache_read_tokens,
+                    "cacheWriteTokens": advisor_cache_write_tokens,
+                    "reasoningTokens": advisor_reasoning_tokens,
+                    "totalTokens": advisor_total,
+                    "rawSourceRef": source.raw_source_ref,
+                    "sourceFingerprint": source.source_fingerprint,
+                    "parserVersion": source.parser_version,
+                    "_dedupKey": advisor_dedup_key,
+                }));
+            }
         }
 
         events
@@ -317,6 +383,27 @@ fn token_field(usage: &Value, aliases: &[&str]) -> i64 {
         }
     }
     0
+}
+
+fn advisor_usages_from_value(usage: &Value) -> Vec<(String, Value)> {
+    usage
+        .get("iterations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|iteration| {
+            (iteration.get("type").and_then(Value::as_str) == Some("advisor_message"))
+                .then_some(iteration)
+                .filter(|iteration| iteration.get("model").and_then(Value::as_str).is_some())
+                .map(|iteration| {
+                    (
+                        iteration["model"].as_str().unwrap_or_default().to_string(),
+                        iteration.clone(),
+                    )
+                })
+        })
+        .filter(|(model, _)| !model.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -414,6 +501,49 @@ mod tests {
         assert_eq!(events[0]["sessionId"], "session-a");
         assert_eq!(events[1]["model"], "model-b");
         assert_eq!(events[1]["sessionId"], "session-b");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parse_usage_counts_advisor_iterations_as_separate_usage() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("atl-claude-advisor-{}.jsonl", suffix));
+        let row = json!({
+            "timestamp": "2026-06-01T10:00:00Z",
+            "sessionId": "session-advisor",
+            "message": {
+                "id": "message-advisor",
+                "model": "main-model",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "iterations": [
+                        {
+                            "type": "advisor_message",
+                            "model": "advisor-model",
+                            "input_tokens": 30,
+                            "output_tokens": 4,
+                            "cache_read_input_tokens": 5,
+                            "cache_creation_input_tokens": 1
+                        }
+                    ]
+                }
+            }
+        });
+        fs::write(&path, serde_json::to_string(&row).unwrap()).unwrap();
+
+        let events = ClaudeCodeLocalProvider.parse_usage(&path.to_string_lossy());
+
+        assert_eq!(events.len(), 2);
+        let advisor = events
+            .iter()
+            .find(|event| event["model"] == "advisor-model")
+            .unwrap();
+        assert_eq!(advisor["totalTokens"], 40);
+        assert_eq!(advisor["_dedupKey"], "message-advisor:advisor:0");
         let _ = fs::remove_file(path);
     }
 }

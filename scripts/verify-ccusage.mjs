@@ -164,7 +164,7 @@ function expectedClaude() {
 function expectedCodex() {
   const incompatible = externalProviderCanMatch("codex_local", "codex");
   if (incompatible) return incompatible;
-  requireCcusageVersion("20.0.8");
+  requireCcusageVersion("20.0.19");
   const raw = run("ccusage", ["codex", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
   const parsed = JSON.parse(raw);
   const expected = new Map();

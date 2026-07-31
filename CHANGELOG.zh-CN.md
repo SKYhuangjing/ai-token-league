@@ -6,6 +6,15 @@
 
 ---
 
+## [0.7.9] - 2026-07-31
+
+### 变更
+
+- [Desktop] Codex 本地采集对齐 ccusage 20.0.19 的 fork/replay 统计语义，避免重复计算分叉会话回放和未增长的累计快照。
+- [Desktop] Claude Code 本地采集补充 `advisor_message` iteration 用量，并保留 advisor 模型归属。
+- [Desktop] ccusage 校验最低要求提升至 20.0.19，避免使用旧版解析规则产生误差。
+- [Desktop] 改进 macOS 启动修复工具，使用管理员权限递归清理 quarantine，并在失败时显示可复制的终端命令。
+
 ## [0.7.8] - 2026-07-18
 
 ### 新增

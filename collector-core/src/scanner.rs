@@ -141,6 +141,7 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
     // Codex
     let codex = CodexProvider;
     let codex_files = codex.scan_sessions(config);
+    let codex_replay_plan = crate::provider::codex_local::CodexReplayPlan::new(&codex_files);
     {
         let mut source_fingerprints = codex_files
             .iter()
@@ -159,7 +160,9 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         } else {
             let events = codex_files
                 .iter()
-                .flat_map(|file| codex.parse_usage(file))
+                .flat_map(|file| {
+                    codex.parse_usage_with_replay(file, codex_replay_plan.replay_prefix(file))
+                })
                 .collect::<Vec<_>>();
             global_dedup_by_field(events, "_codexDedupKey")
                 .into_iter()

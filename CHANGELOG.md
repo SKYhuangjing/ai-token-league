@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.9] - 2026-07-31
+
+### Changed
+
+- [Desktop] Aligned local Codex collection with ccusage 20.0.19 fork/replay semantics, avoiding double-counted fork-session replay and non-advancing cumulative snapshots.
+- [Desktop] Added Claude Code `advisor_message` iteration usage with advisor model attribution.
+- [Desktop] Raised the ccusage verification minimum to 20.0.19 to avoid mismatches caused by older parsing rules.
+- [Desktop] Improved the macOS launch-repair helper to recursively clear quarantine with administrator privileges and show a copyable terminal fallback on failure.
+
 ## [0.7.8] - 2026-07-18
 
 ### Added

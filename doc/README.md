@@ -28,6 +28,7 @@ This directory keeps the project documents after the v0.1 phase freeze.
 
 - `../AGENTS.md` - agent-facing project background, preferred command entrypoints, and full `scripts/` usage table.
 - `operations.md` - 运维手册：服务端部署、下载通道配置、客户端预置配置。
+- `windows-network-check-report.md` - Windows 客户端云端不可达的网络检查报告、命令和现场回传模板。
 - `test-deployment.md` - Docker + external MySQL test deployment notes.
 - `smoke-checklist.md` - local MVP smoke checklist.
 - `packaging.md` - desktop distribution build, verification, and launch checklist.
