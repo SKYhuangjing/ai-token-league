@@ -231,7 +231,7 @@ function initAdminParticipantSelect() {
 
 initAdminParticipantSelect();
 
-document.querySelector("#apply-custom-range").addEventListener("click", () => {
+function applyCustomRangeFromInputs() {
   const start = document.querySelector("#start-date").value;
   const end = document.querySelector("#end-date").value;
   if (start && end && start > end) {
@@ -248,10 +248,12 @@ document.querySelector("#apply-custom-range").addEventListener("click", () => {
   updateAutoGrain();
   syncRangeInputs();
   loadUsage();
-});
+}
 
-document.querySelector("#start-date").addEventListener("change", markCustomRangePending);
-document.querySelector("#end-date").addEventListener("change", markCustomRangePending);
+document.querySelector("#apply-custom-range").addEventListener("click", applyCustomRangeFromInputs);
+
+document.querySelector("#start-date").addEventListener("change", applyCustomRangeFromInputs);
+document.querySelector("#end-date").addEventListener("change", applyCustomRangeFromInputs);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !detailBoard.hidden) closeDetail();
@@ -356,11 +358,6 @@ function buildExportFilename() {
   const safeParticipant = participant.replace(/[^\w\u4e00-\u9fff-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "all-users";
   const rangePart = state.range === "custom" ? `${start || "start"}_${end || "end"}` : state.range;
   return `usage-${rangePart}-${safeParticipant}.csv`;
-}
-
-function markCustomRangePending() {
-  state.customRangePending = true;
-  syncRangeInputs();
 }
 
 async function loadUsage() {
@@ -1198,11 +1195,16 @@ function readBooleanPreference(key, fallback) {
 }
 
 function syncRangeInputs() {
-  const { start, end } = selectedRange();
-  if (state.range !== "custom") {
-    document.querySelector("#start-date").value = start;
-    document.querySelector("#end-date").value = end;
+  const startInput = document.querySelector("#start-date");
+  const endInput = document.querySelector("#end-date");
+  if (state.range === "custom") {
+    startInput.value = state.start || "";
+    endInput.value = state.end || "";
     state.customRangePending = false;
+  } else if (!state.customRangePending) {
+    const { start, end } = selectedRange();
+    startInput.value = start;
+    endInput.value = end;
   }
   const applyButton = document.querySelector("#apply-custom-range");
   if (applyButton) {
