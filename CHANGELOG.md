@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.10] - 2026-08-16
+
+### Added
+
+- [Desktop] Added ZCode as a supported local usage source: scans the local ZCode request-level usage store with cache-aware token accounting, retry deduplication, and per-workdir attribution.
+
+### Fixed
+
+- [Web] Admin analytics custom date range now applies immediately when either date input changes, instead of pending picks being overwritten by quick-range selections.
+
 ## [0.7.9] - 2026-07-31
 
 ### Changed
