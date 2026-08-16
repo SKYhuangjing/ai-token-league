@@ -48,6 +48,7 @@ const sourceNames = {
   opencode_local: "OpenCode",
   hermes_local: "Hermes",
   openclaw_local: "OpenClaw",
+  zcode_local: "ZCode",
 };
 
 const qualityNames = {

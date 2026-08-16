@@ -53,10 +53,12 @@ impl TestEnv {
             .to_string();
         let hermes_path = samples.join("hermes").to_string_lossy().to_string();
         let openclaw_path = samples.join("openclaw").to_string_lossy().to_string();
+        let zcode_path = samples.join("zcode").to_string_lossy().to_string();
         let cfg = config::add_provider_root("codex_local", &codex_path, &cfg);
         let cfg = config::add_provider_root("claude_code_local", &claude_path, &cfg);
         let cfg = config::add_provider_root("hermes_local", &hermes_path, &cfg);
-        config::add_provider_root("openclaw_local", &openclaw_path, &cfg)
+        let cfg = config::add_provider_root("openclaw_local", &openclaw_path, &cfg);
+        config::add_provider_root("zcode_local", &zcode_path, &cfg)
     }
 }
 
@@ -173,6 +175,62 @@ fn scenario_hermes_openclaw_scan() {
         .sum();
     assert!(hermes_total > 0, "hermes total should be positive");
     assert!(openclaw_total > 0, "openclaw total should be positive");
+}
+
+// ── Scenario 1c: ZCode scan from sample data ──
+
+#[test]
+fn scenario_zcode_scan() {
+    let _guard = lock();
+    let _prev = SaveHome::new();
+    let env = TestEnv::new();
+    // The sqlite sample fixture is gitignored (*.sqlite); skip when absent.
+    if !std::env::current_dir()
+        .unwrap()
+        .join("../samples/zcode/db/db.sqlite")
+        .exists()
+    {
+        return;
+    }
+    let cfg = env.init_config();
+
+    let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
+
+    let zcode: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "zcode")
+        .collect();
+
+    assert!(
+        !zcode.is_empty(),
+        "should find zcode items from samples/zcode/db/db.sqlite"
+    );
+
+    for item in &zcode {
+        assert_eq!(item["providerId"], "zcode_local");
+        assert!(item["totalTokens"].as_i64().unwrap_or(0) > 0);
+        assert!(!item["day"].as_str().unwrap_or("").is_empty());
+        assert!(!item["model"].as_str().unwrap_or("").is_empty());
+        assert!(!item["workdirHash"].as_str().unwrap_or("").is_empty());
+        assert!(
+            item["workdirHash"].as_str().unwrap() != "/Users/demo/projects/alpha",
+            "real absolute paths must not be uploaded, only the hashed workdir"
+        );
+    }
+
+    // 6 sample events: 2400 + 1100 + 1000 (retry winner) + 105000 + 350 + 25802
+    let zcode_total: i64 = zcode
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert_eq!(zcode_total, 135652, "zcode sample total should match");
+
+    // No provider errors surfaced for zcode
+    assert!(!result.provider_errors.contains_key("zcode_local"));
+
+    let health = scanner::provider_health(&cfg);
+    assert!(health.iter().any(|h| h["providerId"] == "zcode_local"));
 }
 
 // ── Scenario 2: Scan → persist → query roundtrip ──

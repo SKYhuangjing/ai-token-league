@@ -7,6 +7,7 @@ use crate::provider::hermes_local::HermesLocalProvider;
 use crate::provider::mimocode_local::MiMoCodeLocalProvider;
 use crate::provider::openclaw_local::OpenClawLocalProvider;
 use crate::provider::opencode_local::OpenCodeLocalProvider;
+use crate::provider::zcode_local::ZCodeLocalProvider;
 use crate::schema::{compute_bucket_fingerprint, public_usage_item};
 use crate::workdir::workdir_from_candidate;
 use serde_json::{json, Value};
@@ -348,6 +349,48 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
+    // ZCode
+    let zcode = ZCodeLocalProvider;
+    let zcode_dbs = zcode.scan_sessions(config);
+    let mut zcode_sources = HashMap::new();
+    let mut zcode_error = None;
+    for db_path in &zcode_dbs {
+        let source_meta =
+            crate::provider::common::source_metadata(db_path, zcode.id(), zcode.version());
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            cached
+        } else {
+            match zcode.try_parse_usage(db_path) {
+                Ok(events) => events
+                    .into_iter()
+                    .map(|event| finalize_event(event, config))
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    zcode_error = Some(format!("{}: {}", db_path, error));
+                    Vec::new()
+                }
+            }
+        };
+        zcode_sources.insert(source_meta.source_fingerprint, items);
+    }
+    if let Some(error) = zcode_error {
+        provider_errors.insert(zcode.id().to_string(), error);
+    } else {
+        source_index.extend(zcode_sources);
+    }
+    health.push(local_provider_health(
+        zcode.id(),
+        zcode.tool_code(),
+        zcode.auto_roots(config),
+        zcode.manual_roots(config),
+        config,
+        zcode_dbs.len(),
+        true,
+    ));
+
     // OpenClaw
     let openclaw = OpenClawLocalProvider;
     let openclaw_files = openclaw.scan_sessions(config);
@@ -397,6 +440,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let opencode = OpenCodeLocalProvider;
     let hermes = HermesLocalProvider;
     let openclaw = OpenClawLocalProvider;
+    let zcode = ZCodeLocalProvider;
     let codex_files = codex.scan_sessions(config);
     let claude_files = claude.scan_sessions(config);
     let cursor_sources = cursor.discover_sources(config);
@@ -404,6 +448,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let opencode_dbs = opencode.scan_sessions(config);
     let hermes_dbs = hermes.scan_sessions(config);
     let openclaw_files = openclaw.scan_sessions(config);
+    let zcode_dbs = zcode.scan_sessions(config);
 
     vec![
         local_provider_health(
@@ -458,6 +503,15 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
             openclaw.manual_roots(config),
             config,
             openclaw_files.len(),
+            true,
+        ),
+        local_provider_health(
+            zcode.id(),
+            zcode.tool_code(),
+            zcode.auto_roots(config),
+            zcode.manual_roots(config),
+            config,
+            zcode_dbs.len(),
             true,
         ),
         cursor_provider_health(cursor.id(), cursor.tool_code(), config, &cursor_sources),

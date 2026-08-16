@@ -199,6 +199,12 @@
       roots: ["/other-project"],
       sources: [{ kind: "auto", id: "/other-project", label: "~/other-project", path: "/other-project", ignored: false }],
     },
+    {
+      providerId: "zcode_local", toolCode: "zcode",
+      enabled: true, detected: true, ok: true, scannedFiles: 1,
+      roots: ["/Users/demo/.zcode/cli"],
+      sources: [{ kind: "auto", id: "/Users/demo/.zcode/cli", label: "~/.zcode/cli", path: "/Users/demo/.zcode/cli", ignored: false }],
+    },
   ];
 
   // ── Pre-computed aggregates ────────────────────────────────

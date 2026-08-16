@@ -32,6 +32,7 @@ This directory keeps the project documents after the v0.1 phase freeze.
 - `test-deployment.md` - Docker + external MySQL test deployment notes.
 - `smoke-checklist.md` - local MVP smoke checklist.
 - `packaging.md` - desktop distribution build, verification, and launch checklist.
+- `provider-integration-guide.md` - 新 provider（数据源）接入指南：调研问题清单、collector 实现契约、前端触点清单、测试矩阵、真库对账与打包陷阱。
 - `../env.example` - committed Docker env template; local `env.local` and `env.test` are ignored secrets.
 
 ## Rule

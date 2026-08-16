@@ -353,6 +353,10 @@ document.addEventListener("click", (event) => {
   if (btn) run(() => addProviderRoot("openclaw_local"));
 });
 document.addEventListener("click", (event) => {
+  const btn = event.target.closest("#add-zcode-root");
+  if (btn) run(() => addProviderRoot("zcode_local"));
+});
+document.addEventListener("click", (event) => {
   const btn = event.target.closest("#connect-cursor");
   if (btn) run(connectCursor);
 });
@@ -1129,6 +1133,7 @@ function sourceIconPath(providerId) {
   if (providerId === "opencode_local") return "./icons/folder-code.svg";
   if (providerId === "hermes_local") return "./icons/folder-code.svg";
   if (providerId === "openclaw_local") return "./icons/folder-code.svg";
+  if (providerId === "zcode_local") return "./icons/folder-code.svg";
   if (providerId === "cursor_dashboard_usage") return "./icons/database.svg";
   return "./icons/file-text.svg";
 }
@@ -3623,7 +3628,9 @@ function renderHealth() {
                 ? `<button class="outline-button" id="add-openclaw-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addOpenClaw")}</button>`
                 : item.providerId === "opencode_local"
                   ? `<button class="outline-button" id="add-opencode-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addOpenCode")}</button>`
-                  : `<button class="outline-button" id="add-claude-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addClaude")}</button>`;
+                  : item.providerId === "zcode_local"
+                    ? `<button class="outline-button" id="add-zcode-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addZCode")}</button>`
+                    : `<button class="outline-button" id="add-claude-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addClaude")}</button>`;
       return `<article class="provider-card">
       <div class="provider-card-head">
         <div>
@@ -4669,6 +4676,7 @@ function sourceName(providerId) {
   if (providerId === "opencode_local") return t("source.opencode");
   if (providerId === "hermes_local") return t("source.hermes");
   if (providerId === "openclaw_local") return t("source.openclaw");
+  if (providerId === "zcode_local") return t("source.zcode");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

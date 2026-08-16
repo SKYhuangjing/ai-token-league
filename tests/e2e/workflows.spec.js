@@ -39,6 +39,24 @@ test.describe('Sources Workflows', () => {
     await expect(rows.first()).toBeVisible({ timeout: 5_000 });
     expect(await rows.count()).toBeGreaterThan(0);
   });
+
+  test('sources screen renders zcode provider card from its tab', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    const zcodeTab = page.locator('#sources-tabs [data-provider-tab="zcode_local"]');
+    await expect(zcodeTab).toBeVisible({ timeout: 5_000 });
+    await zcodeTab.click();
+    await expect(zcodeTab).toHaveClass(/active/);
+
+    const card = page.locator('#settings-source-list .provider-card', { hasText: 'ZCode' });
+    await expect(card.first()).toBeVisible({ timeout: 5_000 });
+    await expect(card.locator('h4')).toHaveText('ZCode');
+
+    // Auto-discovered source row for the ZCode data directory
+    const row = card.locator('[data-root-path], .source-row, .auto-source-row');
+    await expect(row.first()).toBeVisible({ timeout: 5_000 });
+    await expect(row.first()).toContainText('.zcode/cli');
+  });
 });
 
 test.describe('Settings Workflows', () => {

@@ -7,6 +7,7 @@ describe("shared sourceName", () => {
     expect(sourceName("opencode_local")).toBe("OpenCode");
     expect(sourceName("hermes_local")).toBe("Hermes");
     expect(sourceName("openclaw_local")).toBe("OpenClaw");
+    expect(sourceName("zcode_local")).toBe("ZCode");
   });
 });
 

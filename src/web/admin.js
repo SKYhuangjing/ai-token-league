@@ -1527,7 +1527,8 @@ const providerDisplayNames = {
   mimocode_local: "MiMoCode",
   opencode_local: "OpenCode",
   hermes_local: "Hermes",
-  openclaw_local: "OpenClaw"
+  openclaw_local: "OpenClaw",
+  zcode_local: "ZCode"
 };
 
 function renderPrimarySource(items = []) {

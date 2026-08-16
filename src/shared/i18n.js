@@ -392,6 +392,7 @@ const translations = {
     "desktop.sources.addOpenCode": "添加 OpenCode 位置",
     "desktop.sources.addHermes": "添加 Hermes 位置",
     "desktop.sources.addOpenClaw": "添加 OpenClaw 位置",
+    "desktop.sources.addZCode": "添加 ZCode 位置",
     "desktop.sources.addCursor": "连接 Cursor",
     "desktop.sources.manualCursorToken": "手工令牌",
     "desktop.sources.localDesc": "扫描本机使用记录，只上传每日汇总。",
@@ -569,6 +570,7 @@ const translations = {
     "source.opencode": "OpenCode",
     "source.hermes": "Hermes",
     "source.openclaw": "OpenClaw",
+    "source.zcode": "ZCode",
     "source.cursor": "Cursor",
 
     // 桌面端 - 渲染器补充
@@ -1399,6 +1401,7 @@ const translations = {
     "desktop.sources.addOpenCode": "Add OpenCode location",
     "desktop.sources.addHermes": "Add Hermes location",
     "desktop.sources.addOpenClaw": "Add OpenClaw location",
+    "desktop.sources.addZCode": "Add ZCode location",
     "desktop.sources.addCursor": "Connect Cursor",
     "desktop.sources.manualCursorToken": "Manual token",
     "desktop.sources.localDesc": "Scans local usage records and uploads only daily aggregates.",
@@ -1574,6 +1577,7 @@ const translations = {
     "source.opencode": "OpenCode",
     "source.hermes": "Hermes",
     "source.openclaw": "OpenClaw",
+    "source.zcode": "ZCode",
     "source.cursor": "Cursor",
 
     // Desktop - Renderer supplement

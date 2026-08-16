@@ -462,7 +462,8 @@ const UI_PROVIDER_ORDER = [
   "opencode_local",
   "openclaw_local",
   "hermes_local",
-  "mimocode_local"
+  "mimocode_local",
+  "zcode_local"
 ];
 
 export function sortProviderHealth(health = []) {
