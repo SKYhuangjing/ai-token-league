@@ -3,7 +3,7 @@ import path from "node:path";
 import { newId, normalizeLegacyEd25519Pem, sha256Hex } from "../shared/crypto.js";
 import { compositionRatio, costQualityLabel, dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { addCostToUsageItem, aggregateCost, createPriceMap, normalizeModelName, priceToPublic } from "../shared/pricing.js";
-import { STORAGE_SCHEMA_VERSION, CLOUD_PROVIDER_IDS, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, cloudNaturalKey, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens, hourlyUsageKey, usageKey } from "../shared/schema.js";
+import { STORAGE_SCHEMA_VERSION, CLOUD_PROVIDER_IDS, assertNoForbiddenUploadFields, assertSnapshot, assertUsageItem, cloudNaturalKey, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens, hourlyUsageKey, normalizeUsageModel, usageKey } from "../shared/schema.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 import { currentBusinessDay } from "./day-context.js";
@@ -379,16 +379,27 @@ export class Store {
     let rejected = 0;
     let duplicate = 0;
     let noOp = 0;
+    let failed = 0;
     return this.withDeferredSave(() => {
       batches.forEach((batch, index) => {
-        const result = this.upsertUsageBatch({
-          participantId: input.participantId,
-          deviceId: input.deviceId,
-          clientGeneratedAt: input.clientGeneratedAt,
-          ...(Object.hasOwn(input, "client") ? { client: input.client } : {}),
-          snapshot: batch.snapshot,
-          items: batch.items
-        });
+        // A failing bucket must not abort the whole multi-batch request: the
+        // server-side error would 500 every sibling bucket in the same chunk
+        // and push all of them into the client retry queue.
+        let result;
+        try {
+          result = this.upsertUsageBatch({
+            participantId: input.participantId,
+            deviceId: input.deviceId,
+            clientGeneratedAt: input.clientGeneratedAt,
+            ...(Object.hasOwn(input, "client") ? { client: input.client } : {}),
+            snapshot: batch.snapshot,
+            items: batch.items
+          });
+        } catch (error) {
+          failed += 1;
+          results.push({ index, accepted: 0, rejected: 0, duplicate: false, noOp: false, failed: true, error: error.message });
+          return;
+        }
         accepted += result.accepted || 0;
         rejected += result.rejected || 0;
         if (result.duplicate) duplicate += 1;
@@ -407,6 +418,7 @@ export class Store {
         bucketCount: batches.length,
         duplicateBucketCount: duplicate,
         noOpBucketCount: noOp,
+        failedBucketCount: failed,
         results
       };
     });
@@ -2509,6 +2521,7 @@ function finalizeCostBreakdown(map = {}) {
 function normalizeUsageTotal(item) {
   return {
     ...item,
+    model: normalizeUsageModel(item.model),
     totalTokens: displayTotalTokens(item)
   };
 }

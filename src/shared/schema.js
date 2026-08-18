@@ -48,6 +48,16 @@ export function normalizeTokenNumber(value) {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
 }
 
+// Storage identity keys are case-sensitive (JS object keys / utf8mb4_bin thinking) but
+// MySQL usage tables use utf8mb4_unicode_ci, where usageKey values differing only by
+// model casing collide as PRIMARY KEY duplicates. Model names must be canonical before
+// they reach any key or persisted row.
+export function normalizeUsageModel(model) {
+  const value = String(model ?? "").trim();
+  if (!value) return "";
+  return value.toLowerCase();
+}
+
 export function primaryTokenTotal(item = {}) {
   return normalizeTokenNumber(item.inputTokens) + normalizeTokenNumber(item.outputTokens);
 }

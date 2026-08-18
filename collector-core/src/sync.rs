@@ -453,6 +453,9 @@ fn apply_batch_upload_response(
 
         let error = result
             .map(|item| {
+                if let Some(server_error) = item.get("error").and_then(|value| value.as_str()) {
+                    return format!("batch bucket failed: {}", server_error);
+                }
                 let accepted_rows = item
                     .get("accepted")
                     .and_then(|value| value.as_i64())

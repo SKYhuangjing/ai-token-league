@@ -6,7 +6,7 @@ import { newId, sha256Hex } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { createPriceMap, normalizeModelName } from "../shared/pricing.js";
 import { addDays, dayToUtcDate, daysBetween, localDay, utcDateToDay } from "../shared/date.js";
-import { CLOUD_PROVIDER_IDS, STORAGE_SCHEMA_VERSION, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens } from "../shared/schema.js";
+import { CLOUD_PROVIDER_IDS, STORAGE_SCHEMA_VERSION, computeBucketFingerprint, computeDailyBucketFingerprint, displayTotalTokens, hourlyUsageKey, normalizeUsageModel, usageKey } from "../shared/schema.js";
 import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
@@ -304,8 +304,8 @@ export class MySqlStore extends Store {
       "SELECT * FROM usage_sync_buckets_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?",
       [participantId, deviceId, day, providerId]
     ).catch(() => [[]]);
-    this.db.usageDaily = Object.fromEntries(dailyRows.map((row) => [row.usageKey, usageFromRow(row)]));
-    this.db.usageHourly = Object.fromEntries(hourlyRows.map((row) => [row.usageKey, usageFromRow(row)]));
+    this.db.usageDaily = indexUsageRows(dailyRows, usageKey);
+    this.db.usageHourly = indexUsageRows(hourlyRows, hourlyUsageKey);
     this.db.usageSyncBuckets = Object.fromEntries(dailyBuckets.map((row) => [row.bucketKey, normalizeRow(row)]));
     this.db.usageSyncBucketsHourly = Object.fromEntries(hourlyBuckets.map((row) => [row.bucketKey, normalizeRow(row)]));
     this.invalidateAggregateCache();
@@ -318,8 +318,8 @@ export class MySqlStore extends Store {
     const [syncBuckets] = await this.pool.query("SELECT * FROM usage_sync_buckets").catch(() => [[]]);
     const [syncBucketsHourly] = await this.pool.query("SELECT * FROM usage_sync_buckets_hourly").catch(() => [[]]);
     const [uploadBatches] = await this.pool.query("SELECT * FROM upload_batches").catch(() => [[]]);
-    this.db.usageDaily = Object.fromEntries(usageRows.map((row) => [row.usageKey, usageFromRow(row)]));
-    this.db.usageHourly = Object.fromEntries(usageHourlyRows.map((row) => [row.usageKey, usageFromRow(row)]));
+    this.db.usageDaily = indexUsageRows(usageRows, usageKey);
+    this.db.usageHourly = indexUsageRows(usageHourlyRows, hourlyUsageKey);
     this.db.usageSyncBuckets = Object.fromEntries(syncBuckets.map((row) => [row.bucketKey, normalizeRow(row)]));
     this.db.usageSyncBucketsHourly = Object.fromEntries(syncBucketsHourly.map((row) => [row.bucketKey, normalizeRow(row)]));
     this.db.uploadBatches = Object.fromEntries(uploadBatches.map((row) => [row.payloadHash, normalizeRow(row)]));
@@ -1284,15 +1284,28 @@ export class MySqlStore extends Store {
     let rejected = 0;
     let duplicate = 0;
     let noOp = 0;
+    let failed = 0;
     for (const [index, batch] of batches.entries()) {
-      const result = await this.upsertUsageBatch({
-        participantId: input.participantId,
-        deviceId: input.deviceId,
-        clientGeneratedAt: input.clientGeneratedAt,
-        ...(Object.hasOwn(input, "client") ? { client: input.client } : {}),
-        snapshot: batch.snapshot,
-        items: batch.items
-      });
+      // Isolate per-bucket failures: a single poisoned bucket (e.g. a MySQL
+      // duplicate-key error) must not 500 the whole chunk and drag healthy
+      // sibling buckets into the client retry queue. After a failed write the
+      // write lock resets working state, and the next iteration re-loads its
+      // own scope from MySQL, so iteration state stays clean.
+      let result;
+      try {
+        result = await this.upsertUsageBatch({
+          participantId: input.participantId,
+          deviceId: input.deviceId,
+          clientGeneratedAt: input.clientGeneratedAt,
+          ...(Object.hasOwn(input, "client") ? { client: input.client } : {}),
+          snapshot: batch.snapshot,
+          items: batch.items
+        });
+      } catch (error) {
+        failed += 1;
+        results.push({ index, accepted: 0, rejected: 0, duplicate: false, noOp: false, failed: true, error: error.message });
+        continue;
+      }
       accepted += result.accepted || 0;
       rejected += result.rejected || 0;
       if (result.duplicate) duplicate += 1;
@@ -1311,6 +1324,7 @@ export class MySqlStore extends Store {
       bucketCount: batches.length,
       duplicateBucketCount: duplicate,
       noOpBucketCount: noOp,
+      failedBucketCount: failed,
       results
     };
   }
@@ -2201,7 +2215,7 @@ function usageFromRow(row) {
     workdirId: row.workdirId,
     workdirHash: row.workdirHash,
     workdirDisplayName: row.workdirDisplayName,
-    model: row.model,
+    model: normalizeUsageModel(row.model),
     inputTokens: Number(row.inputTokens || 0),
     outputTokens: Number(row.outputTokens || 0),
     cacheReadTokens: Number(row.cacheReadTokens || 0),
@@ -2220,6 +2234,19 @@ function usageFromRow(row) {
     sourceFingerprint: row.sourceFingerprint || "",
     uploadedAt: row.uploadedAt instanceof Date ? row.uploadedAt.toISOString() : row.uploadedAt || ""
   };
+}
+
+// Rows read back from MySQL may carry legacy mixed-case model names inside their
+// stored usageKey. Indexing by that stale key would re-insert both the legacy and
+// the normalized key on the next scope sync and hit the case-insensitive PRIMARY
+// KEY, so the map key is always recomputed from the normalized row.
+function indexUsageRows(rows, keyFn) {
+  const map = {};
+  for (const row of rows) {
+    const usage = usageFromRow(row);
+    map[keyFn(usage, usage.participantId, usage.deviceId)] = usage;
+  }
+  return map;
 }
 
 function priceFromRow(row) {

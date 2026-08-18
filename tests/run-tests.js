@@ -1107,6 +1107,145 @@ function testHourlySnapshotDerivesDailyAndProtectsFromLegacy() {
   console.log("  testHourlySnapshotDerivesDailyAndProtectsFromLegacy passed");
 }
 
+function testHourlySnapshotMixedCaseModelMerges() {
+  const tmp = path.join(os.tmpdir(), `test-hourly-mixed-case-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_mixed_case", did = "d_mixed_case";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "mixed-case", identityPublicKey: "pk_mixed", os: "test", appVersion: "0.1.0"
+  });
+
+  // Reproduces the dev-server incident: hour 17 synced first with lowercase model,
+  // hour 12 arrives later with uppercase model for the SAME workdir. deriveDailyFromHourly
+  // must not produce two daily rows whose usageKey differs only by model casing
+  // (MySQL utf8mb4_unicode_ci PRIMARY KEY would reject the second one with ER_DUP_ENTRY).
+  const hour17 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 17, workdirHash: "wh_default", model: "glm-5.3", inputTokens: 100, outputTokens: 0, totalTokens: 100 })
+  ], pid, did, { hour: 17 });
+  const hour12 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 12, workdirHash: "wh_default", model: "GLM-5.3", inputTokens: 200, outputTokens: 0, totalTokens: 200 }),
+    makeSnapshotItem({ hour: 12, workdirHash: "wh_other", model: "GLM-5.3", inputTokens: 50, outputTokens: 0, totalTokens: 50 })
+  ], pid, did, { hour: 12 });
+  store.upsertUsageBatch(hour17);
+  store.upsertUsageBatch(hour12);
+
+  const dailyKeys = Object.keys(store.db.usageDaily);
+  assert.equal(dailyKeys.length, 2, "same workdir with mixed-case model must merge into one daily row");
+  for (const key of dailyKeys) {
+    assert.equal(key, key.toLowerCase(), "usage keys must be stored with normalized model casing");
+  }
+  const defaultRow = Object.values(store.db.usageDaily).find((row) => row.workdirHash === "wh_default");
+  assert.equal(defaultRow.model, "glm-5.3");
+  assert.equal(defaultRow.totalTokens, 300, "mixed-case hourly rows must sum into the merged daily row");
+  const hourlyKeys = Object.keys(store.db.usageHourly);
+  assert.equal(hourlyKeys.length, 3);
+  for (const key of hourlyKeys) {
+    assert.equal(key, key.toLowerCase(), "hourly usage keys must use normalized model casing");
+  }
+
+  // Legacy daily overwrite path must normalize too (legacy upsertUsageBatch items)
+  store.upsertUsageBatch({
+    participantId: pid, deviceId: did, clientGeneratedAt: new Date().toISOString(),
+    items: [makeSnapshotItem({ workdirHash: "wh_legacy", model: "GPT-5.6-Sol" })]
+  });
+  const legacyRow = Object.values(store.db.usageDaily).find((row) => row.workdirHash === "wh_legacy");
+  assert.equal(legacyRow.model, "gpt-5.6-sol", "legacy ingest path must normalize model casing");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testHourlySnapshotMixedCaseModelMerges passed");
+}
+
+async function testMysqlReadBackNormalizesModelCasing() {
+  const store = new MySqlStore({ writeLockName: "" });
+  const pid = "p_rb_case", did = "d_rb_case";
+
+  // Simulate a MySQL read-back where stored rows carry mixed-case models for the
+  // same workdir (the exact state that wedged the retry queue). loadWriteScope must
+  // index rows under recomputed normalized keys so the next scope sync rewrites the
+  // day with a single casing instead of inserting both variants.
+  const legacyDailyRows = [
+    {
+      usageKey: "2026-08-16|p_rb_case|d_rb_case|zcode|zcode_local|wh_default|GLM-5.3",
+      day: "2026-08-16", participantId: pid, deviceId: did,
+      toolCode: "zcode", providerId: "zcode_local",
+      workdirId: `${pid}:wh_default`, workdirHash: "wh_default", workdirDisplayName: "default",
+      model: "GLM-5.3", inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0,
+      reasoningTokens: 0, totalTokens: 3, estimatedCostUsd: null, costQuality: "",
+      pricingVersion: "", pricingModel: "", pricingSource: "", sourceQuality: "exact",
+      rawSourceRef: "", providerVersion: "", parserVersion: "", sourceFingerprint: "sf_a", uploadedAt: ""
+    },
+    {
+      usageKey: "2026-08-16|p_rb_case|d_rb_case|zcode|zcode_local|wh_default|glm-5.3",
+      day: "2026-08-16", participantId: pid, deviceId: did,
+      toolCode: "zcode", providerId: "zcode_local",
+      workdirId: `${pid}:wh_default`, workdirHash: "wh_default", workdirDisplayName: "default",
+      model: "glm-5.3", inputTokens: 4, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0,
+      reasoningTokens: 0, totalTokens: 9, estimatedCostUsd: null, costQuality: "",
+      pricingVersion: "", pricingModel: "", pricingSource: "", sourceQuality: "exact",
+      rawSourceRef: "", providerVersion: "", parserVersion: "", sourceFingerprint: "sf_b", uploadedAt: ""
+    }
+  ];
+  store.pool = {
+    query: async (sql) => {
+      if (sql.includes("FROM usage_daily")) return [legacyDailyRows];
+      if (sql.includes("FROM usage_hourly")) return [[]];
+      return [[]];
+    }
+  };
+  await store.loadWriteScope(pid, did, { day: "2026-08-16", providerId: "zcode_local" });
+
+  const dailyKeys = Object.keys(store.db.usageDaily);
+  assert.equal(dailyKeys.length, 1, "mixed-case read-back rows must collapse onto one normalized key");
+  assert.equal(dailyKeys[0], "2026-08-16|p_rb_case|d_rb_case|zcode|zcode_local|wh_default|glm-5.3");
+  assert.equal(Object.values(store.db.usageDaily)[0].model, "glm-5.3");
+  console.log("  testMysqlReadBackNormalizesModelCasing passed");
+}
+
+async function testMysqlBatchSetIsolatesPoisonedBucket() {
+  const store = new MySqlStore({ writeLockName: "" });
+  const pid = "p_mysql_poison", did = "d_mysql_poison";
+  Store.prototype.registerDevice.call(store, {
+    participantId: pid, deviceId: did,
+    nickname: "mysql-poison", identityPublicKey: "pk_mysql_poison", os: "test", appVersion: "0.1.0"
+  });
+
+  const healthy = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "mp_h10", sourceFingerprint: "mp_sf_10" })
+  ], pid, did, { hour: 10 });
+  const poisoned = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 11, workdirHash: "mp_h11", sourceFingerprint: "mp_sf_11" })
+  ], pid, did, { hour: 11, providerId: "claude_code_local" });
+
+  // Stub the MySQL sync layer: the healthy bucket syncs fine, the poisoned one
+  // throws the way a real ER_DUP_ENTRY would propagate out of the transaction.
+  // load() is stubbed because upsertUsageBatch's error path reloads full state
+  // from MySQL before rethrowing, and this test store has no pool.
+  store.load = async () => {};
+  store.incrementalHourlyBucketSync = async (input) => {
+    if (input.snapshot.providerId === "claude_code_local") {
+      throw new Error("Duplicate entry 'x' for key 'PRIMARY'");
+    }
+  };
+
+  const result = await store.upsertUsageBatchSet({
+    participantId: pid,
+    deviceId: did,
+    clientGeneratedAt: new Date().toISOString(),
+    batches: [
+      { snapshot: healthy.snapshot, items: healthy.items },
+      { snapshot: poisoned.snapshot, items: poisoned.items }
+    ]
+  });
+
+  assert.equal(result.failedBucketCount, 1, "poisoned MySQL bucket is isolated");
+  assert.equal(result.accepted, 1, "healthy MySQL bucket still counts as accepted");
+  const failedResult = result.results.find((r) => r.failed);
+  assert.equal(failedResult.index, 1);
+  assert.match(failedResult.error, /Duplicate entry/);
+  console.log("  testMysqlBatchSetIsolatesPoisonedBucket passed");
+}
+
 async function testMysqlHourlySnapshotUsesIncrementalSync() {
   const store = new MySqlStore({});
   const pid = "p_mysql_hourly", did = "d_mysql_hourly";
@@ -3087,6 +3226,7 @@ testSnapshotProtocolPayload();
 testBucketMetadataSchema();
 testSnapshotReplaceSemantics();
 testHourlySnapshotDerivesDailyAndProtectsFromLegacy();
+testHourlySnapshotMixedCaseModelMerges();
 testSnapshotWorkdirHashChange();
 testSnapshotProviderDisabled();
 testSnapshotLegacyCoexistence();
@@ -3590,6 +3730,83 @@ async function testUsageBatchUploadEndpoint() {
     assert.equal(invalidSigRes.status, 401);
     console.log("  testUsageBatchUploadEndpoint passed");
   } finally { await cleanup(); }
+}
+
+async function testUsageBatchUploadIsolatesPoisonedBucket() {
+  const tmp = path.join(os.tmpdir(), `test-batch-poison-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_batch_poison", did = "d_batch_poison";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "batch-poison", identityPublicKey: "pk_poison", os: "test", appVersion: "0.1.0"
+  });
+
+  // Reproduces the dev-server incident shape: one bucket whose store write
+  // throws (e.g. a MySQL duplicate-key error) travels in the same 25-bucket
+  // chunk as healthy buckets. upsertUsageBatchSet must not let the poisoned
+  // bucket abort the whole chunk — siblings persist, the failure is reported
+  // per bucket so the client only re-queues the poisoned one.
+  const healthyA = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "poison_h10", sourceFingerprint: "poison_sf_10" })
+  ], pid, did, { hour: 10 });
+  const healthyB = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 11, workdirHash: "poison_h11", sourceFingerprint: "poison_sf_11" })
+  ], pid, did, { hour: 11 });
+  const poisoned = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 12, workdirHash: "poison_h12", sourceFingerprint: "poison_sf_12" })
+  ], pid, did, { hour: 12, providerId: "claude_code_local" });
+
+  const originalUpsert = store.upsertUsageBatch.bind(store);
+  let poisonArmed = false;
+  store.upsertUsageBatch = (input) => {
+    if (poisonArmed && input.snapshot?.providerId === "claude_code_local") {
+      throw new Error("simulated store write failure");
+    }
+    return originalUpsert(input);
+  };
+
+  poisonArmed = true;
+  const result = await store.upsertUsageBatchSet({
+    participantId: pid,
+    deviceId: did,
+    clientGeneratedAt: new Date().toISOString(),
+    batches: [
+      { snapshot: healthyA.snapshot, items: healthyA.items },
+      { snapshot: poisoned.snapshot, items: poisoned.items },
+      { snapshot: healthyB.snapshot, items: healthyB.items }
+    ]
+  });
+
+  assert.equal(result.bucketCount, 3);
+  assert.equal(result.failedBucketCount, 1, "exactly the poisoned bucket fails");
+  assert.equal(result.accepted, 2, "healthy siblings are persisted");
+  assert.equal(result.rejected, 0);
+  const failedResult = result.results.find((r) => r.failed);
+  assert.equal(failedResult.index, 1);
+  assert.equal(failedResult.error, "simulated store write failure");
+  assert.ok(result.results.filter((r) => !r.failed).every((r) => r.accepted === 1));
+
+  // verify healthy buckets actually landed in storage under their normalized keys
+  const hourlyWorkdirs = Object.values(store.db.usageHourly)
+    .filter((row) => row.participantId === pid)
+    .map((row) => row.workdirHash)
+    .sort();
+  assert.deepEqual(hourlyWorkdirs, ["poison_h10", "poison_h11"], "poisoned bucket rows must not be stored");
+
+  // a retry containing only healthy buckets succeeds again (no residual state)
+  poisonArmed = false;
+  store.upsertUsageBatch = originalUpsert;
+  const retry = await store.upsertUsageBatchSet({
+    participantId: pid,
+    deviceId: did,
+    clientGeneratedAt: new Date().toISOString(),
+    batches: [{ snapshot: poisoned.snapshot, items: poisoned.items }]
+  });
+  assert.equal(retry.failedBucketCount, 0);
+  assert.equal(retry.accepted, 1);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testUsageBatchUploadIsolatesPoisonedBucket passed");
 }
 
 async function testSyncStateEndpointLimitAndRecentSignatureCompatibility() {
@@ -5688,6 +5905,7 @@ await testHealthEndpoint();
 await testDeviceRegistrationEndpoint();
 await testUsageUploadEndpointSignatureVerification();
 await testUsageBatchUploadEndpoint();
+await testUsageBatchUploadIsolatesPoisonedBucket();
 await testSyncStateEndpointLimitAndRecentSignatureCompatibility();
 await testFullReconcileHttpCompareRepairFlow();
 await testUsageUploadRejectsUnregistered();
@@ -7915,6 +8133,8 @@ testI18nDataAttributesMatchKeys();
 
 // MySQL incremental sync tests
 await testMysqlHourlySnapshotUsesIncrementalSync();
+await testMysqlReadBackNormalizesModelCasing();
+await testMysqlBatchSetIsolatesPoisonedBucket();
 await testMysqlUsageWritesAreSerialized();
 await testMysqlUsageWritesUseDistributedLock();
 await testMysqlWriteLockTimeoutFailsClosed();
