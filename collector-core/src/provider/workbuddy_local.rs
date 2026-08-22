@@ -709,7 +709,11 @@ mod tests {
         assert!(sessions
             .iter()
             .any(|s| s.contains("samples/workbuddy") && s.contains("trace_aaaa1111")));
-        assert!(sessions.iter().all(|s| s.contains("/traces/")));
+        // Path separators differ by OS: walk_files joins the traces component
+        // with `\` on Windows and `/` elsewhere.
+        assert!(sessions
+            .iter()
+            .all(|s| s.contains("/traces/") || s.contains("\\traces\\")));
     }
 
     #[test]

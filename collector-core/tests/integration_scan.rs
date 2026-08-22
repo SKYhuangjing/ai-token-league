@@ -131,6 +131,12 @@ fn scenario_hermes_openclaw_scan() {
     let _guard = lock();
     let _prev = SaveHome::new();
     let env = TestEnv::new();
+    // The hermes sqlite sample fixture is gitignored (*.db); skip the hermes
+    // half when absent. OpenClaw samples are committed and always checked.
+    let hermes_fixture = std::env::current_dir()
+        .unwrap()
+        .join("../samples/hermes/state.db")
+        .exists();
     let cfg = env.init_config();
 
     let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
@@ -146,10 +152,12 @@ fn scenario_hermes_openclaw_scan() {
         .filter(|i| i["toolCode"] == "openclaw")
         .collect();
 
-    assert!(
-        !hermes.is_empty(),
-        "should find hermes items from samples/hermes/state.db"
-    );
+    if hermes_fixture {
+        assert!(
+            !hermes.is_empty(),
+            "should find hermes items from samples/hermes/state.db"
+        );
+    }
     assert!(
         !openclaw.is_empty(),
         "should find openclaw items from samples/openclaw/*.jsonl"
@@ -177,7 +185,9 @@ fn scenario_hermes_openclaw_scan() {
         .iter()
         .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
         .sum();
-    assert!(hermes_total > 0, "hermes total should be positive");
+    if hermes_fixture {
+        assert!(hermes_total > 0, "hermes total should be positive");
+    }
     assert!(openclaw_total > 0, "openclaw total should be positive");
 }
 
