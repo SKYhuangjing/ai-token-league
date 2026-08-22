@@ -1,0 +1,2 @@
+{"type":"session","version":1,"id":"session-99999999-8888-7777-6666-555555555555","createdAt":1781092740000,"cwd":"/tmp/dsh-sample/bad-project","delegationDepth":0}
+{"type":"assistant/message","seq":1,"time":1781092800000,"data":{"message":{"source":{"kind":"model","provider":"sample-provider","model":"sample-model-a"},"content":[{"type":"text","text":"unused"}]},"usage":{"inputTokens":1000,"outputTokens":200,"cacheReadTokens":0,"cacheWriteTokens":0,"reasoningTokens":0}}}

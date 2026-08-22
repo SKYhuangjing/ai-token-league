@@ -3,6 +3,7 @@ pub mod codex_local;
 pub mod common;
 pub mod cursor_auth;
 pub mod cursor_dashboard;
+pub mod dsh_local;
 pub mod hermes_local;
 pub mod mimocode_local;
 pub mod opencode_local;

@@ -1529,7 +1529,8 @@ const providerDisplayNames = {
   hermes_local: "Hermes",
   openclaw_local: "OpenClaw",
   zcode_local: "ZCode",
-  workbuddy_local: "WorkBuddy"
+  workbuddy_local: "WorkBuddy",
+  dsh_local: "DeepSeek Harness"
 };
 
 function renderPrimarySource(items = []) {

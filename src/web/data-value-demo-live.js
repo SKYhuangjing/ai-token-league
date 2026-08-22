@@ -50,6 +50,7 @@ const sourceNames = {
   openclaw_local: "OpenClaw",
   zcode_local: "ZCode",
   workbuddy_local: "WorkBuddy",
+  dsh_local: "DeepSeek Harness",
 };
 
 const qualityNames = {

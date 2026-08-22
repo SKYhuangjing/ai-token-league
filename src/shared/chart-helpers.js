@@ -28,6 +28,7 @@ export function sourceName(providerId) {
   if (providerId === "openclaw_local") return t("source.openclaw") || "OpenClaw";
   if (providerId === "zcode_local") return t("source.zcode") || "ZCode";
   if (providerId === "workbuddy_local") return t("source.workbuddy") || "WorkBuddy";
+  if (providerId === "dsh_local") return t("source.dsh") || "DeepSeek Harness";
   if (providerId === "cursor_dashboard_usage") return t("source.cursor") || "Cursor";
   return providerId;
 }

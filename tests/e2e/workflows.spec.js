@@ -78,6 +78,25 @@ test.describe('Sources Workflows', () => {
     await expect(row.first()).toContainText('.workbuddy');
   });
 
+  test('sources screen renders dsh provider card from its nav item', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    const dshNav = page.locator('#provider-nav-list [data-provider-nav="dsh_local"]');
+    await expect(dshNav).toBeVisible({ timeout: 5_000 });
+    await dshNav.click();
+    await expect(dshNav).toHaveClass(/active/);
+    await expect(dshNav).toHaveAttribute('aria-current', 'true');
+
+    const card = page.locator('#settings-source-list .provider-card', { hasText: 'DeepSeek Harness' });
+    await expect(card.first()).toBeVisible({ timeout: 5_000 });
+    await expect(card.locator('h4')).toHaveText('DeepSeek Harness');
+
+    // Auto-discovered source row for the dsh sessions directory
+    const row = card.locator('[data-root-path], .source-row, .auto-source-row');
+    await expect(row.first()).toBeVisible({ timeout: 5_000 });
+    await expect(row.first()).toContainText('.dsh/sessions');
+  });
+
   test('provider nav auto-sorts by status: healthy first, attention next, disabled last', async ({ page }) => {
     await navigateTo(page, 'sources');
 

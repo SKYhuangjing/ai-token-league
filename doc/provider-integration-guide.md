@@ -100,11 +100,13 @@ let total = input + output + cache_read + cache_write;
 
 后端 `providerId` 是开放字符串，**无需改后端**。
 
-## 四、前端触点（8 处，一处都不能漏）
+## 四、前端触点（9 处，一处都不能漏）
 
 > 教训：zcode 首轮接入漏了 index.html 的 tab 按钮，导致来源页永远看不到该 provider——调研时用 `grep --include="*.js"` 搜触点，没搜 html。**搜触点时不要限定文件类型**：`grep -rn "<参考provider>_local" src/ atl-collector/ collector-core/ tests/ --include="*"`，把参考 provider（如 `hermes_local`）的所有出现位置全部对齐。
 >
 > 0.7.11 起来源页改为"左侧 provider 列表 + 右侧详情"布局：**不再有硬编码的 index.html tab 按钮**，`renderHealth` 直接从 health JSON 动态生成左侧导航项（`data-provider-nav`）和右侧 provider 卡片，添加位置按钮也由 `providerAddRootButton` 按 `PROVIDER_ADD_ROOT_LABEL_KEYS` 数据生成，click 委托统一走 `[data-add-root-provider]`。新增 provider 只需保证 health 返回该条目，来源页即自动出现入口。
+>
+> 0.7.11 起公开下载页（`src/web/download.html`）在 Get Started 区列出"支持的来源" chips：**新增 provider 必须同步加 chip**，否则下载页来源清单与实际能力不一致。
 
 | # | 文件 | 改什么 |
 | --- | --- | --- |
@@ -112,10 +114,11 @@ let total = input + output + cache_read + cache_write;
 | 2 | `src/desktop/renderer-data.js` | 导出的 `sourceName` |
 | 3 | `src/desktop/renderer-helpers.js` | `UI_PROVIDER_ORDER` 末尾追加（左侧列表同状态组内的排序依据） |
 | 4 | `src/shared/chart-helpers.js` | `sourceName`（带 `\|\| "Fallback"` 兜底） |
-| 5 | `src/shared/i18n.js` | **zh、en 两个语言块各 2 个 key**：`source.<name>`（显示名）+ `desktop.sources.add<Name>`（添加按钮文案） |
+| 5 | `src/shared/i18n.js` | **zh、en 两个语言块各 3 个 key**：`source.<name>`（显示名）+ `desktop.sources.add<Name>`（添加按钮文案）+ `web.home.source<Name>Note`（下载页 chip tooltip） |
 | 6 | `src/web/admin.js` | `providerDisplayNames` |
 | 7 | `src/web/data-value-demo-live.js` | `sourceNames` |
-| 8 | 桌面托盘 | 已由 sidecar.rs `TRAY_PROVIDER_NAMES` 覆盖 |
+| 8 | `src/web/download.html` | `#supported-sources` 列表加一个 `<li data-i18n-title="web.home.source<Name>Note">短名</li>` chip（短名用工具通用叫法，如 Codex、WorkBuddy） |
+| 9 | 桌面托盘 | 已由 sidecar.rs `TRAY_PROVIDER_NAMES` 覆盖 |
 
 ## 五、样例数据
 
@@ -173,9 +176,11 @@ scripts/release.sh --platform current --env env.local --yes
 调研   □ 数据路径/形态  □ token 口径(OpenAI/Anthropic)  □ 去重维度  □ 时间戳单位  □ workdir  □ 隐私表清单
 实现   □ <name>_local.rs(只读打开/错误上报)  □ mod.rs  □ scanner.rs×2  □ sidecar.rs
 前端   □ renderer.js×3(按钮映射/sourceIconPath/sourceName)  □ renderer-data.js  □ renderer-helpers.js
-      □ chart-helpers.js  □ i18n.js(zh+en 各2key)  □ admin.js  □ data-value-demo-live.js
+      □ chart-helpers.js  □ i18n.js(zh+en 各3key)  □ admin.js  □ data-value-demo-live.js
+      □ download.html chip + tooltip key
 数据   □ samples/<name>/ 样例库(UTC正午时间戳)
 测试   □ 单测(≥9项)  □ integration_scan 场景  □ chart-helpers 断言  □ e2e mock+导航用例
 验证   □ cargo test --workspace  □ npm test  □ test:ui  □ test:e2e  □ node --check
       □ 真库扫描 vs SQL 对账  □ release.sh 打包  □ 桌面端启动目检(来源页导航/卡片/扫描数据)
+      □ 下载页目检(新增 chip + 中英 tooltip)
 ```

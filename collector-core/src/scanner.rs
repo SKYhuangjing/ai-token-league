@@ -3,6 +3,7 @@ use crate::crypto::sha256_hex;
 use crate::provider::claude_code_local::ClaudeCodeLocalProvider;
 use crate::provider::codex_local::CodexProvider;
 use crate::provider::cursor_dashboard::{build_cursor_session_cookie, CursorDashboardProvider};
+use crate::provider::dsh_local::DshLocalProvider;
 use crate::provider::hermes_local::HermesLocalProvider;
 use crate::provider::mimocode_local::MiMoCodeLocalProvider;
 use crate::provider::openclaw_local::OpenClawLocalProvider;
@@ -464,6 +465,48 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
+    // DSH (DeepSeek Harness)
+    let dsh = DshLocalProvider;
+    let dsh_files = dsh.scan_sessions(config);
+    let mut dsh_errors: Vec<String> = Vec::new();
+    for file in &dsh_files {
+        let source_meta =
+            crate::provider::common::source_metadata(file, dsh.id(), dsh.version());
+        if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            source_index.insert(source_meta.source_fingerprint, cached);
+            continue;
+        }
+        match dsh.try_parse_usage(file) {
+            Ok(events) => {
+                source_index.insert(
+                    source_meta.source_fingerprint,
+                    events
+                        .into_iter()
+                        .map(|event| finalize_event(event, config))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Err(error) => {
+                dsh_errors.push(format!("{}: {}", file, error));
+            }
+        }
+    }
+    if !dsh_errors.is_empty() {
+        provider_errors.insert(dsh.id().to_string(), dsh_errors.join("; "));
+    }
+    health.push(local_provider_health(
+        dsh.id(),
+        dsh.tool_code(),
+        dsh.auto_roots(config),
+        dsh.manual_roots(config),
+        config,
+        dsh_files.len(),
+        true,
+    ));
+
     // Aggregate
     let aggregated = aggregate_item_refs(source_index.values().flat_map(|items| items.iter()));
 
@@ -485,6 +528,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let openclaw = OpenClawLocalProvider;
     let zcode = ZCodeLocalProvider;
     let workbuddy = WorkBuddyLocalProvider;
+    let dsh = DshLocalProvider;
     let codex_files = codex.scan_sessions(config);
     let claude_files = claude.scan_sessions(config);
     let cursor_sources = cursor.discover_sources(config);
@@ -494,6 +538,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let openclaw_files = openclaw.scan_sessions(config);
     let zcode_dbs = zcode.scan_sessions(config);
     let workbuddy_files = workbuddy.scan_sessions(config);
+    let dsh_files = dsh.scan_sessions(config);
 
     vec![
         local_provider_health(
@@ -566,6 +611,15 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
             workbuddy.manual_roots(config),
             config,
             workbuddy_files.len(),
+            true,
+        ),
+        local_provider_health(
+            dsh.id(),
+            dsh.tool_code(),
+            dsh.auto_roots(config),
+            dsh.manual_roots(config),
+            config,
+            dsh_files.len(),
             true,
         ),
         cursor_provider_health(cursor.id(), cursor.tool_code(), config, &cursor_sources),

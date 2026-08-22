@@ -23,7 +23,7 @@ function localDayOffset(offsetDays = 0) {
 // ── Source / Provider helpers ──
 
 describe('sourceName', () => {
-  const t = (k) => ({ 'source.codex': 'Codex', 'source.claude': 'Claude', 'source.cursor': 'Cursor', 'source.workbuddy': 'WorkBuddy' }[k] || k);
+  const t = (k) => ({ 'source.codex': 'Codex', 'source.claude': 'Claude', 'source.cursor': 'Cursor', 'source.workbuddy': 'WorkBuddy', 'source.dsh': 'DeepSeek Harness' }[k] || k);
   it('returns Codex for codex_local', () => {
     expect(sourceName('codex_local', t)).toBe('Codex');
   });
@@ -35,6 +35,9 @@ describe('sourceName', () => {
   });
   it('returns WorkBuddy for workbuddy_local', () => {
     expect(sourceName('workbuddy_local', t)).toBe('WorkBuddy');
+  });
+  it('returns DeepSeek Harness for dsh_local', () => {
+    expect(sourceName('dsh_local', t)).toBe('DeepSeek Harness');
   });
   it('returns raw id for unknown', () => {
     expect(sourceName('unknown_provider', t)).toBe('unknown_provider');

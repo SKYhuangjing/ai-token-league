@@ -55,12 +55,14 @@ impl TestEnv {
         let openclaw_path = samples.join("openclaw").to_string_lossy().to_string();
         let zcode_path = samples.join("zcode").to_string_lossy().to_string();
         let workbuddy_path = samples.join("workbuddy").to_string_lossy().to_string();
+        let dsh_path = samples.join("dsh/zstd").to_string_lossy().to_string();
         let cfg = config::add_provider_root("codex_local", &codex_path, &cfg);
         let cfg = config::add_provider_root("claude_code_local", &claude_path, &cfg);
         let cfg = config::add_provider_root("hermes_local", &hermes_path, &cfg);
         let cfg = config::add_provider_root("openclaw_local", &openclaw_path, &cfg);
         let cfg = config::add_provider_root("zcode_local", &zcode_path, &cfg);
-        config::add_provider_root("workbuddy_local", &workbuddy_path, &cfg)
+        let cfg = config::add_provider_root("workbuddy_local", &workbuddy_path, &cfg);
+        config::add_provider_root("dsh_local", &dsh_path, &cfg)
     }
 }
 
@@ -292,6 +294,62 @@ fn scenario_workbuddy_scan() {
 
     let health = scanner::provider_health(&cfg);
     assert!(health.iter().any(|h| h["providerId"] == "workbuddy_local"));
+}
+
+// ── Scenario 1e: DSH (DeepSeek Harness) scan from sample data ──
+
+#[test]
+fn scenario_dsh_scan() {
+    let _guard = lock();
+    let _prev = SaveHome::new();
+    let env = TestEnv::new();
+    // Committed zstd sample; skip defensively when absent.
+    if !std::env::current_dir()
+        .unwrap()
+        .join("../samples/dsh/zstd/session.jsonl.zstd")
+        .exists()
+    {
+        return;
+    }
+    let cfg = env.init_config();
+
+    let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
+
+    let dsh: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "dsh")
+        .collect();
+
+    assert!(
+        !dsh.is_empty(),
+        "should find dsh items from samples/dsh/zstd/session.jsonl.zstd"
+    );
+
+    for item in &dsh {
+        assert_eq!(item["providerId"], "dsh_local");
+        assert!(item["totalTokens"].as_i64().unwrap_or(0) > 0);
+        assert!(!item["day"].as_str().unwrap_or("").is_empty());
+        assert!(!item["model"].as_str().unwrap_or("").is_empty());
+        assert!(
+            item["workdirHash"].as_str().unwrap_or("") != "/tmp/dsh-sample/project-one",
+            "real absolute paths must not be uploaded, only the hashed workdir"
+        );
+    }
+
+    // Sample total: 7 counted events (seed region skipped), see
+    // samples/dsh/README.md.
+    let dsh_total: i64 = dsh
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert_eq!(dsh_total, 10310, "dsh sample total should match");
+
+    // No provider errors surfaced for dsh
+    assert!(!result.provider_errors.contains_key("dsh_local"));
+
+    let health = scanner::provider_health(&cfg);
+    assert!(health.iter().any(|h| h["providerId"] == "dsh_local"));
 }
 
 // ── Scenario 2: Scan → persist → query roundtrip ──

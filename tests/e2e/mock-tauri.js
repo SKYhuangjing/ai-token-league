@@ -212,6 +212,12 @@
       sources: [{ kind: "auto", id: "/Users/demo/.workbuddy", label: "~/.workbuddy", path: "/Users/demo/.workbuddy", ignored: false }],
     },
     {
+      providerId: "dsh_local", toolCode: "dsh",
+      enabled: true, detected: true, ok: true, scannedFiles: 1,
+      roots: ["/Users/demo/.dsh/sessions"],
+      sources: [{ kind: "auto", id: "/Users/demo/.dsh/sessions", label: "~/.dsh/sessions", path: "/Users/demo/.dsh/sessions", ignored: false }],
+    },
+    {
       providerId: "opencode_local", toolCode: "opencode",
       enabled: true, detected: false, ok: false, scannedFiles: 0,
       roots: [],

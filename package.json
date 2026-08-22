@@ -25,6 +25,7 @@
     "test:e2e:tauri": "playwright test",
     "smoke": "node tests/run-tests.js && node src/backend/server.js --smoke",
     "verify:ccusage": "node scripts/verify-ccusage.mjs",
+    "verify:dsh": "node scripts/verify-dsh.mjs",
     "icons": "node scripts/generate-icons.js && node scripts/generate-tray-icons.js",
     "icons:tray": "node scripts/generate-tray-icons.js",
     "preset": "node scripts/build-preset.js",

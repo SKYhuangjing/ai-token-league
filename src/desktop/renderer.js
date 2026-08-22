@@ -1130,6 +1130,7 @@ function sourceIconPath(providerId) {
   if (providerId === "openclaw_local") return "./icons/folder-code.svg";
   if (providerId === "zcode_local") return "./icons/folder-code.svg";
   if (providerId === "workbuddy_local") return "./icons/folder-code.svg";
+  if (providerId === "dsh_local") return "./icons/folder-code.svg";
   if (providerId === "cursor_dashboard_usage") return "./icons/database.svg";
   return "./icons/file-text.svg";
 }
@@ -3633,7 +3634,8 @@ const PROVIDER_ADD_ROOT_LABEL_KEYS = {
   hermes_local: "desktop.sources.addHermes",
   openclaw_local: "desktop.sources.addOpenClaw",
   zcode_local: "desktop.sources.addZCode",
-  workbuddy_local: "desktop.sources.addWorkbuddy"
+  workbuddy_local: "desktop.sources.addWorkbuddy",
+  dsh_local: "desktop.sources.addDsh"
 };
 
 function providerAddRootButton(item) {
@@ -4704,6 +4706,7 @@ function sourceName(providerId) {
   if (providerId === "openclaw_local") return t("source.openclaw");
   if (providerId === "zcode_local") return t("source.zcode");
   if (providerId === "workbuddy_local") return t("source.workbuddy");
+  if (providerId === "dsh_local") return t("source.dsh");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

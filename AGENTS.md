@@ -44,6 +44,7 @@ Core behavior:
 | `openclaw_local` | Supported | Scans local OpenClaw JSONL logs. |
 | `zcode_local` | Supported | Scans local ZCode SQLite database. |
 | `workbuddy_local` | Supported | Scans local WorkBuddy trace JSON files (per-request tokens from generation spans). |
+| `dsh_local` | Supported | Scans local DeepSeek Harness session logs (multi-frame zstd JSONL). |
 
 Token total rule:
 
