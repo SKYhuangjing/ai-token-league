@@ -65,7 +65,12 @@ test.describe('Share card', () => {
     await expect(actions).toHaveClass(/visible/, { timeout: 5_000 });
 
     await page.click('#save-share-card');
-    await expect(page.locator('#share-card-status')).toContainText(/saved|copied/i, { timeout: 5_000 });
+    // The "saved" status text is transient: the modal auto-closes on success
+    // and clears the status ~400ms later, so polling the text races the close
+    // under a full parallel suite. Waiting for the auto-close proves the
+    // success branch (cancel/error paths keep the modal open); the persisted
+    // save state is asserted right after.
+    await expect(page.locator('#share-card-modal')).toBeHidden({ timeout: 15_000 });
     const saved = await page.evaluate(() => window.__ATL_E2E_STATE__.lastShareImageSave);
     expect(saved).toBeTruthy();
     expect(saved.fileName).toMatch(/^ai-token-league-share-today-\d{4}-\d{2}-\d{2}\.png$/);
