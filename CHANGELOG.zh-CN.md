@@ -11,7 +11,13 @@
 ### 新增
 
 - [Desktop] 新增 DeepSeek Harness（dsh）本地数据源：扫描本机 dsh 会话日志（`~/.dsh/sessions`，支持 `DSH_HOME` 覆盖），解码 zstd 压缩的 JSONL 事件日志，按调用口径统计 assistant 消息与压缩摘要的 token（输入、输出、缓存读/写、推理），对 fork/resume 会话做种子边界去重，并对不支持的会话格式版本硬性报错不猜测解析。
+- [Desktop] 来源页每个来源下方新增数据概览卡：累计/今日/近 7 天用量、覆盖天数、token 构成条、与首页同款样式的完整模型用量列表（含各模型占比）、最近使用日期。
 - [Web] 下载页新增"支持的来源"清单：以标签形式列出全部可用数据源并附逐一说明，同时补充一行隐私说明：仅本地扫描，只上传签名后的每日聚合数据。
+- [Web] 更多来源（OpenCode、MiMoCode、Hermes、OpenClaw、ZCode、WorkBuddy、DeepSeek Harness）在分析图表与参与者 treemap 中拥有专属颜色，不再共用灰色。
+
+### 变更
+
+- [Desktop] 移除"显示原始令牌数"设置：token 数固定以紧凑格式展示（精确数值保留在悬停提示中），该设置不再从导入或预设配置中接受。
 
 ### 修复
 

@@ -11,7 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - [Desktop] Added DeepSeek Harness (dsh) as a supported local usage source: scans local dsh session logs (`~/.dsh/sessions`, honoring `DSH_HOME`), decoding the zstd-compressed JSONL event log and counting per-call token usage (input, output, cache read/write, reasoning) from assistant messages and compaction summaries, with fork/resume deduplication and a hard gate on unsupported session format versions.
+- [Desktop] The Sources screen now shows a data overview card under every provider: total/today/last-7-day tokens, active days, a token composition bar, a full per-model usage list in the same meter style as the home screen (with each model's share), and the last-used day.
 - [Web] The download page now lists every supported usage source as chips with per-source explanations, plus a one-line privacy intro: local scans only, signed daily aggregates uploaded.
+- [Web] More sources (OpenCode, MiMoCode, Hermes, OpenClaw, ZCode, WorkBuddy, DeepSeek Harness) now have dedicated colors in analytics charts and the participant treemap instead of sharing one gray.
+
+### Changed
+
+- [Desktop] Removed the "show raw token numbers" setting: token counts always render in compact form (exact values remain available in hover tooltips), and the setting is no longer accepted from imported or preset configuration.
 
 ### Fixed
 
