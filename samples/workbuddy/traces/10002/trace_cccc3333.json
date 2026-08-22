@@ -1,0 +1,27 @@
+{
+  "trace": {
+    "traceId": "trace_cccc3333",
+    "name": "Agent workflow",
+    "workerPid": 10002,
+    "sessionId": "sess-10002",
+    "startedAt": "2026-06-08T12:00:00Z",
+    "endedAt": "2026-06-08T12:00:08Z",
+    "duration": 8000,
+    "status": "ok",
+    "spanCount": 1,
+    "totalTokens": 0,
+    "modelInfo": {
+      "totalInputTokens": 800,
+      "totalOutputTokens": 200,
+      "totalCachedTokens": 100,
+      "models": ["test-model"]
+    }
+  },
+  "spans": [
+    {
+      "type": "generation",
+      "startedAt": "2026-06-08T12:00:01Z",
+      "toolOutput": "[{\"model\":\"auto\",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":0}}}]"
+    }
+  ]
+}

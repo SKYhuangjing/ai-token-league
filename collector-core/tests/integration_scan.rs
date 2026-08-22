@@ -54,11 +54,13 @@ impl TestEnv {
         let hermes_path = samples.join("hermes").to_string_lossy().to_string();
         let openclaw_path = samples.join("openclaw").to_string_lossy().to_string();
         let zcode_path = samples.join("zcode").to_string_lossy().to_string();
+        let workbuddy_path = samples.join("workbuddy").to_string_lossy().to_string();
         let cfg = config::add_provider_root("codex_local", &codex_path, &cfg);
         let cfg = config::add_provider_root("claude_code_local", &claude_path, &cfg);
         let cfg = config::add_provider_root("hermes_local", &hermes_path, &cfg);
         let cfg = config::add_provider_root("openclaw_local", &openclaw_path, &cfg);
-        config::add_provider_root("zcode_local", &zcode_path, &cfg)
+        let cfg = config::add_provider_root("zcode_local", &zcode_path, &cfg);
+        config::add_provider_root("workbuddy_local", &workbuddy_path, &cfg)
     }
 }
 
@@ -231,6 +233,65 @@ fn scenario_zcode_scan() {
 
     let health = scanner::provider_health(&cfg);
     assert!(health.iter().any(|h| h["providerId"] == "zcode_local"));
+}
+
+// ── Scenario 1d: WorkBuddy scan from sample data ──
+
+#[test]
+fn scenario_workbuddy_scan() {
+    let _guard = lock();
+    let _prev = SaveHome::new();
+    let env = TestEnv::new();
+    // Synthetic JSON samples are committed; skip defensively when absent.
+    if !std::env::current_dir()
+        .unwrap()
+        .join("../samples/workbuddy/traces")
+        .exists()
+    {
+        return;
+    }
+    let cfg = env.init_config();
+
+    let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
+
+    let workbuddy: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "workbuddy")
+        .collect();
+
+    assert!(
+        !workbuddy.is_empty(),
+        "should find workbuddy items from samples/workbuddy/traces"
+    );
+
+    for item in &workbuddy {
+        assert_eq!(item["providerId"], "workbuddy_local");
+        assert!(item["totalTokens"].as_i64().unwrap_or(0) > 0);
+        assert!(!item["day"].as_str().unwrap_or("").is_empty());
+        assert!(!item["model"].as_str().unwrap_or("").is_empty());
+        assert!(
+            item["workdirHash"].as_str().unwrap_or("") != "/tmp/wb-sample/project-one",
+            "real absolute paths must not be uploaded, only the hashed workdir"
+        );
+    }
+
+    // Sample totals:
+    //   trace_aaaa1111  prompt=1500 (cached=500) + completion=300        = 1800
+    //   trace_bbbb2222  span1 1200+400 = 1600; span2 500+200+300 = 1000  = 2600
+    //   trace_cccc3333  modelInfo fallback 800+200+100                    = 1100
+    //   trace_dddd4444  error status → skipped; trace_eeee5555 bad json → skipped
+    let workbuddy_total: i64 = workbuddy
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert_eq!(workbuddy_total, 5500, "workbuddy sample total should match");
+
+    // No provider errors surfaced for workbuddy
+    assert!(!result.provider_errors.contains_key("workbuddy_local"));
+
+    let health = scanner::provider_health(&cfg);
+    assert!(health.iter().any(|h| h["providerId"] == "workbuddy_local"));
 }
 
 // ── Scenario 2: Scan → persist → query roundtrip ──

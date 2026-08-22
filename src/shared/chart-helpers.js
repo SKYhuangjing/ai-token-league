@@ -27,6 +27,7 @@ export function sourceName(providerId) {
   if (providerId === "hermes_local") return t("source.hermes") || "Hermes";
   if (providerId === "openclaw_local") return t("source.openclaw") || "OpenClaw";
   if (providerId === "zcode_local") return t("source.zcode") || "ZCode";
+  if (providerId === "workbuddy_local") return t("source.workbuddy") || "WorkBuddy";
   if (providerId === "cursor_dashboard_usage") return t("source.cursor") || "Cursor";
   return providerId;
 }

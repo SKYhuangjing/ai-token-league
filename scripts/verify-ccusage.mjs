@@ -15,7 +15,7 @@ const providers = new Set(
     .map((arg) => arg.trim())
     .filter(Boolean)
 );
-const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex", "opencode", "hermes", "openclaw", "mimocode"]);
+const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy"]);
 const explicitlySelected = providers.size > 0;
 const home = process.env.HOME || "";
 const configPath = join(home, ".ai-token-league", "config.json");
@@ -129,7 +129,8 @@ function parseCollectorScan(stdout) {
     opencode: new Map(),
     hermes: new Map(),
     openclaw: new Map(),
-    mimocode: new Map()
+    mimocode: new Map(),
+    workbuddy: new Map()
   };
   for (const line of stdout.split(/\r?\n/)) {
     const match = line.match(/^\s*(\d{4}-\d{2}-\d{2})\s+(\S+)\s+.+?\s+tokens=(\d+)\s*$/);
@@ -142,6 +143,7 @@ function parseCollectorScan(stdout) {
     if (providerId === "hermes_local") addTotal(byProvider.hermes, day, total);
     if (providerId === "openclaw_local") addTotal(byProvider.openclaw, day, total);
     if (providerId === "mimocode_local") addTotal(byProvider.mimocode, day, total);
+    if (providerId === "workbuddy_local") addTotal(byProvider.workbuddy, day, total);
   }
   return byProvider;
 }
@@ -318,6 +320,64 @@ function expectedMiMo() {
   return verified("mimocode", expected);
 }
 
+function expectedWorkbuddy() {
+  if (!providerEnabled("workbuddy_local")) return skipped("workbuddy", "provider disabled");
+  const autoRoots = [];
+  const configDir = (process.env.WORKBUDDY_CONFIG_DIR || "").trim();
+  if (configDir) autoRoots.push(configDir);
+  autoRoots.push(`${home}/.workbuddy`);
+  const roots = configuredRoots("workbuddy_local", autoRoots);
+  if (roots.length === 0) return skipped("workbuddy", "no configured directory found");
+  const expected = new Map();
+  for (const root of roots) {
+    const tracesDir = join(root, "traces");
+    if (!existsSync(tracesDir)) continue;
+    for (const pid of readdirSync(tracesDir, { withFileTypes: true })) {
+      if (!pid.isDirectory()) continue;
+      const pidDir = join(tracesDir, pid.name);
+      for (const name of readdirSync(pidDir)) {
+        if (!name.startsWith("trace_") || !name.endsWith(".json")) continue;
+        const file = join(pidDir, name);
+        let data;
+        try { data = JSON.parse(readFileSync(file, "utf8")); } catch { continue; }
+        const trace = data.trace;
+        if (!trace || typeof trace !== "object") continue;
+        if (trace.status !== "ok") continue;
+        const startedMs = Date.parse(trace.startedAt || "");
+        const day = Number.isFinite(startedMs)
+          ? localDay(new Date(startedMs))
+          : localDay(statSync(file).mtime);
+        let emitted = false;
+        for (const span of Array.isArray(data.spans) ? data.spans : []) {
+          if (span.type !== "generation" || typeof span.toolOutput !== "string" || !span.toolOutput.trim()) continue;
+          let output;
+          try { output = JSON.parse(span.toolOutput); } catch { continue; }
+          const response = Array.isArray(output) ? output[0] : (output && typeof output === "object" ? output : null);
+          const usage = response && response.usage;
+          if (!usage || typeof usage !== "object") continue;
+          const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.inputTokens ?? 0);
+          const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? usage.outputTokens ?? 0);
+          const cacheRead = Number(usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0);
+          const input = Math.max(prompt - cacheRead, 0);
+          const outputTokens = Math.max(completion, 0);
+          const total = input + outputTokens + cacheRead;
+          if (total <= 0) continue;
+          addTotal(expected, day, total);
+          emitted = true;
+        }
+        if (!emitted && trace.modelInfo && typeof trace.modelInfo === "object") {
+          const input = Number(trace.modelInfo.totalInputTokens || 0);
+          const outputTokens = Number(trace.modelInfo.totalOutputTokens || 0);
+          const cacheRead = Number(trace.modelInfo.totalCachedTokens || 0);
+          const total = input + outputTokens + cacheRead;
+          if (total > 0) addTotal(expected, day, total);
+        }
+      }
+    }
+  }
+  return verified("workbuddy", expected);
+}
+
 function comparableDays(actual, expected) {
   const today = localDay();
   return [...new Set([...actual.keys(), ...expected.keys()])]
@@ -366,8 +426,8 @@ function compareExpected(name, actual, result) {
 }
 
 function main() {
-  if (![...selectedProviders].every((provider) => ["claude", "codex", "opencode", "hermes", "openclaw", "mimocode"].includes(provider))) {
-    throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, or combinations.");
+  if (![...selectedProviders].every((provider) => ["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy"].includes(provider))) {
+    throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, workbuddy, or combinations.");
   }
 
   const collectorOutput = run("cargo", ["run", "-p", "atl-collector", "--", "scan"], {
@@ -393,6 +453,9 @@ function main() {
   }
   if (selectedProviders.has("mimocode")) {
     ok = compareExpected("mimocode", actual.mimocode, expectedMiMo()) && ok;
+  }
+  if (selectedProviders.has("workbuddy")) {
+    ok = compareExpected("workbuddy", actual.workbuddy, expectedWorkbuddy()) && ok;
   }
 
   if (!ok) process.exit(1);

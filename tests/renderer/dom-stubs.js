@@ -31,7 +31,7 @@ const ALL_IDS = [
   'reveal-backup-directory','reveal-runtime-log-directory','runtimeLogRetentionDays',
   'save-cursor-token','save-share-card','settings-save-message',
   'share-card-modal','share-card-preview','share-card-status','settings-source-list','settings-tabs',
-  'showEstimatedCost','showRawTokens','sources-tabs','sync-state','theme','toast',
+  'showEstimatedCost','showRawTokens','provider-nav-list','sync-state','theme','toast',
   'today-cost','today-total','trend-chart-panel','trend-drawer',
   'trend-drawer-backdrop','trend-drawer-body','trend-drawer-copy','trend-drawer-title',
   'trend-heading','trend-rows','trend-selection-panel','trend-summary',

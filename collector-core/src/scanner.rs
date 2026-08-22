@@ -7,6 +7,7 @@ use crate::provider::hermes_local::HermesLocalProvider;
 use crate::provider::mimocode_local::MiMoCodeLocalProvider;
 use crate::provider::openclaw_local::OpenClawLocalProvider;
 use crate::provider::opencode_local::OpenCodeLocalProvider;
+use crate::provider::workbuddy_local::WorkBuddyLocalProvider;
 use crate::provider::zcode_local::ZCodeLocalProvider;
 use crate::schema::{compute_bucket_fingerprint, public_usage_item};
 use crate::workdir::workdir_from_candidate;
@@ -421,6 +422,48 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
+    // WorkBuddy
+    let workbuddy = WorkBuddyLocalProvider;
+    let workbuddy_files = workbuddy.scan_sessions(config);
+    let mut workbuddy_errors: Vec<String> = Vec::new();
+    for file in &workbuddy_files {
+        let source_meta =
+            crate::provider::common::source_metadata(file, workbuddy.id(), workbuddy.version());
+        if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            source_index.insert(source_meta.source_fingerprint, cached);
+            continue;
+        }
+        match workbuddy.try_parse_usage(file) {
+            Ok(events) => {
+                source_index.insert(
+                    source_meta.source_fingerprint,
+                    events
+                        .into_iter()
+                        .map(|event| finalize_event(event, config))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Err(error) => {
+                workbuddy_errors.push(format!("{}: {}", file, error));
+            }
+        }
+    }
+    if !workbuddy_errors.is_empty() {
+        provider_errors.insert(workbuddy.id().to_string(), workbuddy_errors.join("; "));
+    }
+    health.push(local_provider_health(
+        workbuddy.id(),
+        workbuddy.tool_code(),
+        workbuddy.auto_roots(config),
+        workbuddy.manual_roots(config),
+        config,
+        workbuddy_files.len(),
+        true,
+    ));
+
     // Aggregate
     let aggregated = aggregate_item_refs(source_index.values().flat_map(|items| items.iter()));
 
@@ -441,6 +484,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let hermes = HermesLocalProvider;
     let openclaw = OpenClawLocalProvider;
     let zcode = ZCodeLocalProvider;
+    let workbuddy = WorkBuddyLocalProvider;
     let codex_files = codex.scan_sessions(config);
     let claude_files = claude.scan_sessions(config);
     let cursor_sources = cursor.discover_sources(config);
@@ -449,6 +493,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let hermes_dbs = hermes.scan_sessions(config);
     let openclaw_files = openclaw.scan_sessions(config);
     let zcode_dbs = zcode.scan_sessions(config);
+    let workbuddy_files = workbuddy.scan_sessions(config);
 
     vec![
         local_provider_health(
@@ -512,6 +557,15 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
             zcode.manual_roots(config),
             config,
             zcode_dbs.len(),
+            true,
+        ),
+        local_provider_health(
+            workbuddy.id(),
+            workbuddy.tool_code(),
+            workbuddy.auto_roots(config),
+            workbuddy.manual_roots(config),
+            config,
+            workbuddy_files.len(),
             true,
         ),
         cursor_provider_health(cursor.id(), cursor.tool_code(), config, &cursor_sources),

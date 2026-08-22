@@ -100,21 +100,22 @@ let total = input + output + cache_read + cache_write;
 
 后端 `providerId` 是开放字符串，**无需改后端**。
 
-## 四、前端触点（9 处，一处都不能漏）
+## 四、前端触点（8 处，一处都不能漏）
 
 > 教训：zcode 首轮接入漏了 index.html 的 tab 按钮，导致来源页永远看不到该 provider——调研时用 `grep --include="*.js"` 搜触点，没搜 html。**搜触点时不要限定文件类型**：`grep -rn "<参考provider>_local" src/ atl-collector/ collector-core/ tests/ --include="*"`，把参考 provider（如 `hermes_local`）的所有出现位置全部对齐。
+>
+> 0.7.11 起来源页改为"左侧 provider 列表 + 右侧详情"布局：**不再有硬编码的 index.html tab 按钮**，`renderHealth` 直接从 health JSON 动态生成左侧导航项（`data-provider-nav`）和右侧 provider 卡片，添加位置按钮也由 `providerAddRootButton` 按 `PROVIDER_ADD_ROOT_LABEL_KEYS` 数据生成，click 委托统一走 `[data-add-root-provider]`。新增 provider 只需保证 health 返回该条目，来源页即自动出现入口。
 
 | # | 文件 | 改什么 |
 | --- | --- | --- |
-| 1 | `src/desktop/index.html` | `#sources-tabs` 加 `<button data-provider-tab="<name>_local" data-i18n="source.<name>">` —— **漏了它来源页就没有入口** |
-| 2 | `src/desktop/renderer.js`（4 处） | ① `#add-<name>-root` 的 document click handler；② `sourceIconPath`；③ `renderHealth` 的 addBtn 三元链加分支；④ 文件内局部 `sourceName` |
-| 3 | `src/desktop/renderer-data.js` | 导出的 `sourceName` |
-| 4 | `src/desktop/renderer-helpers.js` | `UI_PROVIDER_ORDER` 末尾追加 |
-| 5 | `src/shared/chart-helpers.js` | `sourceName`（带 `\|\| "Fallback"` 兜底） |
-| 6 | `src/shared/i18n.js` | **zh、en 两个语言块各 2 个 key**：`source.<name>`（显示名）+ `desktop.sources.add<Name>`（添加按钮文案） |
-| 7 | `src/web/admin.js` | `providerDisplayNames` |
-| 8 | `src/web/data-value-demo-live.js` | `sourceNames` |
-| 9 | 桌面托盘 | 已由 sidecar.rs `TRAY_PROVIDER_NAMES` 覆盖 |
+| 1 | `src/desktop/renderer.js`（3 处） | ① `PROVIDER_ADD_ROOT_LABEL_KEYS` 加 `<name>_local → desktop.sources.add<Name>` 映射（添加按钮文案+生成）；② `sourceIconPath`；③ 文件内局部 `sourceName`。（添加按钮 click 委托已通用化：`[data-add-root-provider]`，无需再加 handler） |
+| 2 | `src/desktop/renderer-data.js` | 导出的 `sourceName` |
+| 3 | `src/desktop/renderer-helpers.js` | `UI_PROVIDER_ORDER` 末尾追加（左侧列表同状态组内的排序依据） |
+| 4 | `src/shared/chart-helpers.js` | `sourceName`（带 `\|\| "Fallback"` 兜底） |
+| 5 | `src/shared/i18n.js` | **zh、en 两个语言块各 2 个 key**：`source.<name>`（显示名）+ `desktop.sources.add<Name>`（添加按钮文案） |
+| 6 | `src/web/admin.js` | `providerDisplayNames` |
+| 7 | `src/web/data-value-demo-live.js` | `sourceNames` |
+| 8 | 桌面托盘 | 已由 sidecar.rs `TRAY_PROVIDER_NAMES` 覆盖 |
 
 ## 五、样例数据
 
@@ -129,8 +130,8 @@ let total = input + output + cache_read + cache_write;
 2. **集成测试**（`collector-core/tests/integration_scan.rs`）：`init_config` 注册样例根 + 新场景（条数、总额精确断言、`workdirHash` 不等于真实路径、无 provider_errors、health 含新 provider）。缺样例库时 return 跳过。
 3. **前端单测**（`tests/renderer/chart-helpers.test.js`）：`sourceName` 映射加一行断言。
 4. **E2E**：
-   - `tests/e2e/mock-tauri.js` 的 `mockHealth` 加新 provider 条目；
-   - `tests/e2e/workflows.spec.js` 加 tab 交互用例（tab 可见 → 点击 → 卡片渲染 → 来源行可见）。现有断言用 `>=` 计数，新增 tab 不会破坏。
+   - `tests/e2e/mock-tauri.js` 的 `mockHealth` 加新 provider 条目（左侧导航项由 health 动态生成，无需改 index.html）；
+   - `tests/e2e/workflows.spec.js` 加导航交互用例（`[data-provider-nav="<name>_local"]` 可见 → 点击 → 卡片渲染 → 来源行可见）。现有断言用 `>=` 计数，新增条目不会破坏。
 
 ## 七、验证与打包
 
@@ -171,10 +172,10 @@ scripts/release.sh --platform current --env env.local --yes
 ```
 调研   □ 数据路径/形态  □ token 口径(OpenAI/Anthropic)  □ 去重维度  □ 时间戳单位  □ workdir  □ 隐私表清单
 实现   □ <name>_local.rs(只读打开/错误上报)  □ mod.rs  □ scanner.rs×2  □ sidecar.rs
-前端   □ index.html tab  □ renderer.js×4  □ renderer-data.js  □ renderer-helpers.js
+前端   □ renderer.js×3(按钮映射/sourceIconPath/sourceName)  □ renderer-data.js  □ renderer-helpers.js
       □ chart-helpers.js  □ i18n.js(zh+en 各2key)  □ admin.js  □ data-value-demo-live.js
 数据   □ samples/<name>/ 样例库(UTC正午时间戳)
-测试   □ 单测(≥9项)  □ integration_scan 场景  □ chart-helpers 断言  □ e2e mock+tab用例
+测试   □ 单测(≥9项)  □ integration_scan 场景  □ chart-helpers 断言  □ e2e mock+导航用例
 验证   □ cargo test --workspace  □ npm test  □ test:ui  □ test:e2e  □ node --check
-      □ 真库扫描 vs SQL 对账  □ release.sh 打包  □ 桌面端启动目检(来源页 tab/卡片/扫描数据)
+      □ 真库扫描 vs SQL 对账  □ release.sh 打包  □ 桌面端启动目检(来源页导航/卡片/扫描数据)
 ```

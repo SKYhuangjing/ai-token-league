@@ -23,7 +23,7 @@ function localDayOffset(offsetDays = 0) {
 // ── Source / Provider helpers ──
 
 describe('sourceName', () => {
-  const t = (k) => ({ 'source.codex': 'Codex', 'source.claude': 'Claude', 'source.cursor': 'Cursor' }[k] || k);
+  const t = (k) => ({ 'source.codex': 'Codex', 'source.claude': 'Claude', 'source.cursor': 'Cursor', 'source.workbuddy': 'WorkBuddy' }[k] || k);
   it('returns Codex for codex_local', () => {
     expect(sourceName('codex_local', t)).toBe('Codex');
   });
@@ -32,6 +32,9 @@ describe('sourceName', () => {
   });
   it('returns Cursor for cursor_dashboard_usage', () => {
     expect(sourceName('cursor_dashboard_usage', t)).toBe('Cursor');
+  });
+  it('returns WorkBuddy for workbuddy_local', () => {
+    expect(sourceName('workbuddy_local', t)).toBe('WorkBuddy');
   });
   it('returns raw id for unknown', () => {
     expect(sourceName('unknown_provider', t)).toBe('unknown_provider');

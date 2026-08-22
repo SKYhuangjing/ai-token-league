@@ -1,0 +1,30 @@
+{
+  "trace": {
+    "traceId": "trace_bbbb2222",
+    "name": "Agent workflow",
+    "workerPid": 10001,
+    "startedAt": "2026-06-08T12:00:10.456Z",
+    "endedAt": "2026-06-08T12:00:20Z",
+    "duration": 10000,
+    "status": "ok",
+    "spanCount": 3,
+    "totalTokens": 0
+  },
+  "spans": [
+    {
+      "type": "agent",
+      "name": "agent-run",
+      "startedAt": "2026-06-08T12:00:10Z"
+    },
+    {
+      "type": "generation",
+      "startedAt": "2026-06-08T12:00:11Z",
+      "toolOutput": "[{\"model\":\"auto\",\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":400,\"total_tokens\":1600}}]"
+    },
+    {
+      "type": "generation",
+      "startedAt": "2026-06-08T12:00:15Z",
+      "toolOutput": "[{\"model\":\"test-model-b\",\"usage\":{\"prompt_tokens\":800,\"completion_tokens\":200,\"total_tokens\":1000,\"prompt_tokens_details\":{\"cached_tokens\":300},\"completion_tokens_details\":{\"reasoning_tokens\":40}}}]"
+    }
+  ]
+}

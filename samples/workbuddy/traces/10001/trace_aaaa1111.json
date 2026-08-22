@@ -1,0 +1,25 @@
+{
+  "trace": {
+    "traceId": "trace_aaaa1111",
+    "name": "Agent workflow",
+    "workerPid": 10001,
+    "startedAt": "2026-06-08T12:00:00Z",
+    "endedAt": "2026-06-08T12:00:05Z",
+    "duration": 5000,
+    "status": "ok",
+    "spanCount": 2,
+    "totalTokens": 0
+  },
+  "spans": [
+    {
+      "type": "agent",
+      "name": "agent-run",
+      "startedAt": "2026-06-08T12:00:00Z"
+    },
+    {
+      "type": "generation",
+      "startedAt": "2026-06-08T12:00:01Z",
+      "toolOutput": "[{\"model\":\"auto\",\"usage\":{\"prompt_tokens\":1500,\"completion_tokens\":300,\"total_tokens\":1800,\"prompt_tokens_details\":{\"cached_tokens\":500},\"completion_tokens_details\":{\"reasoning_tokens\":50}}}]"
+    }
+  ]
+}

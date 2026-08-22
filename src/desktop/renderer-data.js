@@ -63,6 +63,7 @@ export function sourceName(providerId, t = (k) => k) {
   if (providerId === "hermes_local") return t("source.hermes");
   if (providerId === "openclaw_local") return t("source.openclaw");
   if (providerId === "zcode_local") return t("source.zcode");
+  if (providerId === "workbuddy_local") return t("source.workbuddy");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

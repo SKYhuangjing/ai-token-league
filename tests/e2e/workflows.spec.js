@@ -10,11 +10,11 @@ test.describe('Sources Workflows', () => {
   test('sources screen renders provider cards with toggle switches', async ({ page }) => {
     await navigateTo(page, 'sources');
 
-    const tabs = page.locator('#sources-tabs [data-provider-tab]');
-    await expect(tabs.first()).toBeVisible({ timeout: 5_000 });
-    expect(await tabs.count()).toBeGreaterThanOrEqual(2);
+    const navItems = page.locator('#provider-nav-list [data-provider-nav]');
+    await expect(navItems.first()).toBeVisible({ timeout: 5_000 });
+    expect(await navItems.count()).toBeGreaterThanOrEqual(2);
 
-    await tabs.first().click();
+    await navItems.first().click();
 
     // Toggle switch exists with correct role and initial state
     const toggle = page.locator('[data-toggle-source]').first();
@@ -32,21 +32,22 @@ test.describe('Sources Workflows', () => {
   test('sources screen shows source rows for each provider', async ({ page }) => {
     await navigateTo(page, 'sources');
 
-    const tabs = page.locator('#sources-tabs [data-provider-tab]');
-    await tabs.first().click();
+    const navItems = page.locator('#provider-nav-list [data-provider-nav]');
+    await navItems.first().click();
 
     const rows = page.locator('[data-root-path], .source-row, .auto-source-row');
     await expect(rows.first()).toBeVisible({ timeout: 5_000 });
     expect(await rows.count()).toBeGreaterThan(0);
   });
 
-  test('sources screen renders zcode provider card from its tab', async ({ page }) => {
+  test('sources screen renders zcode provider card from its nav item', async ({ page }) => {
     await navigateTo(page, 'sources');
 
-    const zcodeTab = page.locator('#sources-tabs [data-provider-tab="zcode_local"]');
-    await expect(zcodeTab).toBeVisible({ timeout: 5_000 });
-    await zcodeTab.click();
-    await expect(zcodeTab).toHaveClass(/active/);
+    const zcodeNav = page.locator('#provider-nav-list [data-provider-nav="zcode_local"]');
+    await expect(zcodeNav).toBeVisible({ timeout: 5_000 });
+    await zcodeNav.click();
+    await expect(zcodeNav).toHaveClass(/active/);
+    await expect(zcodeNav).toHaveAttribute('aria-current', 'true');
 
     const card = page.locator('#settings-source-list .provider-card', { hasText: 'ZCode' });
     await expect(card.first()).toBeVisible({ timeout: 5_000 });
@@ -56,6 +57,52 @@ test.describe('Sources Workflows', () => {
     const row = card.locator('[data-root-path], .source-row, .auto-source-row');
     await expect(row.first()).toBeVisible({ timeout: 5_000 });
     await expect(row.first()).toContainText('.zcode/cli');
+  });
+
+  test('sources screen renders workbuddy provider card from its nav item', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    const workbuddyNav = page.locator('#provider-nav-list [data-provider-nav="workbuddy_local"]');
+    await expect(workbuddyNav).toBeVisible({ timeout: 5_000 });
+    await workbuddyNav.click();
+    await expect(workbuddyNav).toHaveClass(/active/);
+    await expect(workbuddyNav).toHaveAttribute('aria-current', 'true');
+
+    const card = page.locator('#settings-source-list .provider-card', { hasText: 'WorkBuddy' });
+    await expect(card.first()).toBeVisible({ timeout: 5_000 });
+    await expect(card.locator('h4')).toHaveText('WorkBuddy');
+
+    // Auto-discovered source row for the WorkBuddy data directory
+    const row = card.locator('[data-root-path], .source-row, .auto-source-row');
+    await expect(row.first()).toBeVisible({ timeout: 5_000 });
+    await expect(row.first()).toContainText('.workbuddy');
+  });
+
+  test('provider nav auto-sorts by status: healthy first, attention next, disabled last', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    const navItems = page.locator('#provider-nav-list [data-provider-nav]');
+    await expect(navItems.first()).toBeVisible({ timeout: 5_000 });
+    expect(await navItems.count()).toBeGreaterThanOrEqual(4);
+
+    // Mock health: claude/codex/zcode/workbuddy enabled+detected+ok; mimocode disabled; opencode not detected.
+    // Healthy providers must come before attention-state and disabled ones.
+    const order = await navItems.evaluateAll((items) => items.map((item) => ({
+      id: item.getAttribute('data-provider-nav'),
+      status: item.getAttribute('data-nav-status')
+    })));
+
+    const rank = { ok: 0, warn: 1, off: 2 };
+    const statusRanks = order.map((entry) => rank[entry.status]);
+    const sortedRanks = [...statusRanks].sort((a, b) => a - b);
+    expect(statusRanks).toEqual(sortedRanks);
+
+    // Default selection is the first healthy provider
+    expect(order[0].id).toBe('claude_code_local');
+    expect(order[0].status).toBe('ok');
+    // Disabled mimocode sorts after every healthy provider
+    const mimocodeIndex = order.findIndex((entry) => entry.id === 'mimocode_local');
+    expect(mimocodeIndex).toBeGreaterThan(order.findIndex((entry) => entry.id === 'zcode_local'));
   });
 });
 

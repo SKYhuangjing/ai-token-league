@@ -393,6 +393,7 @@ const translations = {
     "desktop.sources.addHermes": "添加 Hermes 位置",
     "desktop.sources.addOpenClaw": "添加 OpenClaw 位置",
     "desktop.sources.addZCode": "添加 ZCode 位置",
+    "desktop.sources.addWorkbuddy": "添加 WorkBuddy 位置",
     "desktop.sources.addCursor": "连接 Cursor",
     "desktop.sources.manualCursorToken": "手工令牌",
     "desktop.sources.localDesc": "扫描本机使用记录，只上传每日汇总。",
@@ -490,6 +491,7 @@ const translations = {
     "desktop.sources.min": "分钟",
     "desktop.sources.save": "保存",
     "desktop.sources.detectNow": "立即检测",
+    "desktop.sources.providerList": "数据来源列表",
 
     // 桌面端 - 渲染器补充
     "desktop.renderer.currentScanDash": "当前 -",
@@ -571,6 +573,7 @@ const translations = {
     "source.hermes": "Hermes",
     "source.openclaw": "OpenClaw",
     "source.zcode": "ZCode",
+    "source.workbuddy": "WorkBuddy",
     "source.cursor": "Cursor",
 
     // 桌面端 - 渲染器补充
@@ -1402,6 +1405,7 @@ const translations = {
     "desktop.sources.addHermes": "Add Hermes location",
     "desktop.sources.addOpenClaw": "Add OpenClaw location",
     "desktop.sources.addZCode": "Add ZCode location",
+    "desktop.sources.addWorkbuddy": "Add WorkBuddy location",
     "desktop.sources.addCursor": "Connect Cursor",
     "desktop.sources.manualCursorToken": "Manual token",
     "desktop.sources.localDesc": "Scans local usage records and uploads only daily aggregates.",
@@ -1497,6 +1501,7 @@ const translations = {
     "desktop.sources.min": "min",
     "desktop.sources.save": "Save",
     "desktop.sources.detectNow": "Detect now",
+    "desktop.sources.providerList": "Provider list",
 
     // Desktop - Renderer supplement
     "desktop.renderer.currentScanDash": "Current -",
@@ -1578,6 +1583,7 @@ const translations = {
     "source.hermes": "Hermes",
     "source.openclaw": "OpenClaw",
     "source.zcode": "ZCode",
+    "source.workbuddy": "WorkBuddy",
     "source.cursor": "Cursor",
 
     // Desktop - Renderer supplement

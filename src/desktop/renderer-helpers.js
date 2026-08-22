@@ -463,7 +463,8 @@ const UI_PROVIDER_ORDER = [
   "openclaw_local",
   "hermes_local",
   "mimocode_local",
-  "zcode_local"
+  "zcode_local",
+  "workbuddy_local"
 ];
 
 export function sortProviderHealth(health = []) {
@@ -471,5 +472,31 @@ export function sortProviderHealth(health = []) {
     const ia = UI_PROVIDER_ORDER.indexOf(a.providerId);
     const ib = UI_PROVIDER_ORDER.indexOf(b.providerId);
     return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+}
+
+// Status group for the Sources screen provider nav:
+// 1 = enabled && detected && ok (healthy, green dot)
+// 2 = enabled && (not detected or not ok) (needs attention, warn dot)
+// 3 = disabled (muted, gray dot)
+// Within each group, UI_PROVIDER_ORDER wins; unknown providers go last sorted by providerId.
+export function providerStatusGroup(item) {
+  const enabled = item?.enabled !== false;
+  if (!enabled) return 3;
+  if (item?.detected && item?.ok !== false) return 1;
+  return 2;
+}
+
+export function sortProviderHealthByStatus(health = []) {
+  return [...health].sort((a, b) => {
+    const ga = providerStatusGroup(a);
+    const gb = providerStatusGroup(b);
+    if (ga !== gb) return ga - gb;
+    const ia = UI_PROVIDER_ORDER.indexOf(a.providerId);
+    const ib = UI_PROVIDER_ORDER.indexOf(b.providerId);
+    const oa = ia === -1 ? UI_PROVIDER_ORDER.length : ia;
+    const ob = ib === -1 ? UI_PROVIDER_ORDER.length : ib;
+    if (oa !== ob) return oa - ob;
+    return String(a.providerId || "").localeCompare(String(b.providerId || ""));
   });
 }

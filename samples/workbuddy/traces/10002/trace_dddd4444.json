@@ -1,0 +1,20 @@
+{
+  "trace": {
+    "traceId": "trace_dddd4444",
+    "name": "Agent workflow",
+    "workerPid": 10002,
+    "startedAt": "2026-06-08T12:00:00Z",
+    "endedAt": "2026-06-08T12:00:03Z",
+    "duration": 3000,
+    "status": "error",
+    "spanCount": 1,
+    "totalTokens": 0
+  },
+  "spans": [
+    {
+      "type": "generation",
+      "startedAt": "2026-06-08T12:00:01Z",
+      "toolOutput": "[{\"model\":\"auto\",\"usage\":{\"prompt_tokens\":900,\"completion_tokens\":100,\"total_tokens\":1000,\"prompt_tokens_details\":{\"cached_tokens\":200}}}]"
+    }
+  ]
+}

@@ -1670,6 +1670,7 @@ const TRAY_PROVIDER_NAMES: &[(&str, &str)] = &[
     ("hermes_local", "Hermes"),
     ("openclaw_local", "OpenClaw"),
     ("zcode_local", "ZCode"),
+    ("workbuddy_local", "WorkBuddy"),
     ("cursor_dashboard_usage", "Cursor"),
 ];
 

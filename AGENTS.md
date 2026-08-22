@@ -42,6 +42,8 @@ Core behavior:
 | `opencode_local` | Supported | Scans local OpenCode SQLite database. |
 | `hermes_local` | Supported | Scans local Hermes SQLite database. |
 | `openclaw_local` | Supported | Scans local OpenClaw JSONL logs. |
+| `zcode_local` | Supported | Scans local ZCode SQLite database. |
+| `workbuddy_local` | Supported | Scans local WorkBuddy trace JSON files (per-request tokens from generation spans). |
 
 Token total rule:
 

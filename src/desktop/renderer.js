@@ -32,7 +32,9 @@ import {
   normalizeUsageWorkdirs as _normalizeUsageWorkdirs,
   normalizeUsageTotal as _normalizeUsageTotal,
   reconcileHealthWithConfig as _reconcileHealthWithConfig,
-  sortProviderHealth
+  sortProviderHealth,
+  providerStatusGroup as _providerStatusGroup,
+  sortProviderHealthByStatus
 } from "./renderer-helpers.js";
 
 import {
@@ -169,7 +171,7 @@ let latestShareData = null;
 let shareCardRange = "all";
 let shareCardRefreshSeq = 0;
 let shareActionsMoveTimer = null;
-let sourcesProviderTab = "claude_code_local";
+let sourcesProviderTab = "";
 let latestSyncInfo = "";
 let pricingRefreshPromise = null;
 let mandatoryUpdateActive = false;
@@ -329,32 +331,8 @@ document.querySelectorAll("[data-wizard-sync-mode]").forEach((button) => {
 $("#wizard-api-base-url")?.addEventListener("input", renderWizardSummary);
 $("#wizard-nickname")?.addEventListener("input", renderWizardSummary);
 document.addEventListener("click", (event) => {
-  const btn = event.target.closest("#add-codex-root");
-  if (btn) run(() => addProviderRoot("codex_local"));
-});
-document.addEventListener("click", (event) => {
-  const btn = event.target.closest("#add-claude-root");
-  if (btn) run(() => addProviderRoot("claude_code_local"));
-});
-document.addEventListener("click", (event) => {
-  const btn = event.target.closest("#add-mimocode-root");
-  if (btn) run(() => addProviderRoot("mimocode_local"));
-});
-document.addEventListener("click", (event) => {
-  const btn = event.target.closest("#add-opencode-root");
-  if (btn) run(() => addProviderRoot("opencode_local"));
-});
-document.addEventListener("click", (event) => {
-  const btn = event.target.closest("#add-hermes-root");
-  if (btn) run(() => addProviderRoot("hermes_local"));
-});
-document.addEventListener("click", (event) => {
-  const btn = event.target.closest("#add-openclaw-root");
-  if (btn) run(() => addProviderRoot("openclaw_local"));
-});
-document.addEventListener("click", (event) => {
-  const btn = event.target.closest("#add-zcode-root");
-  if (btn) run(() => addProviderRoot("zcode_local"));
+  const btn = event.target.closest("[data-add-root-provider]");
+  if (btn) run(() => addProviderRoot(btn.dataset.addRootProvider));
 });
 document.addEventListener("click", (event) => {
   const btn = event.target.closest("#connect-cursor");
@@ -407,13 +385,30 @@ $("#settings-source-list").addEventListener("click", (event) => {
   if (!button) return;
   run(() => toggleSource(button.dataset.toggleSource));
 });
-$("#sources-tabs").addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-provider-tab]");
+$("#provider-nav-list").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-provider-nav]");
   if (!button) return;
-  sourcesProviderTab = button.dataset.providerTab;
-  $("#sources-tabs").querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
-  renderHealth();
+  selectProviderTab(button.dataset.providerNav);
 });
+$("#provider-nav-list").addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  const buttons = [...$("#provider-nav-list").querySelectorAll("button[data-provider-nav]")];
+  if (!buttons.length) return;
+  event.preventDefault();
+  const currentIndex = buttons.findIndex((item) => item.dataset.providerNav === sourcesProviderTab);
+  const delta = event.key === "ArrowDown" ? 1 : -1;
+  const nextIndex = currentIndex === -1 ? 0 : (currentIndex + delta + buttons.length) % buttons.length;
+  const target = buttons[nextIndex];
+  selectProviderTab(target.dataset.providerNav);
+  // renderProviderNav replaces innerHTML, so re-query the fresh node before focusing
+  $(`#provider-nav-list button[data-provider-nav="${CSS.escape(target.dataset.providerNav)}"]`)?.focus();
+});
+
+function selectProviderTab(providerId) {
+  if (!providerId) return;
+  sourcesProviderTab = providerId;
+  renderHealth();
+}
 $("#overview-range").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-range]");
   if (!button) return;
@@ -1134,6 +1129,7 @@ function sourceIconPath(providerId) {
   if (providerId === "hermes_local") return "./icons/folder-code.svg";
   if (providerId === "openclaw_local") return "./icons/folder-code.svg";
   if (providerId === "zcode_local") return "./icons/folder-code.svg";
+  if (providerId === "workbuddy_local") return "./icons/folder-code.svg";
   if (providerId === "cursor_dashboard_usage") return "./icons/database.svg";
   return "./icons/file-text.svg";
 }
@@ -3606,7 +3602,51 @@ function renderAliases() {
     : `<article class="empty-state">${t("desktop.renderer.noWorkdirs")}</article>`;
 }
 
+const PROVIDER_NAV_STATUS = { 1: "ok", 2: "warn", 3: "off" };
+
+function providerNavStatusClass(item) {
+  return PROVIDER_NAV_STATUS[_providerStatusGroup(item)] || "off";
+}
+
+function renderProviderNav() {
+  const sorted = sortProviderHealthByStatus(latestHealth);
+  if (!sorted.some((item) => item.providerId === sourcesProviderTab)) {
+    sourcesProviderTab = sorted[0]?.providerId || "";
+  }
+  $("#provider-nav-list").innerHTML = sorted
+    .map((item) => {
+      const selected = item.providerId === sourcesProviderTab;
+      const status = providerNavStatusClass(item);
+      return `<button class="provider-nav-item${selected ? " active" : ""}" data-provider-nav="${escapeHtml(item.providerId)}" data-nav-status="${status}" aria-current="${selected ? "true" : "false"}" type="button">
+        <span class="provider-nav-dot" data-dot-status="${status}" aria-hidden="true"></span>
+        <span class="provider-nav-name">${sourceName(item.providerId)}</span>
+      </button>`;
+    })
+    .join("");
+}
+
+const PROVIDER_ADD_ROOT_LABEL_KEYS = {
+  claude_code_local: "desktop.sources.addClaude",
+  codex_local: "desktop.sources.addCodex",
+  mimocode_local: "desktop.sources.addMiMoCode",
+  opencode_local: "desktop.sources.addOpenCode",
+  hermes_local: "desktop.sources.addHermes",
+  openclaw_local: "desktop.sources.addOpenClaw",
+  zcode_local: "desktop.sources.addZCode",
+  workbuddy_local: "desktop.sources.addWorkbuddy"
+};
+
+function providerAddRootButton(item) {
+  if (item.providerId === "cursor_dashboard_usage") {
+    // #connect-cursor keeps its own connectCursor() delegation; no data-add-root-provider here.
+    return `<button class="outline-button" id="connect-cursor" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCursor")}</button>`;
+  }
+  const labelKey = PROVIDER_ADD_ROOT_LABEL_KEYS[item.providerId] || "desktop.sources.addClaude";
+  return `<button class="outline-button" id="add-${escapeHtml(item.providerId)}-root" data-add-root-provider="${escapeHtml(item.providerId)}" style="padding:4px 10px;font-size:12px;" type="button">+ ${t(labelKey)}</button>`;
+}
+
 function renderHealth() {
+  renderProviderNav();
   const selectedHealth = latestHealth.filter((item) => item.providerId === sourcesProviderTab);
   const renderItems = selectedHealth.length ? selectedHealth : latestHealth;
   const html = renderItems
@@ -3616,21 +3656,7 @@ function renderHealth() {
       const autoSources = sources.filter(s => s.kind === "auto" && !s.ignored);
       const manualSources = sources.filter(s => s.kind === "manual" && !s.ignored);
       const ignoredSources = sources.filter(s => s.ignored);
-      const addBtn = item.providerId === "cursor_dashboard_usage"
-        ? `<button class="outline-button" id="connect-cursor" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCursor")}</button>`
-        : item.providerId === "codex_local"
-          ? `<button class="outline-button" id="add-codex-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addCodex")}</button>`
-          : item.providerId === "mimocode_local"
-            ? `<button class="outline-button" id="add-mimocode-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addMiMoCode")}</button>`
-            : item.providerId === "hermes_local"
-              ? `<button class="outline-button" id="add-hermes-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addHermes")}</button>`
-              : item.providerId === "openclaw_local"
-                ? `<button class="outline-button" id="add-openclaw-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addOpenClaw")}</button>`
-                : item.providerId === "opencode_local"
-                  ? `<button class="outline-button" id="add-opencode-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addOpenCode")}</button>`
-                  : item.providerId === "zcode_local"
-                    ? `<button class="outline-button" id="add-zcode-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addZCode")}</button>`
-                    : `<button class="outline-button" id="add-claude-root" style="padding:4px 10px;font-size:12px;" type="button">+ ${t("desktop.sources.addClaude")}</button>`;
+      const addBtn = providerAddRootButton(item);
       return `<article class="provider-card">
       <div class="provider-card-head">
         <div>
@@ -4677,6 +4703,7 @@ function sourceName(providerId) {
   if (providerId === "hermes_local") return t("source.hermes");
   if (providerId === "openclaw_local") return t("source.openclaw");
   if (providerId === "zcode_local") return t("source.zcode");
+  if (providerId === "workbuddy_local") return t("source.workbuddy");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

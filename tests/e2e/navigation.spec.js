@@ -17,15 +17,15 @@ test.describe('Navigation', () => {
     expect(await cards.count()).toBeGreaterThan(0);
   });
 
-  test('navigate to Sources screen shows provider tabs', async ({ page }) => {
+  test('navigate to Sources screen shows provider nav list', async ({ page }) => {
     await navigateTo(page, 'sources');
 
     await expect(page.locator('#sources')).toHaveClass(/active/);
-    // Sources tabs should list providers from mock health data
-    const tabs = page.locator('#sources-tabs [data-provider-tab]');
-    await expect(tabs.first()).toBeVisible({ timeout: 5_000 });
+    // Provider nav list should be generated from mock health data
+    const navItems = page.locator('#provider-nav-list [data-provider-nav]');
+    await expect(navItems.first()).toBeVisible({ timeout: 5_000 });
     // At least claude_code_local and codex_local
-    expect(await tabs.count()).toBeGreaterThanOrEqual(2);
+    expect(await navItems.count()).toBeGreaterThanOrEqual(2);
   });
 
   test('navigate to Settings screen shows nickname with config value', async ({ page }) => {

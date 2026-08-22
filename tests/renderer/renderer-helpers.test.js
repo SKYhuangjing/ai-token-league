@@ -14,7 +14,8 @@ import {
   trendBucketKey, emptyTrendRow, summaryLabel, summaryTitle,
   positiveInteger, normalizeTokenAggregate, normalizeBreakdownItems,
   normalizeUsageSummary, normalizeUsageTrend, normalizeUsageWorkdirs,
-  normalizeUsageTotal, reconcileHealthWithConfig
+  normalizeUsageTotal, reconcileHealthWithConfig,
+  providerStatusGroup, sortProviderHealthByStatus
 } from '../../src/desktop/renderer-helpers.js';
 
 // ── String / Number Utilities ──
@@ -790,5 +791,74 @@ describe('reconcileHealthWithConfig', () => {
     const result = reconcileHealthWithConfig(health, config);
     expect(result[0].ok).toBe(false);
     expect(result[0].detected).toBe(false);
+  });
+});
+
+describe('providerStatusGroup', () => {
+  it('groups enabled+detected+ok as healthy (1)', () => {
+    expect(providerStatusGroup({ providerId: 'codex_local', enabled: true, detected: true, ok: true })).toBe(1);
+  });
+  it('treats enabled+detected with ok undefined as healthy (1)', () => {
+    expect(providerStatusGroup({ providerId: 'codex_local', enabled: true, detected: true })).toBe(1);
+  });
+  it('groups enabled but not detected as attention (2)', () => {
+    expect(providerStatusGroup({ providerId: 'codex_local', enabled: true, detected: false, ok: false })).toBe(2);
+  });
+  it('groups enabled+detected but not ok as attention (2)', () => {
+    expect(providerStatusGroup({ providerId: 'codex_local', enabled: true, detected: true, ok: false })).toBe(2);
+  });
+  it('groups disabled as off (3) even when detected', () => {
+    expect(providerStatusGroup({ providerId: 'codex_local', enabled: false, detected: true, ok: true })).toBe(3);
+  });
+  it('treats missing enabled as enabled', () => {
+    expect(providerStatusGroup({ providerId: 'codex_local', detected: true, ok: true })).toBe(1);
+  });
+});
+
+describe('sortProviderHealthByStatus', () => {
+  it('sorts healthy before attention before disabled', () => {
+    const health = [
+      { providerId: 'mimocode_local', enabled: false, detected: true, ok: true },
+      { providerId: 'opencode_local', enabled: true, detected: false, ok: false },
+      { providerId: 'claude_code_local', enabled: true, detected: true, ok: true },
+    ];
+    const sorted = sortProviderHealthByStatus(health);
+    expect(sorted.map((item) => item.providerId)).toEqual([
+      'claude_code_local', 'opencode_local', 'mimocode_local',
+    ]);
+  });
+  it('keeps UI_PROVIDER_ORDER within the same group', () => {
+    const health = [
+      { providerId: 'zcode_local', enabled: true, detected: true, ok: true },
+      { providerId: 'claude_code_local', enabled: true, detected: true, ok: true },
+      { providerId: 'codex_local', enabled: true, detected: true, ok: true },
+    ];
+    const sorted = sortProviderHealthByStatus(health);
+    expect(sorted.map((item) => item.providerId)).toEqual([
+      'claude_code_local', 'codex_local', 'zcode_local',
+    ]);
+  });
+  it('appends unknown providers after known ones within the same group, sorted by providerId', () => {
+    const health = [
+      { providerId: 'zzz_tool_local', enabled: true, detected: true, ok: true },
+      { providerId: 'workbuddy_local', enabled: true, detected: true, ok: true },
+      { providerId: 'aaa_tool_local', enabled: true, detected: true, ok: true },
+    ];
+    const sorted = sortProviderHealthByStatus(health);
+    expect(sorted.map((item) => item.providerId)).toEqual([
+      'workbuddy_local', 'aaa_tool_local', 'zzz_tool_local',
+    ]);
+  });
+  it('does not mutate the input array', () => {
+    const health = [
+      { providerId: 'mimocode_local', enabled: false, detected: true, ok: true },
+      { providerId: 'claude_code_local', enabled: true, detected: true, ok: true },
+    ];
+    const idsBefore = health.map((item) => item.providerId).join(',');
+    sortProviderHealthByStatus(health);
+    expect(health.map((item) => item.providerId).join(',')).toBe(idsBefore);
+  });
+  it('handles empty input', () => {
+    expect(sortProviderHealthByStatus([])).toEqual([]);
   });
 });

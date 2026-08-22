@@ -205,6 +205,24 @@
       roots: ["/Users/demo/.zcode/cli"],
       sources: [{ kind: "auto", id: "/Users/demo/.zcode/cli", label: "~/.zcode/cli", path: "/Users/demo/.zcode/cli", ignored: false }],
     },
+    {
+      providerId: "workbuddy_local", toolCode: "workbuddy",
+      enabled: true, detected: true, ok: true, scannedFiles: 1,
+      roots: ["/Users/demo/.workbuddy"],
+      sources: [{ kind: "auto", id: "/Users/demo/.workbuddy", label: "~/.workbuddy", path: "/Users/demo/.workbuddy", ignored: false }],
+    },
+    {
+      providerId: "opencode_local", toolCode: "opencode",
+      enabled: true, detected: false, ok: false, scannedFiles: 0,
+      roots: [],
+      sources: [],
+    },
+    {
+      providerId: "mimocode_local", toolCode: "mimocode",
+      enabled: false, detected: true, ok: true, scannedFiles: 0,
+      roots: ["/Users/demo/.mimocode"],
+      sources: [{ kind: "auto", id: "/Users/demo/.mimocode", label: "~/.mimocode", path: "/Users/demo/.mimocode", ignored: false }],
+    },
   ];
 
   // ── Pre-computed aggregates ────────────────────────────────
