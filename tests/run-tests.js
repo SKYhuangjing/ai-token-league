@@ -1156,6 +1156,91 @@ function testHourlySnapshotMixedCaseModelMerges() {
   console.log("  testHourlySnapshotMixedCaseModelMerges passed");
 }
 
+function testHourlySnapshotSameBucketCaseCollisionSums() {
+  const tmp = path.join(os.tmpdir(), `test-hourly-case-collision-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_case_bucket", did = "d_case_bucket";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "case-bucket", identityPublicKey: "pk_case_bucket", os: "test", appVersion: "0.1.0"
+  });
+
+  // Reproduces the dev-server 2026-08-22 incident: ONE hour bucket contains both
+  // model casings for the same workdir. Item-by-item writes kept only the last
+  // variant and silently dropped the other variant's tokens; the items must sum.
+  const payload = makeHourlySnapshotPayload([
+    makeSnapshotItem({
+      hour: 15, workdirHash: "wh_control", workdirDisplayName: "control",
+      model: "glm-5.3", inputTokens: 16328591, outputTokens: 0, totalTokens: 16328591,
+      sourceFingerprint: "sf_collision_lower"
+    }),
+    makeSnapshotItem({
+      hour: 15, workdirHash: "wh_control", workdirDisplayName: "control",
+      model: "GLM-5.3", inputTokens: 5131373, outputTokens: 0, totalTokens: 5131373,
+      sourceFingerprint: "sf_collision_upper"
+    })
+  ], pid, did, { hour: 15 });
+
+  const result = store.upsertUsageBatch(payload);
+  assert.equal(result.accepted, 1, "case-colliding items must merge into one written row");
+  const hourlyRows = Object.values(store.db.usageHourly).filter((row) => row.workdirHash === "wh_control");
+  assert.equal(hourlyRows.length, 1);
+  assert.equal(hourlyRows[0].model, "glm-5.3");
+  assert.equal(hourlyRows[0].totalTokens, 21459964, "merged row must keep the SUM of both variants");
+  const dailyRow = Object.values(store.db.usageDaily).find((row) => row.workdirHash === "wh_control");
+  assert.equal(dailyRow.totalTokens, 21459964, "derived daily row must carry the summed total");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testHourlySnapshotSameBucketCaseCollisionSums passed");
+}
+
+function testHourlySnapshotPoisonedBucketHealsOnReupload() {
+  const tmp = path.join(os.tmpdir(), `test-hourly-heal-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_case_heal", did = "d_case_heal";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "case-heal", identityPublicKey: "pk_case_heal", os: "test", appVersion: "0.1.0"
+  });
+
+  const payload = makeHourlySnapshotPayload([
+    makeSnapshotItem({
+      hour: 10, workdirHash: "wh_repo", workdirDisplayName: "repo",
+      model: "glm-5.3", inputTokens: 16551461, outputTokens: 0, totalTokens: 16551461,
+      sourceFingerprint: "sf_heal_lower"
+    }),
+    makeSnapshotItem({
+      hour: 10, workdirHash: "wh_repo", workdirDisplayName: "repo",
+      model: "GLM-5.3", inputTokens: 8410422, outputTokens: 0, totalTokens: 8410422,
+      sourceFingerprint: "sf_heal_upper"
+    })
+  ], pid, did, { hour: 10 });
+  store.upsertUsageBatch(payload);
+
+  // Simulate legacy damage: the stored row keeps only the surviving variant's
+  // tokens while the bucket metadata still matches the uploaded fingerprint.
+  // A metadata-only idempotency check would no-op forever and never heal.
+  const key = Object.keys(store.db.usageHourly).find((k) => k.includes("wh_repo"));
+  const damaged = store.db.usageHourly[key];
+  store.db.usageHourly[key] = { ...damaged, inputTokens: 8410422, totalTokens: 8410422 };
+
+  const heal = store.upsertUsageBatch(payload);
+  assert.notEqual(heal.noOp, true, "metadata match must not no-op when stored rows lost tokens");
+  assert.equal(heal.accepted, 1);
+  assert.equal(store.db.usageHourly[key].totalTokens, 24961883, "re-upload must restore the summed row");
+  const healedDaily = Object.values(store.db.usageDaily).find((row) => row.workdirHash === "wh_repo");
+  assert.equal(healedDaily.totalTokens, 24961883, "derived daily row must be healed too");
+
+  // Once healed, the same upload is a stable no-op (no repair churn).
+  const again = store.upsertUsageBatch(payload);
+  assert.equal(again.noOp, true, "healed bucket must go back to no-op");
+  assert.equal(again.accepted, 1);
+  assert.equal(store.db.usageHourly[key].totalTokens, 24961883);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testHourlySnapshotPoisonedBucketHealsOnReupload passed");
+}
+
 async function testMysqlReadBackNormalizesModelCasing() {
   const store = new MySqlStore({ writeLockName: "" });
   const pid = "p_rb_case", did = "d_rb_case";
@@ -3227,6 +3312,8 @@ testBucketMetadataSchema();
 testSnapshotReplaceSemantics();
 testHourlySnapshotDerivesDailyAndProtectsFromLegacy();
 testHourlySnapshotMixedCaseModelMerges();
+testHourlySnapshotSameBucketCaseCollisionSums();
+testHourlySnapshotPoisonedBucketHealsOnReupload();
 testSnapshotWorkdirHashChange();
 testSnapshotProviderDisabled();
 testSnapshotLegacyCoexistence();

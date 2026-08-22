@@ -524,74 +524,101 @@ export class Store {
   }
 
   /// Hourly snapshot: write to usageHourly, then derive daily aggregates into usageDaily.
+  listHourlyBucketUsageRows(participantId, deviceId, day, hour, providerId) {
+    return Object.values(this.db.usageHourly || {}).filter((item) => (
+      item.participantId === participantId
+      && item.deviceId === deviceId
+      && item.day === day
+      && Number(item.hour || 0) === Number(hour || 0)
+      && item.providerId === providerId
+    ));
+  }
+
   upsertHourlySnapshotBatch(input) {
     const now = new Date().toISOString();
     const snapshot = input.snapshot;
     assertSnapshot(snapshot, input.items, input.participantId, input.deviceId);
-    const serverBucketFingerprint = computeBucketFingerprint(input.items || []);
-    const serverBucketTotalTokens = (input.items || []).reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
     const snapshotHour = snapshot.hour;
 
-    // Idempotency check
-    const existing = this.getHourlyBucketSync(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId);
-    if (existing && existing.bucketFingerprint === serverBucketFingerprint) {
-      return { accepted: existing.rowCount, rejected: 0, duplicate: true, noOp: true };
-    }
-
-    assertNoForbiddenUploadFields(input);
-    let accepted = 0;
+    // Collapse items onto their normalized hourly usage key before writing.
+    // Mixed-case model variants (GLM-5.3 vs glm-5.3) of the same hour+workdir
+    // normalize onto one key; writing item by item would keep only the last
+    // variant and silently drop the other variant's tokens.
+    const mergedByKey = new Map();
     let rejected = 0;
-    const incomingHourlyKeys = new Set();
-    const priceMap = this.priceMap();
-
-    // Write hourly rows
     for (const incoming of input.items || []) {
       try {
         const raw = normalizeUsageTotal(incoming);
         assertUsageItem(raw);
-        const workdirId = `${input.participantId}:${raw.workdirHash}`;
-        this.db.workdirs[workdirId] = {
-          id: workdirId,
-          participantId: input.participantId,
-          workdirHash: raw.workdirHash,
-          alias: raw.workdirAlias || "",
-          detectedName: raw.workdirDisplayName,
-          displayName: raw.workdirAlias || raw.workdirDisplayName,
-          sourceProvider: raw.providerId,
-          updatedAt: now,
-          lastSeenAt: now,
-          createdAt: this.db.workdirs[workdirId]?.createdAt || now
-        };
         const hKey = hourlyUsageKey(raw, input.participantId, input.deviceId);
-        incomingHourlyKeys.add(hKey);
-
-        const withCost = addCostToUsageItem(raw, priceMap);
-        this.db.usageHourly[hKey] = {
-          ...raw,
-          hour: snapshotHour,
-          inputCostUsd: withCost.inputCostUsd,
-          outputCostUsd: withCost.outputCostUsd,
-          cacheReadCostUsd: withCost.cacheReadCostUsd,
-          cacheWriteCostUsd: withCost.cacheWriteCostUsd,
-          reasoningCostUsd: withCost.reasoningCostUsd,
-          estimatedCostUsd: withCost.estimatedCostUsd,
-          costQuality: withCost.costQuality,
-          pricingVersion: withCost.pricingVersion,
-          pricingModel: withCost.pricingModel,
-          pricingSource: withCost.pricingSource || "",
-          participantId: input.participantId,
-          deviceId: input.deviceId,
-          workdirId,
-          rawSourceRef: raw.rawSourceRef || "",
-          providerVersion: raw.providerVersion || "",
-          parserVersion: raw.parserVersion || raw.providerVersion || "",
-          sourceFingerprint: raw.sourceFingerprint || "",
-          uploadedAt: now
-        };
-        accepted += 1;
+        mergedByKey.set(hKey, mergedByKey.has(hKey) ? mergeHourlyUsageRows(mergedByKey.get(hKey), raw) : raw);
       } catch {
         rejected += 1;
       }
+    }
+    const mergedItems = [...mergedByKey.values()];
+    const serverBucketFingerprint = computeBucketFingerprint(mergedItems);
+    const serverBucketTotalTokens = mergedItems.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+
+    // Idempotency check. Facts are authoritative: bucket metadata can match
+    // while the stored rows still carry legacy overwrite damage from a
+    // mixed-case collision, so a metadata match only no-ops when the stored
+    // rows also reproduce the bucket fingerprint.
+    const existing = this.getHourlyBucketSync(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId);
+    if (existing && existing.bucketFingerprint === serverBucketFingerprint) {
+      const storedRows = this.listHourlyBucketUsageRows(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId);
+      if (!storedRows.length || computeBucketFingerprint(storedRows) === serverBucketFingerprint) {
+        return { accepted: existing.rowCount, rejected: 0, duplicate: true, noOp: true };
+      }
+    }
+
+    assertNoForbiddenUploadFields(input);
+    let accepted = 0;
+    const incomingHourlyKeys = new Set();
+    const priceMap = this.priceMap();
+
+    // Write merged hourly rows
+    for (const raw of mergedItems) {
+      const workdirId = `${input.participantId}:${raw.workdirHash}`;
+      this.db.workdirs[workdirId] = {
+        id: workdirId,
+        participantId: input.participantId,
+        workdirHash: raw.workdirHash,
+        alias: raw.workdirAlias || "",
+        detectedName: raw.workdirDisplayName,
+        displayName: raw.workdirAlias || raw.workdirDisplayName,
+        sourceProvider: raw.providerId,
+        updatedAt: now,
+        lastSeenAt: now,
+        createdAt: this.db.workdirs[workdirId]?.createdAt || now
+      };
+      const hKey = hourlyUsageKey(raw, input.participantId, input.deviceId);
+      incomingHourlyKeys.add(hKey);
+
+      const withCost = addCostToUsageItem(raw, priceMap);
+      this.db.usageHourly[hKey] = {
+        ...raw,
+        hour: snapshotHour,
+        inputCostUsd: withCost.inputCostUsd,
+        outputCostUsd: withCost.outputCostUsd,
+        cacheReadCostUsd: withCost.cacheReadCostUsd,
+        cacheWriteCostUsd: withCost.cacheWriteCostUsd,
+        reasoningCostUsd: withCost.reasoningCostUsd,
+        estimatedCostUsd: withCost.estimatedCostUsd,
+        costQuality: withCost.costQuality,
+        pricingVersion: withCost.pricingVersion,
+        pricingModel: withCost.pricingModel,
+        pricingSource: withCost.pricingSource || "",
+        participantId: input.participantId,
+        deviceId: input.deviceId,
+        workdirId,
+        rawSourceRef: raw.rawSourceRef || "",
+        providerVersion: raw.providerVersion || "",
+        parserVersion: raw.parserVersion || raw.providerVersion || "",
+        sourceFingerprint: raw.sourceFingerprint || "",
+        uploadedAt: now
+      };
+      accepted += 1;
     }
 
     // Cloud provider cross-device dedup: remove other-device rows with same natural key
@@ -2523,6 +2550,27 @@ function normalizeUsageTotal(item) {
     ...item,
     model: normalizeUsageModel(item.model),
     totalTokens: displayTotalTokens(item)
+  };
+}
+
+/// Merge two normalized usage items that share one usage key (mixed-case model
+/// variants of the same bucket): token fields sum, while descriptive fields come
+/// from the dominant contributor so the merged row is independent of item order.
+function mergeHourlyUsageRows(a, b) {
+  const aTotal = Number(a.totalTokens || 0);
+  const bTotal = Number(b.totalTokens || 0);
+  const dominant = bTotal > aTotal
+    || (bTotal === aTotal && String(b.sourceFingerprint || "") < String(a.sourceFingerprint || ""))
+    ? b
+    : a;
+  return {
+    ...dominant,
+    inputTokens: Number(a.inputTokens || 0) + Number(b.inputTokens || 0),
+    outputTokens: Number(a.outputTokens || 0) + Number(b.outputTokens || 0),
+    cacheReadTokens: Number(a.cacheReadTokens || 0) + Number(b.cacheReadTokens || 0),
+    cacheWriteTokens: Number(a.cacheWriteTokens || 0) + Number(b.cacheWriteTokens || 0),
+    reasoningTokens: Number(a.reasoningTokens || 0) + Number(b.reasoningTokens || 0),
+    totalTokens: aTotal + bTotal
   };
 }
 
