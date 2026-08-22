@@ -6,6 +6,21 @@
 
 ---
 
+## [0.7.11] - 2026-08-22
+
+### 新增
+
+- [Desktop] 新增 WorkBuddy 本地数据源：扫描本机 WorkBuddy trace 记录，按请求口径统计 token（输入、输出、缓存读、推理），从会话元数据归属工作目录，自动识别 `~/.workbuddy` 目录（支持 `WORKBUDDY_CONFIG_DIR` 覆盖）。
+
+### 变更
+
+- [Desktop] 来源页改版：横向 provider tab 条改为按状态自动排序的来源列表（健康优先，其次警告，最后已禁用）+ 详情面板，选中态为整宽白底，支持键盘上下导航，窄窗口自动切换堆叠布局。
+- [Desktop] `npm run verify:ccusage` 现在包含 WorkBuddy 用量校验，将采集结果与本地 trace 的独立重算结果逐日对账。
+
+### 修复
+
+- [Desktop] 批量上传不再因 collation 等价的使用键失败，同批次的失败 bucket 不再阻塞其他无关 bucket。
+
 ## [0.7.10] - 2026-08-16
 
 ### 新增

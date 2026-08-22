@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.11] - 2026-08-22
+
+### Added
+
+- [Desktop] Added WorkBuddy as a supported local usage source: scans local WorkBuddy trace records with per-request token accounting (input, output, cache read, reasoning), workdir attribution from session metadata, and automatic detection of the `~/.workbuddy` directory (honoring `WORKBUDDY_CONFIG_DIR`).
+
+### Changed
+
+- [Desktop] Redesigned the Sources screen: the horizontal provider tab bar is replaced by a status-sorted provider list (healthy first, then warning, then disabled) with a detail panel, full-width white selected state, keyboard navigation, and a responsive stacked layout on narrow windows.
+- [Desktop] WorkBuddy usage verification is now part of `npm run verify:ccusage`, comparing collector output against an independent recomputation of local traces.
+
+### Fixed
+
+- [Desktop] Batch upload no longer fails on collation-equivalent usage keys, and failed buckets no longer block unrelated buckets in the same batch.
+
 ## [0.7.10] - 2026-08-16
 
 ### Added
