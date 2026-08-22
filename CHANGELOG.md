@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.12] - 2026-08-22
+
+### Added
+
+- [Desktop] Added DeepSeek Harness (dsh) as a supported local usage source: scans local dsh session logs (`~/.dsh/sessions`, honoring `DSH_HOME`), decoding the zstd-compressed JSONL event log and counting per-call token usage (input, output, cache read/write, reasoning) from assistant messages and compaction summaries, with fork/resume deduplication and a hard gate on unsupported session format versions.
+- [Web] The download page now lists every supported usage source as chips with per-source explanations, plus a one-line privacy intro: local scans only, signed daily aggregates uploaded.
+
+### Fixed
+
+- E2E share-card save assertion no longer races the modal's automatic close under the full parallel suite; it waits for the auto-close and asserts the persisted save state instead.
+
 ## [0.7.11] - 2026-08-22
 
 ### Added
