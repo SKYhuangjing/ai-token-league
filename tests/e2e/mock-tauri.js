@@ -70,7 +70,6 @@
     apiBaseUrl: "",
     language: cfg.language,
     theme: cfg.theme,
-    showRawTokens: false,
     showEstimatedCost: Boolean(cfg.showEstimatedCost),
     refreshIntervalMinutes: 15,
     launchAtLogin: false,

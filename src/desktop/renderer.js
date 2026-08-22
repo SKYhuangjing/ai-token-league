@@ -6,7 +6,7 @@ import { initI18n, setLang, t, getCurrentLang, createLangSwitcher, bindLangSwitc
 
 import {
   escapeHtml as _escapeHtml, cssEscape as _cssEscape, clampHour as _clampHour,
-  formatNumber as _formatNumber, formatHourLabel as _formatHourLabel,
+  formatHourLabel as _formatHourLabel,
   formatTime as _formatTime, formatDateTime as _formatDateTime,
   formatBytes as _formatBytes, formatDate as _formatDate,
   formatTrendPeriod as _formatTrendPeriod, formatAxisLabel as _formatAxisLabel,
@@ -48,7 +48,8 @@ import {
   groupTrend as _groupTrend, groupWorkdirs as _groupWorkdirs,
   groupWorkdirDetails as _groupWorkdirDetails, groupDailyRows as _groupDailyRows,
   aggregateComposition as _aggregateComposition,
-  aggregatePeriodRow as _aggregatePeriodRow
+  aggregatePeriodRow as _aggregatePeriodRow,
+  buildProviderOverviewIndex as _buildProviderOverviewIndex
 } from "./renderer-data.js";
 
 import {
@@ -61,6 +62,7 @@ import {
   renderCompactBreakdown as _renderCompactBreakdown,
   sourceSwitchButton as _sourceSwitchButton,
   updateSourceSwitchButton as _updateSourceSwitchButton,
+  renderProviderOverview as _renderProviderOverview,
   renderTrendDashboard as _renderTrendDashboard,
   renderTrendSelection as _renderTrendSelection,
   renderTrendDetailHero as _renderTrendDetailHero,
@@ -471,9 +473,6 @@ document.querySelectorAll(".save-settings").forEach((button) => button.addEventL
 })));
 
 // instant_autosave: display preferences
-$("#showRawTokens").addEventListener("change", async () => {
-  await saveInstantPreference("showRawTokens", $("#showRawTokens").checked);
-});
 $("#showEstimatedCost").addEventListener("change", async () => {
   await saveInstantPreference("showEstimatedCost", $("#showEstimatedCost").checked);
 });
@@ -2680,7 +2679,6 @@ function renderConfig(config) {
   if (config?.nickname && $("#nickname")) $("#nickname").value = config.nickname;
   if ($("#apiBaseUrl")) $("#apiBaseUrl").value = config?.apiBaseUrl ?? "";
   if ($("#showEstimatedCost")) $("#showEstimatedCost").checked = config?.showEstimatedCost ?? false;
-  if ($("#showRawTokens")) $("#showRawTokens").checked = config?.showRawTokens ?? false;
   const theme = normalizeTheme(config?.theme || document.documentElement.dataset.themePreference || storedThemePreference());
   applyTheme(theme);
   storeThemePreference(theme);
@@ -3649,6 +3647,11 @@ function providerAddRootButton(item) {
 
 function renderHealth() {
   renderProviderNav();
+  // One index pass feeds every provider card; capped marks datasets that
+  // exceeded FULL_USAGE_RENDER_CACHE_LIMIT so the overview degrades instead
+  // of showing misleading zeros.
+  const overviewCapped = allUsage.length === 0 && usageQueryState.lastRowCount > 0;
+  const overviewIndex = _buildProviderOverviewIndex(allUsage, localDay());
   const selectedHealth = latestHealth.filter((item) => item.providerId === sourcesProviderTab);
   const renderItems = selectedHealth.length ? selectedHealth : latestHealth;
   const html = renderItems
@@ -3673,7 +3676,8 @@ function renderHealth() {
       </div>
       ${item.providerId === "cursor_dashboard_usage" ? renderCursorTokenSummary(latestConfig?.cursorDashboardUsage) : ""}
       ${renderSourceRows(autoSources, manualSources, ignoredSources, item.providerId)}
-    </article>`;
+    </article>
+    ${_renderProviderOverview(overviewIndex.get(item.providerId), item.providerId, { capped: overviewCapped, lang: getCurrentLang(), t })}`;
     })
     .join("");
   $("#settings-source-list").innerHTML = html;
@@ -4742,7 +4746,6 @@ function setSaveMessage(message, tone = "") {
 }
 
 const normalizeApiBaseUrl = _normalizeApiBaseUrl;
-const formatNumber = _formatNumber;
 const normalizeMissingPriceModels = _normalizeMissingPriceModels;
 const renderCost = _renderCost;
 const renderCostAmount = _renderCostAmount;
@@ -4860,7 +4863,7 @@ const daysForLastWeeks = _daysForLastWeeks;
 const daysForLastMonths = _daysForLastMonths;
 
 function formatToken(value) {
-  return latestConfig?.showRawTokens ? _formatNumber(value) : localeTokenCompact(value);
+  return localeTokenCompact(value);
 }
 
 function metricTitle(row) {

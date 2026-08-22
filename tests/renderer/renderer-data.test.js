@@ -7,6 +7,7 @@ import {
   groupBy, groupProviders, groupByGrain, groupByHour,
   groupTrend, groupWorkdirs, groupWorkdirDetails, groupDailyRows,
   aggregateComposition, aggregatePeriodRow,
+  buildProviderOverviewIndex,
   normalizeUsageSummary, normalizeUsageTrend, normalizeUsageWorkdirs,
   normalizeUsageTotal, reconcileHealthWithConfig
 } from '../../src/desktop/renderer-data.js';
@@ -655,12 +656,12 @@ describe('groupTrend', () => {
     expect(result).toHaveLength(0);
   });
   it('groups by week with weekly view', () => {
-    const items = [makeItem('2026-05-18'), makeItem('2026-05-20')];
+    const items = [makeItem(localDayOffset(-7)), makeItem(localDayOffset(-14))];
     const result = groupTrend(items, { trendView: 'weekly' });
     expect(result.length).toBeGreaterThan(0);
   });
   it('groups by month with monthly view', () => {
-    const items = [makeItem('2026-03-15'), makeItem('2026-05-20')];
+    const items = [makeItem(localDayOffset(-30)), makeItem(localDayOffset(-60))];
     const result = groupTrend(items, { trendView: 'monthly' });
     expect(result.length).toBeGreaterThan(0);
   });
@@ -695,5 +696,131 @@ describe('re-exported normalization', () => {
   it('reconcileHealthWithConfig is available', () => {
     const result = reconcileHealthWithConfig([], {});
     expect(result).toEqual([]);
+  });
+});
+
+// ── buildProviderOverviewIndex ──
+
+describe('buildProviderOverviewIndex', () => {
+  const TODAY = '2026-08-22'; // fixed literal days keep assertions timezone-free
+  const makeItem = (day, providerId, model, parts = {}) => {
+    const inputTokens = parts.inputTokens ?? 100;
+    const outputTokens = parts.outputTokens ?? 50;
+    const cacheReadTokens = parts.cacheReadTokens ?? 20;
+    const cacheWriteTokens = parts.cacheWriteTokens ?? 10;
+    return {
+      day, providerId, model,
+      inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
+      totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+    };
+  };
+
+  it('returns an empty map for empty items', () => {
+    const index = buildProviderOverviewIndex([], TODAY);
+    expect(index.size).toBe(0);
+  });
+
+  it('treats null items like empty input', () => {
+    const index = buildProviderOverviewIndex(null, TODAY);
+    expect(index.size).toBe(0);
+  });
+
+  it('aggregates totals, composition and models for a single provider', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-22', 'claude_code_local', 'claude-sonnet-4'),
+      makeItem('2026-08-21', 'claude_code_local', 'claude-sonnet-4')
+    ], TODAY);
+    const entry = index.get('claude_code_local');
+    expect(entry.totalTokens).toBe(360);
+    expect(entry.todayTokens).toBe(180);
+    expect(entry.composition).toEqual({ inputTokens: 200, outputTokens: 100, cacheReadTokens: 40, cacheWriteTokens: 20 });
+    expect(entry.models).toEqual([{ model: 'claude-sonnet-4', totalTokens: 360 }]);
+    expect(entry.hasData).toBe(true);
+  });
+
+  it('keeps the 7-day window inclusive of today and 6 days ago, exclusive of 7 days ago', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-22', 'codex_local', 'gpt-4o'), // today — in window
+      makeItem('2026-08-16', 'codex_local', 'gpt-4o'), // 6 days ago — in window
+      makeItem('2026-08-15', 'codex_local', 'gpt-4o')  // 7 days ago — out of window
+    ], TODAY);
+    const entry = index.get('codex_local');
+    expect(entry.todayTokens).toBe(180);
+    expect(entry.weekTokens).toBe(360);
+    expect(entry.totalTokens).toBe(540);
+    expect(entry.activeDays).toBe(3);
+  });
+
+  it('counts today usage that happened 7+ days ago as outside the week window', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-15', 'codex_local', 'gpt-4o')
+    ], TODAY);
+    expect(index.get('codex_local').weekTokens).toBe(0);
+    expect(index.get('codex_local').totalTokens).toBe(180);
+  });
+
+  it('deduplicates active days across multiple items on the same day', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-22', 'zcode_local', 'glm-5'),
+      makeItem('2026-08-22', 'zcode_local', 'glm-5'),
+      makeItem('2026-08-20', 'zcode_local', 'glm-5')
+    ], TODAY);
+    const entry = index.get('zcode_local');
+    expect(entry.activeDays).toBe(2);
+    expect(entry.todayTokens).toBe(360);
+    expect(entry.totalTokens).toBe(540);
+  });
+
+  it('ignores zero-token items for active days, last used day and models', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-22', 'hermes_local', 'mimo', { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+    ], TODAY);
+    const entry = index.get('hermes_local');
+    expect(entry.activeDays).toBe(0);
+    expect(entry.lastUsedDay).toBeNull();
+    expect(entry.models).toEqual([]);
+    expect(entry.hasData).toBe(false);
+  });
+
+  it('sorts models by totalTokens descending and maps empty model names to unknown', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-22', 'workbuddy_local', 'gpt-4o-mini'),
+      { ...makeItem('2026-08-22', 'workbuddy_local', 'gpt-4o'), inputTokens: 400, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 500 },
+      makeItem('2026-08-21', 'workbuddy_local', '')
+    ], TODAY);
+    const entry = index.get('workbuddy_local');
+    expect(entry.models.map((m) => m.model)).toEqual(['gpt-4o', 'gpt-4o-mini', 'unknown']);
+    expect(entry.models[0].totalTokens).toBe(500);
+  });
+
+  it('reports the latest usage day as lastUsedDay', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-07-01', 'dsh_local', 'deepseek-chat'),
+      makeItem('2026-08-10', 'dsh_local', 'deepseek-chat')
+    ], TODAY);
+    expect(index.get('dsh_local').lastUsedDay).toBe('2026-08-10');
+  });
+
+  it('keeps composition equal to totalTokens for normalized items', () => {
+    const items = [
+      makeItem('2026-08-22', 'opencode_local', 'qwen3', { inputTokens: 1234, outputTokens: 567, cacheReadTokens: 89, cacheWriteTokens: 10 }),
+      makeItem('2026-08-01', 'opencode_local', 'qwen3', { inputTokens: 11, outputTokens: 22, cacheReadTokens: 33, cacheWriteTokens: 44 })
+    ];
+    const entry = buildProviderOverviewIndex(items, TODAY).get('opencode_local');
+    const sum = entry.composition.inputTokens + entry.composition.outputTokens + entry.composition.cacheReadTokens + entry.composition.cacheWriteTokens;
+    expect(sum).toBe(entry.totalTokens);
+  });
+
+  it('does not mix usage across providers', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-22', 'claude_code_local', 'claude-sonnet-4'),
+      makeItem('2026-08-22', 'codex_local', 'gpt-4o'),
+      makeItem('2026-08-22', 'zcode_local', 'glm-5')
+    ], TODAY);
+    expect(index.size).toBe(3);
+    expect(index.get('claude_code_local').totalTokens).toBe(180);
+    expect(index.get('codex_local').totalTokens).toBe(180);
+    expect(index.get('zcode_local').totalTokens).toBe(180);
+    expect(index.has('mimocode_local')).toBe(false);
   });
 });

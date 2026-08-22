@@ -1,6 +1,6 @@
 // E2E: zh-CN locale — verify Chinese UI renders correctly
 import { test, expect } from './mock-setup-zh.js';
-import { waitForScanComplete, getTokenValue } from './helpers.js';
+import { waitForScanComplete, getTokenValue, navigateTo } from './helpers.js';
 
 test.describe('i18n zh-CN', () => {
   test.beforeEach(async ({ page }) => {
@@ -30,5 +30,21 @@ test.describe('i18n zh-CN', () => {
     const text = await todayBtn.textContent();
     expect(text.trim().length).toBeGreaterThan(0);
     expect(text).not.toMatch(/^desktop\./);
+  });
+
+  test('sources provider overview shows Chinese copy', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    // claude_code_local is the default selected healthy provider with usage
+    const overview = page.locator('#settings-source-list .provider-overview').first();
+    await expect(overview).toBeVisible({ timeout: 5_000 });
+    await expect(overview.locator('.provider-overview-title')).toContainText('数据概览');
+    await expect(overview.locator('.provider-overview-stats')).toContainText('累计用量');
+    await expect(overview.locator('.provider-overview-stats')).toContainText('近 7 天');
+    await expect(overview.locator('.provider-overview-stats')).toContainText('覆盖天数');
+    await expect(overview.locator('.provider-overview-stats')).toContainText('1 天');
+    await expect(overview.locator('.provider-overview-legend')).toContainText('输入');
+    await expect(overview.locator('.provider-overview-models')).toContainText('模型用量');
+    await expect(overview.locator('.provider-overview-models')).toContainText('最近使用');
   });
 });

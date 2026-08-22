@@ -2317,7 +2317,6 @@ mod tests {
             language: "zh-CN".to_string(),
             theme: "light".to_string(),
             show_estimated_cost: true,
-            show_raw_tokens: false,
             auto_refresh_enabled: true,
             silent_update_mode: "auto_download".to_string(),
             refresh_interval_minutes: 15,

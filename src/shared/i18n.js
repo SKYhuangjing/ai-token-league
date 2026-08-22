@@ -429,6 +429,16 @@ const translations = {
     "desktop.cursorConnect.unavailable": "当前客户端不支持连接 Cursor。",
     "desktop.sources.locationOne": "1 个位置",
     "desktop.sources.locations": "{count} 个位置",
+    "desktop.sources.overviewTitle": "数据概览",
+    "desktop.sources.overviewTotal": "累计用量",
+    "desktop.sources.overviewToday": "今日",
+    "desktop.sources.overviewWeek": "近 7 天",
+    "desktop.sources.overviewActiveDays": "覆盖天数",
+    "desktop.sources.overviewDaysUnit": "天",
+    "desktop.sources.overviewModels": "模型用量",
+    "desktop.sources.overviewLastUsed": "最近使用",
+    "desktop.sources.overviewEmpty": "暂无用量数据，完成一次扫描后显示",
+    "desktop.sources.overviewCapped": "数据量较大，概览暂不可用",
 
     // 桌面端 - 云端设置
     "desktop.cloud.title": "云端连接",
@@ -466,7 +476,6 @@ const translations = {
 
     // 桌面端 - 显示选项
     "desktop.display.showEstCost": "显示预估成本",
-    "desktop.display.showRawTokens": "显示原始令牌数",
     "desktop.display.language": "语言",
     "desktop.display.theme": "主题",
     "desktop.display.themeDesc": "选择白底、黑底或跟随系统。",
@@ -1455,6 +1464,16 @@ const translations = {
     "desktop.cursorConnect.unavailable": "This client does not support Cursor connect.",
     "desktop.sources.locationOne": "1 location",
     "desktop.sources.locations": "{count} locations",
+    "desktop.sources.overviewTitle": "Data overview",
+    "desktop.sources.overviewTotal": "Total",
+    "desktop.sources.overviewToday": "Today",
+    "desktop.sources.overviewWeek": "Last 7 days",
+    "desktop.sources.overviewActiveDays": "Active days",
+    "desktop.sources.overviewDaysUnit": "days",
+    "desktop.sources.overviewModels": "Model usage",
+    "desktop.sources.overviewLastUsed": "Last used",
+    "desktop.sources.overviewEmpty": "No usage data yet; run a scan to populate",
+    "desktop.sources.overviewCapped": "Dataset too large for this overview",
 
     // Desktop - Cloud Settings
     "desktop.cloud.title": "Cloud connection",
@@ -1492,7 +1511,6 @@ const translations = {
 
     // Desktop - Display Options
     "desktop.display.showEstCost": "Show estimated cost",
-    "desktop.display.showRawTokens": "Show raw token numbers",
     "desktop.display.language": "Language",
     "desktop.display.theme": "Theme",
     "desktop.display.themeDesc": "Choose light, dark, or follow the system.",

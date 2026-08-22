@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { aggregateTimeSeriesByWeek, renderBarChart, smoothLinePath, sourceName } from "../../src/shared/chart-helpers.js";
+import {
+  aggregateTimeSeriesByWeek, renderBarChart, smoothLinePath, sourceName,
+  providerSourceColor, COMPOSITION_PARTS
+} from "../../src/shared/chart-helpers.js";
 
 describe("shared sourceName", () => {
   it("maps all supported local providers", () => {
@@ -10,6 +13,40 @@ describe("shared sourceName", () => {
     expect(sourceName("zcode_local")).toBe("ZCode");
     expect(sourceName("workbuddy_local")).toBe("WorkBuddy");
     expect(sourceName("dsh_local")).toBe("DeepSeek Harness");
+  });
+});
+
+describe("providerSourceColor", () => {
+  it("gives the seven supplementary providers dedicated palette colors", () => {
+    expect(providerSourceColor("opencode_local")).toBe("#34558b");
+    expect(providerSourceColor("mimocode_local")).toBe("#a63d40");
+    expect(providerSourceColor("hermes_local")).toBe("#6b7a3f");
+    expect(providerSourceColor("openclaw_local")).toBe("#c96a2b");
+    expect(providerSourceColor("zcode_local")).toBe("#4a4e8f");
+    expect(providerSourceColor("workbuddy_local")).toBe("#a84a7c");
+    expect(providerSourceColor("dsh_local")).toBe("#2a6f8f");
+  });
+  it("keeps the original three providers and falls back to other", () => {
+    expect(providerSourceColor("claude_code_local")).toBe("#1f6f66");
+    expect(providerSourceColor("codex_local")).toBe("#b67810");
+    expect(providerSourceColor("cursor_dashboard_usage")).toBe("#6b5b95");
+    expect(providerSourceColor("mystery_provider")).toBe("#8a8478");
+    expect(providerSourceColor("zcode_local", 1)).toBe("#63679e");
+    expect(providerSourceColor("zcode_local", 2)).toBe("#8286b8");
+  });
+});
+
+describe("COMPOSITION_PARTS", () => {
+  it("keeps the four composition colors unchanged", () => {
+    expect(COMPOSITION_PARTS.map((part) => part.color)).toEqual(["#0f4f4c", "#1c7570", "#35aaa0", "#8fddd4"]);
+  });
+  it("exposes keys and i18n label keys for reuse", () => {
+    expect(COMPOSITION_PARTS.map((part) => part.key)).toEqual([
+      "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"
+    ]);
+    expect(COMPOSITION_PARTS.map((part) => part.labelKey)).toEqual([
+      "common.input", "common.output", "common.cacheRead", "common.cacheWrite"
+    ]);
   });
 });
 

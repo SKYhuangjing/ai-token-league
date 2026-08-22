@@ -3,7 +3,7 @@
 
 import { addCostToUsageItem, aggregateCost } from "../shared/pricing.js";
 import { tokenCompositionSummary } from "../shared/composition.js";
-import { localDay } from "../shared/date.js";
+import { addDays, localDay } from "../shared/date.js";
 import {
   bucketForDay, trailingDays, emptyTrendRow, sortedBreakdown, finalizeCostBreakdown,
   addCostBreakdownItem, hasPositiveUsage, normalizeApiBaseUrl, clampHour, formatHourLabel,
@@ -88,6 +88,58 @@ export function sourceSummary(item, t = (k) => k) {
 }
 
 // ── Range / Label ──
+
+// Single pass over all usage items building the per-provider overview index
+// shared by every provider card on the Sources screen. Days are ISO strings,
+// so window membership is a plain string range check against [today-6, today].
+export function buildProviderOverviewIndex(items, todayDay = localDay()) {
+  const index = new Map();
+  const weekStartDay = addDays(todayDay, -6);
+  for (const item of items || []) {
+    const providerId = item.providerId || "unknown";
+    const entry = index.get(providerId) || {
+      totalTokens: 0,
+      todayTokens: 0,
+      weekTokens: 0,
+      activeDays: 0,
+      lastUsedDay: null,
+      composition: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      modelMap: new Map(),
+      activeDaySet: new Set()
+    };
+    const totalTokens = Number(item.totalTokens || 0);
+    const day = item.day || "";
+    entry.totalTokens += totalTokens;
+    entry.composition.inputTokens += Number(item.inputTokens || 0);
+    entry.composition.outputTokens += Number(item.outputTokens || 0);
+    entry.composition.cacheReadTokens += Number(item.cacheReadTokens || 0);
+    entry.composition.cacheWriteTokens += Number(item.cacheWriteTokens || 0);
+    if (day === todayDay) entry.todayTokens += totalTokens;
+    if (day >= weekStartDay && day <= todayDay) entry.weekTokens += totalTokens;
+    if (totalTokens > 0) {
+      entry.activeDaySet.add(day);
+      if (!entry.lastUsedDay || day > entry.lastUsedDay) entry.lastUsedDay = day;
+      const model = item.model || "unknown";
+      entry.modelMap.set(model, (entry.modelMap.get(model) || 0) + totalTokens);
+    }
+    index.set(providerId, entry);
+  }
+  for (const [providerId, entry] of index) {
+    index.set(providerId, {
+      totalTokens: entry.totalTokens,
+      todayTokens: entry.todayTokens,
+      weekTokens: entry.weekTokens,
+      activeDays: entry.activeDaySet.size,
+      lastUsedDay: entry.lastUsedDay,
+      composition: entry.composition,
+      models: [...entry.modelMap.entries()]
+        .map(([model, totalTokens]) => ({ model, totalTokens }))
+        .sort((a, b) => b.totalTokens - a.totalTokens),
+      hasData: entry.totalTokens > 0
+    });
+  }
+  return index;
+}
 
 export function daysForRange(range) {
   if (range === "all") return null;

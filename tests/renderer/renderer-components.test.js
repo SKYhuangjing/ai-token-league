@@ -6,12 +6,14 @@ import {
   renderCompositionTiles, renderMiniMeters, renderDetailMeters,
   renderWorkdirCards, renderSparkBarValue, renderCompactBreakdown,
   sourceSwitchButton, updateSourceSwitchButton,
+  renderProviderOverview,
   renderTrendDashboard, renderTrendSelection,
   renderTrendDetailHero, renderTrendDetailBreakdown
 } from '../../src/desktop/renderer-components.js';
 
 const t = (k) => ({
   'common.cache': 'Cache', 'common.input': 'Input', 'common.output': 'Output',
+  'common.cacheRead': 'Cache read', 'common.cacheWrite': 'Cache write',
   'common.cost': 'Cost', 'common.estimated': 'Estimated',
   'desktop.overview.totalTokens': 'Total Tokens',
   'desktop.renderer.topModels': 'Top Models', 'desktop.renderer.topWorkdirs': 'Top Workdirs',
@@ -25,6 +27,13 @@ const t = (k) => ({
   'desktop.trend.hourlyDetail': 'Hourly', 'desktop.renderer.missing': 'missing',
   'desktop.renderer.unknownPrice': 'unknown', 'desktop.renderer.noPricingVersion': 'no version',
   'desktop.sources.disable': 'Disable', 'desktop.sources.enable': 'Enable',
+  'desktop.sources.overviewTitle': 'Data overview',
+  'desktop.sources.overviewTotal': 'Total', 'desktop.sources.overviewToday': 'Today',
+  'desktop.sources.overviewWeek': 'Last 7 days', 'desktop.sources.overviewActiveDays': 'Active days',
+  'desktop.sources.overviewDaysUnit': 'days', 'desktop.sources.overviewModels': 'Model usage',
+  'desktop.sources.overviewLastUsed': 'Last used',
+  'desktop.sources.overviewEmpty': 'No usage data yet; run a scan to populate',
+  'desktop.sources.overviewCapped': 'Dataset too large for this overview',
   'desktop.renderer.groupedBy': 'grouped by', 'desktop.renderer.workdir': 'Workdir',
   'desktop.renderer.model': 'Model', 'desktop.today.estCost': 'Est. Cost',
 }[k] || k);
@@ -35,11 +44,6 @@ describe('formatToken', () => {
   it('formats compact by default', () => {
     const result = formatToken(12345, {});
     expect(result).toBeTruthy();
-  });
-  it('formats raw when showRawTokens', () => {
-    const result = formatToken(12345, { showRawTokens: true });
-    expect(result).toContain('12');
-    expect(result).toContain('345');
   });
   it('formats with default opts (no args)', () => {
     const result = formatToken(12345);
@@ -338,5 +342,72 @@ describe('renderTrendDetailBreakdown', () => {
     expect(html).toContain('hour-detail-grid');
     expect(html).toContain('10:00');
     expect(html).toContain('14:00');
+  });
+});
+
+// ── Provider Overview ──
+
+describe('renderProviderOverview', () => {
+  const overview = {
+    totalTokens: 8500,
+    todayTokens: 8500,
+    weekTokens: 8500,
+    activeDays: 2,
+    lastUsedDay: '2026-08-22',
+    composition: { inputTokens: 5000, outputTokens: 2000, cacheReadTokens: 1000, cacheWriteTokens: 500 },
+    models: [
+      { model: 'claude-sonnet-4', totalTokens: 7500 },
+      { model: 'claude-opus-4', totalTokens: 800 },
+      { model: 'claude-haiku', totalTokens: 200 }
+    ],
+    hasData: true
+  };
+
+  it('renders title, four stat cells and compact numbers', () => {
+    const html = renderProviderOverview(overview, 'claude_code_local', { t });
+    expect(html).toContain('provider-overview-title');
+    expect(html).toContain('Data overview');
+    expect(html).toContain('provider-overview-stats');
+    expect((html.match(/class="provider-overview-stat"/g) || []).length).toBe(4);
+    expect(html).toContain('8.5K');
+    expect(html).toContain('2 days');
+  });
+  it('renders the four-segment composition bar and legend', () => {
+    const html = renderProviderOverview(overview, 'claude_code_local', { t });
+    expect(html).toContain('provider-overview-bar');
+    expect(html).toContain('background:#0f4f4c');
+    expect(html).toContain('background:#1c7570');
+    expect(html).toContain('background:#35aaa0');
+    expect(html).toContain('background:#8fddd4');
+    expect(html).toContain('provider-overview-legend');
+    expect(html).toContain('Cache read');
+    expect(html).toContain('59%');
+  });
+  it('renders the full model usage list with homepage meter rows and the last used day', () => {
+    const html = renderProviderOverview(overview, 'claude_code_local', { t });
+    expect(html).toContain('Model usage');
+    expect(html).toContain('claude-sonnet-4');
+    expect(html).toContain('claude-opus-4');
+    expect(html).toContain('claude-haiku');
+    expect(html).not.toContain('+1');
+    const rows = html.match(/class="mini-meter-row"/g) || [];
+    expect(rows.length).toBe((overview.models || []).length);
+    expect(html).toContain('meter-val-top');
+    expect(html).toContain('meter-pct');
+    expect(html).toContain('88%');
+    expect(html).toContain('Last used');
+    expect(html).toContain('2026-08-22');
+  });
+  it('renders the empty note when there is no data', () => {
+    const html = renderProviderOverview(undefined, 'zcode_local', { t });
+    expect(html).toContain('provider-overview-note');
+    expect(html).toContain('No usage data yet; run a scan to populate');
+    expect(html).not.toContain('provider-overview-stats');
+  });
+  it('renders the capped note instead of misleading zeros', () => {
+    const html = renderProviderOverview(undefined, 'zcode_local', { capped: true, t });
+    expect(html).toContain('Dataset too large for this overview');
+    expect(html).not.toContain('No usage data yet');
+    expect(html).not.toContain('provider-overview-stats');
   });
 });

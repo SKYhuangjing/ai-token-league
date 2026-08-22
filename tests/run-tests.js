@@ -4943,7 +4943,6 @@ function testDesktopHtmlSettingsTabs() {
   }
   assert.match(html, /id="apiBaseUrl"/);
   assert.match(html, /id="launchAtLogin"/);
-  assert.match(html, /id="showRawTokens"/);
   console.log("  testDesktopHtmlSettingsTabs passed");
 }
 

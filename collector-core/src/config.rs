@@ -197,8 +197,6 @@ pub struct AppConfig {
     pub theme: String,
     #[serde(default)]
     pub show_estimated_cost: bool,
-    #[serde(default)]
-    pub show_raw_tokens: bool,
     #[serde(default = "default_true")]
     pub auto_refresh_enabled: bool,
     #[serde(default = "default_silent_update_mode")]
@@ -416,7 +414,6 @@ pub fn load_build_preset() -> serde_json::Value {
         "refreshIntervalMinutes",
         "launchAtLogin",
         "showEstimatedCost",
-        "showRawTokens",
         "providerEnabled",
     ];
 
@@ -547,7 +544,6 @@ pub fn init_config(input: serde_json::Value, persist: bool) -> AppConfig {
         language: input["language"].as_str().unwrap_or("").to_string(),
         theme: normalize_theme(input["theme"].as_str().unwrap_or("light")),
         show_estimated_cost: input["showEstimatedCost"].as_bool().unwrap_or(false),
-        show_raw_tokens: input["showRawTokens"].as_bool().unwrap_or(false),
         auto_refresh_enabled: DEFAULT_AUTO_REFRESH_ENABLED,
         silent_update_mode: DEFAULT_SILENT_UPDATE_MODE.to_string(),
         refresh_interval_minutes: interval,
@@ -751,7 +747,6 @@ pub fn import_config_with_summary(
         language: imported["language"].as_str().unwrap_or("").to_string(),
         theme: normalize_theme(imported["theme"].as_str().unwrap_or("light")),
         show_estimated_cost: imported["showEstimatedCost"].as_bool().unwrap_or(false),
-        show_raw_tokens: imported["showRawTokens"].as_bool().unwrap_or(false),
         auto_refresh_enabled: DEFAULT_AUTO_REFRESH_ENABLED,
         silent_update_mode: DEFAULT_SILENT_UPDATE_MODE.to_string(),
         refresh_interval_minutes: imported["refreshIntervalMinutes"]
@@ -1072,9 +1067,6 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
     }
     if let Some(v) = input["showEstimatedCost"].as_bool() {
         config.show_estimated_cost = v;
-    }
-    if let Some(v) = input["showRawTokens"].as_bool() {
-        config.show_raw_tokens = v;
     }
     if let Some(v) = input["launchAtLogin"].as_bool() {
         config.launch_at_login = v;

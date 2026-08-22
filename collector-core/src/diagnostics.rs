@@ -182,7 +182,6 @@ mod tests {
             language: String::new(),
             theme: "light".into(),
             show_estimated_cost: false,
-            show_raw_tokens: false,
             auto_refresh_enabled: true,
             silent_update_mode: "download".into(),
             refresh_interval_minutes: 15,

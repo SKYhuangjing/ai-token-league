@@ -59,6 +59,41 @@ test.describe('Sources Workflows', () => {
     await expect(row.first()).toContainText('.zcode/cli');
   });
 
+  test('provider card shows a data overview with stats and composition bar for providers with usage', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    // claude_code_local is the first healthy provider and has today's 8,500 tokens
+    const claudeNav = page.locator('#provider-nav-list [data-provider-nav="claude_code_local"]');
+    await claudeNav.click();
+
+    const overview = page.locator('#settings-source-list .provider-overview').first();
+    await expect(overview).toBeVisible({ timeout: 5_000 });
+    await expect(overview.locator('.provider-overview-title')).toContainText('Data overview');
+    // Four stat cells (total / today / last 7 days / active days) with compact numbers
+    await expect(overview.locator('.provider-overview-stat')).toHaveCount(4);
+    await expect(overview.locator('.provider-overview-stat strong').first()).toContainText('8.5K');
+    // Four-segment composition bar and legend percentages
+    await expect(overview.locator('.provider-overview-bar i')).toHaveCount(4);
+    await expect(overview.locator('.provider-overview-legend')).toContainText('59%');
+    // Full model usage list reusing homepage meter rows, plus the last used day
+    await expect(overview.locator('.mini-meter-row').first()).toContainText('claude-sonnet-4-20250514');
+    await expect(overview.locator('.mini-meter-row .mini-meter i').first()).toBeVisible();
+    await expect(overview.locator('.provider-overview-last')).toContainText(/\d{4}-\d{2}-\d{2}/);
+  });
+
+  test('provider card shows the overview empty note for providers without usage', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    // zcode_local is healthy but has no usage rows in the mock dataset
+    const zcodeNav = page.locator('#provider-nav-list [data-provider-nav="zcode_local"]');
+    await zcodeNav.click();
+
+    const overview = page.locator('#settings-source-list .provider-overview').first();
+    await expect(overview).toBeVisible({ timeout: 5_000 });
+    await expect(overview.locator('.provider-overview-note')).toContainText('No usage data yet');
+    await expect(overview.locator('.provider-overview-stats')).toHaveCount(0);
+  });
+
   test('sources screen renders workbuddy provider card from its nav item', async ({ page }) => {
     await navigateTo(page, 'sources');
 

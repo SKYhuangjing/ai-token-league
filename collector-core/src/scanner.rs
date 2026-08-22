@@ -1034,7 +1034,6 @@ mod tests {
             language: "zh-CN".to_string(),
             theme: "light".to_string(),
             show_estimated_cost: false,
-            show_raw_tokens: false,
             auto_refresh_enabled: true,
             silent_update_mode: config::DEFAULT_SILENT_UPDATE_MODE.to_string(),
             refresh_interval_minutes: 15,

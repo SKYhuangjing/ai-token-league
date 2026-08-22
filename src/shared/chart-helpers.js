@@ -8,8 +8,24 @@ const SOURCE_PALETTE = {
   claude_code_local: { base: "#1f6f66", alt: "#2a8a80", light: "#3d9e93" },
   codex_local: { base: "#b67810", alt: "#c9922e", light: "#d4a84a" },
   cursor_dashboard_usage: { base: "#6b5b95", alt: "#8574ad", light: "#9d8fc4" },
+  opencode_local: { base: "#34558b", alt: "#4a6fa5", light: "#6b8dbd" },
+  mimocode_local: { base: "#a63d40", alt: "#bd5a5d", light: "#d08083" },
+  hermes_local: { base: "#6b7a3f", alt: "#83934f", light: "#a0af70" },
+  openclaw_local: { base: "#c96a2b", alt: "#d6823f", light: "#e39b60" },
+  zcode_local: { base: "#4a4e8f", alt: "#63679e", light: "#8286b8" },
+  workbuddy_local: { base: "#a84a7c", alt: "#b96891", light: "#cb87a8" },
+  dsh_local: { base: "#2a6f8f", alt: "#3d87a8", light: "#5b9dbd" },
   other: { base: "#8a8478", alt: "#9a9488", light: "#b5aea0" }
 };
+
+// Single source of truth for the four token composition segment colors.
+// Labels are i18n keys so callers resolve them with their own t().
+export const COMPOSITION_PARTS = [
+  { key: "inputTokens", labelKey: "common.input", color: "#0f4f4c" },
+  { key: "outputTokens", labelKey: "common.output", color: "#1c7570" },
+  { key: "cacheReadTokens", labelKey: "common.cacheRead", color: "#35aaa0" },
+  { key: "cacheWriteTokens", labelKey: "common.cacheWrite", color: "#8fddd4" }
+];
 
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -34,9 +50,7 @@ export function sourceName(providerId) {
 }
 
 export function providerSourceKey(providerId = "") {
-  if (providerId === "claude_code_local") return "claude_code_local";
-  if (providerId === "codex_local") return "codex_local";
-  if (providerId === "cursor_dashboard_usage") return "cursor_dashboard_usage";
+  if (SOURCE_PALETTE[providerId]) return providerId;
   return "other";
 }
 
@@ -174,16 +188,12 @@ export function renderTokenComposition(container, summary = {}) {
     container.innerHTML = `<div class="empty-state">${escapeHtml(t("web.analytics.noData"))}</div>`;
     return;
   }
-  const parts = [
-    { key: "inputTokens", label: t("common.input"), color: "#0f4f4c" },
-    { key: "outputTokens", label: t("common.output"), color: "#1c7570" },
-    { key: "cacheReadTokens", label: t("common.cacheRead"), color: "#35aaa0" },
-    { key: "cacheWriteTokens", label: t("common.cacheWrite"), color: "#8fddd4" }
-  ].map((part) => {
+  const parts = COMPOSITION_PARTS.map((part) => {
     const tokens = Number(summary[part.key] || 0);
     const ratio = tokens / total;
     return {
       ...part,
+      label: t(part.labelKey),
       tokens,
       ratio,
       pct: Math.round(ratio * 100)

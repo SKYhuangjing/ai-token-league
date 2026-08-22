@@ -44,7 +44,6 @@ function parsePreset() {
   if (process.env.PRESET_REFRESH_INTERVAL) preset.refreshIntervalMinutes = Number(process.env.PRESET_REFRESH_INTERVAL);
   if (process.env.PRESET_LAUNCH_AT_LOGIN) preset.launchAtLogin = parseBool(process.env.PRESET_LAUNCH_AT_LOGIN);
   if (process.env.PRESET_SHOW_ESTIMATED_COST) preset.showEstimatedCost = parseBool(process.env.PRESET_SHOW_ESTIMATED_COST);
-  if (process.env.PRESET_SHOW_RAW_TOKENS) preset.showRawTokens = parseBool(process.env.PRESET_SHOW_RAW_TOKENS);
   const providerEnabled = parseProviderEnabled();
   if (providerEnabled) preset.providerEnabled = providerEnabled;
   return preset;

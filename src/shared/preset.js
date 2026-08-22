@@ -9,7 +9,6 @@ export const PRESET_ALLOWED_KEYS = [
   "refreshIntervalMinutes",
   "launchAtLogin",
   "showEstimatedCost",
-  "showRawTokens",
   "providerEnabled"
 ];
 

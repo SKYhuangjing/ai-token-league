@@ -656,7 +656,6 @@ mod tests {
             language: "zh-CN".into(),
             theme: "light".into(),
             show_estimated_cost: false,
-            show_raw_tokens: false,
             auto_refresh_enabled: true,
             silent_update_mode: "auto_download".into(),
             refresh_interval_minutes: 15,
