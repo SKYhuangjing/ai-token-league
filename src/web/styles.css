@@ -3877,6 +3877,49 @@ body.is-embedded .analytics-card {
   margin-top: 12px;
 }
 
+.sources-note {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.sources-note h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sources-note-intro {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.supported-sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.supported-sources li {
+  padding: 3px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-2, #fff);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: help;
+  transition: border-color 0.15s;
+}
+
+.supported-sources li:hover {
+  border-color: var(--teal);
+}
+
 .download-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

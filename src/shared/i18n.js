@@ -1014,7 +1014,18 @@ const translations = {
     "web.home.participantTreemapSubtitle": "面积 ∝ 用量 · 颜色 = 主要来源",
     "web.home.viewFullAnalytics": "查看完整分析",
     "web.home.getStarted": "开始使用",
-    "web.home.desktopPreview": "桌面端预览"
+    "web.home.desktopPreview": "桌面端预览",
+    "web.home.sourcesTitle": "支持的来源",
+    "web.home.sourcesIntro": "采集器扫描以下 AI 编程工具的本地使用记录，仅上传签名后的每日聚合数据。",
+    "web.home.sourceCodexNote": "本地 Codex 会话日志",
+    "web.home.sourceClaudeNote": "本地 Claude Code 项目日志",
+    "web.home.sourceWorkbuddyNote": "本地 WorkBuddy trace 记录",
+    "web.home.sourceZcodeNote": "本地 ZCode 请求级用量存储",
+    "web.home.sourceOpencodeNote": "本地 OpenCode 用量数据库",
+    "web.home.sourceMimocodeNote": "本地 MiMoCode 用量数据库",
+    "web.home.sourceHermesNote": "本地 Hermes 用量数据库",
+    "web.home.sourceOpenclawNote": "本地 OpenClaw 会话日志",
+    "web.home.sourceCursorNote": "Cursor dashboard 用量接口（需显式启用）"
   },
 
   "en": {
@@ -2024,7 +2035,18 @@ const translations = {
     "web.home.participantTreemapSubtitle": "Area ∝ usage · color = primary source",
     "web.home.viewFullAnalytics": "View full analytics",
     "web.home.getStarted": "Get Started",
-    "web.home.desktopPreview": "Desktop preview"
+    "web.home.desktopPreview": "Desktop preview",
+    "web.home.sourcesTitle": "Supported usage sources",
+    "web.home.sourcesIntro": "The collector scans local usage records from these AI coding tools; only signed daily aggregates are uploaded.",
+    "web.home.sourceCodexNote": "Local Codex session logs",
+    "web.home.sourceClaudeNote": "Local Claude Code project logs",
+    "web.home.sourceWorkbuddyNote": "Local WorkBuddy trace records",
+    "web.home.sourceZcodeNote": "Local ZCode request-level usage store",
+    "web.home.sourceOpencodeNote": "Local OpenCode usage database",
+    "web.home.sourceMimocodeNote": "Local MiMoCode usage database",
+    "web.home.sourceHermesNote": "Local Hermes usage database",
+    "web.home.sourceOpenclawNote": "Local OpenClaw session logs",
+    "web.home.sourceCursorNote": "Cursor dashboard usage API (opt-in)"
   }
 };
 
