@@ -1182,7 +1182,8 @@ function testHourlySnapshotSameBucketCaseCollisionSums() {
   ], pid, did, { hour: 15 });
 
   const result = store.upsertUsageBatch(payload);
-  assert.equal(result.accepted, 1, "case-colliding items must merge into one written row");
+  assert.equal(result.accepted, 2, "accepted counts uploaded items (protocol rowCount), not merged rows");
+  assert.equal(result.rejected, 0);
   const hourlyRows = Object.values(store.db.usageHourly).filter((row) => row.workdirHash === "wh_control");
   assert.equal(hourlyRows.length, 1);
   assert.equal(hourlyRows[0].model, "glm-5.3");
@@ -1226,7 +1227,7 @@ function testHourlySnapshotPoisonedBucketHealsOnReupload() {
 
   const heal = store.upsertUsageBatch(payload);
   assert.notEqual(heal.noOp, true, "metadata match must not no-op when stored rows lost tokens");
-  assert.equal(heal.accepted, 1);
+  assert.equal(heal.accepted, 2, "accepted counts uploaded items even when they merge into one row");
   assert.equal(store.db.usageHourly[key].totalTokens, 24961883, "re-upload must restore the summed row");
   const healedDaily = Object.values(store.db.usageDaily).find((row) => row.workdirHash === "wh_repo");
   assert.equal(healedDaily.totalTokens, 24961883, "derived daily row must be healed too");
@@ -1234,7 +1235,7 @@ function testHourlySnapshotPoisonedBucketHealsOnReupload() {
   // Once healed, the same upload is a stable no-op (no repair churn).
   const again = store.upsertUsageBatch(payload);
   assert.equal(again.noOp, true, "healed bucket must go back to no-op");
-  assert.equal(again.accepted, 1);
+  assert.equal(again.accepted, 2, "no-op reports the recorded item count");
   assert.equal(store.db.usageHourly[key].totalTokens, 24961883);
 
   if (fs.existsSync(tmp)) fs.unlinkSync(tmp);

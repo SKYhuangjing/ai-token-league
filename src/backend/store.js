@@ -546,10 +546,12 @@ export class Store {
     // variant and silently drop the other variant's tokens.
     const mergedByKey = new Map();
     let rejected = 0;
+    let acceptedItemCount = 0;
     for (const incoming of input.items || []) {
       try {
         const raw = normalizeUsageTotal(incoming);
         assertUsageItem(raw);
+        acceptedItemCount += 1;
         const hKey = hourlyUsageKey(raw, input.participantId, input.deviceId);
         mergedByKey.set(hKey, mergedByKey.has(hKey) ? mergeHourlyUsageRows(mergedByKey.get(hKey), raw) : raw);
       } catch {
@@ -573,7 +575,6 @@ export class Store {
     }
 
     assertNoForbiddenUploadFields(input);
-    let accepted = 0;
     const incomingHourlyKeys = new Set();
     const priceMap = this.priceMap();
 
@@ -618,7 +619,6 @@ export class Store {
         sourceFingerprint: raw.sourceFingerprint || "",
         uploadedAt: now
       };
-      accepted += 1;
     }
 
     // Cloud provider cross-device dedup: remove other-device rows with same natural key
@@ -639,7 +639,7 @@ export class Store {
       providerId: snapshot.providerId,
       granularity: "hourly",
       bucketFingerprint: serverBucketFingerprint,
-      rowCount: accepted,
+      rowCount: acceptedItemCount,
       totalTokens: serverBucketTotalTokens,
       clientGeneratedAt: input.clientGeneratedAt || ""
     });
@@ -649,7 +649,9 @@ export class Store {
 
     this.invalidateAggregateCache();
     this.save();
-    return { accepted, rejected, incomingKeys: [...incomingHourlyKeys] };
+    // accepted counts uploaded items per the snapshot protocol (rowCount);
+    // merged written rows can be fewer when case-colliding variants collapse.
+    return { accepted: acceptedItemCount, rejected, incomingKeys: [...incomingHourlyKeys] };
   }
 
   /// Derive daily rows from hourly rows for a given participant+device+day+provider.
