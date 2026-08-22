@@ -4,7 +4,7 @@ import { formatContributionPercent, formatTokenCompact } from "/shared/display.j
 import {
   escapeHtml, sourceName, formatCost, formatTokenRaw,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
-  renderModelSegments, renderCost
+  renderModelSegments, renderCost, formatPricePer100M
 } from "/shared/chart-helpers.js";
 
 function localeTokenCompact(value) {
@@ -178,7 +178,7 @@ function renderListView(items, communityTotal) {
         </td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
         <td class="contribution-cell">${formatContributionPercent(item.totalTokens, communityTotal)}</td>
-        ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}</td>` : ""}
+        ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}<small class="price-sub">${formatPricePer100M(item)}</small></td>` : ""}
         <td>${renderModels(item.models)}</td>
       </tr>`
     )
@@ -240,7 +240,7 @@ function renderMeterView(items, communityTotal) {
         <span class="meter-value${state.showCost ? " has-cost" : ""}">
           <strong class="meter-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
           <span class="meter-share"><span>${t("web.leaderboard.contribution")}</span><b>${formatContributionPercent(item.totalTokens, communityTotal)}</b></span>
-          ${state.showCost ? `<span class="meter-cost">${renderCost(item)}</span>` : ""}
+          ${state.showCost ? `<span class="meter-cost">${renderCost(item)}<small class="price-sub">${formatPricePer100M(item)}</small></span>` : ""}
         </span>
       </div>`;
     })
@@ -258,7 +258,7 @@ function renderMeterView(items, communityTotal) {
 function renderLeaderboardValueMeta(item, communityTotal, className) {
   return `<span class="leaderboard-value-meta ${className}">
     <span class="contribution-stat">${t("web.leaderboard.contribution")} <strong>${formatContributionPercent(item.totalTokens, communityTotal)}</strong></span>
-    ${state.showCost ? `<span class="value-meta-divider" aria-hidden="true">·</span><span class="value-meta-cost">${renderCost(item)}</span>` : ""}
+    ${state.showCost ? `<span class="value-meta-divider" aria-hidden="true">·</span><span class="value-meta-cost">${renderCost(item)}${formatPricePer100M(item) !== "-" ? `<small class="price-sub">${formatPricePer100M(item)}</small>` : ""}</span>` : ""}
   </span>`;
 }
 

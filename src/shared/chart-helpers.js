@@ -113,6 +113,14 @@ export function renderCost(item) {
   return `<span class="cost-amount">${escapeHtml(value)}</span>${item.missingPriceTokens ? `<sup title="${escapeHtml(t("web.cost.missingModelPrices"))}">*</sup>` : ""}`;
 }
 
+export function formatPricePer100M(item) {
+  const cost = Number(item.estimatedCostUsd);
+  const tokens = Number(item.totalTokens || 0);
+  if (!Number.isFinite(cost) || cost <= 0 || tokens <= 0) return "-";
+  const price = (cost / tokens) * 100_000_000;
+  return t("web.cost.pricePer100M", { value: price.toFixed(price >= 100 ? 0 : price >= 10 ? 1 : 2) });
+}
+
 export function computeConcentrationMetrics(rankings = []) {
   const sorted = [...rankings].sort((a, b) => Number(b.totalTokens || 0) - Number(a.totalTokens || 0));
   const total = sorted.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);

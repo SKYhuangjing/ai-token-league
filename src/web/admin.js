@@ -1508,7 +1508,9 @@ function renderCostQuality(item) {
   if (!state.showCost) return "";
   const quality = item.costQuality || "unknown_price";
   const cost = renderCost(item);
-  return `<span class="cost-quality ${escapeHtml(quality)}" title="${escapeHtml(costTitle(item))}">${cost}</span>`;
+  const price = formatPricePer100M(item);
+  const priceLine = price !== "-" ? `<small class="price-sub">${escapeHtml(price)}</small>` : "";
+  return `<span class="cost-quality ${escapeHtml(quality)}" title="${escapeHtml(costTitle(item))}">${cost}${priceLine}</span>`;
 }
 
 function renderPrimarySlice(items = []) {
@@ -1603,6 +1605,14 @@ function renderCost(item) {
   const value = formatCost(item.estimatedCostUsd);
   if (value === "-") return value;
   return `<span class="cost-amount">${escapeHtml(value)}</span>${item.missingPriceTokens ? `<sup title="${escapeHtml(t("admin.cost.missingModelPrices"))}">*</sup>` : ""}`;
+}
+
+function formatPricePer100M(item) {
+  const cost = Number(item.estimatedCostUsd);
+  const tokens = Number(item.totalTokens || 0);
+  if (!Number.isFinite(cost) || cost <= 0 || tokens <= 0) return "-";
+  const price = (cost / tokens) * 100_000_000;
+  return t("web.cost.pricePer100M", { value: price.toFixed(price >= 100 ? 0 : price >= 10 ? 1 : 2) });
 }
 
 function chartItemTitle(item) {

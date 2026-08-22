@@ -270,6 +270,7 @@ const translations = {
     "web.cost.noPricingVersion": "无定价版本",
     "web.cost.missingModels": "缺失模型",
     "web.cost.missingModelPrices": "部分模型价格缺失",
+    "web.cost.pricePer100M": "${value}/亿",
 
     // 桌面端 - 导航
     "desktop.nav.overview": "总览",
@@ -1305,6 +1306,7 @@ const translations = {
     "web.cost.noPricingVersion": "no pricing version",
     "web.cost.missingModels": "missing",
     "web.cost.missingModelPrices": "Some model prices are missing",
+    "web.cost.pricePer100M": "${value}/100M",
 
     // Desktop - Navigation
     "desktop.nav.overview": "Overview",

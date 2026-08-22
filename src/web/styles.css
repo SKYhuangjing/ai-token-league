@@ -1690,6 +1690,10 @@ td {
   vertical-align: middle;
 }
 
+.public-table .price-sub {
+  font-size: 13px;
+}
+
 .anonymous-banner {
   display: flex;
   align-items: center;
@@ -1894,6 +1898,27 @@ td {
   gap: 1px;
 }
 
+.leaderboard-value-meta .value-meta-cost:has(.price-sub) {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  position: relative;
+}
+
+.leaderboard-value-meta .value-meta-cost:has(.price-sub) sup {
+  position: absolute;
+  top: -5px;
+  right: -8px;
+}
+
+.leaderboard-value-meta .value-meta-cost .cost-amount {
+  font-size: 13px;
+}
+
+.leaderboard-value-meta .value-meta-cost .price-sub {
+  font-size: 10px;
+}
+
 .medal-meta {
   width: fit-content;
   margin-top: -3px;
@@ -2065,13 +2090,29 @@ td {
 .meter-cost {
   grid-area: cost;
   justify-self: end;
+  display: inline-grid;
+  justify-items: end;
+  gap: 3px;
   color: var(--cost-accent);
-  font-size: 11px;
-  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.1;
+  position: relative;
+}
+
+.meter-cost sup {
+  position: absolute;
+  top: -5px;
+  right: -8px;
 }
 
 .meter-cost .cost-amount {
-  font-size: 11px;
+  font-size: 13px;
+}
+
+.meter-cost .price-sub {
+  color: var(--cost-accent);
+  font: 600 10px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
 }
 
 .meter-empty {
@@ -2718,6 +2759,33 @@ h3 {
   line-height: 1.2;
 }
 
+.cost-quality:has(.price-sub) {
+  display: inline-grid;
+  gap: 4px;
+  white-space: normal;
+  position: relative;
+}
+
+.cost-quality:has(.price-sub) sup {
+  position: absolute;
+  top: -4px;
+  right: -8px;
+}
+
+.cost-quality .price-sub {
+  color: var(--ink-muted);
+  font: 600 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.price-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--cost-accent);
+  font: 600 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
 .admin-shell .table-wrap td {
   vertical-align: top;
   padding-top: 12px;
@@ -2743,6 +2811,11 @@ h3 {
 }
 
 .cost-quality small:not(.cq-label) {
+  color: var(--cost-accent);
+}
+
+.cost-quality small.price-sub,
+.cost-quality .price-sub {
   color: var(--cost-accent);
 }
 
