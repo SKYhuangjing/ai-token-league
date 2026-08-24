@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.13] - 2026-08-24
+
+### Added
+
+- [Desktop] Added Kimi as a supported local usage source: scans the Kimi desktop client's local agent sessions (daimon kernel `wire.jsonl` logs) with per-call token accounting (input, output, cache read/write) attributed to working directories, plus background title-generation usage; local Kimi usage verification is part of `npm run verify:ccusage`.
+- [Web] Estimated cost now shows a unit-price line (price per 100M tokens) alongside the cost amount on the leaderboard medal cards, meter rows, list view, and the admin usage ranking.
+
+### Fixed
+
+- Server hourly batches no longer mis-report merged rows as the accepted item count when mixed-case model variants collapse into one bucket, which previously forced an extra retry round trip before the client confirmed the upload.
+- Server buckets with case-colliding model names (for example GLM-5.3 vs glm-5.3 in the same hour) now sum every variant instead of silently overwriting all but the last one, and no-op uploads verify stored rows before confirming.
+- Local scan no longer double-counts a Kimi source directory that is both auto-discovered and manually configured (roots are canonicalized before dedup), verified against a real Windows install.
+- Running the test suite on Windows no longer reads or writes the real `~/.ai-token-league` data directory (tests sandbox through `ATL_HOME` instead of `HOME`, which Windows ignores).
+
+### Changed
+
+- Release and build CI upgraded to the Node 24 runtime, with a new cross-platform build validation workflow covering Linux, Windows, and macOS.
+
 ## [0.7.12] - 2026-08-22
 
 ### Added
