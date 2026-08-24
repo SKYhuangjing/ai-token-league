@@ -500,23 +500,11 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_home() -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("atl-runtime-log-test-{}", suffix))
-    }
 
     #[test]
     fn runtime_log_retention_prunes_by_days_only() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = config::AtlHomeSandbox::new();
         config::ensure_app_dir();
         fs::create_dir_all(config::runtime_log_dir()).unwrap();
 
@@ -548,13 +536,6 @@ mod tests {
             .ends_with(".log"));
         assert!(summary["maxBytes"].is_null());
         assert!(summary["maxExportEvents"].is_null());
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     // ── sanitize_value tests ──
@@ -850,22 +831,13 @@ mod tests {
     #[test]
     fn diagnostics_status_structure() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = config::AtlHomeSandbox::new();
         config::ensure_app_dir();
 
         let status = diagnostics_status();
         assert!(status["runtimeLog"].is_object());
         assert_eq!(status["retention"]["strategy"], "days");
         assert!(status["retention"]["days"].as_u64().unwrap() >= 1);
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     // ── clear_runtime_log test ──
@@ -873,9 +845,7 @@ mod tests {
     #[test]
     fn clear_runtime_log_removes_files() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = config::AtlHomeSandbox::new();
         config::ensure_app_dir();
         fs::create_dir_all(config::runtime_log_dir()).unwrap();
 
@@ -891,12 +861,5 @@ mod tests {
         assert_eq!(result["ok"], true);
         assert_eq!(result["existed"], true);
         assert_eq!(result["removed"], true);
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 }

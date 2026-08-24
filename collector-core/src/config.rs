@@ -9,6 +9,43 @@ use std::path::PathBuf;
 #[cfg(test)]
 pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Test-support RAII sandbox: points `ATL_HOME` at a fresh temp dir so tests
+/// never read or write the real `~/.ai-token-league`. Redirection via `HOME`
+/// does not work on Windows (`dirs::home_dir()` resolves USERPROFILE), so any
+/// test that touches app-dir-derived paths must hold `TEST_ENV_LOCK` and use
+/// this sandbox. The previous value is restored on drop.
+#[cfg(test)]
+pub struct AtlHomeSandbox {
+    previous: Option<String>,
+    home: PathBuf,
+}
+
+#[cfg(test)]
+impl AtlHomeSandbox {
+    pub fn new() -> Self {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!("atl-sandbox-{}", suffix));
+        let previous = std::env::var("ATL_HOME").ok();
+        std::env::set_var("ATL_HOME", &home);
+        Self { previous, home }
+    }
+}
+
+#[cfg(test)]
+impl Drop for AtlHomeSandbox {
+    fn drop(&mut self) {
+        if let Some(v) = &self.previous {
+            std::env::set_var("ATL_HOME", v);
+        } else {
+            std::env::remove_var("ATL_HOME");
+        }
+        let _ = fs::remove_dir_all(&self.home);
+    }
+}
+
 pub const DEFAULT_AUTO_REFRESH_ENABLED: bool = true;
 pub const DEFAULT_SILENT_UPDATE_MODE: &str = "auto_download";
 pub const SILENT_UPDATE_MODES: &[&str] = &["notify", "auto_download", "auto_apply_on_idle"];
@@ -1370,9 +1407,7 @@ mod tests {
     #[test]
     fn import_config_restore_mode_uses_imported_device_id() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = AtlHomeSandbox::new();
 
         let local = init_config(serde_json::json!({}), true);
         let local_device = local.device_id.clone();
@@ -1389,21 +1424,12 @@ mod tests {
             result.cursor_dashboard_usage.accounts.is_empty(),
             "restore mode must not import Cursor credentials"
         );
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(v) = previous_home {
-            std::env::set_var("HOME", v);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn import_config_join_mode_preserves_local_device_id() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = AtlHomeSandbox::new();
 
         let mut local = init_config(serde_json::json!({}), true);
         let local_device = local.device_id.clone();
@@ -1468,21 +1494,12 @@ mod tests {
             result.local_backup.directory, "/local/backup",
             "join mode must preserve local backup directory"
         );
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(v) = previous_home {
-            std::env::set_var("HOME", v);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn import_config_join_mode_no_existing_config_generates_device_id() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = AtlHomeSandbox::new();
 
         let result = import_config(sample_import(), Some("join_existing_participant")).unwrap();
         assert_eq!(result.participant_id, "p-imported");
@@ -1491,21 +1508,12 @@ mod tests {
             "join mode must generate fresh deviceId when no local config exists"
         );
         assert_ne!(result.device_id, "d-imported");
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(v) = previous_home {
-            std::env::set_var("HOME", v);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn import_config_join_mode_clears_local_sync_and_cache_state() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = AtlHomeSandbox::new();
 
         init_config(serde_json::json!({}), true);
         fs::write(manifest_path(), "{}\n").unwrap();
@@ -1527,21 +1535,12 @@ mod tests {
         assert!(!sync_state_path().exists());
         assert!(!queue_path().exists());
         assert!(!usage_cache_path().exists());
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(v) = previous_home {
-            std::env::set_var("HOME", v);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn save_sync_manifest_preserves_full_reconcile_state() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = AtlHomeSandbox::new();
         ensure_app_dir();
 
         let api = "https://api.example.com";
@@ -1575,13 +1574,6 @@ mod tests {
             restored.verified_server_fingerprint.as_deref(),
             Some("server-1")
         );
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(v) = previous_home {
-            std::env::set_var("HOME", v);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]

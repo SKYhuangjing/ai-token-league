@@ -160,15 +160,6 @@ mod tests {
     use super::*;
     use crate::config::{self, CursorAccount};
     use std::collections::HashMap;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_home() -> std::path::PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("atl-diagnostics-test-{}", suffix))
-    }
 
     fn make_config() -> AppConfig {
         AppConfig {
@@ -336,9 +327,7 @@ mod tests {
     #[test]
     fn test_export_diagnostics_structure() {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = config::AtlHomeSandbox::new();
         config::ensure_app_dir();
         fs::write(
             config::sync_state_path(),
@@ -359,12 +348,5 @@ mod tests {
         assert!(diag["syncState"].is_object());
         assert!(diag["syncState"]["states"]["https://example.test"].is_object());
         assert!(diag["runtimeLogSummary"].is_object());
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(value) = previous_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 }

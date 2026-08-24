@@ -2306,6 +2306,39 @@ mod tests {
 
     static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// RAII sandbox: points ATL_HOME at a fresh temp dir so tests never touch
+    /// the real ~/.ai-token-league. HOME redirection does not work on Windows
+    /// (dirs::home_dir() resolves USERPROFILE). Mirrors the collector-core
+    /// test-support sandbox, which is cfg(test) and not visible cross-crate.
+    struct AtlHomeSandbox {
+        previous: Option<String>,
+        home: std::path::PathBuf,
+    }
+
+    impl AtlHomeSandbox {
+        fn new() -> Self {
+            let suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let home = std::env::temp_dir().join(format!("atl-sidecar-sandbox-{}", suffix));
+            let previous = std::env::var("ATL_HOME").ok();
+            std::env::set_var("ATL_HOME", &home);
+            Self { previous, home }
+        }
+    }
+
+    impl Drop for AtlHomeSandbox {
+        fn drop(&mut self) {
+            if let Some(v) = &self.previous {
+                std::env::set_var("ATL_HOME", v);
+            } else {
+                std::env::remove_var("ATL_HOME");
+            }
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
     fn test_config() -> config::AppConfig {
         config::AppConfig {
             participant_id: "p_test".to_string(),
@@ -2345,14 +2378,6 @@ mod tests {
             last_sync_api_base_url: None,
             last_sync_error: None,
         }
-    }
-
-    fn temp_home() -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("atl-sidecar-test-{}", suffix))
     }
 
     #[test]
@@ -2547,9 +2572,7 @@ mod tests {
     #[tokio::test]
     async fn workdir_alias_clears_cached_usage_sources() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = AtlHomeSandbox::new();
 
         config::init_config(serde_json::json!({}), true);
         fs::write(config::usage_cache_path(), "{}\n").unwrap();
@@ -2585,21 +2608,12 @@ mod tests {
         assert!(!config::usage_cache_path().exists());
         let mut store = collector_core::local_usage_store::LocalUsageStore::open_default().unwrap();
         assert!(store.take_cached_source("source-fingerprint").is_none());
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(v) = previous_home {
-            std::env::set_var("HOME", v);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[tokio::test]
     async fn config_import_apply_returns_sanitized_join_summary() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous_home = std::env::var("HOME").ok();
-        let home = temp_home();
-        std::env::set_var("HOME", &home);
+        let _sandbox = AtlHomeSandbox::new();
 
         config::init_config(serde_json::json!({}), true);
         fs::write(config::queue_path(), "[]\n").unwrap();
@@ -2645,12 +2659,5 @@ mod tests {
         assert!(!config::queue_path().exists());
         assert!(!config::usage_cache_path().exists());
         assert!(!config::manifest_path().exists());
-
-        let _ = fs::remove_dir_all(&home);
-        if let Some(v) = previous_home {
-            std::env::set_var("HOME", v);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 }

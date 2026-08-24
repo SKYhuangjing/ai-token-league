@@ -35,6 +35,10 @@ impl SidecarProcess {
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_atl-collector"))
             .arg("--sidecar")
+            // HOME redirection does not sandbox the child on Windows
+            // (dirs::home_dir() resolves USERPROFILE); ATL_HOME pins the
+            // child's app dir to the temp home on every platform.
+            .env("ATL_HOME", &home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

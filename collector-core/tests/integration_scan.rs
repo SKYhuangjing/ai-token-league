@@ -22,6 +22,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestEnv {
     home: PathBuf,
+    prev_atl_home: Option<String>,
+    prev_kimi_desktop_dir: Option<String>,
 }
 
 impl TestEnv {
@@ -33,8 +35,27 @@ impl TestEnv {
         let home = std::env::temp_dir().join(format!("atl-integ-{}", suffix));
         fs::create_dir_all(&home).unwrap();
         std::env::set_var("HOME", &home);
+        // On Windows, dirs::home_dir()/dirs::data_dir() resolve USERPROFILE/
+        // APPDATA and ignore HOME, so HOME alone does not isolate anything.
+        // ATL_HOME pins the app dir (config, queue, cache, store) to the temp
+        // home so tests never touch the real ~/.ai-token-league, and
+        // KIMI_DESKTOP_DIR pins the kimi auto root so a real kimi-desktop
+        // install cannot leak into scan totals.
+        let prev_atl_home = std::env::var("ATL_HOME").ok();
+        std::env::set_var("ATL_HOME", home.join(".ai-token-league"));
+        let prev_kimi_desktop_dir = std::env::var("KIMI_DESKTOP_DIR").ok();
+        std::env::set_var(
+            "KIMI_DESKTOP_DIR",
+            std::env::current_dir()
+                .unwrap()
+                .join("../samples/kimi/home"),
+        );
         config::ensure_app_dir();
-        Self { home }
+        Self {
+            home,
+            prev_atl_home,
+            prev_kimi_desktop_dir,
+        }
     }
 
     fn init_config(&self) -> config::AppConfig {
@@ -70,6 +91,14 @@ impl TestEnv {
 
 impl Drop for TestEnv {
     fn drop(&mut self) {
+        match &self.prev_atl_home {
+            Some(prev) => std::env::set_var("ATL_HOME", prev),
+            None => std::env::remove_var("ATL_HOME"),
+        }
+        match &self.prev_kimi_desktop_dir {
+            Some(prev) => std::env::set_var("KIMI_DESKTOP_DIR", prev),
+            None => std::env::remove_var("KIMI_DESKTOP_DIR"),
+        }
         let _ = fs::remove_dir_all(&self.home);
     }
 }
