@@ -217,6 +217,12 @@
       sources: [{ kind: "auto", id: "/Users/demo/.dsh/sessions", label: "~/.dsh/sessions", path: "/Users/demo/.dsh/sessions", ignored: false }],
     },
     {
+      providerId: "kimi_local", toolCode: "kimi",
+      enabled: true, detected: true, ok: true, scannedFiles: 2,
+      roots: ["/Users/demo/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home"],
+      sources: [{ kind: "auto", id: "/Users/demo/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home", label: "kimi-desktop", path: "/Users/demo/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home", ignored: false }],
+    },
+    {
       providerId: "opencode_local", toolCode: "opencode",
       enabled: true, detected: false, ok: false, scannedFiles: 0,
       roots: [],

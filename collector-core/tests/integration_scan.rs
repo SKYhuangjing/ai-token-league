@@ -56,13 +56,15 @@ impl TestEnv {
         let zcode_path = samples.join("zcode").to_string_lossy().to_string();
         let workbuddy_path = samples.join("workbuddy").to_string_lossy().to_string();
         let dsh_path = samples.join("dsh/zstd").to_string_lossy().to_string();
+        let kimi_path = samples.join("kimi/home").to_string_lossy().to_string();
         let cfg = config::add_provider_root("codex_local", &codex_path, &cfg);
         let cfg = config::add_provider_root("claude_code_local", &claude_path, &cfg);
         let cfg = config::add_provider_root("hermes_local", &hermes_path, &cfg);
         let cfg = config::add_provider_root("openclaw_local", &openclaw_path, &cfg);
         let cfg = config::add_provider_root("zcode_local", &zcode_path, &cfg);
         let cfg = config::add_provider_root("workbuddy_local", &workbuddy_path, &cfg);
-        config::add_provider_root("dsh_local", &dsh_path, &cfg)
+        let cfg = config::add_provider_root("dsh_local", &dsh_path, &cfg);
+        config::add_provider_root("kimi_local", &kimi_path, &cfg)
     }
 }
 
@@ -360,6 +362,66 @@ fn scenario_dsh_scan() {
 
     let health = scanner::provider_health(&cfg);
     assert!(health.iter().any(|h| h["providerId"] == "dsh_local"));
+}
+
+// ── Scenario 1f: Kimi desktop (daimon kernel) scan from sample data ──
+
+#[test]
+fn scenario_kimi_scan() {
+    let _guard = lock();
+    let _prev = SaveHome::new();
+    let env = TestEnv::new();
+    // Synthetic JSONL samples are committed; skip defensively when absent.
+    if !std::env::current_dir()
+        .unwrap()
+        .join("../samples/kimi/home/sessions")
+        .exists()
+    {
+        return;
+    }
+    let cfg = env.init_config();
+
+    let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
+
+    let kimi: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "kimi")
+        .collect();
+
+    assert!(
+        !kimi.is_empty(),
+        "should find kimi items from samples/kimi/home/sessions"
+    );
+
+    for item in &kimi {
+        assert_eq!(item["providerId"], "kimi_local");
+        assert!(item["totalTokens"].as_i64().unwrap_or(0) > 0);
+        assert!(!item["day"].as_str().unwrap_or("").is_empty());
+        assert!(!item["model"].as_str().unwrap_or("").is_empty());
+        assert!(
+            item["workdirHash"].as_str().unwrap_or("") != "/tmp/kimi-sample/project-one",
+            "real absolute paths must not be uploaded, only the hashed workdir"
+        );
+    }
+
+    // Sample totals (6 counted records):
+    //   conv-aaa111  25407 + 26024  (zero-token record skipped)
+    //   conv-bbb222  1600 + 120     (second record: mtime fallback)
+    //   ctitle-ccc333  60           (background title generation)
+    //   conv-ddd444  1000           (subagent wire file)
+    //   conv-eee555   350           (session-scope replay record + torn line dropped)
+    let kimi_total: i64 = kimi
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert_eq!(kimi_total, 54561, "kimi sample total should match");
+
+    // No provider errors surfaced for kimi
+    assert!(!result.provider_errors.contains_key("kimi_local"));
+
+    let health = scanner::provider_health(&cfg);
+    assert!(health.iter().any(|h| h["providerId"] == "kimi_local"));
 }
 
 // ── Scenario 2: Scan → persist → query roundtrip ──

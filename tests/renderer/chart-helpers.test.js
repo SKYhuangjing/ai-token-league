@@ -13,6 +13,7 @@ describe("shared sourceName", () => {
     expect(sourceName("zcode_local")).toBe("ZCode");
     expect(sourceName("workbuddy_local")).toBe("WorkBuddy");
     expect(sourceName("dsh_local")).toBe("DeepSeek Harness");
+    expect(sourceName("kimi_local")).toBe("Kimi");
   });
 });
 
@@ -25,6 +26,7 @@ describe("providerSourceColor", () => {
     expect(providerSourceColor("zcode_local")).toBe("#4a4e8f");
     expect(providerSourceColor("workbuddy_local")).toBe("#a84a7c");
     expect(providerSourceColor("dsh_local")).toBe("#2a6f8f");
+    expect(providerSourceColor("kimi_local")).toBe("#1f6f5c");
   });
   it("keeps the original three providers and falls back to other", () => {
     expect(providerSourceColor("claude_code_local")).toBe("#1f6f66");

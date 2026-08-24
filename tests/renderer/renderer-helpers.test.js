@@ -860,6 +860,17 @@ describe('sortProviderHealthByStatus', () => {
       'workbuddy_local', 'dsh_local', 'zzz_tool_local',
     ]);
   });
+  it('orders kimi_local after dsh_local', () => {
+    const health = [
+      { providerId: 'zzz_tool_local', enabled: true, detected: true, ok: true },
+      { providerId: 'kimi_local', enabled: true, detected: true, ok: true },
+      { providerId: 'dsh_local', enabled: true, detected: true, ok: true },
+    ];
+    const sorted = sortProviderHealthByStatus(health);
+    expect(sorted.map((item) => item.providerId)).toEqual([
+      'dsh_local', 'kimi_local', 'zzz_tool_local',
+    ]);
+  });
   it('does not mutate the input array', () => {
     const health = [
       { providerId: 'mimocode_local', enabled: false, detected: true, ok: true },

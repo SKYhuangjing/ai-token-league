@@ -1,0 +1,2 @@
+{"type":"usage.record","model":"k3-agent","usage":{"inputOther":1000,"output":200,"inputCacheRead":300,"inputCacheCreation":100},"usageScope":"turn","time":1781006400000}
+{"type":"usage.record","model":"k3-agent","usage":{"inputOther":100,"output":20,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn"}

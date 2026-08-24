@@ -51,6 +51,7 @@ const sourceNames = {
   zcode_local: "ZCode",
   workbuddy_local: "WorkBuddy",
   dsh_local: "DeepSeek Harness",
+  kimi_local: "Kimi",
 };
 
 const qualityNames = {

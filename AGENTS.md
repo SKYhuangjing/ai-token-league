@@ -45,6 +45,7 @@ Core behavior:
 | `zcode_local` | Supported | Scans local ZCode SQLite database. |
 | `workbuddy_local` | Supported | Scans local WorkBuddy trace JSON files (per-request tokens from generation spans). |
 | `dsh_local` | Supported | Scans local DeepSeek Harness session logs (multi-frame zstd JSONL). |
+| `kimi_local` | Supported | Scans local Kimi desktop client agent session logs (daimon kernel `wire.jsonl` usage records). Web-style chats are server-only and not covered. |
 
 Token total rule:
 

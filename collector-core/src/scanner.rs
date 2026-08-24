@@ -5,6 +5,7 @@ use crate::provider::codex_local::CodexProvider;
 use crate::provider::cursor_dashboard::{build_cursor_session_cookie, CursorDashboardProvider};
 use crate::provider::dsh_local::DshLocalProvider;
 use crate::provider::hermes_local::HermesLocalProvider;
+use crate::provider::kimi_local::KimiLocalProvider;
 use crate::provider::mimocode_local::MiMoCodeLocalProvider;
 use crate::provider::openclaw_local::OpenClawLocalProvider;
 use crate::provider::opencode_local::OpenCodeLocalProvider;
@@ -507,6 +508,48 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
+    // Kimi desktop (embedded daimon / kimi-code kernel agent sessions)
+    let kimi = KimiLocalProvider;
+    let kimi_files = kimi.scan_sessions(config);
+    let mut kimi_errors: Vec<String> = Vec::new();
+    for file in &kimi_files {
+        let source_meta =
+            crate::provider::common::source_metadata(file, kimi.id(), kimi.version());
+        if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            source_index.insert(source_meta.source_fingerprint, cached);
+            continue;
+        }
+        match kimi.try_parse_usage(file) {
+            Ok(events) => {
+                source_index.insert(
+                    source_meta.source_fingerprint,
+                    events
+                        .into_iter()
+                        .map(|event| finalize_event(event, config))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Err(error) => {
+                kimi_errors.push(format!("{}: {}", file, error));
+            }
+        }
+    }
+    if !kimi_errors.is_empty() {
+        provider_errors.insert(kimi.id().to_string(), kimi_errors.join("; "));
+    }
+    health.push(local_provider_health(
+        kimi.id(),
+        kimi.tool_code(),
+        kimi.auto_roots(config),
+        kimi.manual_roots(config),
+        config,
+        kimi_files.len(),
+        true,
+    ));
+
     // Aggregate
     let aggregated = aggregate_item_refs(source_index.values().flat_map(|items| items.iter()));
 
@@ -529,6 +572,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let zcode = ZCodeLocalProvider;
     let workbuddy = WorkBuddyLocalProvider;
     let dsh = DshLocalProvider;
+    let kimi = KimiLocalProvider;
     let codex_files = codex.scan_sessions(config);
     let claude_files = claude.scan_sessions(config);
     let cursor_sources = cursor.discover_sources(config);
@@ -539,6 +583,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let zcode_dbs = zcode.scan_sessions(config);
     let workbuddy_files = workbuddy.scan_sessions(config);
     let dsh_files = dsh.scan_sessions(config);
+    let kimi_files = kimi.scan_sessions(config);
 
     vec![
         local_provider_health(
@@ -620,6 +665,15 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
             dsh.manual_roots(config),
             config,
             dsh_files.len(),
+            true,
+        ),
+        local_provider_health(
+            kimi.id(),
+            kimi.tool_code(),
+            kimi.auto_roots(config),
+            kimi.manual_roots(config),
+            config,
+            kimi_files.len(),
             true,
         ),
         cursor_provider_health(cursor.id(), cursor.tool_code(), config, &cursor_sources),

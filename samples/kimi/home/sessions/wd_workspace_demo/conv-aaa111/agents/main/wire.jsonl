@@ -1,0 +1,11 @@
+{"type":"metadata","protocol_version":"1.4","created_at":1780919999000}
+{"type":"config.update","profileName":"agent"}
+{"type":"turn.prompt","input":[{"type":"text","text":"hi"}],"origin":{"kind":"user"},"time":1780920000100}
+{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"u1","turnId":"0","step":1},"time":1780920000101}
+{"type":"llm.request","kind":"loop","provider":"kimi","model":"k2d6-agent","turnStep":"0.1","time":1780920000102}
+{"type":"context.append_loop_event","event":{"type":"step.end","uuid":"u1","turnId":"0","step":1,"usage":{"inputOther":6157,"output":50,"inputCacheRead":19200,"inputCacheCreation":0},"finishReason":"end_turn"},"time":1780920005000}
+{"type":"usage.record","model":"k2d6-agent","usage":{"inputOther":6157,"output":50,"inputCacheRead":19200,"inputCacheCreation":0},"usageScope":"turn","time":1780920005599}
+{"type":"turn.prompt","input":[{"type":"text","text":"more"}],"origin":{"kind":"user"},"time":1780920300000}
+{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"u2","turnId":"1","step":1},"time":1780920300001}
+{"type":"usage.record","model":"k2d6-agent","usage":{"inputOther":94,"output":586,"inputCacheRead":25344,"inputCacheCreation":0},"usageScope":"turn","time":1780920305000}
+{"type":"usage.record","model":"k2d6-agent","usage":{"inputOther":0,"output":0,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780920306000}

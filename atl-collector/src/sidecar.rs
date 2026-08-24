@@ -1672,6 +1672,7 @@ const TRAY_PROVIDER_NAMES: &[(&str, &str)] = &[
     ("zcode_local", "ZCode"),
     ("workbuddy_local", "WorkBuddy"),
     ("dsh_local", "DeepSeek Harness"),
+    ("kimi_local", "Kimi"),
     ("cursor_dashboard_usage", "Cursor"),
 ];
 

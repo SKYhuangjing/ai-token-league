@@ -15,7 +15,7 @@ const providers = new Set(
     .map((arg) => arg.trim())
     .filter(Boolean)
 );
-const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy"]);
+const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy", "kimi"]);
 const explicitlySelected = providers.size > 0;
 const home = process.env.HOME || "";
 const configPath = join(home, ".ai-token-league", "config.json");
@@ -130,7 +130,8 @@ function parseCollectorScan(stdout) {
     hermes: new Map(),
     openclaw: new Map(),
     mimocode: new Map(),
-    workbuddy: new Map()
+    workbuddy: new Map(),
+    kimi: new Map()
   };
   for (const line of stdout.split(/\r?\n/)) {
     const match = line.match(/^\s*(\d{4}-\d{2}-\d{2})\s+(\S+)\s+.+?\s+tokens=(\d+)\s*$/);
@@ -144,6 +145,7 @@ function parseCollectorScan(stdout) {
     if (providerId === "openclaw_local") addTotal(byProvider.openclaw, day, total);
     if (providerId === "mimocode_local") addTotal(byProvider.mimocode, day, total);
     if (providerId === "workbuddy_local") addTotal(byProvider.workbuddy, day, total);
+    if (providerId === "kimi_local") addTotal(byProvider.kimi, day, total);
   }
   return byProvider;
 }
@@ -378,6 +380,54 @@ function expectedWorkbuddy() {
   return verified("workbuddy", expected);
 }
 
+function expectedKimi() {
+  if (!providerEnabled("kimi_local")) return skipped("kimi", "provider disabled");
+  const autoRoots = [];
+  const desktopDir = (process.env.KIMI_DESKTOP_DIR || "").trim();
+  if (desktopDir) autoRoots.push(desktopDir);
+  const dataDir = process.env.APPDATA
+    ? process.env.APPDATA
+    : `${home}/Library/Application Support`;
+  autoRoots.push(join(dataDir, "kimi-desktop", "daimon-share", "daimon", "runtime", "kimi-code", "home"));
+  const roots = configuredRoots("kimi_local", autoRoots);
+  if (roots.length === 0) return skipped("kimi", "no configured directory found");
+  const expected = new Map();
+  const walkWire = (dir) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walkWire(full);
+      } else if (entry.isFile() && entry.name === "wire.jsonl") {
+        // Only usage.record lines are counted; conversation plaintext is never read.
+        let content;
+        try { content = readFileSync(full, "utf8"); } catch { continue; }
+        for (const line of content.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("{")) continue;
+          let row;
+          try { row = JSON.parse(trimmed); } catch { continue; }
+          if (row.type !== "usage.record" || !row.usage || typeof row.usage !== "object") continue;
+          const input = Number(row.usage.inputOther ?? row.usage.input ?? row.usage.input_tokens ?? 0);
+          const output = Number(row.usage.output ?? row.usage.output_tokens ?? 0);
+          const cacheRead = Number(row.usage.inputCacheRead ?? row.usage.cache_read_tokens ?? 0);
+          const cacheWrite = Number(row.usage.inputCacheCreation ?? row.usage.cache_write_tokens ?? 0);
+          const total = input + output + cacheRead + cacheWrite;
+          if (total <= 0) continue;
+          const time = Number(row.time);
+          const day = Number.isFinite(time) && time > 1_000_000_000_000
+            ? localDay(new Date(time))
+            : localDay(statSync(full).mtime);
+          addTotal(expected, day, total);
+        }
+      }
+    }
+  };
+  for (const root of roots) walkWire(root);
+  return verified("kimi", expected);
+}
+
 function comparableDays(actual, expected) {
   const today = localDay();
   return [...new Set([...actual.keys(), ...expected.keys()])]
@@ -426,8 +476,8 @@ function compareExpected(name, actual, result) {
 }
 
 function main() {
-  if (![...selectedProviders].every((provider) => ["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy"].includes(provider))) {
-    throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, workbuddy, or combinations.");
+  if (![...selectedProviders].every((provider) => ["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy", "kimi"].includes(provider))) {
+    throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, workbuddy, kimi, or combinations.");
   }
 
   const collectorOutput = run("cargo", ["run", "-p", "atl-collector", "--", "scan"], {
@@ -456,6 +506,9 @@ function main() {
   }
   if (selectedProviders.has("workbuddy")) {
     ok = compareExpected("workbuddy", actual.workbuddy, expectedWorkbuddy()) && ok;
+  }
+  if (selectedProviders.has("kimi")) {
+    ok = compareExpected("kimi", actual.kimi, expectedKimi()) && ok;
   }
 
   if (!ok) process.exit(1);

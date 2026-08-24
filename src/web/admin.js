@@ -1532,7 +1532,8 @@ const providerDisplayNames = {
   openclaw_local: "OpenClaw",
   zcode_local: "ZCode",
   workbuddy_local: "WorkBuddy",
-  dsh_local: "DeepSeek Harness"
+  dsh_local: "DeepSeek Harness",
+  kimi_local: "Kimi"
 };
 
 function renderPrimarySource(items = []) {

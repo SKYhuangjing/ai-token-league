@@ -132,6 +132,25 @@ test.describe('Sources Workflows', () => {
     await expect(row.first()).toContainText('.dsh/sessions');
   });
 
+  test('sources screen renders kimi provider card from its nav item', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    const kimiNav = page.locator('#provider-nav-list [data-provider-nav="kimi_local"]');
+    await expect(kimiNav).toBeVisible({ timeout: 5_000 });
+    await kimiNav.click();
+    await expect(kimiNav).toHaveClass(/active/);
+    await expect(kimiNav).toHaveAttribute('aria-current', 'true');
+
+    const card = page.locator('#settings-source-list .provider-card', { hasText: 'Kimi' });
+    await expect(card.first()).toBeVisible({ timeout: 5_000 });
+    await expect(card.locator('h4')).toHaveText('Kimi');
+
+    // Auto-discovered source row for the kimi-desktop kernel home
+    const row = card.locator('[data-root-path], .source-row, .auto-source-row');
+    await expect(row.first()).toBeVisible({ timeout: 5_000 });
+    await expect(row.first()).toContainText('kimi-desktop');
+  });
+
   test('provider nav auto-sorts by status: healthy first, attention next, disabled last', async ({ page }) => {
     await navigateTo(page, 'sources');
 

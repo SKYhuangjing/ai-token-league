@@ -15,6 +15,7 @@ const SOURCE_PALETTE = {
   zcode_local: { base: "#4a4e8f", alt: "#63679e", light: "#8286b8" },
   workbuddy_local: { base: "#a84a7c", alt: "#b96891", light: "#cb87a8" },
   dsh_local: { base: "#2a6f8f", alt: "#3d87a8", light: "#5b9dbd" },
+  kimi_local: { base: "#1f6f5c", alt: "#358a74", light: "#5aa892" },
   other: { base: "#8a8478", alt: "#9a9488", light: "#b5aea0" }
 };
 
@@ -45,6 +46,7 @@ export function sourceName(providerId) {
   if (providerId === "zcode_local") return t("source.zcode") || "ZCode";
   if (providerId === "workbuddy_local") return t("source.workbuddy") || "WorkBuddy";
   if (providerId === "dsh_local") return t("source.dsh") || "DeepSeek Harness";
+  if (providerId === "kimi_local") return t("source.kimi") || "Kimi";
   if (providerId === "cursor_dashboard_usage") return t("source.cursor") || "Cursor";
   return providerId;
 }
