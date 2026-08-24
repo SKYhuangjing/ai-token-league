@@ -107,8 +107,11 @@ pub const VERSION: &str = "0.1.0";
 ### 2.2 路径发现
 
 ```rust
-auto_roots(按序探测,存在即收):
+auto_roots(按序探测):
   1. env KIMI_DESKTOP_DIR(本采集器自定义测试口,非官方;指向 .../kimi-code/home)
+     —— 设置且存在时完全覆盖后续自动发现(确定性覆盖语义,机器上同时
+        装有真实 kimi-desktop 时扫描结果仍确定;重定位安装也不会与
+        canonical 路径重复计数)
   2. <userData>/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home
      userData: macOS ~/Library/Application Support,Windows %APPDATA%,Linux ~/.config
 manual_roots:

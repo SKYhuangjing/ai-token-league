@@ -382,13 +382,18 @@ function expectedWorkbuddy() {
 
 function expectedKimi() {
   if (!providerEnabled("kimi_local")) return skipped("kimi", "provider disabled");
-  const autoRoots = [];
+  // Mirror the collector hook: KIMI_DESKTOP_DIR, when set and existing,
+  // fully overrides canonical auto discovery (kimi_local::auto_roots).
   const desktopDir = (process.env.KIMI_DESKTOP_DIR || "").trim();
-  if (desktopDir) autoRoots.push(desktopDir);
-  const dataDir = process.env.APPDATA
-    ? process.env.APPDATA
-    : `${home}/Library/Application Support`;
-  autoRoots.push(join(dataDir, "kimi-desktop", "daimon-share", "daimon", "runtime", "kimi-code", "home"));
+  const autoRoots = [];
+  if (desktopDir && existsSync(desktopDir)) {
+    autoRoots.push(desktopDir);
+  } else {
+    const dataDir = process.env.APPDATA
+      ? process.env.APPDATA
+      : `${home}/Library/Application Support`;
+    autoRoots.push(join(dataDir, "kimi-desktop", "daimon-share", "daimon", "runtime", "kimi-code", "home"));
+  }
   const roots = configuredRoots("kimi_local", autoRoots);
   if (roots.length === 0) return skipped("kimi", "no configured directory found");
   const expected = new Map();

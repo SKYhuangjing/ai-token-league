@@ -43,11 +43,14 @@ impl KimiLocalProvider {
         let mut roots = Vec::new();
 
         // Testing hook (our own, not official): point directly at the
-        // `<home>/sessions` root used by the embedded kimi-code kernel.
+        // kernel `home` root used by the embedded kimi-code kernel. When
+        // set and existing it fully overrides auto discovery so scans stay
+        // deterministic on machines that also have a real install (and a
+        // relocated install does not double-count the canonical location).
         if let Ok(dir) = std::env::var("KIMI_DESKTOP_DIR") {
             let dir = dir.trim();
             if !dir.is_empty() && Path::new(dir).exists() {
-                roots.push(dir.to_string());
+                return vec![dir.to_string()];
             }
         }
 
@@ -94,9 +97,12 @@ impl KimiLocalProvider {
     pub fn roots(&self, config: &AppConfig) -> Vec<String> {
         let auto = self.auto_roots(config);
         let manual = self.manual_roots(config);
-        let mut combined = auto;
-        for r in manual {
-            if !combined.contains(&r) {
+        let mut seen: Vec<String> = Vec::new();
+        let mut combined = Vec::new();
+        for r in auto.into_iter().chain(manual.into_iter()) {
+            let key = root_key(&r);
+            if !seen.contains(&key) {
+                seen.push(key);
                 combined.push(r);
             }
         }
@@ -119,11 +125,25 @@ impl KimiLocalProvider {
             .collect();
         let manual = self.manual_roots(config);
 
+        // A root may be both auto-discovered and manually configured, and
+        // the same directory can be spelled with different separators or
+        // casing; walk each directory once or every wire.jsonl under it is
+        // counted twice.
+        let mut seen: Vec<String> = Vec::new();
+        let mut roots: Vec<String> = Vec::new();
+        for root in auto.into_iter().chain(manual.into_iter()) {
+            let key = root_key(&root);
+            if !seen.contains(&key) {
+                seen.push(key);
+                roots.push(root);
+            }
+        }
+
         let mut files = Vec::new();
-        for root in auto.iter().chain(manual.iter()) {
+        for root in roots {
             // Manual/loose roots may be wider trees; keep the walk bounded.
-            let limit = if is_kernel_home(root) { 5000 } else { 20000 };
-            files.extend(walk_files(root, |f| is_kimi_wire_file(f), limit));
+            let limit = if is_kernel_home(&root) { 5000 } else { 20000 };
+            files.extend(walk_files(&root, |f| is_kimi_wire_file(f), limit));
         }
         files
     }
@@ -216,6 +236,15 @@ impl KimiLocalProvider {
 /// `~/Library/Application Support`, Windows `%APPDATA%`, Linux `~/.config`).
 fn user_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(PathBuf::from)
+}
+
+/// Root identity for dedup: the canonicalized path when resolvable (the same
+/// directory spelled with different separators or casing must not be walked
+/// twice), the raw string otherwise.
+fn root_key(root: &str) -> String {
+    fs::canonicalize(root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| root.to_string())
 }
 
 /// True when the root is the kernel `home` dir (has `sessions/` + `session_index.jsonl`).
@@ -561,9 +590,10 @@ mod tests {
         assert!(sessions
             .iter()
             .any(|s| s.contains("conv-aaa111")), "sample wire.jsonl must be found");
+        // Windows walk yields backslash-separated paths; normalize before matching.
         assert!(sessions
             .iter()
-            .any(|s| s.contains("conv-ddd444/agents/sub1")), "subagent wire must be found");
+            .any(|s| s.replace('\\', "/").contains("conv-ddd444/agents/sub1")), "subagent wire must be found");
         assert!(!sessions.iter().any(|s| s.contains("session_index.jsonl")));
     }
 
@@ -588,7 +618,7 @@ mod tests {
             Some(p) => p,
             None => return,
         };
-        let cfg: AppConfig = serde_json::from_value(serde_json::json!({
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
             "participantId": "test",
             "nickname": "test",
             "identityPublicKey": "",
@@ -596,10 +626,25 @@ mod tests {
             "deviceId": "test"
         }))
         .unwrap();
+        // Manual root pointing at the same directory as the env-override
+        // auto root, but spelled with the opposite separator style: must be
+        // walked once, not double-counted.
+        let manual_variant = samples
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('/', "\\");
+        cfg.provider_roots.insert(PROVIDER_ID.into(), vec![manual_variant]);
         std::env::set_var("KIMI_DESKTOP_DIR", samples.to_string_lossy().to_string());
         let provider = KimiLocalProvider;
+        let roots = provider.auto_roots(&cfg);
+        assert_eq!(roots.len(), 1, "env hook overrides canonical discovery");
         let sessions = provider.scan_sessions(&cfg);
         std::env::remove_var("KIMI_DESKTOP_DIR");
         assert!(sessions.iter().any(|s| s.contains("conv-bbb222")));
+        assert_eq!(
+            sessions.iter().filter(|s| s.contains("conv-aaa111")).count(),
+            1,
+            "auto root == manual root must not double-scan wire files"
+        );
     }
 }
