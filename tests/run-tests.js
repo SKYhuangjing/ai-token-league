@@ -4343,6 +4343,604 @@ async function testAdminUsageRankingPagination() {
   } finally { await cleanup(); }
 }
 
+async function registerAndUploadUsage(baseUrl, nickname, items) {
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  const registerRes = await fetch(`${baseUrl}/api/devices/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      participantId: identity.participantId,
+      deviceId,
+      nickname,
+      identityPublicKey: identity.identityPublicKey,
+      os: "test",
+      appVersion: APP_VERSION
+    })
+  });
+  assert.equal(registerRes.status, 200);
+  const payload = {
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: new Date().toISOString(),
+    items
+  };
+  const uploadRes = await fetch(`${baseUrl}/api/usage/daily-batch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...payload, signature: signPayload(identity.identityPrivateKey, payload) })
+  });
+  assert.equal(uploadRes.status, 200);
+  return { ...identity, deviceId };
+}
+
+function sourceFilterUsageItem(nickname, providerId, totalTokens, usageDay) {
+  return {
+    day: usageDay,
+    toolCode: providerId.startsWith("claude") ? "claude" : "codex",
+    providerId,
+    workdirHash: `h_${nickname}_${providerId}`,
+    workdirDisplayName: `wd_${nickname}_${providerId}`,
+    model: `model_${providerId}`,
+    inputTokens: totalTokens,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens,
+    sourceQuality: "exact",
+    sourceFingerprint: `sf_${nickname}_${providerId}_${usageDay}`
+  };
+}
+
+async function testAdminUsageRankingSourceFilter() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const day = localDay();
+    await registerAndUploadUsage(baseUrl, "src-alpha", [
+      sourceFilterUsageItem("src-alpha", "codex_local", 100, day),
+      sourceFilterUsageItem("src-alpha", "claude_code_local", 40, day)
+    ]);
+    await registerAndUploadUsage(baseUrl, "src-beta", [
+      sourceFilterUsageItem("src-beta", "codex_local", 70, day)
+    ]);
+
+    const unfilteredRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today`);
+    assert.equal(unfilteredRes.status, 200);
+    const unfiltered = await unfilteredRes.json();
+    assert.equal(unfiltered.total, 2);
+    assert.deepEqual(unfiltered.items.map((item) => [item.nickname, item.totalTokens]), [
+      ["src-alpha", 140],
+      ["src-beta", 70]
+    ]);
+
+    const codexRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&source=codex_local`);
+    const codex = await codexRes.json();
+    assert.equal(codex.total, 2);
+    assert.deepEqual(codex.items.map((item) => [item.nickname, item.totalTokens]), [
+      ["src-alpha", 100],
+      ["src-beta", 70]
+    ]);
+
+    const claudeRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&source=claude_code_local`);
+    const claude = await claudeRes.json();
+    assert.equal(claude.total, 1);
+    assert.deepEqual(claude.items.map((item) => [item.nickname, item.totalTokens]), [
+      ["src-alpha", 40]
+    ]);
+
+    const unknownSourceRes = await fetch(`${baseUrl}/api/admin/usage-ranking?range=today&source=no_such_source`);
+    const unknownSource = await unknownSourceRes.json();
+    assert.equal(unknownSource.total, 0);
+    assert.deepEqual(unknownSource.items, []);
+    assert.equal(unknownSource.from, day);
+    assert.equal(unknownSource.to, day);
+
+    // Filtered and unfiltered results must not share cache entries.
+    const unfilteredAgain = await (await fetch(`${baseUrl}/api/admin/usage-ranking?range=today`)).json();
+    assert.deepEqual(unfilteredAgain.items.map((item) => [item.nickname, item.totalTokens]), [
+      ["src-alpha", 140],
+      ["src-beta", 70]
+    ]);
+    console.log("  testAdminUsageRankingSourceFilter passed");
+  } finally { await cleanup(); }
+}
+
+function testPublicLeaderboardSourceFilterAggregation() {
+  const store = new Store(path.join(tmp, "db-public-source-filter.json"));
+  store.currentBusinessDay = () => "2026-08-27";
+  const day = "2026-08-27";
+  const yesterday = "2026-08-26";
+  const baseItem = {
+    toolCode: "codex",
+    workdirHash: "wd_public_source_filter",
+    workdirDisplayName: "public-source-filter",
+    model: "gpt-5",
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    sourceQuality: "exact",
+    rawSourceRef: "",
+    providerVersion: "0.1.0",
+    parserVersion: "0.1.0"
+  };
+  const seed = (nickname, rows) => {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    store.registerDevice({
+      participantId: identity.participantId,
+      deviceId,
+      nickname,
+      identityPublicKey: identity.identityPublicKey,
+      os: "test",
+      appVersion: APP_VERSION
+    });
+    store.upsertUsageBatch({
+      participantId: identity.participantId,
+      deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: rows.map(({ providerId, totalTokens, usageDay }) => ({
+        ...baseItem,
+        toolCode: providerId.startsWith("claude") ? "claude" : "codex",
+        providerId,
+        day: usageDay,
+        model: `model_${providerId}`,
+        inputTokens: totalTokens,
+        totalTokens,
+        sourceFingerprint: `sf_${nickname}_${providerId}_${usageDay}`
+      }))
+    });
+    return identity;
+  };
+
+  const alpha = seed("pub-src-alpha", [
+    { providerId: "codex_local", totalTokens: 100, usageDay: day },
+    { providerId: "claude_code_local", totalTokens: 40, usageDay: day }
+  ]);
+  seed("pub-src-beta", [{ providerId: "codex_local", totalTokens: 70, usageDay: day }]);
+  seed("pub-src-gamma", [{ providerId: "claude_code_local", totalTokens: 90, usageDay: yesterday }]);
+  seed("pub-src-delta", [{ providerId: "kimi_local", totalTokens: 500, usageDay: day }]);
+
+  const unfiltered = store.publicLeaderboard({ period: "today" });
+  assert.deepEqual(unfiltered.map((item) => [item.nickname, item.totalTokens, item.rank]), [
+    ["pub-src-delta", 500, 1],
+    ["pub-src-alpha", 140, 2],
+    ["pub-src-beta", 70, 3]
+  ]);
+
+  const codex = store.publicLeaderboard({ period: "today", source: "codex_local" });
+  assert.deepEqual(codex.map((item) => [item.nickname, item.totalTokens, item.rank]), [
+    ["pub-src-alpha", 100, 1],
+    ["pub-src-beta", 70, 2]
+  ], "source filter re-ranks participants and drops participants without that source");
+
+  const claude = store.publicLeaderboard({ period: "today", source: "claude_code_local" });
+  assert.deepEqual(claude.map((item) => [item.nickname, item.totalTokens, item.rank]), [
+    ["pub-src-alpha", 40, 1]
+  ], "out-of-window rows for the requested source are excluded");
+
+  const kimi = store.publicLeaderboard({ period: "today", source: "kimi_local" });
+  assert.deepEqual(kimi.map((item) => [item.nickname, item.totalTokens]), [["pub-src-delta", 500]]);
+
+  assert.deepEqual(store.publicLeaderboard({ period: "today", source: "no_such_source" }), []);
+
+  // Filtered models breakdown only contains the filtered source's models.
+  assert.deepEqual(codex[0].models.map((model) => model.name), ["model_codex_local"]);
+
+  // source is part of the aggregate cache key: filtered and unfiltered coexist.
+  const boardEntries = Object.values(store.aggregateCache).filter((entry) => entry.name === "publicLeaderboard");
+  assert.ok(boardEntries.some((entry) => entry.args.source === ""));
+  assert.ok(boardEntries.some((entry) => entry.args.source === "codex_local"));
+  assert.equal(
+    store.publicLeaderboard({ period: "today" })[0].totalTokens,
+    500,
+    "unfiltered result must stay intact after filtered queries"
+  );
+
+  // Participant detail keeps the unfiltered overall rank even when the board is filtered.
+  const detail = store.participantDetail(alpha.participantId, { period: "today" });
+  assert.equal(detail.rank, 2);
+  assert.equal(detail.totalTokens, 140);
+  console.log("  testPublicLeaderboardSourceFilterAggregation passed");
+}
+
+async function testBoardLeaderboardSourceFilter() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const day = localDay();
+    const yesterday = addDays(day, -1);
+    const alpha = await registerAndUploadUsage(baseUrl, "board-lb-src-a", [
+      sourceFilterUsageItem("board-lb-src-a", "codex_local", 100, day),
+      sourceFilterUsageItem("board-lb-src-a", "claude_code_local", 40, day)
+    ]);
+    await registerAndUploadUsage(baseUrl, "board-lb-src-b", [
+      sourceFilterUsageItem("board-lb-src-b", "codex_local", 70, day)
+    ]);
+    await registerAndUploadUsage(baseUrl, "board-lb-src-c", [
+      sourceFilterUsageItem("board-lb-src-c", "claude_code_local", 90, yesterday)
+    ]);
+    await registerAndUploadUsage(baseUrl, "board-lb-src-d", [
+      sourceFilterUsageItem("board-lb-src-d", "kimi_local", 500, day)
+    ]);
+
+    // Backward compatibility: request without source keeps today's default behavior and shape.
+    const unfilteredRes = await fetch(`${baseUrl}/api/board/leaderboard?period=today`);
+    assert.equal(unfilteredRes.status, 200);
+    const unfiltered = await unfilteredRes.json();
+    assert.equal(unfiltered.period, "today");
+    assert.equal(unfiltered.identityMode, "public");
+    assert.deepEqual(unfiltered.items.map((item) => [item.displayName, item.totalTokens, item.rank]), [
+      ["board-lb-src-d", 500, 1],
+      ["board-lb-src-a", 140, 2],
+      ["board-lb-src-b", 70, 3]
+    ]);
+
+    const codex = await (await fetch(`${baseUrl}/api/board/leaderboard?period=today&source=codex_local`)).json();
+    assert.deepEqual(codex.items.map((item) => [item.displayName, item.totalTokens, item.rank]), [
+      ["board-lb-src-a", 100, 1],
+      ["board-lb-src-b", 70, 2]
+    ]);
+
+    const claude = await (await fetch(`${baseUrl}/api/board/leaderboard?period=today&source=claude_code_local`)).json();
+    assert.deepEqual(claude.items.map((item) => [item.displayName, item.totalTokens, item.rank]), [
+      ["board-lb-src-a", 40, 1]
+    ], "yesterday-only claude usage stays outside the today window");
+
+    const kimi = await (await fetch(`${baseUrl}/api/board/leaderboard?period=today&source=kimi_local`)).json();
+    assert.deepEqual(kimi.items.map((item) => [item.displayName, item.totalTokens]), [
+      ["board-lb-src-d", 500]
+    ]);
+
+    const unknown = await (await fetch(`${baseUrl}/api/board/leaderboard?period=today&source=no_such_source`)).json();
+    assert.equal(unknown.period, "today");
+    assert.deepEqual(unknown.items, []);
+
+    // Filtered and unfiltered results must not share cache entries.
+    const unfilteredAgain = await (await fetch(`${baseUrl}/api/board/leaderboard?period=today`)).json();
+    assert.deepEqual(unfilteredAgain.items.map((item) => [item.displayName, item.totalTokens]), [
+      ["board-lb-src-d", 500],
+      ["board-lb-src-a", 140],
+      ["board-lb-src-b", 70]
+    ]);
+
+    // Participant detail endpoints stay unfiltered by source (whole-participant view).
+    const detailRes = await fetch(`${baseUrl}/api/board/participants/${alpha.participantId}?period=today&source=codex_local`);
+    assert.equal(detailRes.status, 200);
+    const detail = await detailRes.json();
+    assert.equal(detail.rank, 2, "detail rank stays the overall board rank");
+    assert.equal(detail.totalTokens, 140, "detail totals stay whole-participant");
+    console.log("  testBoardLeaderboardSourceFilter passed");
+  } finally { await cleanup(); }
+}
+
+async function testBoardSourceLeaderboardEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer();
+  try {
+    const day = localDay();
+    const yesterday = addDays(day, -1);
+    const alpha = await registerAndUploadUsage(baseUrl, "board-src-a", [
+      sourceFilterUsageItem("board-src-a", "codex_local", 300, day),
+      sourceFilterUsageItem("board-src-a", "claude_code_local", 100, day),
+      sourceFilterUsageItem("board-src-a", "codex_local", 999, yesterday)
+    ]);
+    await registerAndUploadUsage(baseUrl, "board-src-b", [
+      sourceFilterUsageItem("board-src-b", "codex_local", 150, day)
+    ]);
+    await registerAndUploadUsage(baseUrl, "board-src-c", [
+      sourceFilterUsageItem("board-src-c", "codex_local", 50, day)
+    ]);
+
+    const res = await fetch(`${baseUrl}/api/board/source-leaderboard?period=today&top=2`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.period, "today");
+    assert.equal(body.identityMode, "public");
+    assert.equal(body.businessDay, currentBusinessDay());
+    assert.equal(body.totalTokens, 600);
+    assert.deepEqual(body.sources.map((source) => [source.name, source.totalTokens, source.participantCount]), [
+      ["codex_local", 500, 3],
+      ["claude_code_local", 100, 1]
+    ]);
+    const codexItems = body.sources[0].items;
+    assert.equal(codexItems.length, 2);
+    assert.deepEqual(codexItems.map((item) => [item.rank, item.displayName, item.totalTokens]), [
+      [1, "board-src-a", 300],
+      [2, "board-src-b", 150]
+    ]);
+    assert.equal(codexItems[0].displayId, alpha.participantId);
+    assert.equal(codexItems[0].models[0].name, "model_codex_local");
+    assert.ok(codexItems[0].compositionSummary);
+    assert.ok(codexItems[0].dominantComposition);
+    const claudeItems = body.sources[1].items;
+    assert.deepEqual(claudeItems.map((item) => [item.rank, item.displayName, item.totalTokens]), [
+      [1, "board-src-a", 100]
+    ]);
+
+    // Default top=3, and out-of-window (yesterday) rows excluded under period=today.
+    const defaultTop = await (await fetch(`${baseUrl}/api/board/source-leaderboard?period=today`)).json();
+    assert.equal(defaultTop.sources[0].items.length, 3);
+    assert.equal(defaultTop.sources[0].totalTokens, 500);
+
+    // this_month default range: yesterday row still inside the month in most cases,
+    // so assert a deterministic custom window instead.
+    const custom = await (await fetch(`${baseUrl}/api/board/source-leaderboard?range=custom&start=${yesterday}&end=${yesterday}`)).json();
+    assert.equal(custom.period, "custom");
+    assert.deepEqual(custom.sources.map((source) => [source.name, source.totalTokens]), [
+      ["codex_local", 999]
+    ]);
+    console.log("  testBoardSourceLeaderboardEndpoint passed");
+  } finally { await cleanup(); }
+}
+
+async function testAdminSourceStatsEndpoint() {
+  const { baseUrl, cleanup } = await createTestServer({ ADMIN_USERNAME: "admin", ADMIN_PASSWORD: "secret" });
+  try {
+    const noAuthRes = await fetch(`${baseUrl}/api/admin/source-stats`);
+    assert.equal(noAuthRes.status, 401);
+    const badAuthRes = await fetch(`${baseUrl}/api/admin/source-stats`, {
+      headers: { authorization: `Basic ${Buffer.from("admin:wrong").toString("base64")}` }
+    });
+    assert.equal(badAuthRes.status, 401);
+    const authHeader = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+
+    const day = localDay();
+    const previousDay = addDays(day, -1);
+    await registerAndUploadUsage(baseUrl, "stats-alpha", [
+      sourceFilterUsageItem("stats-alpha", "codex_local", 500, day),
+      sourceFilterUsageItem("stats-alpha", "codex_local", 300, previousDay)
+    ]);
+    await registerAndUploadUsage(baseUrl, "stats-beta", [
+      sourceFilterUsageItem("stats-beta", "claude_code_local", 200, day)
+    ]);
+
+    const todayRes = await fetch(`${baseUrl}/api/admin/source-stats?range=today&trendDays=7`, { headers: authHeader });
+    assert.equal(todayRes.status, 200);
+    const today = await todayRes.json();
+    assert.equal(today.range, "today");
+    assert.equal(today.from, day);
+    assert.equal(today.to, day);
+    assert.equal(today.trendDays, 7);
+    assert.equal(today.trendFrom, addDays(day, -6));
+    assert.equal(today.trendTo, day);
+    assert.equal(today.totalTokens, 700);
+    assert.equal(today.sources.length, 2);
+    const codex = today.sources[0];
+    assert.equal(codex.name, "codex_local");
+    assert.equal(codex.totalTokens, 500);
+    assert.ok(Math.abs(codex.ratio - 500 / 700) < 1e-9);
+    assert.equal(codex.activeParticipants, 1);
+    assert.equal(codex.rows, 1);
+    assert.deepEqual(codex.peakDay, { day, totalTokens: 500 });
+    assert.equal(codex.trend.length, 7);
+    assert.deepEqual(codex.trend.at(-1), { day, totalTokens: 500 });
+    assert.deepEqual(codex.trend.find((entry) => entry.day === previousDay), { day: previousDay, totalTokens: 300 });
+    assert.deepEqual(codex.trend[0], { day: addDays(day, -6), totalTokens: 0 });
+    const claude = today.sources[1];
+    assert.equal(claude.name, "claude_code_local");
+    assert.equal(claude.totalTokens, 200);
+    assert.equal(claude.rows, 1);
+
+    const allRes = await fetch(`${baseUrl}/api/admin/source-stats?range=all&trendDays=1`, { headers: authHeader });
+    const all = await allRes.json();
+    assert.equal(all.totalTokens, 1000);
+    assert.equal(all.from, previousDay);
+    assert.equal(all.to, day);
+    assert.equal(all.sources[0].totalTokens, 800);
+    assert.equal(all.sources[0].rows, 2);
+    assert.equal(all.sources[0].activeParticipants, 1);
+    assert.deepEqual(all.sources[0].peakDay, { day, totalTokens: 500 });
+    assert.equal(all.sources[0].trend.length, 1);
+
+    const clampedRes = await fetch(`${baseUrl}/api/admin/source-stats?range=today&trendDays=500`, { headers: authHeader });
+    const clamped = await clampedRes.json();
+    assert.equal(clamped.trendDays, 90);
+    assert.equal(clamped.sources[0].trend.length, 90);
+    console.log("  testAdminSourceStatsEndpoint passed");
+  } finally { await cleanup(); }
+}
+
+function testSourceLeaderboardStoreAggregation() {
+  const store = new Store(path.join(tmp, "db-source-leaderboard.json"), {
+    businessDayProvider: () => "2026-08-27"
+  });
+  const identities = [generateIdentity(), generateIdentity(), generateIdentity()];
+  const nicknames = ["src-lead-a", "src-lead-b", "src-lead-c"];
+  const deviceIds = identities.map((identity, index) => store.registerDevice({
+    participantId: identity.participantId,
+    deviceId: newId("d"),
+    nickname: nicknames[index],
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  }).deviceId);
+  const upload = (participantIndex, providerId, model, totalTokens, usageDay) => {
+    store.upsertUsageBatch({
+      participantId: identities[participantIndex].participantId,
+      deviceId: deviceIds[participantIndex],
+      clientGeneratedAt: "2026-08-27T00:00:00.000Z",
+      items: [{
+        day: usageDay,
+        toolCode: providerId.startsWith("claude") ? "claude" : "codex",
+        providerId,
+        workdirHash: `h_${providerId}_${model}`,
+        workdirDisplayName: `wd_${providerId}`,
+        model,
+        inputTokens: totalTokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens,
+        sourceQuality: "exact",
+        sourceFingerprint: `sf_${participantIndex}_${providerId}_${usageDay}_${model}`
+      }]
+    });
+  };
+  upload(0, "codex_local", "gpt-5", 300, "2026-08-20");
+  upload(0, "codex_local", "gpt-5-codex", 120, "2026-08-25");
+  upload(1, "codex_local", "gpt-5", 260, "2026-08-22");
+  upload(2, "codex_local", "gpt-5", 80, "2026-08-25");
+  upload(0, "claude_code_local", "claude-sonnet-4", 90, "2026-08-26");
+  upload(1, "claude_code_local", "claude-sonnet-4", 400, "2026-08-26");
+  // Out of window for every query below.
+  upload(0, "codex_local", "gpt-5", 9999, "2026-01-05");
+
+  const result = store.sourceLeaderboard({ range: "this_month", top: 2 });
+  assert.equal(result.totalTokens, 1250);
+  assert.deepEqual(result.sources.map((source) => [source.name, source.totalTokens, source.participantCount]), [
+    ["codex_local", 760, 3],
+    ["claude_code_local", 490, 2]
+  ]);
+  const codexItems = result.sources[0].items;
+  assert.equal(codexItems.length, 2);
+  assert.deepEqual(codexItems.map((item) => [item.rank, item.nickname, item.totalTokens]), [
+    [1, "src-lead-a", 420],
+    [2, "src-lead-b", 260]
+  ]);
+  assert.deepEqual(codexItems[0].models, [
+    { name: "gpt-5", totalTokens: 300 },
+    { name: "gpt-5-codex", totalTokens: 120 }
+  ]);
+  assert.equal(codexItems[0].inputTokens, 420);
+  assert.ok(codexItems[0].compositionSummary);
+  assert.deepEqual(result.sources[1].items.map((item) => [item.rank, item.nickname, item.totalTokens]), [
+    [1, "src-lead-b", 400],
+    [2, "src-lead-a", 90]
+  ]);
+
+  const singleDay = store.sourceLeaderboard({ range: "custom", startDay: "2026-08-25", endDay: "2026-08-25" });
+  assert.deepEqual(singleDay.sources.map((source) => [source.name, source.totalTokens]), [
+    ["codex_local", 200]
+  ]);
+
+  const emptyStore = new Store(path.join(tmp, "db-source-leaderboard-empty.json"), { persist: false, businessDayProvider: () => "2026-08-27" });
+  const empty = emptyStore.sourceLeaderboard({ range: "this_month" });
+  assert.equal(empty.totalTokens, 0);
+  assert.deepEqual(empty.sources, []);
+  console.log("  testSourceLeaderboardStoreAggregation passed");
+}
+
+async function testMysqlSourceAggregations() {
+  const store = new MySqlStore({});
+  store.currentBusinessDay = () => "2026-08-27";
+  const queries = [];
+  const usageRow = (day, providerId, participantId, totalTokens) => ({
+    usageKey: `uk_${providerId}_${participantId}_${day}`,
+    day,
+    participantId,
+    deviceId: `d_${participantId}`,
+    toolCode: "codex",
+    providerId,
+    workdirId: `${participantId}:h1`,
+    workdirHash: "h1",
+    workdirDisplayName: "mysql-source-stats",
+    model: "gpt-5",
+    inputTokens: totalTokens,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens,
+    estimatedCostUsd: null,
+    costQuality: "",
+    pricingVersion: "",
+    pricingModel: "",
+    pricingSource: "",
+    sourceQuality: "exact",
+    rawSourceRef: "",
+    providerVersion: "",
+    parserVersion: "",
+    sourceFingerprint: `fp_${providerId}_${participantId}_${day}`,
+    uploadedAt: "2026-08-27T00:00:00.000Z"
+  });
+  store.pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, " ").trim();
+      queries.push({ sql: normalized, params });
+      if (normalized.includes("GROUP BY u.providerId, u.participantId, p.nickname")) {
+        return [[
+          { providerId: "codex_local", participantId: "p1", nickname: "mysql-src-a", totalTokens: 300, inputTokens: 200, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 },
+          { providerId: "codex_local", participantId: "p2", nickname: "mysql-src-b", totalTokens: 150, inputTokens: 150, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 },
+          { providerId: "claude_code_local", participantId: "p1", nickname: "mysql-src-a", totalTokens: 100, inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 }
+        ]];
+      }
+      if (normalized.includes("GROUP BY u.providerId, u.participantId, u.model")) {
+        return [[
+          { providerId: "codex_local", participantId: "p1", name: "gpt-5", totalTokens: 300 },
+          { providerId: "codex_local", participantId: "p2", name: "gpt-5", totalTokens: 150 },
+          { providerId: "claude_code_local", participantId: "p1", name: "claude-sonnet-4", totalTokens: 100 }
+        ]];
+      }
+      if (normalized.startsWith("SELECT * FROM usage_daily WHERE day IN")) {
+        return [[
+          usageRow("2026-08-27", "codex_local", "p1", 500),
+          usageRow("2026-08-26", "codex_local", "p1", 300),
+          usageRow("2026-08-27", "claude_code_local", "p2", 200)
+        ]];
+      }
+      return [[]];
+    }
+  };
+
+  const board = await store.sourceLeaderboard({ range: "this_month", top: 2 });
+  assert.equal(board.totalTokens, 550);
+  assert.deepEqual(board.sources.map((source) => [source.name, source.totalTokens, source.participantCount]), [
+    ["codex_local", 450, 2],
+    ["claude_code_local", 100, 1]
+  ]);
+  assert.deepEqual(board.sources[0].items.map((item) => [item.rank, item.nickname, item.totalTokens]), [
+    [1, "mysql-src-a", 300],
+    [2, "mysql-src-b", 150]
+  ]);
+  assert.deepEqual(board.sources[0].items[0].models, [{ name: "gpt-5", totalTokens: 300 }]);
+  assert.ok(board.sources[0].items[0].compositionSummary);
+  const boardQuery = queries.find((q) => q.sql.includes("GROUP BY u.providerId, u.participantId, p.nickname"));
+  assert.ok(boardQuery.sql.includes("JOIN participants"));
+  assert.deepEqual(boardQuery.params, ["2026-08-01", "2026-08-27"]);
+  assert.equal(Object.keys(store.db.usageDaily).length, 0, "source leaderboard must not leave rows resident");
+
+  const stats = await store.adminSourceStats({ range: "today", trendDays: 3 });
+  assert.equal(stats.range, "today");
+  assert.equal(stats.totalTokens, 700);
+  assert.equal(stats.sources.length, 2);
+  assert.equal(stats.sources[0].name, "codex_local");
+  assert.equal(stats.sources[0].totalTokens, 500);
+  assert.equal(stats.sources[0].rows, 1);
+  assert.equal(stats.sources[0].activeParticipants, 1);
+  assert.deepEqual(stats.sources[0].peakDay, { day: "2026-08-27", totalTokens: 500 });
+  assert.equal(stats.sources[0].trend.length, 3);
+  assert.deepEqual(stats.sources[0].trend[0], { day: "2026-08-25", totalTokens: 0 });
+  assert.deepEqual(stats.sources[0].trend[1], { day: "2026-08-26", totalTokens: 300 });
+  assert.equal(stats.trendFrom, "2026-08-25");
+  assert.equal(stats.trendTo, "2026-08-27");
+  const statsQuery = queries.find((q) => q.sql.startsWith("SELECT * FROM usage_daily WHERE day IN"));
+  assert.deepEqual(statsQuery.params, ["2026-08-25", "2026-08-26", "2026-08-27"]);
+
+  queries.length = 0;
+  await store.adminUsageRanking({ range: "today", source: "codex_local" });
+  assert.ok(queries.some((q) => q.sql.includes("providerId = ?") && q.params.includes("codex_local")));
+  queries.length = 0;
+  await store.adminUsageRanking({ range: "today" });
+  assert.equal(queries.some((q) => q.sql.includes("providerId = ?")), false, "no source filter must not add a providerId predicate");
+
+  queries.length = 0;
+  await store.publicLeaderboard({ range: "today", source: "codex_local" });
+  assert.ok(
+    queries.some((q) => q.sql.includes("GROUP BY u.participantId, p.nickname") && q.sql.includes("providerId = ?") && q.params.includes("codex_local")),
+    "public leaderboard source filter must add a providerId predicate"
+  );
+  queries.length = 0;
+  await store.publicLeaderboard({ range: "today" });
+  assert.equal(
+    queries.some((q) => q.sql.includes("GROUP BY u.participantId, p.nickname") && q.sql.includes("providerId = ?")),
+    false,
+    "public leaderboard without source must not add a providerId predicate"
+  );
+  console.log("  testMysqlSourceAggregations passed");
+}
+
 async function testBoardPublicMode() {
   const { baseUrl, cleanup } = await createTestServer({ BOARD_SECURITY_LEVEL: "public" });
   try {
@@ -5999,6 +6597,12 @@ await testUsageUploadRejectsUnregistered();
 await testAdminAuthEnforcement();
 await testAdminAuthDisabledWhenNotConfigured();
 await testAdminUsageRankingPagination();
+await testAdminUsageRankingSourceFilter();
+testPublicLeaderboardSourceFilterAggregation();
+await testBoardLeaderboardSourceFilter();
+await testBoardSourceLeaderboardEndpoint();
+await testAdminSourceStatsEndpoint();
+await testMysqlSourceAggregations();
 await testBoardPublicMode();
 await testBoardAuthenticatedMode();
 await testSelfServiceDeletionReplayProtection();
@@ -8325,6 +8929,7 @@ testStoreLargeTokenValues();
 testStoreWorkdirAliasPersistence();
 testStoreParticipantDetailMissingDay();
 testStoreBoardSummaryEmpty();
+testSourceLeaderboardStoreAggregation();
 testExportDailyCsv();
 testExportDailyCsvWithCost();
 testExportDailyCsvFiltersByParticipant();

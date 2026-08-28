@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import mysql from "mysql2/promise";
-import { Store } from "./store.js";
+import { Store, normalizeSourceTop, normalizeSourceTrendDays } from "./store.js";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { createPriceMap, normalizeModelName } from "../shared/pricing.js";
@@ -349,7 +349,7 @@ export class MySqlStore extends Store {
     return rows.map(usageFromRow);
   }
 
-  mysqlUsageScope({ period = "", range = "today", startDay = "", endDay = "", participantId = "", tool = "all" } = {}, alias = "") {
+  mysqlUsageScope({ period = "", range = "today", startDay = "", endDay = "", participantId = "", tool = "all", providerId = "" } = {}, alias = "") {
     const days = mysqlDaysForQuery({ period, range, startDay, endDay }, { businessDay: this.currentBusinessDay() });
     const prefix = alias ? `${alias}.` : "";
     const where = [];
@@ -368,6 +368,10 @@ export class MySqlStore extends Store {
     if (tool && tool !== "all") {
       where.push(`${prefix}toolCode = ?`);
       params.push(tool);
+    }
+    if (providerId) {
+      where.push(`${prefix}providerId = ?`);
+      params.push(providerId);
     }
     return {
       where,
@@ -451,7 +455,7 @@ export class MySqlStore extends Store {
   }
 
   async publicLeaderboard(args = {}) {
-    const { whereSql, params } = this.mysqlUsageScope(args, "u");
+    const { whereSql, params } = this.mysqlUsageScope({ ...args, providerId: args.source || "" }, "u");
     const includeCost = Boolean(args.includeCost);
     const [rows] = await this.pool.query(
       `SELECT u.participantId, p.nickname,
@@ -498,6 +502,94 @@ export class MySqlStore extends Store {
         ...(includeCost ? mysqlCostFields(row) : {})
       };
     });
+  }
+
+  async sourceLeaderboard(args = {}) {
+    const { whereSql, params } = this.mysqlUsageScope(args, "u");
+    const includeCost = Boolean(args.includeCost);
+    const boundedTop = normalizeSourceTop(args.top);
+    const [rows] = await this.pool.query(
+      `SELECT u.providerId, u.participantId, p.nickname,
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              COALESCE(SUM(u.inputTokens), 0) AS inputTokens,
+              COALESCE(SUM(u.outputTokens), 0) AS outputTokens,
+              COALESCE(SUM(u.cacheReadTokens), 0) AS cacheReadTokens,
+              COALESCE(SUM(u.cacheWriteTokens), 0) AS cacheWriteTokens,
+              COALESCE(SUM(u.reasoningTokens), 0) AS reasoningTokens,
+              ${mysqlCostAggregateSelect("u")}
+       FROM usage_daily u
+       JOIN participants p ON p.id = u.participantId
+       ${whereSql}
+       GROUP BY u.providerId, u.participantId, p.nickname
+       ORDER BY totalTokens DESC`,
+      params
+    );
+    const [modelRows] = await this.pool.query(
+      `SELECT u.providerId, u.participantId, u.model AS name,
+              COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+              ${mysqlCostAggregateSelect("u")}
+       FROM usage_daily u
+       ${whereSql}
+       GROUP BY u.providerId, u.participantId, u.model`,
+      params
+    );
+    const modelsBySourceParticipant = new Map();
+    for (const row of modelRows || []) {
+      const key = `${row.providerId}|${row.participantId}`;
+      const list = modelsBySourceParticipant.get(key) || [];
+      list.push({
+        name: row.name || "unknown",
+        totalTokens: Number(row.totalTokens || 0),
+        ...(includeCost ? mysqlCostFields(row) : {})
+      });
+      modelsBySourceParticipant.set(key, list);
+    }
+    for (const list of modelsBySourceParticipant.values()) {
+      list.sort((a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name));
+    }
+    const bySource = new Map();
+    for (const row of rows) {
+      const sourceName = row.providerId || "unknown";
+      const list = bySource.get(sourceName) || [];
+      const item = {
+        rank: 0,
+        participantId: row.participantId,
+        nickname: row.nickname,
+        totalTokens: Number(row.totalTokens || 0),
+        inputTokens: Number(row.inputTokens || 0),
+        outputTokens: Number(row.outputTokens || 0),
+        cacheReadTokens: Number(row.cacheReadTokens || 0),
+        cacheWriteTokens: Number(row.cacheWriteTokens || 0),
+        reasoningTokens: Number(row.reasoningTokens || 0),
+        estimatedCostUsd: 0,
+        costQuality: ""
+      };
+      list.push({
+        ...item,
+        compositionSummary: tokenCompositionSummary(item),
+        dominantComposition: dominantComposition(item),
+        ...(includeCost ? mysqlCostFields(row) : {}),
+        models: modelsBySourceParticipant.get(`${row.providerId}|${row.participantId}`) || []
+      });
+      bySource.set(sourceName, list);
+    }
+    const sources = [...bySource.entries()]
+      .map(([name, participants]) => {
+        const ranked = participants
+          .sort((a, b) => b.totalTokens - a.totalTokens || a.participantId.localeCompare(b.participantId))
+          .map((item, index) => ({ ...item, rank: index + 1 }));
+        return {
+          name,
+          totalTokens: ranked.reduce((sum, item) => sum + item.totalTokens, 0),
+          participantCount: ranked.length,
+          items: ranked.slice(0, boundedTop)
+        };
+      })
+      .sort((a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name));
+    return {
+      totalTokens: sources.reduce((sum, item) => sum + item.totalTokens, 0),
+      sources
+    };
   }
 
   async boardSummary() {
@@ -720,7 +812,7 @@ export class MySqlStore extends Store {
     const effectiveArgs = { range: "month", ...args };
     const { page, pageSize } = normalizeMysqlPagination(effectiveArgs);
     const includeCost = Boolean(effectiveArgs.includeCost);
-    const { whereSql, params, days } = this.mysqlUsageScope(effectiveArgs, "u");
+    const { whereSql, params, days } = this.mysqlUsageScope({ ...effectiveArgs, providerId: effectiveArgs.source || "" }, "u");
     const [[countRow]] = await this.pool.query(
       `SELECT COUNT(*) AS total
        FROM (
@@ -844,6 +936,28 @@ export class MySqlStore extends Store {
     const effectiveArgs = { range: "month", ...args };
     const rows = await this.usageRowsForQuery(effectiveArgs);
     return this.withScopedUsageRows(rows, () => Store.prototype.adminQuality.call(this, effectiveArgs));
+  }
+
+  async adminSourceStats(args = {}) {
+    const effectiveArgs = { range: "month", ...args };
+    const businessDay = this.currentBusinessDay();
+    const rangeDays = mysqlDaysForQuery(effectiveArgs, { businessDay });
+    let rows;
+    if (!rangeDays) {
+      rows = await this.usageRowsForQuery(effectiveArgs);
+    } else {
+      // The trend window (trailing N days) can extend beyond the aggregation
+      // range, so load the union of both day sets before delegating to the
+      // shared JSON-store aggregation (same pattern as analytics + heatmap).
+      const trendDayList = mysqlTrailingDays(normalizeSourceTrendDays(effectiveArgs.trendDays), { businessDay });
+      const unionDays = [...new Set([...rangeDays, ...trendDayList])].sort();
+      const [rawRows] = await this.pool.query(
+        `SELECT * FROM usage_daily WHERE day IN (${unionDays.map(() => "?").join(",")})`,
+        unionDays
+      );
+      rows = rawRows.map(usageFromRow);
+    }
+    return this.withScopedUsageRows(rows, () => Store.prototype.adminSourceStats.call(this, effectiveArgs));
   }
 
   async exportDailyCsv(args = {}) {

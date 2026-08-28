@@ -642,8 +642,33 @@ async function handleApi(req, res) {
         range,
         startDay: url.searchParams.get("start") || "",
         endDay: url.searchParams.get("end") || "",
+        source: url.searchParams.get("source") || "",
         includeCost: includeCost(url)
       })).map((item) => transformBoardItem(item))
+    }));
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/board/source-leaderboard")) {
+    const url = new URL(req.url, "http://localhost");
+    const period = url.searchParams.get("period") || "";
+    const range = url.searchParams.get("range") || "this_month";
+    ensureAnonymizerFresh();
+    const result = await store.sourceLeaderboard({
+      period,
+      range,
+      startDay: url.searchParams.get("start") || "",
+      endDay: url.searchParams.get("end") || "",
+      top: url.searchParams.get("top") || "3",
+      includeCost: includeCost(url)
+    });
+    return sendJson(res, 200, withBusinessDay({
+      period: period || range,
+      identityMode: BOARD_SECURITY_LEVEL,
+      identityLabel: BOARD_SECURITY_LEVEL === "anonymous" ? "anonymousDisplayName" : "nickname",
+      totalTokens: result.totalTokens,
+      sources: result.sources.map((source) => ({
+        ...source,
+        items: source.items.map((item) => transformBoardItem(item))
+      }))
     }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/usage-ranking")) {
@@ -653,6 +678,7 @@ async function handleApi(req, res) {
       startDay: url.searchParams.get("start") || "",
       endDay: url.searchParams.get("end") || "",
       participantId: url.searchParams.get("participantId") || "",
+      source: url.searchParams.get("source") || "",
       includeCost: includeCost(url),
       page: url.searchParams.get("page") || "1",
       pageSize: url.searchParams.get("pageSize") || "25"
@@ -667,6 +693,15 @@ async function handleApi(req, res) {
       endDay: url.searchParams.get("end") || "",
       participantId: url.searchParams.get("participantId") || "",
       includeCost: includeCost(url)
+    }));
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/source-stats")) {
+    const url = new URL(req.url, "http://localhost");
+    return sendJson(res, 200, await store.adminSourceStats({
+      range: url.searchParams.get("range") || "month",
+      startDay: url.searchParams.get("start") || "",
+      endDay: url.searchParams.get("end") || "",
+      trendDays: url.searchParams.get("trendDays") || "30"
     }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/quality")) {
