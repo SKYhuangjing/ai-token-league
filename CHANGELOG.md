@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.14] - 2026-08-28
+
+### Added
+
+- [Web] The public web now ranks usage by source dimension: a source top-3 module on the home page, per-source filtering on the leaderboard, and a source stats tab in the admin console, backed by new server-side source stats and source-filtered ranking APIs; the download page's source list follows the same dimension.
+
+### Fixed
+
+- [Desktop] Restored Cursor usage collection after cursor.com's Vercel Security Checkpoint started rejecting the rustls TLS fingerprint with 403 challenges: the collector now uses the platform-native TLS stack (SecureTransport on macOS, schannel on Windows, OpenSSL on Linux), verified on real Windows and macOS machines. Reconnecting an account on an older client cannot recover from this — upgrading to this version is required.
+- [Desktop] Cursor auth failures are no longer silent: 30x login redirects and 401/403 responses are classified as auth errors, so token refresh runs and exhausted accounts visibly flip to "reconnect required" instead of staying active with zero rows; exported diagnostics now include the last scan's partial flag, failed provider ids, and per-provider errors.
+- [Desktop] A provider that previously reported rows but returns none on a scan without an error keeps its previous local rows instead of being silently wiped, and full reconciliation never prunes a server-side scope whose provider failed its last scan — upstream outages can no longer destroy local or server history.
+- [Desktop] Cursor account handling hardened: the session cookie is built from the canonical WorkOS user id embedded in the token, the Sources screen shows the account's last activity day derived from the raw event stream (visible even when recent usage is all Pro-included with no token rows), older records with a missing email are repaired opportunistically, and the account hash is never shown as a label.
+- [Desktop] WorkBuddy workdir attribution stays stable when WorkBuddy reuses pid directories: attribution snapshots refresh per scan instead of pinning a stale cwd, so rescanned old traces keep landing in the correct working directory.
+
+### Changed
+
+- The Linux build environment script now installs `libssl-dev` (required to build the native-TLS collector); self-hosted Linux builders should re-run the setup script before upgrading.
+
 ## [0.7.13] - 2026-08-24
 
 ### Added
