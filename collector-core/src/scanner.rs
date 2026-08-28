@@ -456,6 +456,10 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
     if !workbuddy_errors.is_empty() {
         provider_errors.insert(workbuddy.id().to_string(), workbuddy_errors.join("; "));
     }
+    // Persist workdir attribution snapshots pinned during this scan so later
+    // rescans (including after source-cache resets) reuse the original cwd
+    // attribution instead of the drifted sessions/<pid>.json state.
+    crate::provider::workbuddy_local::flush_workdir_snapshot_cache();
     health.push(local_provider_health(
         workbuddy.id(),
         workbuddy.tool_code(),
