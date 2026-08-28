@@ -1,18 +1,18 @@
 # HANDOFF — Cursor 采集断流:根因、修复与交接状态
 
-> 交接时点:2026-08-28(Windows 真机验证后更新)。修复已提交、已推送;**Windows 真机发现第二层根因(Vercel 按 TLS 指纹拦 rustls),TLS 后端切换已在工作区,待提交**。
-> 本文件为会话交接文档(untracked),合并后可删除。
+> 交接时点:2026-08-28(Mac 真机验证后更新)。修复已提交、已推送;Windows + Mac 真机均验证通过。
+> 本文件为会话交接文档,合并后可删除。
 
 ## 0. 交接快照
 
 | 项 | 状态 |
 | --- | --- |
-| 分支 | `fix/cursor-dashboard-auth-hardening`(基于 develop `e99e271e` 切出) |
-| 已提交 | `3154053d` fix(collector): surface Cursor dashboard auth failures and protect usage history |
-| 工作区(未提交) | reqwest `rustls-tls` → `native-tls`(根 `Cargo.toml` + `Cargo.lock`);`setup-build-env-linux.sh` 补 `libssl-dev`;本文档更新 |
-| Windows 真机验证 | ✅ 2026-08-28:rustls 403 复现 + native-tls 后 413 events / 409 items 拉通(见 §10) |
-| Mac 门禁 | `3154053d`:`cargo test --workspace` 全绿;native-tls 切换后需在 Mac 复跑 + 真机验证(SecureTransport 指纹是否过 Vercel 检查点未验证) |
-| 待办 | native-tls 变更跑门禁 → 合回 develop → 随 0.7.14+ 发布;Mac/Linux 真机各验一次;用户侧通报改为"升级客户端"(见 §7) |
+| 分支 | `fix/cursor-dashboard-auth-hardening`(基于 develop `e99e271e` 切出,tip `fb9a7d99` 已推送) |
+| 已提交 | `3154053d` P0 四项防御 → `fb826dda` cookie 规范 id / latestUsageDay / email 修复 → `3ded3213` 本文档 → `fb9a7d99` reqwest `rustls-tls` → `native-tls` + `setup-build-env-linux.sh` 补 `libssl-dev` |
+| Windows 真机验证 | ✅ 2026-08-28:rustls 403 复现 + native-tls(schannel)后 413 events / 409 items 拉通(见 §10) |
+| Mac 门禁(native-tls 后) | ✅ `cargo test --workspace` exit 0(363+18+12+9+3)、`npm test` 全过、`node --check` ok、`test:ui` 544 过、`test:e2e` 94 过 |
+| Mac 真机验证 | ✅ 2026-08-28:SecureTransport 通过 Vercel 检查点,装包回归全绿(见 §11) |
+| 待办 | Linux 真机各验一次(OpenSSL 指纹) → 合回 develop → 随 0.7.14+ 发布;用户侧通报"升级客户端"(见 §7) |
 
 ## 1. 发生了什么
 
@@ -141,7 +141,7 @@ git merge fix/cursor-dashboard-auth-hardening
 7. 根 `Cargo.toml` reqwest `rustls-tls` → `native-tls` 后重跑:同 token **200,413 events / 409 parsed items**。
 8. 本机恢复:配置中 `authStatus` 手动改回 `active`(token 未失效,免重连);重打安装包。
 
-修复(工作区,待提交):
+修复(已随 `fb9a7d99` 提交):
 
 - 根 `Cargo.toml`:`reqwest` features `["json","rustls-tls"]` → `["json","native-tls"]`(Windows=schannel,macOS=SecureTransport,Linux=OpenSSL)。
 - `scripts/setup-build-env-linux.sh`:apt 列表与 verify 增加 `libssl-dev`(native-tls 构建依赖)。
@@ -150,5 +150,35 @@ git merge fix/cursor-dashboard-auth-hardening
 遗留风险与待办:
 
 - **Vercel 检查点是旁路防御**:若 Cursor 将来把 schannel/OpenSSL 指纹也纳入拦截,采集器会再次全军覆没;届时只能走浏览器 cookie 铸 token(§7 暂缓方案)或正式 HTTP 客户端伪装。
-- Mac(SecureTransport)与 Linux(OpenSSL)真机各需验证一次 checkpoint 放行情况;`cargo test --workspace` 需在两平台复跑。
+- ~~Mac(SecureTransport)真机验证~~ ✅ 已通过(§11);Linux(OpenSSL)真机仍需验证一次。
 - 旧版客户端(≤0.7.13)用户即使重连也会复现卡死循环;发版通报要讲清楚"必须升级"。
+
+## 11. Mac 真机验证记录(2026-08-28)
+
+环境:macOS arm64,分支 tip `fb9a7d99`,`scripts/release.sh --platform current --env env.local --yes` 构建,产物 `dist/AI Token League-darwin-arm64.dmg` / `.app`(arm64;主程序与 `atl-collector` 均已链接 Security.framework = native-tls/SecureTransport 生效)。
+
+装前基线(旧 0.7.13 自建包,已含 `3154053d`):
+
+1. 本机 cursor 账号 jasper.cui@oneaix.com,`authStatus: active` 但 `ignored: true`(事故期间断开连接所致)→ discover 跳过、零 fetch。
+2. usage cache:`partial: true`、`failedProviderIds: [cursor_dashboard_usage]`、`providerErrors: {"cursor_dashboard_usage": "scan returned no rows; previous rows preserved"}`、cursor 48 行 —— **P0-4 防御已在真实事故中生效,48 行历史被保住**。
+
+操作与结果:
+
+1. 门禁(native-tls 后):`cargo test --workspace` exit 0(collector-core 363 单测 + 18 集成,atl-collector 12 + 9 + 3);`npm test` 全过;`node --check src/desktop/renderer.js` ok;`npm run test:ui` 544 过;`npm run test:e2e` 94 过(含 `fb826dda` 新增 cursor/latestUsageDay 用例)。
+2. 安装:退出旧实例 → 备份 `~/.ai-token-league/config.json.bak-20260828-pre-native-tls` → 账号 `ignored` 改回 `false`(token 未失效,免重连)→ 替换 `/Applications/AI Token League.app`。
+   - ⚠️ 打包注意:`release.sh` 收集产物后的 `.app` 内**无 `_CodeSignature`**(`codesign -v` 报 "code has no resources but signature indicates they must be present"),本机安装前用 `codesign --force --deep -s -` ad-hoc 重签修复。正式发版走 `patch-dmg-layout.sh` / publish 流程时需确认签名完整。
+3. 启动安装版,开机自动扫描(15:32)后 usage cache:
+
+   ```text
+   partial: false | failedProviderIds: [] | providerErrors: {}
+   items: 2694(装前 2693)| cursor items: 48(稳定,无丢失)
+   cursor health: detected/enabled/ok = true
+                 latestUsageDay: "2026-08-27"
+                 sources[0]: label=jasper.cui@oneaix.com, authStatus=active, ignored=false
+   ```
+
+4. **结论:macOS SecureTransport(native-tls)通过 cursor.com Vercel 检查点 ✅**。`latestUsageDay` 从原始事件流推导(含 Pro included 零 token 事件),只有 fetch 拿到 200 才会有值——它就是"指纹放行"的直接证据。扫描非 partial、零 provider 错误,说明本次扫描产出了当前 cursor 行(重算出等量 48 个小时桶),故 preserve 错误按设计未再出现。
+5. UI 目检:回归模型无图片输入,Tauri WKWebView 不暴露 AX;渲染层(fb826dda 的 latestUsageDay → 来源卡"最后使用")由 e2e 新用例覆盖,真机截图存档 `/tmp/atl-installed-01-initial.png`,来源页建议人工目检一次。
+6. 稳定性:App + sidecar 进程持续存活,无上传队列积压文件。
+
+与 Windows 记录(§10)合并后的指纹矩阵:**rustls 全平台被拦;schannel(Windows ✅)、SecureTransport(macOS ✅)放行;OpenSSL(Linux + 各机 Node/curl 探测)放行**。
