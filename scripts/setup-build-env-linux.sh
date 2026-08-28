@@ -68,6 +68,7 @@ install_linux_packages() {
     curl \
     libappindicator3-dev \
     librsvg2-dev \
+    libssl-dev \
     libwebkit2gtk-4.1-dev \
     patchelf \
     pkg-config
@@ -85,7 +86,7 @@ verify() {
   npm -v
   rustc --version
   cargo --version
-  dpkg -s libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf >/dev/null
+  dpkg -s libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev patchelf >/dev/null
 }
 
 main() {
