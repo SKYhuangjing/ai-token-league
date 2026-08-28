@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use crate::crypto::sha256_hex;
 use crate::provider::cursor_auth;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Datelike;
 use serde_json::{json, Value};
 
@@ -27,34 +27,57 @@ impl CursorDashboardProvider {
         let now = chrono::Utc::now().to_rfc3339();
 
         for account in &mut updated.cursor_dashboard_usage.accounts {
-            if !cursor_auth::token_needs_refresh(account) {
-                continue;
-            }
-            if account.refresh_token.is_empty() {
-                account.auth_status = "reauth_required".to_string();
-                changed = true;
-                continue;
-            }
-            match cursor_auth::refresh_token(&account.refresh_token).await {
-                Ok(result) => {
-                    account.access_token = result.access_token;
-                    if let Some(rt) = result.refresh_token {
-                        account.refresh_token = rt;
-                    }
-                    account.last_refresh_at = Some(now.clone());
-                    account.auth_status = "active".to_string();
-                    // Extract exp from new JWT
-                    let (_, exp) = cursor_auth::extract_jwt_claims(&account.access_token);
-                    account.access_token_expires_at = exp;
-                    changed = true;
-                }
-                Err(cursor_auth::CursorRefreshError::ReauthRequired) => {
+            if cursor_auth::token_needs_refresh(account) {
+                if account.refresh_token.is_empty() {
                     account.auth_status = "reauth_required".to_string();
                     changed = true;
+                    continue;
                 }
-                Err(cursor_auth::CursorRefreshError::Transient(_)) => {
-                    account.auth_status = "refresh_failed".to_string();
-                    changed = true;
+                match cursor_auth::refresh_token(&account.refresh_token).await {
+                    Ok(result) => {
+                        account.access_token = result.access_token;
+                        if let Some(rt) = result.refresh_token {
+                            account.refresh_token = rt;
+                        }
+                        account.last_refresh_at = Some(now.clone());
+                        account.auth_status = "active".to_string();
+                        // Extract exp from new JWT
+                        let (_, exp) = cursor_auth::extract_jwt_claims(&account.access_token);
+                        account.access_token_expires_at = exp;
+                        changed = true;
+                    }
+                    Err(cursor_auth::CursorRefreshError::ReauthRequired) => {
+                        account.auth_status = "reauth_required".to_string();
+                        changed = true;
+                    }
+                    Err(cursor_auth::CursorRefreshError::Transient(_)) => {
+                        account.auth_status = "refresh_failed".to_string();
+                        changed = true;
+                    }
+                }
+            }
+
+            // Older clients silently accepted a failed /api/auth/me request,
+            // leaving email empty and exposing accountHash as the UI label.
+            // Repair those records opportunistically with the corrected cookie.
+            if account.auth_status == "active"
+                && account.email.trim().is_empty()
+                && !account.access_token.is_empty()
+            {
+                if let Ok(info) =
+                    cursor_auth::fetch_account_info(&account.access_token, &account.sub).await
+                {
+                    if !info.email.is_empty() {
+                        account.email = info.email;
+                        account.account_hash = cursor_auth::compute_account_hash(
+                            &account.email,
+                            &updated.participant_id,
+                        );
+                        if !info.sub.is_empty() {
+                            account.sub = info.sub;
+                        }
+                        changed = true;
+                    }
                 }
             }
         }
@@ -334,6 +357,23 @@ impl CursorDashboardProvider {
 
         items
     }
+
+    /// Latest successful usage activity returned by the dashboard API.
+    ///
+    /// Cursor omits `tokenUsage` for included/free Auto requests, so this is
+    /// intentionally derived from the raw event stream rather than parsed
+    /// token rows. Failed, uncharged requests are not user usage.
+    pub fn latest_usage_day(&self, events: &[Value]) -> Option<String> {
+        events
+            .iter()
+            .filter(|event| !is_errored_not_charged(event))
+            .filter_map(|event| {
+                let timestamp = parse_event_timestamp(&event["timestamp"]);
+                (timestamp > 0).then_some(timestamp)
+            })
+            .max()
+            .map(crate::date::local_day_from_timestamp_ms)
+    }
 }
 
 fn is_auth_http_error(error: &str) -> bool {
@@ -382,6 +422,13 @@ fn parse_event_timestamp(raw: &Value) -> i64 {
         }
     }
     0
+}
+
+fn is_errored_not_charged(event: &Value) -> bool {
+    ["kind", "eventKind", "usageEventKind"]
+        .iter()
+        .filter_map(|key| event.get(*key).and_then(Value::as_str))
+        .any(|kind| kind == "USAGE_EVENT_KIND_ERRORED_NOT_CHARGED")
 }
 
 fn timestamp_number_to_millis(value: i64) -> i64 {
@@ -450,11 +497,17 @@ pub fn cursor_token_to_cookie(value: &str) -> String {
     format!("WorkosCursorSessionToken={}", urlencoding::encode(&decoded))
 }
 
-/// Build a WorkosCursorSessionToken cookie from sub and access_token.
-/// Cursor expects encodeURIComponent(sub + "::" + accessToken).
+/// Build the browser-compatible WorkosCursorSessionToken cookie.
+///
+/// Cursor's access-token JWT uses an Auth0 subject (`auth0|user_...`), while
+/// the dashboard cookie is keyed by the underlying WorkOS user id
+/// (`user_...`). Prefer the canonical id embedded in the token and only fall
+/// back to the supplied subject for opaque/legacy tokens.
 pub fn build_cursor_session_cookie(sub: &str, access_token: &str) -> String {
-    if !sub.is_empty() {
-        let raw = format!("{}::{}", sub, access_token);
+    let cookie_user_id =
+        cursor_user_id_from_token(access_token).unwrap_or_else(|| sub.trim().to_string());
+    if !cookie_user_id.is_empty() {
+        let raw = format!("{}::{}", cookie_user_id, access_token);
         format!("WorkosCursorSessionToken={}", urlencoding::encode(&raw))
     } else {
         cursor_token_to_cookie(access_token)
@@ -466,8 +519,7 @@ fn cursor_user_id_from_token(token: &str) -> Option<String> {
     if parts.len() != 3 {
         return None;
     }
-    let payload = parts[1].replace('-', "+").replace('_', "/");
-    let decoded = BASE64.decode(payload).ok()?;
+    let decoded = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
     let obj: Value = serde_json::from_slice(&decoded).ok()?;
     let sub = obj["sub"].as_str()?;
     let re = regex::Regex::new(r"user_[A-Za-z0-9]+").ok()?;
@@ -649,6 +701,34 @@ mod tests {
     }
 
     #[test]
+    fn latest_usage_day_includes_free_events_without_token_usage() {
+        let provider = CursorDashboardProvider;
+        let events = vec![
+            json!({
+                "tokenUsage": { "inputTokens": 100 },
+                "timestamp": "2026-08-17T08:00:00Z"
+            }),
+            json!({
+                "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO",
+                "isTokenBasedCall": false,
+                "model": "default",
+                "timestamp": "2026-08-28T04:00:00Z"
+            }),
+            json!({
+                "kind": "USAGE_EVENT_KIND_ERRORED_NOT_CHARGED",
+                "timestamp": "2026-08-29T04:00:00Z"
+            }),
+        ];
+
+        assert_eq!(
+            provider.latest_usage_day(&events),
+            Some(crate::date::local_day_from_timestamp_ms(
+                parse_event_timestamp(&json!("2026-08-28T04:00:00Z"))
+            ))
+        );
+    }
+
+    #[test]
     fn test_parse_event_timestamp() {
         assert_eq!(
             parse_event_timestamp(&json!(1704067200000_i64)),
@@ -692,23 +772,33 @@ mod tests {
     }
 
     #[test]
-    fn test_build_cookie_encodes_complete_auth0_session_value() {
+    fn test_build_cookie_uses_canonical_workos_user_id_from_auth0_subject() {
         let sub = "auth0|user_01HPX9ABCDEF";
-        let access_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzAxSFBYOUFCQ0RFRiJ9.sig";
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"auth0|user_01HPX9ABCDEF","type":"web"}"#);
+        let access_token = format!("header.{}.signature", payload);
 
-        let cookie = build_cursor_session_cookie(sub, access_token);
+        let cookie = build_cursor_session_cookie(sub, &access_token);
         let expected = format!(
             "WorkosCursorSessionToken={}",
-            urlencoding::encode(&format!("{}::{}", sub, access_token))
+            urlencoding::encode(&format!("user_01HPX9ABCDEF::{}", access_token))
         );
 
         assert_eq!(cookie, expected);
-        assert!(cookie.contains("auth0%7Cuser_"));
+        assert!(!cookie.contains("auth0%7C"));
         assert!(cookie.contains("%3A%3A"));
     }
 
+    #[test]
+    fn test_build_cookie_falls_back_to_supplied_subject_for_opaque_token() {
+        let cookie = build_cursor_session_cookie("legacy-user", "opaque-token");
+        assert_eq!(
+            cookie,
+            "WorkosCursorSessionToken=legacy-user%3A%3Aopaque-token"
+        );
+    }
+
     /// Simulate the full scanner cookie-matching flow with an Auth0 sub.
-    /// discover_sources builds cookies via build_cursor_session_cookie (new style).
+    /// discover_sources builds the canonical WorkOS-user cookie.
     /// The scanner's account_cookies map should also use build_cursor_session_cookie.
     /// They must match for reactive refresh to work.
     #[test]
@@ -719,9 +809,10 @@ mod tests {
         };
         use std::collections::HashMap;
 
+        let payload =
+            URL_SAFE_NO_PAD.encode(r#"{"sub":"auth0|user_01HPX9ABCDEF","type":"session"}"#);
         let account = CursorAccount {
-            access_token: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhdXRoMHx1c2VyXzAxSFBYOUFCQ0RFRiJ9.sig"
-                .into(),
+            access_token: format!("header.{}.signature", payload),
             refresh_token: "rt_mock_jasper".into(),
             auth_id: "auth_abc".into(),
             sub: "auth0|user_01HPX9ABCDEF".into(),
@@ -787,6 +878,8 @@ mod tests {
         let sources = provider.discover_sources(&cfg);
         assert_eq!(sources.len(), 1, "one active account → one source");
         let source_cookie = &sources[0].cookie;
+        assert!(source_cookie.starts_with("WorkosCursorSessionToken=user_01HPX9ABCDEF%3A%3A"));
+        assert!(!source_cookie.contains("auth0%7C"));
 
         // Scanner's account_cookies map (now also uses build_cursor_session_cookie)
         let account_cookies: Vec<(String, usize)> = cfg

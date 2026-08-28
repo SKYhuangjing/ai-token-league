@@ -804,6 +804,30 @@ describe('buildProviderOverviewIndex', () => {
     expect(index.get('dsh_local').lastUsedDay).toBe('2026-08-10');
   });
 
+  it('uses provider activity metadata for latest usage without changing token statistics', () => {
+    const index = buildProviderOverviewIndex([
+      makeItem('2026-08-17', 'cursor_dashboard_usage', 'cursor-grok-4.6-high')
+    ], TODAY, [{ providerId: 'cursor_dashboard_usage', latestUsageDay: '2026-08-22' }]);
+    const entry = index.get('cursor_dashboard_usage');
+
+    expect(entry.lastUsedDay).toBe('2026-08-22');
+    expect(entry.totalTokens).toBe(180);
+    expect(entry.activeDays).toBe(1);
+    expect(entry.models).toEqual([{ model: 'cursor-grok-4.6-high', totalTokens: 180 }]);
+  });
+
+  it('shows latest activity metadata even when Cursor returned no token rows', () => {
+    const index = buildProviderOverviewIndex([], TODAY, [
+      { providerId: 'cursor_dashboard_usage', latestUsageDay: '2026-08-22' }
+    ]);
+    const entry = index.get('cursor_dashboard_usage');
+
+    expect(entry.lastUsedDay).toBe('2026-08-22');
+    expect(entry.totalTokens).toBe(0);
+    expect(entry.activeDays).toBe(0);
+    expect(entry.hasData).toBe(true);
+  });
+
   it('keeps composition equal to totalTokens for normalized items', () => {
     const items = [
       makeItem('2026-08-22', 'opencode_local', 'qwen3', { inputTokens: 1234, outputTokens: 567, cacheReadTokens: 89, cacheWriteTokens: 10 }),

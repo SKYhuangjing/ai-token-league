@@ -93,7 +93,7 @@ export function sourceSummary(item, t = (k) => k) {
 // Single pass over all usage items building the per-provider overview index
 // shared by every provider card on the Sources screen. Days are ISO strings,
 // so window membership is a plain string range check against [today-6, today].
-export function buildProviderOverviewIndex(items, todayDay = localDay()) {
+export function buildProviderOverviewIndex(items, todayDay = localDay(), health = []) {
   const index = new Map();
   const weekStartDay = addDays(todayDay, -6);
   for (const item of items || []) {
@@ -138,6 +138,26 @@ export function buildProviderOverviewIndex(items, todayDay = localDay()) {
         .sort((a, b) => b.totalTokens - a.totalTokens),
       hasData: entry.totalTokens > 0
     });
+  }
+  for (const provider of health || []) {
+    const providerId = provider?.providerId;
+    const latestUsageDay = provider?.latestUsageDay;
+    if (!providerId || !/^\d{4}-\d{2}-\d{2}$/.test(latestUsageDay || "")) continue;
+    const entry = index.get(providerId) || {
+      totalTokens: 0,
+      todayTokens: 0,
+      weekTokens: 0,
+      activeDays: 0,
+      lastUsedDay: null,
+      composition: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      models: [],
+      hasData: false
+    };
+    entry.lastUsedDay = !entry.lastUsedDay || latestUsageDay > entry.lastUsedDay
+      ? latestUsageDay
+      : entry.lastUsedDay;
+    entry.hasData = true;
+    index.set(providerId, entry);
   }
   return index;
 }

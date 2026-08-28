@@ -223,6 +223,13 @@
       sources: [{ kind: "auto", id: "/Users/demo/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home", label: "kimi-desktop", path: "/Users/demo/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home", ignored: false }],
     },
     {
+      providerId: "cursor_dashboard_usage", toolCode: "cursor",
+      enabled: true, detected: true, ok: true, scannedFiles: 1,
+      latestUsageDay: today,
+      roots: ["cursor@example.com"],
+      sources: [{ kind: "manual", id: "cursor-account", label: "cursor@example.com", ignored: false }],
+    },
+    {
       providerId: "opencode_local", toolCode: "opencode",
       enabled: true, detected: false, ok: false, scannedFiles: 0,
       roots: [],

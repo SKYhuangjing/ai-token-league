@@ -3653,7 +3653,7 @@ function renderHealth() {
   // exceeded FULL_USAGE_RENDER_CACHE_LIMIT so the overview degrades instead
   // of showing misleading zeros.
   const overviewCapped = allUsage.length === 0 && usageQueryState.lastRowCount > 0;
-  const overviewIndex = _buildProviderOverviewIndex(allUsage, localDay());
+  const overviewIndex = _buildProviderOverviewIndex(allUsage, localDay(), latestHealth);
   const selectedHealth = latestHealth.filter((item) => item.providerId === sourcesProviderTab);
   const renderItems = selectedHealth.length ? selectedHealth : latestHealth;
   const html = renderItems

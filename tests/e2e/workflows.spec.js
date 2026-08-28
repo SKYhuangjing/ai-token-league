@@ -94,6 +94,18 @@ test.describe('Sources Workflows', () => {
     await expect(overview.locator('.provider-overview-stats')).toHaveCount(0);
   });
 
+  test('Cursor latest usage includes activity metadata without token rows', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    const cursorNav = page.locator('#provider-nav-list [data-provider-nav="cursor_dashboard_usage"]');
+    await cursorNav.click();
+
+    const overview = page.locator('#settings-source-list .provider-overview').first();
+    await expect(overview.locator('.provider-overview-stat strong').first()).toHaveText('0');
+    await expect(overview.locator('.provider-overview-last')).toContainText(/\d{4}-\d{2}-\d{2}/);
+    await expect(overview.locator('.provider-overview-note')).toHaveCount(0);
+  });
+
   test('sources screen renders workbuddy provider card from its nav item', async ({ page }) => {
     await navigateTo(page, 'sources');
 

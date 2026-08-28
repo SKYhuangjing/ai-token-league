@@ -242,25 +242,38 @@ pub async fn fetch_account_info(access_token: &str, sub: &str) -> Result<Account
         .await
         .map_err(|e| format!("account info parse error: {}", e))?;
 
-    let email = body
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-
-    let user_sub = body
-        .get("sub")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Ok(AccountInfo {
-        email,
-        sub: user_sub,
-    })
+    Ok(parse_account_info(&body))
 }
 
+fn parse_account_info(body: &Value) -> AccountInfo {
+    let email = [
+        body.get("email"),
+        body.get("user").and_then(|value| value.get("email")),
+        body.get("data").and_then(|value| value.get("email")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_lowercase();
+
+    let sub = [
+        body.get("sub"),
+        body.get("user").and_then(|value| value.get("sub")),
+        body.get("data").and_then(|value| value.get("sub")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_string();
+
+    AccountInfo { email, sub }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountInfo {
     pub email: String,
     pub sub: String,
@@ -503,6 +516,35 @@ mod tests {
         let h1 = compute_account_hash("user@example.com", "p_123");
         let h2 = compute_account_hash("user@example.com", "p_456");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn parse_account_info_reads_top_level_cursor_response() {
+        let info = parse_account_info(&json!({
+            "email": " Jasper.Cui@OneAix.com ",
+            "sub": "auth0|user_01ABC"
+        }));
+
+        assert_eq!(
+            info,
+            AccountInfo {
+                email: "jasper.cui@oneaix.com".to_string(),
+                sub: "auth0|user_01ABC".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_account_info_accepts_nested_user_response() {
+        let info = parse_account_info(&json!({
+            "user": {
+                "email": "user@example.com",
+                "sub": "auth0|user_02DEF"
+            }
+        }));
+
+        assert_eq!(info.email, "user@example.com");
+        assert_eq!(info.sub, "auth0|user_02DEF");
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
 
         let mut cursor_items = Vec::new();
         let mut cursor_errors = Vec::new();
+        let mut latest_usage_day: Option<String> = None;
         let sources = cursor.discover_sources(&config);
 
         // Build a map from cookie to account index for reactive refresh
@@ -91,6 +92,14 @@ pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
 
             match fetch_result {
                 Ok(events) => {
+                    if let Some(day) = cursor.latest_usage_day(&events) {
+                        if latest_usage_day
+                            .as_ref()
+                            .is_none_or(|current| day > *current)
+                        {
+                            latest_usage_day = Some(day);
+                        }
+                    }
                     cursor_items.extend(
                         cursor
                             .parse_events(&events, &source.account_name)
@@ -115,6 +124,7 @@ pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
             cursor.tool_code(),
             &config,
             &sources,
+            latest_usage_day.as_deref(),
         ));
     } else {
         let sources = cursor.discover_sources(config);
@@ -123,6 +133,7 @@ pub async fn scan_usage_async_with_source_cache<C: SourceCache>(
             cursor.tool_code(),
             config,
             &sources,
+            None,
         ));
     }
 
@@ -680,7 +691,13 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
             kimi_files.len(),
             true,
         ),
-        cursor_provider_health(cursor.id(), cursor.tool_code(), config, &cursor_sources),
+        cursor_provider_health(
+            cursor.id(),
+            cursor.tool_code(),
+            config,
+            &cursor_sources,
+            None,
+        ),
     ]
 }
 
@@ -723,19 +740,15 @@ fn cursor_provider_health(
     tool_code: &str,
     config: &AppConfig,
     detected_sources: &[crate::provider::cursor_dashboard::CursorSource],
+    latest_usage_day: Option<&str>,
 ) -> Value {
     let mut sources = Vec::new();
 
     for (index, account) in config.cursor_dashboard_usage.accounts.iter().enumerate() {
         let label = if !account.email.trim().is_empty() {
             account.email.clone()
-        } else if !account.account_hash.trim().is_empty() {
-            format!(
-                "Cursor {}",
-                &account.account_hash[..account.account_hash.len().min(8)]
-            )
         } else {
-            format!("Cursor {}", index + 1)
+            format!("Cursor #{}", index + 1)
         };
         let id = if !account.account_hash.trim().is_empty() {
             account.account_hash.clone()
@@ -768,7 +781,8 @@ fn cursor_provider_health(
         "ok": detected,
         "roots": roots,
         "sources": sources,
-        "scannedFiles": detected_sources.len()
+        "scannedFiles": detected_sources.len(),
+        "latestUsageDay": latest_usage_day
     })
 }
 
@@ -1324,6 +1338,38 @@ mod tests {
             .iter()
             .any(|source| source["ignored"].as_bool() == Some(true)
                 && source["id"].as_str() == Some("user@example.com")));
+    }
+
+    #[test]
+    fn cursor_provider_health_never_exposes_account_hash_as_label() {
+        let mut cfg = test_config();
+        cfg.provider_enabled
+            .insert("cursor_dashboard_usage".to_string(), true);
+        cfg.cursor_dashboard_usage
+            .accounts
+            .push(config::CursorAccount {
+                access_token: "access".to_string(),
+                refresh_token: "refresh".to_string(),
+                auth_id: "auth_id".to_string(),
+                sub: "auth0|user".to_string(),
+                email: String::new(),
+                account_hash: "0123456789abcdef".to_string(),
+                access_token_expires_at: None,
+                last_refresh_at: None,
+                auth_status: "active".to_string(),
+                ignored: false,
+                added_at: None,
+            });
+
+        let health = provider_health(&cfg);
+        let cursor = health
+            .iter()
+            .find(|item| item["providerId"].as_str() == Some("cursor_dashboard_usage"))
+            .unwrap();
+        let source = &cursor["sources"][0];
+
+        assert_eq!(source["label"], "Cursor #1");
+        assert_eq!(source["id"], "0123456789abcdef");
     }
 
     #[test]
