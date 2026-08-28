@@ -65,7 +65,8 @@ impl CursorDashboardProvider {
         updated
     }
 
-    /// Reactive refresh: called when a usage request returns 401/403.
+    /// Reactive refresh: called when a usage request returns 401/403 or a
+    /// login redirect.
     /// Refreshes once, retries the fetch, and updates config.
     pub async fn fetch_with_reactive_refresh(
         &self,
@@ -76,7 +77,7 @@ impl CursorDashboardProvider {
         // First attempt
         match self.fetch_usage(cookie).await {
             Ok(events) => Ok(events),
-            Err(e) if e.contains("401") || e.contains("403") => {
+            Err(e) if is_auth_http_error(&e) => {
                 // Try refresh once
                 let refresh_token = {
                     let accounts = &config.cursor_dashboard_usage.accounts;
@@ -190,7 +191,22 @@ impl CursorDashboardProvider {
 
     /// Fetch usage events from Cursor dashboard API.
     pub async fn fetch_usage(&self, cookie: &str) -> Result<Vec<Value>, String> {
-        let client = reqwest::Client::new();
+        self.fetch_usage_at(
+            "https://cursor.com/api/dashboard/get-filtered-usage-events",
+            cookie,
+        )
+        .await
+    }
+
+    /// URL-injectable fetch for tests. Redirects are never followed: the
+    /// dashboard API redirects to the WorkOS login flow when it rejects the
+    /// session, and following that chain used to surface as an unrelated
+    /// "HTTP 404" from api.workos.com instead of an auth failure.
+    pub async fn fetch_usage_at(&self, url: &str, cookie: &str) -> Result<Vec<Value>, String> {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("HTTP client error: {}", e))?;
         let now = chrono::Utc::now();
         let scan_start = cursor_scan_start(now);
 
@@ -208,7 +224,7 @@ impl CursorDashboardProvider {
             });
 
             let resp = client
-                .post("https://cursor.com/api/dashboard/get-filtered-usage-events")
+                .post(url)
                 .header("Origin", "https://cursor.com")
                 .header("Referer", "https://cursor.com/dashboard/usage")
                 .header("Content-Type", "application/json")
@@ -223,6 +239,9 @@ impl CursorDashboardProvider {
                 .await
                 .map_err(|e| format!("HTTP error: {}", e))?;
 
+            if resp.status().is_redirection() {
+                return Err(format!("HTTP {} (login redirect)", resp.status()));
+            }
             if !resp.status().is_success() {
                 return Err(format!("HTTP {}", resp.status()));
             }
@@ -318,7 +337,12 @@ impl CursorDashboardProvider {
 }
 
 fn is_auth_http_error(error: &str) -> bool {
-    error == "HTTP 401 Unauthorized" || error == "HTTP 403 Forbidden"
+    error == "HTTP 401 Unauthorized"
+        || error == "HTTP 403 Forbidden"
+        // Login redirects (301/302/303/307/308) mean the session token was
+        // rejected by cursor.com and the request was bounced to WorkOS auth.
+        || error.starts_with("HTTP 30")
+        || error.contains("(login redirect)")
 }
 
 fn update_status_after_usage_retry(
@@ -461,6 +485,74 @@ pub struct CursorSource {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn mock_dashboard_response(status_line: &str, headers: &str, body: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let status_line = status_line.to_string();
+        let headers = headers.to_string();
+        let body = body.to_string();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = socket.read(&mut request).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 {}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                headers,
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        format!("http://{}/api/dashboard/get-filtered-usage-events", address)
+    }
+
+    #[test]
+    fn auth_error_classification_includes_login_redirects() {
+        assert!(is_auth_http_error("HTTP 401 Unauthorized"));
+        assert!(is_auth_http_error("HTTP 403 Forbidden"));
+        assert!(is_auth_http_error(
+            "HTTP 307 Temporary Redirect (login redirect)"
+        ));
+        assert!(is_auth_http_error("HTTP 302 Found (login redirect)"));
+        assert!(!is_auth_http_error("HTTP 404 Not Found"));
+        assert!(!is_auth_http_error("HTTP 500 Internal Server Error"));
+        assert!(!is_auth_http_error("JSON parse error: expected value"));
+    }
+
+    #[tokio::test]
+    async fn fetch_usage_at_surfaces_login_redirect_as_error() {
+        let url = mock_dashboard_response(
+            "307 Temporary Redirect",
+            "Location: https://api.workos.com/user_management/authorize?x=1\r\n",
+            "",
+        )
+        .await;
+        let error = CursorDashboardProvider
+            .fetch_usage_at(&url, "WorkosCursorSessionToken=x")
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("(login redirect)"),
+            "unexpected error: {}",
+            error
+        );
+        assert!(is_auth_http_error(&error));
+    }
+
+    #[tokio::test]
+    async fn fetch_usage_at_returns_events_on_success() {
+        let body = r#"{"totalUsageEventsCount":1,"usageEventsDisplay":[{"tokenUsage":{"inputTokens":100,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0},"model":"gpt","timestamp":1704067200000}]}"#;
+        let url = mock_dashboard_response("200 OK", "", body).await;
+        let events = CursorDashboardProvider
+            .fetch_usage_at(&url, "WorkosCursorSessionToken=x")
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+    }
 
     #[test]
     fn test_normalize_cursor_model() {

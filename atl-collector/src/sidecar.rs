@@ -979,6 +979,7 @@ fn spawn_full_reconcile_job(
             let options = collector_core::reconcile::FullReconcileOptions {
                 resume: true,
                 max_batches_per_run: 1,
+                protected_provider_ids: failed_provider_ids_from_last_scan(),
                 ..Default::default()
             };
             let result = collector_core::reconcile::full_reconcile_usage(
@@ -1227,25 +1228,17 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
         let source_cache = read_source_index_cache();
         scanner::scan_usage_async(cfg, source_cache).await
     };
-    let previous_items = if !result.provider_errors.is_empty() {
-        if let Some(store) = local_store.as_ref() {
-            store.all_usage_items().unwrap_or_default()
-        } else {
-            read_usage_cache()
-                .and_then(|snapshot| snapshot.get("items").and_then(|v| v.as_array()).cloned())
-                .unwrap_or_default()
-        }
+    let previous_items = if let Some(store) = local_store.as_ref() {
+        store.all_usage_items().unwrap_or_default()
     } else {
-        Vec::new()
+        read_usage_cache()
+            .and_then(|snapshot| snapshot.get("items").and_then(|v| v.as_array()).cloned())
+            .unwrap_or_default()
     };
-    let items = merge_failed_provider_items(result.items, previous_items, &result.provider_errors);
-    let snapshot = build_usage_snapshot(
-        items,
-        result.health,
-        result.provider_errors.clone(),
-        false,
-        cfg,
-    );
+    let mut provider_errors = result.provider_errors.clone();
+    preserve_providers_with_missing_rows(&result.items, &previous_items, cfg, &mut provider_errors);
+    let items = merge_failed_provider_items(result.items, previous_items, &provider_errors);
+    let snapshot = build_usage_snapshot(items, result.health, provider_errors.clone(), false, cfg);
     if let Some(store) = local_store.as_mut() {
         let scanned_at = snapshot
             .get("scannedAt")
@@ -1302,6 +1295,49 @@ fn merge_failed_provider_items(
     current_items
 }
 
+/// A provider that previously had rows but produced none this scan — without
+/// reporting an error — would otherwise have its local history silently wiped
+/// when the store is replaced with the new snapshot. Keep the previous rows
+/// and surface the provider as partial instead, so an upstream regression
+/// (e.g. the dashboard API quietly returning nothing) degrades visibly
+/// instead of destroying local data. Providers explicitly disabled in config
+/// are excluded: disabling a source is a deliberate removal.
+fn preserve_providers_with_missing_rows(
+    current_items: &[serde_json::Value],
+    previous_items: &[serde_json::Value],
+    cfg: &config::AppConfig,
+    provider_errors: &mut HashMap<String, String>,
+) {
+    let current_providers: HashSet<&str> = current_items
+        .iter()
+        .filter_map(|item| item.get("providerId").and_then(|v| v.as_str()))
+        .collect();
+    let previous_providers: HashSet<&str> = previous_items
+        .iter()
+        .filter_map(|item| item.get("providerId").and_then(|v| v.as_str()))
+        .collect();
+    for provider_id in previous_providers {
+        if current_providers.contains(provider_id) || provider_errors.contains_key(provider_id) {
+            continue;
+        }
+        // Local providers scan unless explicitly disabled; the dashboard
+        // provider only scans when explicitly enabled.
+        let enabled_for_scan = if provider_id == collector_core::provider::cursor_dashboard::PROVIDER_ID
+        {
+            cfg.provider_enabled.get(provider_id).copied() == Some(true)
+        } else {
+            cfg.provider_enabled.get(provider_id).copied() != Some(false)
+        };
+        if !enabled_for_scan {
+            continue;
+        }
+        provider_errors.insert(
+            provider_id.to_string(),
+            "scan returned no rows; previous rows preserved".to_string(),
+        );
+    }
+}
+
 fn build_usage_snapshot(
     items: Vec<serde_json::Value>,
     health: Vec<serde_json::Value>,
@@ -1349,6 +1385,24 @@ fn read_usage_cache() -> Option<serde_json::Value> {
     } else {
         None
     }
+}
+
+/// Providers whose last scan reported errors. Their server-only scopes must
+/// not be pruned by full reconcile: missing local rows mean the collector
+/// failed to re-read the data, not that the data stopped existing.
+fn failed_provider_ids_from_last_scan() -> Vec<String> {
+    read_usage_cache()
+        .and_then(|cache| {
+            cache
+                .get("failedProviderIds")
+                .and_then(|v| v.as_array())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|id| id.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+        })
+        .unwrap_or_default()
 }
 
 fn write_usage_cache(snapshot: &serde_json::Value) -> Result<(), String> {
@@ -2303,6 +2357,55 @@ mod tests {
     use super::*;
     use collector_core::scanner::SourceCache;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn item(provider_id: &str) -> serde_json::Value {
+        serde_json::json!({"providerId": provider_id, "day": "2026-08-27", "totalTokens": 1})
+    }
+
+    #[test]
+    fn preserve_marks_enabled_provider_that_lost_all_rows() {
+        let mut cfg = test_config();
+        cfg.provider_enabled.insert("cursor_dashboard_usage".into(), true);
+        let current = vec![item("codex_local")];
+        let previous = vec![item("cursor_dashboard_usage"), item("codex_local")];
+        let mut errors = HashMap::new();
+        preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors.contains_key("cursor_dashboard_usage"));
+    }
+
+    #[test]
+    fn preserve_skips_provider_with_current_rows_or_existing_error() {
+        let cfg = test_config();
+        let current = vec![item("codex_local")];
+        let previous = vec![item("codex_local"), item("claude_code_local")];
+        let mut errors = HashMap::new();
+        errors.insert("claude_code_local".to_string(), "scan failed".to_string());
+        preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors.get("claude_code_local").map(String::as_str), Some("scan failed"));
+    }
+
+    #[test]
+    fn preserve_respects_disable_semantics() {
+        let mut cfg = test_config();
+        // Cursor is opt-in: without an explicit true it never scans, so its
+        // previous rows must not be preserved.
+        let current: Vec<serde_json::Value> = vec![];
+        let previous = vec![item("cursor_dashboard_usage")];
+        let mut errors = HashMap::new();
+        preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
+        assert!(errors.is_empty(), "opt-in provider without enable must not be preserved");
+
+        // Local providers are opt-out: explicit false means deliberate removal.
+        cfg.provider_enabled.insert("cursor_dashboard_usage".into(), true);
+        cfg.provider_enabled.insert("claude_code_local".into(), false);
+        let previous = vec![item("cursor_dashboard_usage"), item("claude_code_local")];
+        let mut errors = HashMap::new();
+        preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors.contains_key("cursor_dashboard_usage"));
+    }
 
     static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

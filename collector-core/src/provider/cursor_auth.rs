@@ -217,7 +217,10 @@ async fn refresh_token_at(
 pub async fn fetch_account_info(access_token: &str, sub: &str) -> Result<AccountInfo, String> {
     let cookie = crate::provider::cursor_dashboard::build_cursor_session_cookie(sub, access_token);
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
     let resp = client
         .get(ACCOUNT_ME_URL)
         .header("Cookie", &cookie)

@@ -79,6 +79,8 @@ pub struct FullReconcileState {
     #[serde(default)]
     pub pruned_scope_count: usize,
     #[serde(default)]
+    pub protected_scope_count: usize,
+    #[serde(default)]
     pub rebuilt_daily_scope_count: usize,
     #[serde(default)]
     pub conflicted_scope_count: usize,
@@ -95,6 +97,12 @@ pub struct FullReconcileOptions {
     pub upload_batch_size: usize,
     pub resume: bool,
     pub max_batches_per_run: usize,
+    /// Providers whose latest scan reported errors. Server-only scopes of
+    /// these providers are never pruned: a failed provider legitimately has
+    /// no local rows, and pruning them would erase server history for data
+    /// the collector merely failed to re-read (e.g. an upstream auth outage).
+    #[serde(default)]
+    pub protected_provider_ids: Vec<String>,
 }
 
 impl Default for FullReconcileOptions {
@@ -104,6 +112,7 @@ impl Default for FullReconcileOptions {
             upload_batch_size: DEFAULT_UPLOAD_BATCH_SIZE,
             resume: false,
             max_batches_per_run: 0,
+            protected_provider_ids: Vec::new(),
         }
     }
 }
@@ -121,6 +130,7 @@ pub struct FullReconcileResult {
     pub unknown_legacy_bucket_count: usize,
     pub server_only_scope_count: usize,
     pub pruned_scope_count: usize,
+    pub protected_scope_count: usize,
     pub rebuilt_daily_scope_count: usize,
     pub conflicted_scope_count: usize,
 }
@@ -340,6 +350,11 @@ pub async fn full_reconcile_usage(
     let local_daily_scopes = local_daily_scope_keys(items);
     let local_hourly_scopes = local_hourly_scope_keys(items);
     let protected_recent_days = protected_recent_reconcile_days(&crate::date::local_day());
+    let protected_providers: HashSet<String> = options
+        .protected_provider_ids
+        .iter()
+        .cloned()
+        .collect();
 
     // Find cursor position
     let start_index = resolve_start_index(&mut state, &all_buckets);
@@ -373,6 +388,7 @@ pub async fn full_reconcile_usage(
         unknown_legacy_bucket_count: state.unknown_legacy_bucket_count,
         server_only_scope_count: state.server_only_scope_count,
         pruned_scope_count: state.pruned_scope_count,
+        protected_scope_count: state.protected_scope_count,
         rebuilt_daily_scope_count: state.rebuilt_daily_scope_count,
         conflicted_scope_count: state.conflicted_scope_count,
     };
@@ -531,6 +547,7 @@ pub async fn full_reconcile_usage(
         api_base_url,
         &local_hourly_scopes,
         &protected_recent_days,
+        &protected_providers,
         &mut state,
         options.max_batches_per_run > 0,
     )
@@ -547,9 +564,11 @@ pub async fn full_reconcile_usage(
         cumulative.server_only_scope_count += hourly_inventory_outcome.server_only;
         cumulative.pruned_scope_count += hourly_inventory_outcome.pruned;
         cumulative.conflicted_scope_count += hourly_inventory_outcome.conflicts;
+        cumulative.protected_scope_count += hourly_inventory_outcome.protected;
         state.server_only_scope_count = cumulative.server_only_scope_count;
         state.pruned_scope_count = cumulative.pruned_scope_count;
         state.conflicted_scope_count = cumulative.conflicted_scope_count;
+        state.protected_scope_count = cumulative.protected_scope_count;
         state.status = FullReconcileStatus::Pending;
         state.updated_at = now_iso();
         save_full_reconcile_state(api_base_url, &state);
@@ -562,6 +581,7 @@ pub async fn full_reconcile_usage(
         api_base_url,
         &local_daily_scopes,
         &protected_recent_days,
+        &protected_providers,
         &mut state,
         options.max_batches_per_run > 0,
     )
@@ -580,10 +600,13 @@ pub async fn full_reconcile_usage(
     cumulative.rebuilt_daily_scope_count += inventory_outcome.rebuilt;
     cumulative.conflicted_scope_count +=
         hourly_inventory_outcome.conflicts + inventory_outcome.conflicts;
+    cumulative.protected_scope_count +=
+        hourly_inventory_outcome.protected + inventory_outcome.protected;
     state.server_only_scope_count = cumulative.server_only_scope_count;
     state.pruned_scope_count = cumulative.pruned_scope_count;
     state.rebuilt_daily_scope_count = cumulative.rebuilt_daily_scope_count;
     state.conflicted_scope_count = cumulative.conflicted_scope_count;
+    state.protected_scope_count = cumulative.protected_scope_count;
 
     if inventory_outcome.needs_resume {
         state.status = FullReconcileStatus::Pending;
@@ -727,7 +750,21 @@ struct InventoryReconcileOutcome {
     pruned: usize,
     rebuilt: usize,
     conflicts: usize,
+    protected: usize,
     needs_resume: bool,
+}
+
+/// A server-only scope may only be pruned when its provider is healthy and
+/// the day is outside the recent-protection window. Providers whose latest
+/// scan errored keep their server-only scopes: missing local rows then mean
+/// "could not re-read", not "data deleted".
+fn scope_prune_allowed(
+    day: &str,
+    provider_id: &str,
+    protected_recent_days: &HashSet<String>,
+    protected_providers: &HashSet<String>,
+) -> bool {
+    !protected_recent_days.contains(day) && !protected_providers.contains(provider_id)
 }
 
 fn protected_recent_reconcile_days(reference_day: &str) -> HashSet<String> {
@@ -773,6 +810,7 @@ async fn reconcile_device_hourly_inventory(
     api_base_url: &str,
     local_hourly_scopes: &HashSet<String>,
     protected_recent_days: &HashSet<String>,
+    protected_providers: &HashSet<String>,
     state: &mut FullReconcileState,
     single_page: bool,
 ) -> Result<InventoryReconcileOutcome, String> {
@@ -824,9 +862,14 @@ async fn reconcile_device_hourly_inventory(
                 return Err("invalid hourly reconcile inventory response".to_string());
             }
             let key = format!("{}|{:02}|{}", day, hour, provider_id);
-            if !local_hourly_scopes.contains(&key) && !protected_recent_days.contains(day) {
-                page_outcome.server_only += 1;
-                actions.push(json!({"day": day, "hour": hour, "providerId": provider_id, "action": "prune_hourly", "expectedFingerprint": fingerprint}));
+            if !local_hourly_scopes.contains(&key) {
+                if !scope_prune_allowed(day, provider_id, protected_recent_days, protected_providers)
+                {
+                    page_outcome.protected += 1;
+                } else {
+                    page_outcome.server_only += 1;
+                    actions.push(json!({"day": day, "hour": hour, "providerId": provider_id, "action": "prune_hourly", "expectedFingerprint": fingerprint}));
+                }
             }
         }
         for action_chunk in actions.chunks(INVENTORY_ACTION_BATCH_SIZE) {
@@ -907,6 +950,7 @@ async fn reconcile_device_daily_inventory(
     api_base_url: &str,
     local_daily_scopes: &HashSet<String>,
     protected_recent_days: &HashSet<String>,
+    protected_providers: &HashSet<String>,
     state: &mut FullReconcileState,
     single_page: bool,
 ) -> Result<InventoryReconcileOutcome, String> {
@@ -950,7 +994,12 @@ async fn reconcile_device_daily_inventory(
                 return Err("invalid reconcile inventory response".to_string());
             }
             let key = daily_bucket_key(day, provider_id);
-            if !local_daily_scopes.contains(&key) && !protected_recent_days.contains(day) {
+            if !local_daily_scopes.contains(&key) {
+                if !scope_prune_allowed(day, provider_id, protected_recent_days, protected_providers)
+                {
+                    outcome.protected += 1;
+                    continue;
+                }
                 // Local facts are reconciled by the hourly/daily bucket pass before this
                 // inventory pass. Rebuilding every matching daily scope here would turn an
                 // otherwise read-only inventory check into hundreds of needless writes.
@@ -1589,6 +1638,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scope_prune_allowed_respects_recent_days_and_failed_providers() {
+        let recent_days: HashSet<String> = ["2026-08-27", "2026-08-28"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let failed: HashSet<String> = ["cursor_dashboard_usage"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        assert!(scope_prune_allowed(
+            "2026-08-01",
+            "codex_local",
+            &recent_days,
+            &failed
+        ));
+        assert!(!scope_prune_allowed(
+            "2026-08-27",
+            "codex_local",
+            &recent_days,
+            &failed
+        ));
+        assert!(!scope_prune_allowed(
+            "2026-08-01",
+            "cursor_dashboard_usage",
+            &recent_days,
+            &failed
+        ));
+    }
+
+    #[test]
     fn detect_granularity_returns_hourly_for_current_protocol() {
         let bucket = json!({
             "mode": "device_day_hour_provider",
@@ -1699,6 +1779,7 @@ mod tests {
             unknown_legacy_bucket_count: 0,
             server_only_scope_count: 3,
             pruned_scope_count: 2,
+            protected_scope_count: 1,
             rebuilt_daily_scope_count: 4,
             conflicted_scope_count: 0,
         };
@@ -1708,6 +1789,7 @@ mod tests {
         assert_eq!(json["repairUploadedBucketCount"], 18);
         assert_eq!(json["unknownLegacyBucketCount"], 0);
         assert_eq!(json["prunedScopeCount"], 2);
+        assert_eq!(json["protectedScopeCount"], 1);
         assert_eq!(json["status"], "completed");
     }
 

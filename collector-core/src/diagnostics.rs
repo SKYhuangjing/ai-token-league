@@ -102,7 +102,13 @@ fn read_usage_cache_summary() -> Value {
         "rowCount": row_count,
         "scannedAt": raw.get("scannedAt").cloned().unwrap_or(Value::Null),
         "sourceFingerprint": raw.get("sourceFingerprint").cloned().unwrap_or(Value::Null),
-        "usageSourceConfigFingerprint": raw.get("usageSourceConfigFingerprint").cloned().unwrap_or(Value::Null)
+        "usageSourceConfigFingerprint": raw.get("usageSourceConfigFingerprint").cloned().unwrap_or(Value::Null),
+        // Provider failures live only in the last snapshot; without them a
+        // silently broken provider (e.g. an auth redirect) is invisible in
+        // exported diagnostics.
+        "partial": raw.get("partial").cloned().unwrap_or(Value::Bool(false)),
+        "failedProviderIds": raw.get("failedProviderIds").cloned().unwrap_or_else(|| json!([])),
+        "providerErrors": raw.get("providerErrors").cloned().unwrap_or_else(|| json!({}))
     })
 }
 
@@ -322,6 +328,28 @@ mod tests {
         let summary = summarize_payload(&json!({}));
         assert_eq!(summary["itemCount"], 0);
         assert_eq!(summary["totalTokens"], 0);
+    }
+
+    #[test]
+    fn test_export_diagnostics_includes_provider_errors() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let _sandbox = config::AtlHomeSandbox::new();
+        config::ensure_app_dir();
+        fs::write(
+            config::usage_cache_path(),
+            r#"{"rowCount":3,"partial":true,"failedProviderIds":["cursor_dashboard_usage"],"providerErrors":{"cursor_dashboard_usage":"authorized: HTTP 307 Temporary Redirect (login redirect)"}}"#,
+        )
+        .unwrap();
+
+        let cfg = make_config();
+        let diag = export_diagnostics(&cfg);
+
+        assert_eq!(diag["usageCache"]["partial"], json!(true));
+        assert_eq!(
+            diag["usageCache"]["failedProviderIds"][0],
+            json!("cursor_dashboard_usage")
+        );
+        assert!(diag["usageCache"]["providerErrors"]["cursor_dashboard_usage"].is_string());
     }
 
     #[test]
