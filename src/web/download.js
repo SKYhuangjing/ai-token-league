@@ -5,12 +5,13 @@ import {
   escapeHtml, escapeAttribute, sourceName, formatCost, formatTokenRaw,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
   renderModelSegments, renderCost, renderTrendChart,
-  renderBarChart, renderDonutChart, renderActivityHeatmap, renderParticipantTreemap
+  renderBarChart, renderDonutChart, renderActivityHeatmap, renderParticipantTreemap,
+  providerSourceColor
 } from "/shared/chart-helpers.js";
 
 initI18n();
 
-const state = { summaryData: null, analyticsData: null, trendData: null, leaderboardData: null };
+const state = { summaryData: null, analyticsData: null, trendData: null, leaderboardData: null, sourceLeaderboardData: null };
 
 function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
@@ -262,6 +263,78 @@ function renderLeaderboardPreview(items) {
       </article>`;
     })
     .join("");
+}
+
+function rankIconSvg(rank) {
+  if (rank === 1) {
+    return `<svg class="rank-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978"/><path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978"/><path d="M18 9h1.5a1 1 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"/><path d="M6 9H4.5a1 1 0 0 1 0-5H6"/></svg>`;
+  }
+  return `<svg class="rank-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
+}
+
+function renderSourceTop(sources = []) {
+  const el = document.querySelector("#home-source-top");
+  if (!el) return;
+  const blocks = sources.filter((source) => (source.items || []).length);
+  if (!blocks.length) {
+    el.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noUsage")}</div>`;
+    return;
+  }
+  el.innerHTML = blocks
+    .map((source) => {
+      const sourceTotal = Number(source.totalTokens || 0);
+      const barColor = providerSourceColor(source.name);
+      const rows = (source.items || [])
+        .map((item) => {
+          const share = sourceTotal > 0
+            ? Math.max(6, (Number(item.totalTokens || 0) / sourceTotal) * 100)
+            : 0;
+          const rank = Number(item.rank) || 0;
+          const rankClass = rank >= 1 && rank <= 3 ? ` is-rank-${rank}` : "";
+          const avatar = item.avatarColor
+            ? `<i class="source-top-avatar" style="background:${escapeAttribute(item.avatarColor)}"></i>`
+            : "";
+          const medalIcon = rank >= 1 && rank <= 3
+            ? `<span class="source-top-medal-icon medal-icon-${rank}">${rankIconSvg(rank)}</span>`
+            : "";
+          return `<article class="top-row${rankClass}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+            <span class="rank-badge rank-badge-${rank}">${medalIcon}<span class="n">${rank || ""}</span></span>
+            <span class="nm">${avatar}${escapeHtml(item.displayName || "")}</span>
+            <span class="tv" title="${escapeHtml(formatTokenRaw(item.totalTokens))}">${localeTokenCompact(item.totalTokens)}</span>
+            <div class="mini-bar"><i style="width:${share}%;background:${barColor}"></i></div>
+          </article>`;
+        })
+        .join("");
+      const count = Number(source.participantCount || 0);
+      return `<div class="source-top-block">
+        <div class="source-top-head">
+          <span class="source-top-title">
+            <i class="source-top-dot" style="background:${barColor}"></i>
+            <span class="source-top-name">${escapeHtml(sourceName(source.name))}</span>
+          </span>
+          <span class="source-top-total" title="${escapeHtml(formatTokenRaw(sourceTotal))}">${localeTokenCompact(sourceTotal)}</span>
+        </div>
+        <div class="source-top-sub">${escapeHtml(t("web.home.sourceTopParticipantCount", { count, plural: count === 1 ? "" : "s" }))}</div>
+        <div class="source-top-rows">${rows}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+async function loadSourceLeaderboard() {
+  try {
+    const params = new URLSearchParams({ range: "this_month", top: "3" });
+    const response = await fetch(`/api/board/source-leaderboard?${params.toString()}`);
+    if (!response.ok) {
+      renderAuthFallback("#home-source-top");
+      return;
+    }
+    const data = await response.json();
+    state.sourceLeaderboardData = data;
+    renderSourceTop(data.sources || []);
+  } catch {
+    renderAuthFallback("#home-source-top");
+  }
 }
 
 // --- Download Cards ---
@@ -546,6 +619,7 @@ async function init() {
       loadSummary(),
       loadAnalytics(),
       loadLeaderboard(),
+      loadSourceLeaderboard(),
       loadReleaseConfig(),
       fetchAndRenderChangelog()
     ]);

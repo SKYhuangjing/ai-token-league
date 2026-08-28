@@ -34,6 +34,7 @@
         <button type="button" data-admin-tab="quality" data-i18n="admin.tab.quality">Quality</button>
         <button type="button" data-admin-tab="devices" data-i18n="admin.tab.devices">Devices</button>
         <button type="button" data-admin-tab="analytics" data-i18n="admin.tab.analytics">Visual Analytics</button>
+        <button type="button" data-admin-tab="sources" data-i18n="admin.tab.sources">Source stats</button>
       </nav>
 
       <section class="board admin-panel active" data-admin-panel="usage">
@@ -47,7 +48,16 @@
               <button data-value="last_month" data-i18n="admin.usage.lastMonth">Last month</button>
               <button data-value="all" data-i18n="admin.usage.allTime">All</button>
             </div>
-            <div class="date-filter">
+            <div class="custom-range-group">
+              <input id="start-date" type="date" data-i18n-aria-label="admin.usage.startDate" />
+              <span class="range-sep" aria-hidden="true">~</span>
+              <input id="end-date" type="date" data-i18n-aria-label="admin.usage.endDate" />
+              <button id="apply-custom-range" type="button" data-i18n="admin.usage.apply">Apply</button>
+              <span id="range-pending-hint" class="range-pending-hint" hidden data-i18n="admin.usage.pendingRangeHint">Date changed · pending apply</span>
+            </div>
+          </div>
+          <div class="usage-toolbar-secondary">
+            <div class="scope-filter-group">
               <div class="atl-select admin-participant-select" data-admin-participant-select>
                 <select id="participant-filter" class="atl-select-native" data-i18n-aria-label="admin.usage.allUsers" aria-hidden="true" tabindex="-1">
                   <option value="" data-i18n="admin.usage.allUsers">All users</option>
@@ -57,22 +67,27 @@
                 </button>
                 <ul class="atl-select-menu" id="participant-filter-menu" role="listbox" hidden></ul>
               </div>
-              <input id="start-date" type="date" data-i18n-aria-label="admin.usage.startDate" />
-              <input id="end-date" type="date" data-i18n-aria-label="admin.usage.endDate" />
-              <button id="apply-custom-range" type="button" data-i18n="admin.usage.apply">Apply</button>
-              <span id="range-pending-hint" class="range-pending-hint" hidden data-i18n="admin.usage.pendingRangeHint">Date changed · pending apply</span>
+              <div class="atl-select admin-source-select" data-admin-source-select>
+                <select id="source-filter" class="atl-select-native" data-i18n-aria-label="admin.usage.allSources" aria-hidden="true" tabindex="-1">
+                  <option value="" data-i18n="admin.usage.allSources">All sources</option>
+                </select>
+                <button type="button" class="atl-select-trigger analytics-select" id="source-filter-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="atl-select-value" data-i18n="admin.usage.allSources">All sources</span>
+                </button>
+                <ul class="atl-select-menu" id="source-filter-menu" role="listbox" hidden></ul>
+              </div>
             </div>
-          </div>
-          <div class="usage-toolbar-secondary">
-            <label class="inline-toggle subtle-toggle">
-              <input id="raw-tokens" type="checkbox" />
-              <span data-i18n="admin.usage.rawTokens">Raw tokens</span>
-            </label>
-            <label class="inline-toggle subtle-toggle">
-              <input id="show-cost" type="checkbox" />
-              <span data-i18n="admin.usage.estCost">Estimated cost</span>
-            </label>
-            <button type="button" id="export-csv" class="export-csv-btn" data-i18n="admin.usage.exportCsv">Export CSV</button>
+            <div class="usage-options-group">
+              <label class="inline-toggle subtle-toggle">
+                <input id="raw-tokens" type="checkbox" />
+                <span data-i18n="admin.usage.rawTokens">Raw tokens</span>
+              </label>
+              <label class="inline-toggle subtle-toggle">
+                <input id="show-cost" type="checkbox" />
+                <span data-i18n="admin.usage.estCost">Estimated cost</span>
+              </label>
+              <button type="button" id="export-csv" class="export-csv-btn" data-i18n="admin.usage.exportCsv">Export CSV</button>
+            </div>
           </div>
         </section>
         <div class="usage-view-bar">
@@ -269,6 +284,58 @@
 
       <section class="board admin-panel admin-analytics-panel" data-admin-panel="analytics">
         <iframe data-src="/analytics.html" class="admin-analytics-frame" id="analytics-iframe" title="Visual analytics" data-i18n-title="admin.tab.analytics"></iframe>
+      </section>
+
+      <section class="board admin-panel" data-admin-panel="sources">
+        <div class="board-header sources-board-header">
+          <div>
+            <h2 data-i18n="admin.sources.title">Source statistics</h2>
+            <p id="sources-status" aria-live="polite" data-i18n="admin.loading">Loading...</p>
+          </div>
+          <div class="segmented quick-range sources-range" data-filter="sources-range">
+            <button type="button" data-value="today">1d</button>
+            <button type="button" data-value="last7">7d</button>
+            <button type="button" data-value="last30">30d</button>
+            <button type="button" data-value="month" class="active" data-i18n="admin.usage.mtd">MTD</button>
+            <button type="button" data-value="last_month" data-i18n="admin.usage.lastMonth">Last month</button>
+            <button type="button" data-value="all" data-i18n="admin.usage.allTime">All</button>
+          </div>
+        </div>
+        <div id="sources-summary" class="an-kpis sources-summary-grid"></div>
+        <div class="sources-viz-grid">
+          <article class="sources-card sources-share-card">
+            <div class="sources-card-head">
+              <h3 data-i18n="admin.sources.shareTitle">Source share</h3>
+            </div>
+            <div id="sources-share" class="breakdown sources-donut-wrap"></div>
+          </article>
+          <article class="sources-card sources-table-card">
+            <div class="sources-card-head">
+              <h3 data-i18n="admin.sources.tableTitle">来源明细</h3>
+            </div>
+            <div class="table-wrap sources-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="admin.sources.table.source">Source</th>
+                    <th data-i18n="admin.usage.totalTokens">Total tokens</th>
+                    <th data-i18n="admin.sources.table.ratio">Share</th>
+                    <th data-i18n="admin.sources.table.activeParticipants">Active participants</th>
+                    <th data-i18n="admin.sources.table.peakDay">Peak day</th>
+                  </tr>
+                </thead>
+                <tbody id="sources-tbody"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+        <article class="sources-card sources-trend-card">
+          <div class="sources-card-head sources-trend-head">
+            <h3 data-i18n="admin.sources.trendTitle">Daily trend by source</h3>
+            <p id="sources-trend-meta" class="sources-trend-meta"></p>
+          </div>
+          <div id="sources-trend" class="source-trend-grid"></div>
+        </article>
       </section>
 
       <section class="board detail-board" id="detail-board" hidden role="dialog" aria-modal="true" aria-labelledby="detail-title">

@@ -1,6 +1,7 @@
 import { tokenCompositionDetails } from "/shared/composition.js";
 import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
 import { formatTokenCompact } from "/shared/display.js";
+import { renderDonutChart, smoothLinePath, sourceName, providerSourceColor } from "/shared/chart-helpers.js";
 
 initI18n();
 const langContainer = document.querySelector("#lang-switcher-container");
@@ -18,6 +19,8 @@ const state = {
   start: "",
   end: "",
   participantId: "",
+  sourceId: "",
+  sourcesRange: "month",
   rankingPage: 1,
   rankingPageSize: 25,
   rawTokens: false,
@@ -42,6 +45,8 @@ const rankingPageLabel = document.querySelector("#ranking-page-label");
 const detailBoard = document.querySelector("#detail-board");
 const detailBackdrop = document.querySelector("#admin-detail-backdrop");
 const participantFilter = document.querySelector("#participant-filter");
+const sourceFilter = document.querySelector("#source-filter");
+const sourcesStatus = document.querySelector("#sources-status");
 const pricingStatus = document.querySelector("#pricing-status");
 let detailCloseTimer = null;
 let detailTrigger = null;
@@ -85,8 +90,11 @@ function showAuthRequired() {
   statusEl.textContent = message;
   rankingStatus.textContent = message;
   pricingStatus.textContent = message;
+  if (sourcesStatus) sourcesStatus.textContent = message;
   rankingTbody.innerHTML = `<tr><td class="empty" colspan="8">${message}</td></tr>`;
   tbody.innerHTML = `<tr><td class="empty" colspan="8">${message}</td></tr>`;
+  const sourcesTbody = document.querySelector("#sources-tbody");
+  if (sourcesTbody) sourcesTbody.innerHTML = `<tr><td class="empty" colspan="5">${message}</td></tr>`;
 }
 
 function applyUsageView() {
@@ -98,7 +106,19 @@ function applyUsageView() {
   });
   const grainControls = document.querySelector("[data-grain-controls]");
   if (grainControls) grainControls.hidden = state.usageView !== "aggregate";
+  applySourceFilterAvailability();
   syncRangeInputs();
+}
+
+function applySourceFilterAvailability() {
+  const available = state.usageView === "ranking";
+  const trigger = document.querySelector("#source-filter-trigger");
+  if (sourceFilter) sourceFilter.disabled = !available;
+  if (trigger) {
+    trigger.disabled = !available;
+    trigger.title = available ? "" : t("admin.usage.sourceRankingOnly");
+  }
+  if (!available) setAdminSourceSelectOpen(false);
 }
 
 hydratePreferences();
@@ -157,6 +177,16 @@ document.querySelector("[data-filter='quick-range']").addEventListener("click", 
   updateAutoGrain();
   syncRangeInputs();
   loadUsage();
+});
+
+document.querySelector("[data-filter='sources-range']")?.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button || button.dataset.value === state.sourcesRange) return;
+  setActive(event.currentTarget, button);
+  state.sourcesRange = button.dataset.value;
+  loadSourceStats().catch((error) => {
+    if (sourcesStatus && error.message !== "Authentication required") sourcesStatus.textContent = error.message;
+  });
 });
 
 document.querySelector("[data-filter='grain']").addEventListener("click", (event) => {
@@ -230,6 +260,96 @@ function initAdminParticipantSelect() {
 }
 
 initAdminParticipantSelect();
+
+sourceFilter?.addEventListener("change", () => {
+  state.sourceId = sourceFilter.value;
+  syncAdminSourceSelect();
+  resetUsagePaging();
+  loadUsage();
+});
+
+function syncAdminSourceSelect() {
+  const trigger = document.querySelector("#source-filter-trigger");
+  const menu = document.querySelector("#source-filter-menu");
+  const valueEl = trigger?.querySelector(".atl-select-value");
+  if (!trigger || !menu || !valueEl || !sourceFilter) return;
+
+  const selected = sourceFilter.options[sourceFilter.selectedIndex] || sourceFilter.options[0];
+  valueEl.textContent = selected?.textContent || "";
+  valueEl.removeAttribute("data-i18n");
+  menu.innerHTML = [...sourceFilter.options].map((option) => {
+    const isSelected = option.value === sourceFilter.value;
+    return `<li class="atl-select-option${isSelected ? " is-selected" : ""}" role="option" data-value="${escapeHtml(option.value)}" aria-selected="${isSelected ? "true" : "false"}">${escapeHtml(option.textContent)}</li>`;
+  }).join("");
+}
+
+function setAdminSourceSelectOpen(open) {
+  const wrap = document.querySelector("[data-admin-source-select]");
+  const trigger = document.querySelector("#source-filter-trigger");
+  const menu = document.querySelector("#source-filter-menu");
+  if (!wrap || !trigger || !menu) return;
+  wrap.classList.toggle("is-open", open);
+  trigger.setAttribute("aria-expanded", open ? "true" : "false");
+  menu.hidden = !open;
+}
+
+function initAdminSourceSelect() {
+  const wrap = document.querySelector("[data-admin-source-select]");
+  const trigger = document.querySelector("#source-filter-trigger");
+  const menu = document.querySelector("#source-filter-menu");
+  if (!wrap || !trigger || !menu || !sourceFilter) return;
+
+  trigger.addEventListener("click", () => {
+    if (trigger.disabled) return;
+    setAdminSourceSelectOpen(menu.hidden);
+  });
+  menu.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-value]");
+    if (!option) return;
+    const nextValue = option.getAttribute("data-value") || "";
+    if (sourceFilter.value !== nextValue) {
+      sourceFilter.value = nextValue;
+      sourceFilter.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    setAdminSourceSelectOpen(false);
+    trigger.focus();
+  });
+  document.addEventListener("click", (event) => {
+    if (!wrap.contains(event.target)) setAdminSourceSelectOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") setAdminSourceSelectOpen(false);
+  });
+  syncAdminSourceSelect();
+}
+
+initAdminSourceSelect();
+
+function renderSourceOptions(sourceNames) {
+  if (!sourceFilter) return;
+  const current = sourceFilter.value;
+  const options = new Set(sourceNames.filter(Boolean));
+  if (!options.has(current)) state.sourceId = "";
+  sourceFilter.innerHTML = `<option value="">${t("admin.usage.allSources")}</option>${[...options]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(sourceName(name))}</option>`)
+    .join("")}`;
+  sourceFilter.value = options.has(current) ? current : "";
+  syncAdminSourceSelect();
+}
+
+async function refreshSourceFilterOptions() {
+  try {
+    const response = await fetchAdmin("/api/admin/source-stats?range=all&trendDays=1");
+    if (!response.ok) return;
+    const data = await response.json();
+    renderSourceOptions((data.sources || []).map((item) => item.name));
+  } catch (error) {
+    if (error.message !== "Authentication required") {
+      console.warn("Failed to load source filter options:", error.message);
+    }
+  }
+}
 
 function applyCustomRangeFromInputs() {
   const start = document.querySelector("#start-date").value;
@@ -976,6 +1096,232 @@ async function loadQuality({ useCache = false } = {}) {
   }
 }
 
+async function loadSourceStats() {
+  setAdminPanelBusy("sources", true);
+  try {
+    if (sourcesStatus) sourcesStatus.textContent = t("admin.loading");
+    const params = new URLSearchParams({ range: state.sourcesRange });
+    const response = await fetchAdmin(`/api/admin/source-stats?${params.toString()}`);
+    const data = await response.json();
+    renderSourceStatsBoard(data);
+  } finally {
+    setAdminPanelBusy("sources", false);
+  }
+}
+
+function renderSourceStatsBoard(data = {}) {
+  const sources = data.sources || [];
+  if (sourcesStatus) {
+    sourcesStatus.textContent = t("admin.sources.status", {
+      from: data.from || "-",
+      to: data.to || "-",
+      count: sources.length,
+      plural: sources.length === 1 ? "" : "s"
+    });
+  }
+  renderSourceStatsSummary(data, sources);
+  renderSourceShare(sources);
+  renderSourceTrends(sources, data);
+  renderSourceTable(sources);
+}
+
+function renderSourceStatsSummary(data, sources) {
+  const container = document.querySelector("#sources-summary");
+  if (!container) return;
+
+  const totalTokens = data.totalTokens || 0;
+  const activeSources = sources.filter((s) => Number(s.totalTokens) > 0);
+  const topSource = sources.length && Number(sources[0].totalTokens) > 0 ? sources[0] : null;
+
+  // Find peak day across all sources in trend / window
+  const dailyTotals = {};
+  for (const src of sources) {
+    for (const pt of src.trend || []) {
+      if (pt.day && pt.totalTokens) {
+        dailyTotals[pt.day] = (dailyTotals[pt.day] || 0) + Number(pt.totalTokens);
+      }
+    }
+  }
+  let peakDay = null;
+  let peakDayTokens = 0;
+  for (const [day, tokens] of Object.entries(dailyTotals)) {
+    if (tokens > peakDayTokens) {
+      peakDayTokens = tokens;
+      peakDay = day;
+    }
+  }
+
+  const kpiCards = [
+    {
+      label: t("admin.sources.totalTokens"),
+      val: formatToken(totalTokens),
+      sub: formatTokenRaw(totalTokens),
+      title: formatTokenRaw(totalTokens)
+    },
+    {
+      label: t("admin.sources.sourceCount"),
+      val: String(activeSources.length),
+      sub: t("admin.sources.sourceCountNote", { total: sources.length }),
+      title: `${activeSources.length} / ${sources.length}`
+    },
+    {
+      label: t("admin.sources.topSource"),
+      val: topSource ? sourceName(topSource.name) : "-",
+      sub: topSource ? `${t("admin.sources.table.ratio")} ${formatPercent(topSource.ratio)} · ${formatToken(topSource.totalTokens)}` : "-",
+      title: topSource ? `${sourceName(topSource.name)} (${formatTokenRaw(topSource.totalTokens)})` : ""
+    },
+    {
+      label: t("admin.sources.peakUsage"),
+      val: peakDayTokens > 0 ? formatToken(peakDayTokens) : "-",
+      sub: peakDay ? `${peakDay} · ${t("admin.sources.table.peakDay")}` : "-",
+      title: peakDay ? `${peakDay}: ${formatTokenRaw(peakDayTokens)}` : ""
+    }
+  ];
+
+  container.innerHTML = kpiCards.map((kpi) => `<article class="an-kpi"${kpi.title ? ` title="${escapeHtml(kpi.title)}"` : ""}>
+    <span class="lab">${escapeHtml(kpi.label)}</span>
+    <strong class="val">${escapeHtml(kpi.val)}</strong>
+    <span class="sub">${escapeHtml(kpi.sub)}</span>
+  </article>`).join("");
+}
+
+function renderSourceShare(sources) {
+  const container = document.querySelector("#sources-share");
+  if (!container) return;
+  const items = sources
+    .filter((item) => Number(item.totalTokens || 0) > 0)
+    .map((item) => ({ id: item.name, label: sourceName(item.name), ratio: Number(item.ratio || 0) }));
+  renderDonutChart(container, items, { collapseAfter: 7, collapseLabel: t("web.analytics.otherSources") });
+}
+
+function renderSourceTrends(sources, data) {
+  const container = document.querySelector("#sources-trend");
+  const meta = document.querySelector("#sources-trend-meta");
+  if (!container) return;
+  if (meta) {
+    meta.textContent = t("admin.sources.trendMeta", {
+      from: data.trendFrom || "-",
+      to: data.trendTo || "-",
+      days: data.trendDays || 0
+    });
+  }
+  const trendSources = sources.filter((item) => Array.isArray(item.trend) && item.trend.length);
+  if (!trendSources.length) {
+    container.innerHTML = `<article class="empty-state">${t("admin.sources.empty")}</article>`;
+    return;
+  }
+  const maxTokens = Math.max(...trendSources.flatMap((item) => item.trend.map((point) => Number(point.totalTokens) || 0)), 0);
+  container.innerHTML = trendSources.map((item) => renderSourceTrendFacet(item, maxTokens)).join("");
+  bindSourceTrendTooltips(container);
+}
+
+function renderSourceTrendFacet(source, maxTokens) {
+  const color = providerSourceColor(source.name, 0);
+  const width = 320;
+  const height = 64;
+  const pad = { top: 7, right: 5, bottom: 8, left: 5 };
+  const series = source.trend || [];
+  const count = series.length;
+  const trendTotal = series.reduce((sum, point) => sum + (Number(point.totalTokens) || 0), 0);
+  const points = series.map((point, index) => ({
+    day: point.day,
+    tokens: Number(point.totalTokens) || 0,
+    x: pad.left + (count > 1 ? (index / (count - 1)) * (width - pad.left - pad.right) : (width - pad.left - pad.right) / 2),
+    y: height - pad.bottom - (maxTokens > 0 ? ((Number(point.totalTokens) || 0) / maxTokens) * (height - pad.top - pad.bottom) : 0)
+  }));
+  const linePath = smoothLinePath(points);
+  const areaPath = points.length ? `${linePath} L ${points[points.length - 1].x} ${height - pad.bottom} L ${points[0].x} ${height - pad.bottom} Z` : "";
+  const peakPoint = points.reduce((peak, point) => (!peak || point.tokens > peak.tokens ? point : peak), null);
+  const peakLabel = peakPoint && peakPoint.tokens > 0
+    ? t("admin.sources.trendPeak", { day: peakPoint.day, tokens: formatToken(peakPoint.tokens) })
+    : t("admin.sources.noPeak");
+  const dots = count <= 45
+    ? points.map((point) => `<circle class="source-trend-dot" data-day="${escapeHtml(point.day)}" data-tokens="${point.tokens}" cx="${point.x}" cy="${point.y}" r="4"></circle>`).join("")
+    : "";
+  return `<article class="source-trend-row" data-source-trend="${escapeHtml(source.name)}" style="--src-color:${color}">
+    <header>
+      <span class="swatch" style="background:${color}"></span>
+      <strong title="${escapeHtml(source.name)}">${escapeHtml(sourceName(source.name))}</strong>
+      <small>${escapeHtml(peakLabel)}</small>
+      <span class="source-trend-total">${formatToken(trendTotal)}</span>
+    </header>
+    <svg class="source-trend-spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(sourceName(source.name))}">
+      ${areaPath ? `<path class="source-trend-area" d="${areaPath}" fill="${color}"></path>` : ""}
+      ${linePath ? `<path class="source-trend-line" d="${linePath}" stroke="${color}"></path>` : ""}
+      ${peakPoint && peakPoint.tokens > 0 ? `<circle class="source-trend-peak" cx="${peakPoint.x}" cy="${peakPoint.y}" r="3.5" fill="${color}"></circle>` : ""}
+      ${dots}
+    </svg>
+  </article>`;
+}
+
+let sourcesTooltip = null;
+
+function ensureSourcesTooltip() {
+  if (sourcesTooltip) return sourcesTooltip;
+  sourcesTooltip = document.createElement("div");
+  sourcesTooltip.className = "chart-tooltip";
+  document.body.appendChild(sourcesTooltip);
+  return sourcesTooltip;
+}
+
+function bindSourceTrendTooltips(container) {
+  const tooltip = ensureSourcesTooltip();
+  container.querySelectorAll(".source-trend-dot").forEach((dot) => {
+    dot.addEventListener("mouseenter", () => {
+      const row = dot.closest(".source-trend-row");
+      const name = row?.dataset.sourceTrend ? sourceName(row.dataset.sourceTrend) : "";
+      tooltip.innerHTML = `<strong>${escapeHtml(name)}</strong><br>${escapeHtml(dot.dataset.day || "")}<br>${formatToken(Number(dot.dataset.tokens) || 0)} ${t("unit.tokens")}`;
+      tooltip.style.opacity = "1";
+      positionSourcesTooltip(tooltip, dot);
+    });
+    dot.addEventListener("mouseleave", () => {
+      tooltip.style.opacity = "0";
+    });
+  });
+}
+
+function positionSourcesTooltip(tooltip, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const tooltipWidth = tooltip.offsetWidth;
+  const tooltipHeight = tooltip.offsetHeight;
+  const viewportWidth = window.innerWidth;
+  let left = rect.left + window.scrollX - tooltipWidth / 2 + rect.width / 2;
+  let top = rect.top + window.scrollY - tooltipHeight - 8;
+  if (left < 8) left = 8;
+  if (left + tooltipWidth > viewportWidth - 8) left = viewportWidth - tooltipWidth - 8;
+  if (top < window.scrollY + 4) top = rect.bottom + window.scrollY + 8;
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function renderSourceTable(sources) {
+  const tableBody = document.querySelector("#sources-tbody");
+  if (!tableBody) return;
+  if (!sources.length) {
+    tableBody.innerHTML = `<tr><td class="empty" colspan="5">${t("admin.sources.empty")}</td></tr>`;
+    return;
+  }
+  tableBody.innerHTML = sources.map((item) => {
+    const label = escapeHtml(sourceName(item.name));
+    const color = providerSourceColor(item.name, 0);
+    const peakTitle = item.peakDay ? `${item.peakDay.day} · ${formatTokenRaw(item.peakDay.totalTokens)}` : "";
+    return `<tr>
+      <td><span class="source-cell"><i class="swatch" style="background:${color}"></i><strong title="${escapeHtml(item.name)}">${label}</strong></span></td>
+      <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
+      <td>
+        <span class="share-cell" title="${escapeHtml(label)} ${formatPercent(item.ratio)}">
+          <em>${formatPercent(item.ratio)}</em>
+          <i class="share-track"><b style="width:${Math.min(100, Number(item.ratio || 0) * 100).toFixed(1)}%;background:${color}"></b></i>
+        </span>
+      </td>
+      <td>${formatNumber(item.activeParticipants)}</td>
+      <td>${item.peakDay
+        ? `<span title="${escapeHtml(peakTitle)}">${escapeHtml(item.peakDay.day)} · ${formatToken(item.peakDay.totalTokens)}</span>`
+        : `<span class="muted-cell">-</span>`}</td>
+    </tr>`;
+  }).join("");
+}
+
 function closeDetail() {
   detailBoard.classList.remove("is-open");
   detailBackdrop.classList.remove("is-open");
@@ -1012,6 +1358,7 @@ function rankingQueryString() {
     pageSize: String(state.rankingPageSize)
   });
   if (state.participantId) params.set("participantId", state.participantId);
+  if (state.sourceId) params.set("source", state.sourceId);
   if (state.showCost) params.set("includeCost", "1");
   if (state.range === "custom") {
     if (state.start) params.set("start", state.start);
@@ -1054,6 +1401,11 @@ function switchAdminTab(tabId) {
       iframe.src = iframe.dataset.src;
       iframe.dataset.loaded = "true";
     }
+  }
+  if (tabId === "sources") {
+    loadSourceStats().catch((error) => {
+      if (sourcesStatus && error.message !== "Authentication required") sourcesStatus.textContent = error.message;
+    });
   }
   if (tabId === "pricing") {
     loadPricing().catch((error) => {
@@ -1640,6 +1992,7 @@ function escapeHtml(value) {
 loadUsage().catch((error) => {
   if (error.message !== "Authentication required") statusEl.textContent = error.message;
 });
+refreshSourceFilterOptions();
 loadPricing().catch((error) => {
   if (error.message !== "Authentication required") pricingStatus.textContent = error.message;
 });

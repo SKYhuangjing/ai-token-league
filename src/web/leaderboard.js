@@ -16,6 +16,7 @@ const currentLang = initI18n();
 
 const state = {
   period: "today",
+  source: "",
   identityMode: "public",
   detailParticipantId: "",
   detailTab: "period",
@@ -31,6 +32,7 @@ const storageKeys = {
 
 const tbody = document.querySelector("#leaderboard");
 const statusEl = document.querySelector("#status");
+const sourceFilter = document.querySelector("#source-filter");
 const detailEl = document.querySelector("#participant-detail");
 const detailBackdrop = document.querySelector("#detail-backdrop");
 let detailCloseTimer = null;
@@ -83,6 +85,11 @@ document.querySelector("#show-cost").addEventListener("change", (event) => {
   if (state.detailParticipantId) loadDetail(state.detailParticipantId);
 });
 
+sourceFilter?.addEventListener("change", () => {
+  state.source = sourceFilter.value;
+  loadLeaderboard();
+});
+
 document.querySelectorAll("[data-view-mode]").forEach((group) => {
   group.addEventListener("click", (event) => {
     const button = event.target.closest("button");
@@ -99,6 +106,7 @@ async function loadLeaderboard() {
   try {
     statusEl.textContent = t("loading");
     const params = new URLSearchParams({ period: state.period });
+    if (state.source) params.set("source", state.source);
     if (state.showCost) params.set("includeCost", "1");
     const response = await fetch(`/api/board/leaderboard?${params.toString()}`);
     if (!response.ok) throw new Error(t("web.analytics.noData"));
@@ -119,7 +127,7 @@ function setLeaderboardLoading(on) {
   const surface = document.querySelector("#leaderboard-surface");
   surface?.classList.toggle("is-refreshing", on);
   surface?.setAttribute("aria-busy", on ? "true" : "false");
-  document.querySelectorAll("[data-filter='period'] button, #show-cost").forEach((control) => {
+  document.querySelectorAll("[data-filter='period'] button, #show-cost, #source-filter").forEach((control) => {
     control.disabled = on;
   });
   if (on || !surface) return;
@@ -311,6 +319,30 @@ async function loadHistory(participantId) {
 
 function renderDisplayName(displayName) {
   return escapeHtml(displayName);
+}
+
+function renderSourceOptions(sourceNames) {
+  if (!sourceFilter) return;
+  const current = sourceFilter.value;
+  const options = new Set(sourceNames.filter(Boolean));
+  if (current && !options.has(current)) state.source = "";
+  sourceFilter.innerHTML = `<option value="">${escapeHtml(t("web.leaderboard.allSources"))}</option>${[...options]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(sourceName(name))}</option>`)
+    .join("")}`;
+  sourceFilter.value = options.has(current) ? current : "";
+}
+
+async function loadSourceFilterOptions() {
+  try {
+    const response = await fetch("/api/board/source-leaderboard?range=all&top=1");
+    if (!response.ok) return;
+    const data = await response.json();
+    renderSourceOptions((data.sources || []).map((source) => source.name));
+  } catch (error) {
+    // Silent fallback: keep only the "All sources" option when options fail to load.
+    console.warn("Failed to load source filter options:", error.message);
+  }
 }
 
 function renderDetailTitle(displayName, contextLabel) {
@@ -722,3 +754,5 @@ updatePageTranslations();
 loadLeaderboard().catch((error) => {
   statusEl.textContent = error.message;
 });
+
+loadSourceFilterOptions();
