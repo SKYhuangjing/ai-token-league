@@ -82,7 +82,7 @@ impl ClaudeCodeLocalProvider {
 
         let mut files = Vec::new();
         for root in auto.iter().chain(manual.iter()) {
-            let found = walk_files(root, |f| f.ends_with(".jsonl"), 1000);
+            let found = walk_files(root, |f| f.ends_with(".jsonl"), 10_000);
             files.extend(found);
         }
         files

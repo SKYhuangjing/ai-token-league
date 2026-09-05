@@ -1140,6 +1140,114 @@ mod tests {
         assert_eq!(merge_trace_value(vec![]), "");
     }
 
+    /// Diagnostic harness for layout-dependent codex totals (archive moves,
+    /// walk-order drift). Not part of CI: run explicitly with
+    /// `ATL_CODEX_REPRO_ROOTS=<rootA,rootB> ATL_CODEX_REPRO_OUT=<file.json>
+    /// cargo test -p collector-core codex_repro_layout_dump -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic; requires ATL_CODEX_REPRO_ROOTS/ATL_CODEX_REPRO_OUT"]
+    fn codex_repro_layout_dump() {
+        let roots_value = std::env::var("ATL_CODEX_REPRO_ROOTS").expect("ATL_CODEX_REPRO_ROOTS");
+        let out_path = std::env::var("ATL_CODEX_REPRO_OUT").expect("ATL_CODEX_REPRO_OUT");
+        let mut report = serde_json::Map::new();
+
+        for root in roots_value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let mut config = test_config();
+            config.provider_roots.insert(
+                crate::provider::codex_local::PROVIDER_ID.to_string(),
+                vec![root.to_string()],
+            );
+
+            let codex = crate::provider::codex_local::CodexProvider;
+            let files = codex.scan_sessions(&config);
+            let plan = crate::provider::codex_local::CodexReplayPlan::new(&files);
+
+            let mut events: Vec<(String, Value)> = Vec::new();
+            let mut per_file = Vec::new();
+            for file in &files {
+                let file_events =
+                    codex.parse_usage_with_replay(file, plan.replay_prefix(file));
+                let file_total: i64 = file_events
+                    .iter()
+                    .map(|e| e["totalTokens"].as_i64().unwrap_or(0))
+                    .sum();
+                per_file.push(json!({
+                    "file": Path::new(file).file_name().map(|n| n.to_string_lossy().to_string()),
+                    "path": file,
+                    "rows": file_events.len(),
+                    "preDedupTotalTokens": file_total,
+                }));
+                for event in file_events {
+                    events.push((file.clone(), event));
+                }
+            }
+
+            let kept = global_dedup_by_field(
+                events.iter().map(|(_, e)| e.clone()).collect(),
+                "_codexDedupKey",
+            );
+            let kept_keys: std::collections::HashSet<&str> = kept
+                .iter()
+                .map(|e| e["_codexDedupKey"].as_str().unwrap_or_default())
+                .collect();
+            let mut per_file_after = std::collections::HashMap::new();
+            let mut per_day = std::collections::HashMap::new();
+            let mut agg_total = 0i64;
+            for (file, event) in &events {
+                let key = event["_codexDedupKey"].as_str().unwrap_or_default();
+                if !key.is_empty() && !kept_keys.contains(key) {
+                    continue;
+                }
+                let total = event["totalTokens"].as_i64().unwrap_or(0);
+                *per_file_after
+                    .entry(Path::new(file).file_name().unwrap().to_string_lossy().to_string())
+                    .or_insert(0i64) += total;
+                *per_day
+                    .entry(event["day"].as_str().unwrap_or_default().to_string())
+                    .or_insert(0i64) += total;
+                agg_total += total;
+            }
+
+            let per_file_after: Vec<Value> = per_file
+                .iter()
+                .map(|entry| {
+                    let name = entry["file"].as_str().unwrap_or_default().to_string();
+                    json!({
+                        "file": name,
+                        "path": entry["path"],
+                        "rows": entry["rows"],
+                        "preDedupTotalTokens": entry["preDedupTotalTokens"],
+                        "postDedupTotalTokens": per_file_after.get(&name).copied().unwrap_or(0),
+                    })
+                })
+                .collect();
+            let per_day: std::collections::BTreeMap<String, i64> =
+                per_day.into_iter().collect();
+
+            report.insert(
+                root.to_string(),
+                json!({
+                    "fileCount": files.len(),
+                    "aggregateTotalTokens": agg_total,
+                    "perDay": per_day,
+                    "perFile": per_file_after,
+                }),
+            );
+            println!(
+                "root={} files={} aggregate={}",
+                root,
+                files.len(),
+                agg_total
+            );
+        }
+
+        std::fs::write(
+            &out_path,
+            serde_json::to_string_pretty(&Value::Object(report)).unwrap(),
+        )
+        .expect("write report");
+    }
+
     #[test]
     fn test_merge_trace_value_single() {
         assert_eq!(merge_trace_value(vec!["abc"]), "abc");

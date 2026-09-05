@@ -60,6 +60,20 @@ pub struct SourceMetadata {
 
 /// Compute source fingerprint from the main file and a possible SQLite WAL sidecar.
 pub fn source_metadata(file: &str, provider_id: &str, parser_version: &str) -> SourceMetadata {
+    source_metadata_with_stable_key(file, file, provider_id, parser_version)
+}
+
+/// Same as [source_metadata], but the fingerprint hashes `stable_key` instead
+/// of the full path. Use this for providers whose upstream tool relocates
+/// files between directories (Codex moves `sessions/YYYY/MM/DD/x.jsonl` to
+/// `archived_sessions/x.jsonl`): a path-derived fingerprint turns every move
+/// into a cache miss, a full cold re-parse, and a mass history re-upload.
+pub fn source_metadata_with_stable_key(
+    file: &str,
+    stable_key: &str,
+    provider_id: &str,
+    parser_version: &str,
+) -> SourceMetadata {
     let path = Path::new(file);
     let raw_source_ref = path
         .file_name()
@@ -82,7 +96,7 @@ pub fn source_metadata(file: &str, provider_id: &str, parser_version: &str) -> S
 
     let fingerprint_input = format!(
         "{}|{}|{}|{}|{}|{}|{}",
-        provider_id, parser_version, file, size, mtime_ms, wal_size, wal_mtime_ms
+        provider_id, parser_version, stable_key, size, mtime_ms, wal_size, wal_mtime_ms
     );
 
     SourceMetadata {

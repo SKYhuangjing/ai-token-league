@@ -166,7 +166,7 @@ impl CodexProvider {
 
         let mut files = Vec::new();
         for root in auto.iter().chain(manual.iter()) {
-            let found = walk_files(root, |f| f.ends_with(".jsonl"), 1000);
+            let found = walk_files(root, |f| f.ends_with(".jsonl"), 10_000);
             files.extend(found);
         }
         dedupe_active_and_archived_files(files)
@@ -192,7 +192,7 @@ impl CodexProvider {
             .map(|d| d.as_millis() as f64)
             .unwrap_or(0.0);
 
-        let source = source_metadata(file, PROVIDER_ID, VERSION);
+        let source = codex_source_metadata(file);
         let rows = read_json_lines(file);
         let mut events = Vec::new();
         let replay_fallback = replay_prefix.is_some() || is_codex_subagent_session(file);
@@ -329,20 +329,54 @@ fn add_codex_usage_roots(home_or_usage_dir: &Path, roots: &mut Vec<String>) {
     }
 }
 
+/// Codex rollout filenames embed a session UUID, so the basename alone is a
+/// stable identity for a session file regardless of which directory holds it.
+/// The fingerprint must survive Codex relocating files between `sessions/`
+/// and `archived_sessions/`, otherwise every relocation invalidates the scan
+/// cache and re-uploads history with a re-derived (order-sensitive) total.
+fn codex_stable_key(file: &str) -> String {
+    Path::new(file)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+fn codex_source_metadata(file: &str) -> crate::provider::common::SourceMetadata {
+    crate::provider::common::source_metadata_with_stable_key(
+        file,
+        &codex_stable_key(file),
+        PROVIDER_ID,
+        VERSION,
+    )
+}
+
+/// Collapse duplicate copies of the same session (same basename under one
+/// codex home, e.g. present in both `sessions/` and `archived_sessions/`)
+/// preferring the active `sessions/` copy, then order the result by basename
+/// so parse order — and therefore replay-prefix matching and keep-first
+/// global dedup — is a pure function of the file set, not of directory
+/// layout or readdir order.
 fn dedupe_active_and_archived_files(files: Vec<String>) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
     let mut sorted = files;
-    sorted.sort_by_key(|file| file.contains("/archived_sessions/"));
-    sorted
+    sorted.sort_by_key(|file| (file.contains("/archived_sessions/"), codex_file_key(file)));
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = sorted
         .into_iter()
         .filter(|file| seen.insert(codex_file_key(file)))
-        .collect()
+        .collect();
+    out.sort_by(|a, b| {
+        codex_stable_key(a)
+            .cmp(&codex_stable_key(b))
+            .then_with(|| a.cmp(b))
+    });
+    out
 }
 
 fn codex_file_key(file: &str) -> String {
     for marker in ["/sessions/", "/archived_sessions/"] {
         if let Some((home, relative)) = file.split_once(marker) {
-            return format!("{}|{}", home, relative);
+            let basename = relative.rsplit('/').next().unwrap_or(relative);
+            return format!("{}|{}", home, basename);
         }
     }
     file.to_string()
@@ -1045,6 +1079,278 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["totalTokens"], 10);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn unique_temp_dir(label: &str) -> std::path::PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("atl-codex-{}-{}", label, suffix));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cumulative_row(ts: &str, total_tokens: i64) -> Value {
+        json!({
+            "timestamp": ts,
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": total_tokens,
+                "cached_input_tokens": 0,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_output_tokens": 0,
+                "total_tokens": total_tokens
+            }}}
+        })
+    }
+
+    fn write_rollout(path: &std::path::Path, rows: &[Value]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let content = rows
+            .iter()
+            .map(|row| serde_json::to_string(row).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// Regression for the 2026-09-05 incident: Codex moved 905 rollout files
+    /// from `sessions/YYYY/MM/DD/` to a flat `archived_sessions/`, every file
+    /// fingerprint changed (path was hashed), the codex cache cold-rebuilt,
+    /// and the re-derived total silently moved history down by ~3.8e8 tokens.
+    #[test]
+    fn codex_source_fingerprint_survives_archive_move() {
+        let root = unique_temp_dir("fp-move");
+        let sessions_dir = root.join("sessions/2026/08/01");
+        let archived_dir = root.join("archived_sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::create_dir_all(&archived_dir).unwrap();
+
+        let name = "rollout-2026-08-01T10-00-00-019d0a2b-721d-7ee0-87fa-3d841c771ed0.jsonl";
+        let sessions_path = sessions_dir.join(name);
+        let archived_path = archived_dir.join(name);
+        write_rollout(
+            &sessions_path,
+            &[
+                json!({"timestamp":"2026-08-01T10:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"/tmp/proj"}}),
+                cumulative_row("2026-08-01T10:00:01Z", 1_000),
+                cumulative_row("2026-08-01T10:00:02Z", 2_000),
+            ],
+        );
+
+        let before = codex_source_metadata(&sessions_path.to_string_lossy());
+        std::fs::rename(&sessions_path, &archived_path).unwrap();
+        let after = codex_source_metadata(&archived_path.to_string_lossy());
+
+        assert_eq!(
+            before.source_fingerprint, after.source_fingerprint,
+            "moving a rollout between sessions/ and archived_sessions/ must not change its fingerprint"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dedupe_active_and_archived_is_order_independent() {
+        let files = vec![
+            "/tmp/codex/archived_sessions/b.jsonl".to_string(),
+            "/tmp/codex/sessions/2026/08/01/a.jsonl".to_string(),
+            "/tmp/codex/archived_sessions/a.jsonl".to_string(),
+            "/tmp/codex/sessions/2026/08/01/c.jsonl".to_string(),
+        ];
+        let once = dedupe_active_and_archived_files(files.clone());
+        let twice = dedupe_active_and_archived_files(files.into_iter().rev().collect());
+
+        assert_eq!(once, twice, "scan order must be a function of the file set");
+        assert_eq!(once.len(), 3);
+        assert!(once.iter().any(|f| f.ends_with("/sessions/2026/08/01/a.jsonl")));
+        assert!(!once.iter().any(|f| f.contains("/archived_sessions/a.jsonl")));
+        // deterministic basename ordering
+        let names: Vec<String> = once
+            .iter()
+            .map(|f| codex_stable_key(f))
+            .collect();
+        assert_eq!(names, vec!["a.jsonl", "b.jsonl", "c.jsonl"]);
+    }
+
+    /// Parse a synthetic codex family exactly like scanner.rs does: replay
+    /// plan, per-file parse, keep-first global dedup on `_codexDedupKey`.
+    fn scan_family_totals(files: &[String]) -> (i64, std::collections::HashMap<String, i64>) {
+        let files = dedupe_active_and_archived_files(files.to_vec());
+        let plan = CodexReplayPlan::new(&files);
+        let mut seen = std::collections::HashSet::new();
+        let mut per_file = std::collections::HashMap::new();
+        let mut total = 0i64;
+        for file in &files {
+            for event in CodexProvider.parse_usage_with_replay(file, plan.replay_prefix(file)) {
+                let key = event["_codexDedupKey"].as_str().unwrap_or_default().to_string();
+                if !key.is_empty() && !seen.insert(key) {
+                    continue;
+                }
+                let tokens = event["totalTokens"].as_i64().unwrap_or(0);
+                *per_file
+                    .entry(codex_stable_key(file))
+                    .or_insert(0i64) += tokens;
+                total += tokens;
+            }
+        }
+        (total, per_file)
+    }
+
+    /// A parent session, a pure-snapshot fork (all replay rows share the fork
+    /// timestamp and contribute nothing), and a fork with own post-burst
+    /// turns must produce identical totals whether Codex keeps everything
+    /// under `sessions/` or archives the parent to `archived_sessions/` —
+    /// including when a stale duplicate copy is left behind in both dirs.
+    #[test]
+    fn codex_family_totals_invariant_across_archive_layout() {
+        let root = unique_temp_dir("layout");
+        let sessions_day = root.join("sessions/2026/08/01");
+        let archived = root.join("archived_sessions");
+        std::fs::create_dir_all(&sessions_day).unwrap();
+        std::fs::create_dir_all(&archived).unwrap();
+
+        let parent_rows = {
+            let mut rows = vec![json!({
+                "timestamp": "2026-08-01T10:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": "parent-1", "cwd": "/tmp/family"}
+            })];
+            for (ts, cum) in [
+                ("2026-08-01T10:00:10Z", 1_000i64),
+                ("2026-08-01T10:01:10Z", 2_000),
+                ("2026-08-01T10:02:10Z", 3_000),
+                ("2026-08-01T10:03:10Z", 4_000),
+                ("2026-08-01T10:04:10Z", 5_000),
+            ] {
+                rows.push(cumulative_row(ts, cum));
+            }
+            rows
+        };
+        // snapshot fork: re-emits mid-state cumulative, all rows stamped at
+        // the fork instant -> pure replay, must contribute 0
+        let snapshot_rows = {
+            let mut rows = vec![json!({
+                "timestamp": "2026-08-01T10:02:30Z",
+                "type": "session_meta",
+                "payload": {"id": "snap-1", "forked_from_id": "parent-1", "cwd": "/tmp/family"}
+            })];
+            for cum in [1_200i64, 2_200, 2_900] {
+                rows.push(cumulative_row("2026-08-01T10:02:30.000Z", cum));
+            }
+            rows
+        };
+        // fork with own turns after the replay burst -> contributes its own delta
+        let own_rows = {
+            let mut rows = vec![json!({
+                "timestamp": "2026-08-01T10:02:30Z",
+                "type": "session_meta",
+                "payload": {"id": "own-1", "forked_from_id": "parent-1", "cwd": "/tmp/family"}
+            })];
+            for cum in [1_200i64, 2_200, 2_900] {
+                rows.push(cumulative_row("2026-08-01T10:02:30.000Z", cum));
+            }
+            rows.push(cumulative_row("2026-08-01T10:05:00Z", 3_900));
+            rows.push(cumulative_row("2026-08-01T10:06:00Z", 4_900));
+            rows
+        };
+
+        let parent_name = "rollout-2026-08-01T10-00-00-parent.jsonl";
+        let snapshot_name = "rollout-2026-08-01T10-02-30-snapshot.jsonl";
+        let own_name = "rollout-2026-08-01T10-02-30-own.jsonl";
+
+        // Layout 1: everything active under sessions/
+        let p1 = sessions_day.join(parent_name);
+        let s1 = sessions_day.join(snapshot_name);
+        let c1 = sessions_day.join(own_name);
+        write_rollout(&p1, &parent_rows);
+        write_rollout(&s1, &snapshot_rows);
+        write_rollout(&c1, &own_rows);
+        let (total1, per1) = scan_family_totals(&[
+            p1.to_string_lossy().to_string(),
+            s1.to_string_lossy().to_string(),
+            c1.to_string_lossy().to_string(),
+        ]);
+
+        // Layout 2: parent + snapshot archived flat, own fork still active,
+        // plus a stale duplicate of the parent left in sessions/.
+        let p2 = archived.join(parent_name);
+        let s2 = archived.join(snapshot_name);
+        let c2 = sessions_day.join(own_name);
+        std::fs::rename(&p1, &p2).unwrap();
+        std::fs::rename(&s1, &s2).unwrap();
+        write_rollout(&p1, &parent_rows); // stale duplicate copy
+        let (total2, per2) = scan_family_totals(&[
+            p2.to_string_lossy().to_string(),
+            s2.to_string_lossy().to_string(),
+            c2.to_string_lossy().to_string(),
+            p1.to_string_lossy().to_string(),
+        ]);
+
+        assert_eq!(total1, total2, "archive layout must not change family totals");
+        assert_eq!(total1, 7_000, "parent 5000 + own fork 2000 + snapshot 0");
+        assert_eq!(per1.get(parent_name), Some(&5_000));
+        assert_eq!(per1.get(own_name), Some(&2_000));
+        assert_eq!(per1.get(snapshot_name).copied().unwrap_or(0), 0);
+        assert_eq!(per2, per1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    struct CodexHomeGuard {
+        previous: Option<String>,
+    }
+    impl CodexHomeGuard {
+        fn set(value: &str) -> Self {
+            let previous = std::env::var("CODEX_HOME").ok();
+            std::env::set_var("CODEX_HOME", value);
+            Self { previous }
+        }
+    }
+    impl Drop for CodexHomeGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+        }
+    }
+
+    /// Real heavy users exceed 1000 codex rollout files; the old walk limit
+    /// silently dropped the remainder, which both lost usage and made totals
+    /// depend on arbitrary readdir order.
+    #[test]
+    fn scan_sessions_reads_beyond_thousand_files() {
+        let _guard = crate::config::TEST_ENV_LOCK.lock().unwrap();
+        let root = unique_temp_dir("thousand");
+        let day = root.join("sessions/2026/08/01");
+        std::fs::create_dir_all(&day).unwrap();
+        for i in 0..1_001 {
+            let path = day.join(format!("rollout-2026-08-01T10-00-{:04}-session.jsonl", i));
+            write_rollout(
+                &path,
+                &[
+                    json!({"timestamp":"2026-08-01T10:00:00Z","type":"session_meta","payload":{"id":format!("s-{}", i),"cwd":"/tmp/proj"}}),
+                    cumulative_row("2026-08-01T10:00:01Z", 1_000),
+                ],
+            );
+        }
+
+        let _codex_home = CodexHomeGuard::set(&root.to_string_lossy());
+        let config: AppConfig = serde_json::from_value(json!({
+            "participantId": "p_test",
+            "identityPublicKey": "pk",
+            "identityPrivateKey": "sk",
+            "deviceId": "d_test"
+        }))
+        .unwrap();
+        let files = CodexProvider.scan_sessions(&config);
+
+        assert_eq!(files.len(), 1_001, "no session file may be silently truncated");
         let _ = std::fs::remove_dir_all(root);
     }
 }
