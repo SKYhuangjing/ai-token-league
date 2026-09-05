@@ -24,6 +24,7 @@
             <a href="/" class="nav-link" data-i18n="web.nav.home">Home</a>
             <a href="/leaderboard.html" class="nav-link current" data-i18n="web.nav.leaderboard">Leaderboard</a>
             <a href="/analytics.html" class="nav-link" data-i18n="web.nav.analytics">Analytics</a>
+            <a href="/profile.html" class="nav-link" id="nav-profile-link" data-i18n="web.nav.profile">Profile</a>
           </nav>
           <div class="lang-switcher-container" id="lang-switcher-container"></div>
         </div>
@@ -74,70 +75,6 @@
           </table>
         </div>
       </section>
-
-      <section class="board detail-board" id="participant-detail" hidden role="dialog" aria-modal="true" aria-labelledby="detail-title">
-        <div class="board-header">
-          <div>
-            <h2 id="detail-title" data-i18n="web.detail.title">Participant detail</h2>
-            <p id="detail-identity-note" class="detail-identity-note" hidden></p>
-            <p id="detail-status" data-i18n="web.detail.selectUser">Select a user from the leaderboard.</p>
-          </div>
-          <div class="detail-controls">
-            <div class="view-segments compact" data-detail-tab>
-              <button data-value="period" class="active" data-i18n="web.detail.periodDetail">Period detail</button>
-              <button data-value="history" data-i18n="web.detail.historyTrend">History trend</button>
-            </div>
-            <div class="view-segments compact" data-history-view hidden>
-              <button data-value="daily" class="active" data-i18n="web.detail.daily">Daily</button>
-              <button data-value="weekly" data-i18n="web.detail.weekly">Weekly</button>
-              <button data-value="monthly" data-i18n="web.detail.monthly">Monthly</button>
-            </div>
-            <button class="drawer-close" id="close-detail" type="button" data-i18n="close">Close</button>
-          </div>
-        </div>
-        <div id="detail-summary" class="detail-summary"></div>
-        <div id="period-detail-panel">
-          <section>
-            <h3 data-i18n="web.detail.usageComposition">Usage composition</h3>
-            <div id="detail-composition"></div>
-          </section>
-          <div id="period-chart" class="detail-chart"></div>
-          <div class="detail-grid">
-            <section>
-              <h3 data-i18n="web.detail.models">Models</h3>
-              <div id="detail-models" class="breakdown"></div>
-            </section>
-            <section>
-              <h3 data-i18n="web.detail.sources">Sources</h3>
-              <div id="detail-sources" class="breakdown"></div>
-            </section>
-          </div>
-        </div>
-        <div id="history-trend-panel" hidden>
-          <div id="history-chart" class="detail-chart"></div>
-        </div>
-        <details class="raw-data">
-          <summary data-i18n="web.detail.rawData">Raw data</summary>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th data-i18n="web.detail.period">Period</th>
-                  <th data-i18n="web.leaderboard.totalTokens">Total tokens</th>
-                  <th data-i18n="web.detail.input">Input</th>
-                  <th data-i18n="web.detail.output">Output</th>
-                  <th data-i18n="web.detail.cache">Cache</th>
-                  <th data-i18n="web.detail.reasoning">Reasoning</th>
-                  <th class="cost-col" hidden data-i18n="web.detail.priceQuality">Price quality</th>
-                  <th data-i18n="web.leaderboard.models">Models</th>
-                </tr>
-              </thead>
-              <tbody id="detail-rows"></tbody>
-            </table>
-          </div>
-        </details>
-      </section>
-      <div class="drawer-backdrop" id="detail-backdrop" hidden></div>
     </main>
     <script type="module" src="/leaderboard.js"></script>
   </body>

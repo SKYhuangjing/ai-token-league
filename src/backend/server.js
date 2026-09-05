@@ -557,6 +557,36 @@ async function handleApi(req, res) {
     const model = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/model-prices/", ""));
     return sendJson(res, 200, await store.deleteModelPrice(model));
   }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/profile/")) {
+    const url = new URL(req.url, "http://localhost");
+    const participantId = decodeURIComponent(url.pathname.replace("/api/admin/profile/", ""));
+    const profile = await store.participantProfile(participantId, { includeCost: includeCost(url) });
+    if (!profile) return sendJson(res, 404, { error: "participant not found" });
+    return sendJson(res, 200, withBusinessDay({
+      identityMode: "admin",
+      displayId: participantId,
+      displayName: profile.nickname || participantId,
+      ...profile
+    }));
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/admin/participants/") && req.url.includes("/trend")) {
+    const url = new URL(req.url, "http://localhost");
+    const participantId = decodeURIComponent(url.pathname.replace("/api/admin/participants/", "").replace("/trend", ""));
+    const trend = await store.participantTrend(participantId, {
+      grain: url.searchParams.get("grain") || "day",
+      range: url.searchParams.get("range") || "last30",
+      startDay: url.searchParams.get("start") || "",
+      endDay: url.searchParams.get("end") || "",
+      includeCost: includeCost(url),
+      fields: url.searchParams.get("fields") === "totals" ? "totals" : ""
+    });
+    if (!trend) return sendJson(res, 404, { error: "participant not found" });
+    return sendJson(res, 200, withBusinessDay({
+      displayId: participantId,
+      displayName: trend.nickname || participantId,
+      ...trend
+    }));
+  }
   if (req.method === "GET" && req.url.startsWith("/api/admin/participants/") && !req.url.includes("/trend")) {
     const url = new URL(req.url, "http://localhost");
     const participantId = decodeURIComponent(url.pathname.replace("/api/admin/participants/", ""));
@@ -569,7 +599,11 @@ async function handleApi(req, res) {
       includeCost: includeCost(url)
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
-    return sendJson(res, 200, detail);
+    return sendJson(res, 200, withBusinessDay({
+      displayId: participantId,
+      displayName: detail.nickname || participantId,
+      ...detail
+    }));
   }
   if (req.method === "DELETE" && req.url.startsWith("/api/admin/participants/")) {
     const participantId = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/admin/participants/", ""));
@@ -772,7 +806,8 @@ async function handleApi(req, res) {
       range: url.searchParams.get("range") || "last30",
       startDay: url.searchParams.get("start") || "",
       endDay: url.searchParams.get("end") || "",
-      includeCost: includeCost(url)
+      includeCost: includeCost(url),
+      fields: url.searchParams.get("fields") === "totals" ? "totals" : ""
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
     return sendJson(res, 200, withBusinessDay(transformTrendResult(detail)));
@@ -868,6 +903,15 @@ async function handleApi(req, res) {
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
     return sendJson(res, 200, withBusinessDay(transformBoardDetail(detail)));
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/board/profile/")) {
+    const url = new URL(req.url, "http://localhost");
+    const displayId = decodeURIComponent(url.pathname.replace("/api/board/profile/", ""));
+    ensureAnonymizerFresh();
+    const realId = BOARD_SECURITY_LEVEL === "anonymous" ? boardAnonymizer?.resolveParticipantId(displayId) || displayId : displayId;
+    const profile = await store.participantProfile(realId, { includeCost: includeCost(url) });
+    if (!profile) return sendJson(res, 404, { error: "participant not found" });
+    return sendJson(res, 200, withBusinessDay({ identityMode: BOARD_SECURITY_LEVEL, ...transformBoardDetail(profile) }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/health")) {
     const url = new URL(req.url, "http://localhost");

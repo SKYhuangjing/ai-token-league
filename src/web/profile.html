@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-i18n="web.profile.title">Participant profile</title>
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page-profile">
+    <main class="shell public-shell landing-shell">
+      <!-- 统一顶部导航栏 -->
+      <section class="masthead public-masthead">
+        <div class="masthead-copy">
+          <div class="brand-row">
+            <h1 data-i18n="app.name">AI Token League</h1>
+            <span class="pill" id="page-title-pill" data-i18n="web.profile.title">Participant profile</span>
+            <span class="pill profile-admin-pill" id="profile-admin-pill" hidden data-i18n="web.profile.adminMode">Admin View · Verified Identity</span>
+          </div>
+        </div>
+        <div class="masthead-side">
+          <nav class="public-nav" aria-label="Site">
+            <a href="/" class="nav-link" data-i18n="web.nav.home">Home</a>
+            <a href="/leaderboard.html" class="nav-link" id="nav-leaderboard-link" data-i18n="web.nav.leaderboard">Leaderboard</a>
+            <a href="/analytics.html" class="nav-link" data-i18n="web.nav.analytics">Analytics</a>
+            <a href="/profile.html" class="nav-link current" id="nav-profile-link" data-i18n="web.nav.profile">Profile</a>
+          </nav>
+          <div class="lang-switcher-container" id="lang-switcher-container"></div>
+        </div>
+      </section>
+
+      <!-- 状态条：今日活跃 + 用户切换 -->
+      <div class="profile-subbar" id="profile-subbar">
+        <div class="profile-subbar-right">
+          <span class="profile-live-status" id="profile-live-status">
+            <i class="live-dot" aria-hidden="true"></i>
+            <span id="profile-live-status-text" data-i18n="web.profile.activeToday">Active today</span>
+          </span>
+          <div class="profile-user-switcher" data-profile-switcher>
+            <button type="button" class="profile-switcher-trigger" id="profile-switcher-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="profile-switcher-panel">
+              <span class="profile-switcher-label" id="profile-switcher-label" data-i18n="web.profile.switchUser">Switch user</span>
+              <span class="nav-profile-caret" aria-hidden="true"></span>
+            </button>
+            <div class="nav-profile-panel profile-switcher-panel" id="profile-switcher-panel" hidden>
+              <input type="search" class="nav-profile-search" data-i18n-placeholder="web.nav.profileSearch" placeholder="Search people…" autocomplete="off" />
+              <ul class="nav-profile-list" role="listbox" aria-label="Profile"></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 第一模块：人物通行证名片 (左) + 九维战力 Bento 阵列 (右) -->
+      <section class="profile-hero-section" id="profile-hero" aria-busy="true">
+        <div class="profile-layout-grid">
+          <!-- 左侧：人物身份通行证卡片 -->
+          <article class="card profile-id-card">
+            <div class="profile-id-head">
+              <div class="profile-avatar-crest" id="profile-avatar-crest">
+                <span class="profile-avatar" id="profile-avatar" aria-hidden="true">·</span>
+                <span class="profile-crest-badge" id="profile-crest-badge" hidden></span>
+              </div>
+              <div class="profile-id-nameblock">
+                <div class="profile-name-row">
+                  <!-- 不挂 data-i18n：该元素由 renderHero 动态填充，全局重翻译会把已渲染的名字打回占位文案 -->
+                  <h2 id="profile-name" class="profile-name">Loading...</h2>
+                </div>
+                <div class="profile-pills-row">
+                  <span id="profile-rank-chip" class="profile-rank-chip mono" hidden></span>
+                  <span id="profile-percentile-pill" class="pill profile-percentile-pill" hidden></span>
+                  <span id="profile-alias-note" class="pill profile-alias-pill" hidden data-i18n="web.leaderboard.aliasRotatesDaily"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 客户端风格排位专属金句评语卡 -->
+            <div class="profile-quote-card" id="profile-quote-card" hidden>
+              <span class="quote-mark" aria-hidden="true">“</span>
+              <p class="quote-body" id="profile-quote-text"></p>
+            </div>
+
+            <!-- 元数据标签 -->
+            <div class="profile-id-meta">
+              <div class="meta-item" id="meta-active-row">
+                <span class="meta-label" data-i18n="web.profile.lastActive">Last active</span>
+                <strong class="mono" id="profile-last-active">-</strong>
+              </div>
+              <div class="meta-item" id="meta-joined-row">
+                <span class="meta-label" data-i18n="web.profile.joined">First seen</span>
+                <strong class="mono" id="profile-joined">-</strong>
+              </div>
+            </div>
+
+            <!-- 结构化特征宣言胶囊 -->
+            <div class="profile-features-strip" id="profile-features-strip"></div>
+
+            <!-- 404 状态 -->
+            <p class="profile-not-found empty-state" id="profile-not-found" hidden></p>
+            <p class="profile-not-found-back" id="profile-not-found-back" hidden>
+              <button type="button" class="link-button" id="profile-pick-another" data-i18n="web.nav.profilePick">Choose a person</button>
+            </p>
+          </article>
+
+          <!-- 右侧：联赛战报指标阵列（等高格子，色轨区分） -->
+          <div class="profile-stats-panel">
+            <div class="profile-stats-grid" id="profile-stats"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 第二模块：顶部多周期对比战报 (复用首页 Scoreboard 结构) -->
+      <section class="kpi-row kpi-scoreboard profile-kpi-scoreboard" id="profile-scoreboard">
+        <div class="kpi-pair" data-period-pair="today">
+          <article class="kpi kpi-current period-today">
+            <span class="lab" data-i18n="web.period.today">Today</span>
+            <span class="val" id="kpi-today-tokens">--</span>
+            <div class="kpi-meta">
+              <span class="delta flat" id="delta-today">--</span>
+              <span class="sub cost-amount" id="kpi-today-cost" hidden></span>
+            </div>
+          </article>
+          <article class="kpi kpi-compare period-yesterday">
+            <span class="lab" data-i18n="web.period.yesterday">Yesterday</span>
+            <span class="val" id="kpi-yesterday-tokens">--</span>
+            <span class="sub cost-amount" id="kpi-yesterday-cost" hidden></span>
+          </article>
+        </div>
+        <div class="kpi-pair" data-period-pair="week">
+          <article class="kpi kpi-current period-week">
+            <span class="lab" data-i18n="web.period.thisWeek">This week</span>
+            <span class="val" id="kpi-week-tokens">--</span>
+            <div class="kpi-meta">
+              <span class="delta flat" id="delta-week">--</span>
+              <span class="sub cost-amount" id="kpi-week-cost" hidden></span>
+            </div>
+          </article>
+          <article class="kpi kpi-compare period-last-week">
+            <span class="lab" data-i18n="web.period.lastWeek">Last week</span>
+            <span class="val" id="kpi-last-week-tokens">--</span>
+            <span class="sub cost-amount" id="kpi-last-week-cost" hidden></span>
+          </article>
+        </div>
+        <div class="kpi-pair" data-period-pair="month">
+          <article class="kpi kpi-current period-month">
+            <span class="lab" data-i18n="web.period.thisMonth">This month</span>
+            <span class="val" id="kpi-month-tokens">--</span>
+            <div class="kpi-meta">
+              <span class="delta flat" id="delta-month">--</span>
+              <span class="sub cost-amount" id="kpi-month-cost" hidden></span>
+            </div>
+          </article>
+          <article class="kpi kpi-compare period-last-month">
+            <span class="lab" data-i18n="web.period.lastMonth">Last month</span>
+            <span class="val" id="kpi-last-month-tokens">--</span>
+            <span class="sub cost-amount" id="kpi-last-month-cost" hidden></span>
+          </article>
+        </div>
+        <article class="kpi kpi-total period-all-time">
+          <span class="lab" data-i18n="web.home.allTimeTotal">All-time total</span>
+          <span class="val" id="profile-all-time-tokens">--</span>
+          <span class="sub cost-amount" id="profile-all-time-cost" hidden></span>
+        </article>
+      </section>
+
+      <!-- 第三模块：月度战绩走势图卡片 (复合走势与巅峰月度) -->
+      <section class="card profile-section-card profile-monthly-card">
+        <div class="card-head-bar">
+          <div>
+            <h3 data-i18n="web.profile.monthlyRankTitle">Monthly rank & standing</h3>
+            <p class="card-subtitle-meta" id="monthly-peak-note"></p>
+          </div>
+        </div>
+        <div id="profile-monthly-rank-chart" class="monthly-rank-container"></div>
+      </section>
+
+      <!-- 全历史日常编码活动矩阵卡片 -->
+      <section class="card profile-section-card profile-heatmap-card" id="profile-recent" aria-busy="true">
+        <div class="card-head-bar">
+          <div>
+            <h3 data-i18n="web.analytics.activityCalendar">Activity heatmap</h3>
+            <p id="profile-recent-meta" class="card-subtitle-meta"></p>
+          </div>
+          <div class="profile-recent-badges" id="profile-mini-stats">
+            <div class="heat-foot">
+              <span data-i18n="web.analytics.less">Less</span>
+              <span class="heat-legend-dots" aria-hidden="true">
+                <i class="heatmap-cell level-0"></i>
+                <i class="heatmap-cell level-1"></i>
+                <i class="heatmap-cell level-2"></i>
+                <i class="heatmap-cell level-3"></i>
+                <i class="heatmap-cell level-4"></i>
+              </span>
+              <span data-i18n="web.analytics.more">More</span>
+            </div>
+          </div>
+        </div>
+        <div class="heatmap-container analytics-heatmap">
+          <div class="heatmap-scroll-frame">
+            <div class="heatmap-weekday-axis" aria-hidden="true">
+              <span>一</span>
+              <span></span>
+              <span>三</span>
+              <span></span>
+              <span>五</span>
+              <span></span>
+              <span>日</span>
+            </div>
+            <div class="heatmap-grid" id="profile-heatmap"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 第四模块：多维明细切片交互分析 (受时间窗口与成本控制) -->
+      <div class="profile-interactive-scope">
+        <!-- 毛玻璃吸顶控制卡片 (Control Cockpit) -->
+        <section class="card profile-control-card" aria-label="Profile range">
+          <div class="control-card-content">
+            <div class="control-left">
+              <span class="control-section-label mono" data-i18n="web.profile.rangeSectionTitle">Multi-dimensional deep dive</span>
+              <div class="period-pills-wrap">
+                <div class="period-pills profile-range-pills" data-profile-range>
+                  <button data-value="last7" data-i18n="web.profile.last7Days">Last 7 days</button>
+                  <button data-value="last30" class="active" data-i18n="web.profile.last30Days">Last 30 days</button>
+                  <button data-value="all" data-i18n="web.period.all">All</button>
+                </div>
+              </div>
+            </div>
+            <div class="control-right">
+              <div class="period-pills compact" data-profile-grain>
+                <button data-value="day" class="active" data-i18n="web.profile.daily">Daily</button>
+                <button data-value="week" data-i18n="web.profile.weekly">Weekly</button>
+                <button data-value="month" data-i18n="web.profile.monthly">Monthly</button>
+              </div>
+              <label class="inline-toggle subtle-toggle">
+                <input id="show-cost" type="checkbox" />
+                <span data-i18n="web.estimatedCost">Estimated cost</span>
+              </label>
+              <span id="profile-range-status" class="leaderboard-status mono" aria-live="polite"></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 趋势图表主卡片 (含区间最高峰、连续、均值火花胶囊) -->
+        <section class="card profile-section-card profile-trend-card" aria-busy="true">
+          <div class="card-head-bar">
+            <div>
+              <h3 data-i18n="web.profile.trend">Usage trend</h3>
+              <p id="profile-trend-meta" class="card-subtitle-meta"></p>
+            </div>
+            <div class="profile-spark-pills" id="profile-trend-spark-stats"></div>
+          </div>
+          <div class="chart-frame profile-trend-frame">
+            <svg id="profile-trend-svg" class="chart-svg" preserveAspectRatio="none" role="img" aria-label="Usage trend"></svg>
+          </div>
+        </section>
+
+        <!-- 二级分析：周内燃烧节律 + 主力模型排名（并排等高） -->
+        <div class="profile-charts-split profile-rhythm-models">
+          <section class="card profile-section-card profile-weekday-card">
+            <div class="card-head-bar">
+              <div>
+                <h3 data-i18n="web.profile.weekdayTitle">Weekday rhythm</h3>
+                <p class="card-subtitle-meta" data-i18n="web.profile.weekdaySub">Which day of the week is most productive</p>
+              </div>
+            </div>
+            <div id="profile-weekday-chart" class="weekday"></div>
+            <div class="weekday-weekend-split" id="weekday-weekend-split"></div>
+          </section>
+
+          <section class="card profile-section-card profile-models-card">
+            <div class="card-head-bar">
+              <div>
+                <h3 data-i18n="web.profile.modelsTitle">Primary model share</h3>
+                <p class="card-subtitle-meta" id="profile-models-meta"></p>
+              </div>
+            </div>
+            <div id="profile-models" class="bar-chart-container usage-share-chart profile-models-chart"></div>
+          </section>
+        </div>
+
+        <!-- 接入来源工具生态 -->
+        <section class="card profile-section-card profile-sources-card">
+          <div class="card-head-bar">
+            <div>
+              <h3 data-i18n="web.profile.sourcesTitle">Source distribution</h3>
+              <p class="card-subtitle-meta" id="profile-sources-meta"></p>
+            </div>
+            <span class="source-count-badge pill mono" id="profile-sources-count" hidden></span>
+          </div>
+          <div id="profile-sources" class="profile-sources-ecosystem"></div>
+        </section>
+
+        <!-- 重构后的数据日志工作台 (固定受控高度 440px，表头吸顶，快速过滤，绝对防泄露无导出) -->
+        <section class="card profile-section-card profile-log-workbench">
+          <div class="workbench-head">
+            <div class="workbench-title-group">
+              <h3 data-i18n="web.profile.rawData">Raw data</h3>
+              <span class="workbench-count-pill mono" id="profile-log-count">0</span>
+            </div>
+            <div class="workbench-filters">
+              <select id="profile-filter-source" class="workbench-select" aria-label="Filter by source">
+                <option value="" data-i18n="web.profile.filterSourceAll">All sources</option>
+              </select>
+              <select id="profile-filter-model" class="workbench-select" aria-label="Filter by model">
+                <option value="" data-i18n="web.profile.filterModelAll">All models</option>
+              </select>
+            </div>
+          </div>
+          <div class="workbench-table-viewport">
+            <table class="public-table profile-log-table">
+              <thead>
+                <tr>
+                  <th data-i18n="web.profile.day">Day</th>
+                  <th data-i18n="web.profile.sources">Sources</th>
+                  <th data-i18n="web.profile.models">Models</th>
+                  <th data-i18n="web.leaderboard.totalTokens">Total tokens</th>
+                  <th data-i18n="web.profile.input">Input</th>
+                  <th data-i18n="web.profile.output">Output</th>
+                  <th data-i18n="web.profile.cache">Cache</th>
+                  <th data-i18n="web.profile.reasoning">Reasoning</th>
+                </tr>
+              </thead>
+              <tbody id="profile-rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+    <div id="profile-tooltip" class="chart-tooltip"></div>
+    <div id="profile-toast" class="profile-toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="/profile.js"></script>
+  </body>
+</html>

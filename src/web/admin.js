@@ -35,6 +35,11 @@ const storageKeys = {
   showCost: "ai-token-league.admin.showCost",
   missingPricesCollapsed: "ai-token-league.admin.missingPricesCollapsed"
 };
+
+function adminProfileUrl(participantId) {
+  return `/profile.html?id=${encodeURIComponent(participantId)}&mode=admin`;
+}
+
 const tbody = document.querySelector("#leaderboard");
 const rankingTbody = document.querySelector("#ranking-tbody");
 const statusEl = document.querySelector("#status");
@@ -927,7 +932,7 @@ function renderRanking(data) {
       const expanded = state.expandedRankingKey === key;
       return `<tr>
       <td><span class="rank">#${item.rank}</span></td>
-      <td><button class="link-button" data-ranking-participant="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</button></td>
+      <td><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></td>
       <td class="tokens" title="${escapeHtml(deviceTokenTooltip(item))}">${formatToken(item.totalTokens)}</td>
       <td class="cost-col" ${state.showCost ? "" : "hidden"}>${renderCostQuality(item)}</td>
       <td>${renderPrimarySlice(item.workdirs)}</td>
@@ -943,9 +948,9 @@ function renderRanking(data) {
     ${expanded ? `<tr class="expanded-row"><td colspan="8">${renderExpandedUsage(item)}</td></tr>` : ""}`;
     })
     .join("");
-  rankingTbody.querySelectorAll("[data-ranking-participant], [data-ranking-detail]").forEach((button) => {
+  rankingTbody.querySelectorAll("[data-ranking-detail]").forEach((button) => {
     button.addEventListener("click", () => {
-      loadDetail(button.dataset.rankingParticipant || button.dataset.rankingDetail);
+      loadDetail(button.dataset.rankingDetail);
     });
   });
   rankingTbody.querySelectorAll("[data-expand-ranking-row]").forEach((button) => {
@@ -968,7 +973,7 @@ function render(items) {
       const expanded = state.expandedUsageKey === key;
       return `<tr>
         <td>${formatPeriod(item)}</td>
-        <td><button class="link-button" data-participant="${escapeHtml(item.participantId)}" data-period-start="${escapeHtml(item.periodStart)}" data-period-end="${escapeHtml(item.periodEnd)}">${escapeHtml(item.nickname)}</button></td>
+        <td><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></td>
         <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
         <td class="cost-col" ${state.showCost ? "" : "hidden"}>${renderCostQuality(item)}</td>
         <td>${renderPrimarySlice(item.workdirs)}</td>
@@ -977,6 +982,7 @@ function render(items) {
         <td>
           <div class="row-actions">
             <button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? t("admin.usage.collapseRow") : t("admin.usage.expandRow")}</button>
+            <button type="button" class="link-button" data-usage-detail="${escapeHtml(item.participantId)}" data-period-start="${escapeHtml(item.periodStart)}" data-period-end="${escapeHtml(item.periodEnd)}">${t("admin.usage.viewDetail")}</button>
           </div>
         </td>
       </tr>
@@ -985,9 +991,9 @@ function render(items) {
       </td></tr>` : ""}`;
     })
     .join("");
-  tbody.querySelectorAll("[data-participant]").forEach((button) => {
+  tbody.querySelectorAll("[data-usage-detail]").forEach((button) => {
     button.addEventListener("click", () => {
-      loadDetail(button.dataset.participant, {
+      loadDetail(button.dataset.usageDetail, {
         start: button.dataset.periodStart,
         end: button.dataset.periodEnd
       });

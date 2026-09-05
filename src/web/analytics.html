@@ -24,6 +24,7 @@
           <a href="/" class="nav-link" data-i18n="web.nav.home">Home</a>
           <a href="/leaderboard.html" class="nav-link" data-i18n="web.nav.leaderboard">Leaderboard</a>
           <a href="/analytics.html" class="nav-link current" data-i18n="web.nav.analytics">Analytics</a>
+          <a href="/profile.html" class="nav-link" id="nav-profile-link" data-i18n="web.nav.profile">Profile</a>
         </nav>
         <div class="lang-switcher-container" id="lang-switcher-container"></div>
       </div>
@@ -53,30 +54,51 @@
       </label>
     </section>
 
+    <!-- 宏观态势说明与快捷下钻导引条 -->
+    <div class="an-subbar" id="an-subbar">
+      <div class="an-subbar-left">
+        <span class="an-badge-community" data-i18n="web.analytics.macroBadge">全社区宏观态势大盘</span>
+        <span class="an-subbar-hint" data-i18n="web.analytics.macroHint">点击图表中的任意参与者直接下钻个人专属画像</span>
+      </div>
+      <div class="an-subbar-right">
+        <span class="an-live-stat mono" id="an-live-summary">--</span>
+      </div>
+    </div>
+
     <div id="analytics-loading" class="analytics-loading" role="status" aria-live="polite" data-i18n-aria-label="loading" hidden>
       <div class="analytics-spinner" aria-hidden="true"></div>
     </div>
 
-    <section class="an-kpis" aria-label="KPI">
+    <section class="an-kpis an-kpis-macro" aria-label="KPI">
       <article class="an-kpi">
         <span class="lab" data-i18n="web.totalTokens">Total Tokens</span>
         <strong class="val" id="kpi-total-tokens">-</strong>
-        <span class="sub" id="period-date-range"></span>
+        <span class="sub mono" id="period-date-range"></span>
+      </article>
+      <article class="an-kpi">
+        <span class="lab" data-i18n="web.analytics.activeDevs">Active Contributors</span>
+        <strong class="val" id="kpi-active-count">-</strong>
+        <span class="sub" id="kpi-active-sub">-</span>
       </article>
       <article class="an-kpi savings">
         <span class="lab" data-i18n="web.analytics.cacheSavings">Cache savings</span>
         <strong class="val cost-amount" id="kpi-cache-savings">-</strong>
-        <span class="sub"><span data-i18n="web.analytics.cacheHitRate">Hit rate</span> <span id="kpi-hit-rate">-</span></span>
-      </article>
-      <article class="an-kpi">
-        <span class="lab" data-i18n="web.analytics.unitCost">Unit cost</span>
-        <strong class="val cost-amount" id="kpi-unit-cost">-</strong>
-        <span class="sub" data-i18n="web.analytics.unitCostSub">per 100M tokens</span>
+        <span class="sub"><span data-i18n="web.analytics.cacheHitRate">Hit rate</span> <strong class="mono" id="kpi-hit-rate">-</strong></span>
       </article>
       <article class="an-kpi">
         <span class="lab" data-i18n="web.estimatedCost">Estimated cost</span>
         <strong class="val cost-amount" id="kpi-estimated-cost">-</strong>
-        <span class="sub" id="kpi-savings-rate"></span>
+        <span class="sub"><span data-i18n="web.analytics.unitCost">Unit cost</span>: <strong class="mono cost-amount" id="kpi-unit-cost">-</strong> <span id="kpi-savings-rate"></span></span>
+      </article>
+      <article class="an-kpi">
+        <span class="lab" data-i18n="web.analytics.topEngine">Leading Source</span>
+        <strong class="val" id="kpi-top-provider">-</strong>
+        <span class="sub" id="kpi-top-provider-sub">-</span>
+      </article>
+      <article class="an-kpi">
+        <span class="lab" data-i18n="web.analytics.peakBurnDay">Peak Burn Day</span>
+        <strong class="val" id="kpi-peak-day">-</strong>
+        <span class="sub mono" id="kpi-peak-day-date">-</span>
       </article>
     </section>
 
@@ -107,8 +129,11 @@
 
     <article id="participant-ranking-card" class="card treemap-card">
       <div class="card-head">
-        <h2 data-i18n="web.analytics.participantTreemap">Participant distribution</h2>
-        <span class="meta" data-i18n="web.analytics.participantTreemapSubtitle">Area ∝ usage · color = primary source</span>
+        <div class="card-head-titles">
+          <h2 data-i18n="web.analytics.participantTreemap">Participant distribution</h2>
+          <span class="meta" data-i18n="web.analytics.participantTreemapSubtitle">Area ∝ usage · color = primary source</span>
+        </div>
+        <span class="pill tm-drilldown-pill" data-i18n="web.analytics.clickToDrilldown">点击下钻画像 ↗</span>
       </div>
       <div id="treemap-legend" class="src-legend-wrap"></div>
       <div class="dist-split">
@@ -160,12 +185,30 @@
     <article class="card heatmap-full-width">
       <div class="card-head">
         <h2 data-i18n="web.analytics.activityCalendar">Activity heatmap</h2>
-        <span class="meta" data-i18n="web.analytics.heatmapSubtitle">近 90 天</span>
+        <span class="meta" id="analytics-heatmap-meta" data-i18n="web.analytics.heatmapSubtitle">Last year</span>
       </div>
       <div class="heatmap-container analytics-heatmap">
-        <div id="heatmap-grid" class="heatmap-grid heat90"></div>
+        <div class="heatmap-scroll-frame">
+          <div class="heatmap-weekday-axis" aria-hidden="true">
+            <span>一</span>
+            <span></span>
+            <span>三</span>
+            <span></span>
+            <span>五</span>
+            <span></span>
+            <span>日</span>
+          </div>
+          <div id="heatmap-grid" class="heatmap-grid"></div>
+        </div>
         <div class="heat-foot">
           <span data-i18n="web.analytics.less">Less</span>
+          <div class="heat-legend-dots" aria-hidden="true">
+            <i class="heatmap-cell level-0"></i>
+            <i class="heatmap-cell level-1"></i>
+            <i class="heatmap-cell level-2"></i>
+            <i class="heatmap-cell level-3"></i>
+            <i class="heatmap-cell level-4"></i>
+          </div>
           <span data-i18n="web.analytics.more">More</span>
         </div>
       </div>

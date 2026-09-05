@@ -215,6 +215,12 @@ function testBackendUpload(identity, items) {
   assert.ok(Object.hasOwn(trend.items[0].models[0], "estimatedCostUsd"));
   const monthlyTrend = store.participantTrend(identity.participantId, { grain: "month", range: "last12_months" });
   assert.ok(monthlyTrend.items.length >= 1);
+  const lightTrend = store.participantTrend(identity.participantId, { grain: "day", range: "last30", fields: "totals" });
+  assert.ok(lightTrend.items.length >= 1, "fields=totals keeps aggregated day rows");
+  assert.ok(lightTrend.items[0].totalTokens >= 0);
+  assert.ok(!Object.hasOwn(lightTrend.items[0], "models"), "fields=totals strips model breakdowns");
+  assert.ok(!Object.hasOwn(lightTrend.items[0], "workdirs"), "fields=totals strips workdir breakdowns");
+  assert.ok(!Object.hasOwn(lightTrend.items[0], "providers"), "fields=totals strips provider breakdowns");
   const admin = store.adminUsage({ grain: "day", range: "month" });
   assert.equal(admin.participants.length, 1);
   assert.equal(admin.items.length, 1);
@@ -6021,7 +6027,7 @@ function testStoreAnalytics() {
   assert.equal(data.timeGrain, "day");
   assert.equal(data.timeSeries[0].totalTokens, 210000);
   assert.equal(data.timeSeries[0].activeCount, 1);
-  assert.equal(data.heatmap.length, 90);
+  assert.equal(data.heatmap.length, 365);
   assert.equal(data.heatmap.find(h => h.day === day).totalTokens, 210000);
 
   console.log("  testStoreAnalytics passed");
@@ -6062,7 +6068,7 @@ function testStoreAnalyticsHourly() {
   assert.equal(data.timeSeries[9].day, today);
   // Summary should include hourly-derived daily total (31000 = 10000+11000+10000)
   assert.equal(data.summary.totalTokens, 31000, "summary must reflect hourly-derived daily total");
-  assert.equal(data.heatmap.length, 90);
+  assert.equal(data.heatmap.length, 365);
   assert.equal(data.heatmap.find(hm => hm.day === today).totalTokens, 31000, "heatmap must reflect today total");
 
   if (fs.existsSync(path.join(tmp, "db-analytics-hourly.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-hourly.json"));
@@ -6243,7 +6249,7 @@ function testStoreAnalyticsHeatmap() {
   });
 
   const data = store.analytics({ period: "today", participantId: identity.participantId });
-  assert.equal(data.heatmap.length, 90, "heatmap must always have 90 entries");
+  assert.equal(data.heatmap.length, 365, "heatmap covers trailing year by day");
   // Verify continuity
   for (let i = 1; i < data.heatmap.length; i++) {
     const prev = new Date(data.heatmap[i - 1].day + "T00:00:00Z");
@@ -6259,9 +6265,10 @@ function testStoreAnalyticsHeatmap() {
   const day30Entry = data.heatmap.find(h => h.day === day30);
   assert.ok(day30Entry, "heatmap must contain day-30");
   assert.equal(day30Entry.totalTokens, 2000);
-  // Period change should not affect heatmap length
+  // Period change should not affect heatmap window
   const dataWeek = store.analytics({ period: "this_week", participantId: identity.participantId });
-  assert.equal(dataWeek.heatmap.length, 90, "heatmap must be 90 regardless of period");
+  assert.equal(dataWeek.heatmap.length, 365, "heatmap must stay trailing-year regardless of period");
+  assert.equal(dataWeek.heatmap.find((h) => h.day === day30)?.totalTokens, 2000);
 
   if (fs.existsSync(path.join(tmp, "db-analytics-heatmap.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-heatmap.json"));
   console.log("  testStoreAnalyticsHeatmap passed");
@@ -6276,7 +6283,7 @@ function testStoreAnalyticsEmptyStore() {
   assert.equal(data.timeGrain, "day");
   assert.equal(data.timeSeries.length, 1, "empty today should still have 1 timeSeries entry");
   assert.equal(data.timeSeries[0].totalTokens, 0);
-  assert.equal(data.heatmap.length, 90, "empty store must still return 90 heatmap entries");
+  assert.equal(data.heatmap.length, 365, "empty store still returns trailing-year heatmap skeleton");
   assert.equal(data.period, "today");
   assert.ok(data.from, "from must be set");
   assert.ok(data.to, "to must be set");
@@ -8146,6 +8153,116 @@ function testStoreEmptyDatabase() {
   console.log("  testStoreEmptyDatabase passed");
 }
 
+function testParticipantProfile() {
+  const store = new Store(path.join(tmp, "db-participant-profile.json"));
+  store.currentBusinessDay = () => "2026-08-27";
+  const baseItem = {
+    toolCode: "codex",
+    workdirHash: "wd_participant_profile",
+    workdirDisplayName: "participant-profile",
+    model: "model_codex_local",
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    sourceQuality: "exact",
+    rawSourceRef: "",
+    providerVersion: "0.1.0",
+    parserVersion: "0.1.0"
+  };
+  const seed = (nickname, rows) => {
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    store.registerDevice({
+      participantId: identity.participantId,
+      deviceId,
+      nickname,
+      identityPublicKey: identity.identityPublicKey,
+      os: "test",
+      appVersion: APP_VERSION
+    });
+    store.upsertUsageBatch({
+      participantId: identity.participantId,
+      deviceId,
+      clientGeneratedAt: new Date().toISOString(),
+      items: rows.map(({ providerId, totalTokens, usageDay, model }) => ({
+        ...baseItem,
+        providerId,
+        day: usageDay,
+        model: model || `model_${providerId}`,
+        inputTokens: totalTokens,
+        totalTokens,
+        sourceFingerprint: `pp_${nickname}_${providerId}_${usageDay}_${model || ""}`
+      }))
+    });
+    return identity.participantId;
+  };
+
+  assert.equal(store.participantProfile("nonexistent"), null);
+
+  const alpha = seed("pp-alpha", [
+    { providerId: "codex_local", totalTokens: 200, usageDay: "2026-08-25" },
+    { providerId: "codex_local", totalTokens: 100, usageDay: "2026-08-26" },
+    { providerId: "claude_code_local", totalTokens: 40, usageDay: "2026-08-27", model: "model_claude" },
+    { providerId: "codex_local", totalTokens: 100, usageDay: "2026-08-27", model: "model_gpt52" }
+  ]);
+  const beta = seed("pp-beta", [
+    { providerId: "codex_local", totalTokens: 50, usageDay: "2026-08-20" }
+  ]);
+  const gamma = seed("pp-gamma", [
+    { providerId: "codex_local", totalTokens: 1000, usageDay: "2026-08-27" }
+  ]);
+
+  const alphaProfile = store.participantProfile(alpha);
+  assert.equal(alphaProfile.nickname, "pp-alpha");
+  assert.equal(alphaProfile.totalTokens, 440);
+  assert.equal(alphaProfile.lastActiveDay, "2026-08-27");
+  assert.equal(alphaProfile.activeDays, 3);
+  assert.equal(alphaProfile.currentStreak, 3, "streak counts consecutive days up to the last active day");
+  assert.equal(alphaProfile.bestStreak, 3);
+  assert.equal(alphaProfile.rank, 2);
+  assert.equal(alphaProfile.percentile, 33);
+  assert.equal(alphaProfile.participantCount, 3, "participantCount reflects the all-time leaderboard size");
+  assert.ok(Array.isArray(alphaProfile.monthlyRanks), "monthlyRanks must be an array");
+  assert.ok(alphaProfile.monthlyRanks.length >= 1, "monthlyRanks must contain active months");
+  assert.equal(alphaProfile.monthlyRanks.at(-1).rank, 2);
+  assert.deepEqual(alphaProfile.providers, [
+    { name: "codex_local", totalTokens: 400 },
+    { name: "claude_code_local", totalTokens: 40 }
+  ]);
+  assert.deepEqual(alphaProfile.models, [
+    { name: "model_codex_local", totalTokens: 300 },
+    { name: "model_gpt52", totalTokens: 100 },
+    { name: "model_claude", totalTokens: 40 }
+  ]);
+  assert.equal(Object.hasOwn(alphaProfile, "workdirs"), false, "profile must not expose workdir data");
+  assert.equal(Object.hasOwn(alphaProfile, "rows"), false, "profile must not expose raw rows");
+  assert.deepEqual(alphaProfile.peakDay, { day: "2026-08-25", totalTokens: 200 }, "peakDay aggregates every row of the all-time peak day");
+  assert.ok(alphaProfile.peakDay.totalTokens <= alphaProfile.totalTokens, "peakDay tokens must stay within the career total");
+  assert.ok(alphaProfile.peakDay.day >= "2026-08-25" && alphaProfile.peakDay.day <= alphaProfile.lastActiveDay, "peakDay day must be one of the active days");
+
+  const betaProfile = store.participantProfile(beta);
+  assert.equal(betaProfile.activeDays, 1);
+  assert.equal(betaProfile.currentStreak, 1, "streak of the latest run survives idle days");
+  assert.equal(betaProfile.bestStreak, 1);
+  assert.equal(betaProfile.rank, 3);
+  assert.equal(betaProfile.percentile, 0);
+  assert.deepEqual(betaProfile.peakDay, { day: "2026-08-20", totalTokens: 50 });
+
+  const gammaProfile = store.participantProfile(gamma);
+  assert.equal(gammaProfile.rank, 1);
+  assert.equal(gammaProfile.percentile, 67);
+  assert.deepEqual(gammaProfile.peakDay, { day: "2026-08-27", totalTokens: 1000 });
+
+  const costProfile = store.participantProfile(alpha, { includeCost: true });
+  assert.equal(costProfile.estimatedCostUsd, null, "unpriced tokens surface as null cost");
+  assert.equal(costProfile.missingPriceTokens, 440);
+  assert.equal(costProfile.costQuality, "unknown_price");
+
+  console.log("  testParticipantProfile passed");
+}
+
 function testStoreZeroTokenItems() {
   const store = new Store(path.join(tmp, "db-zero-tokens.json"));
   const identity = generateIdentity();
@@ -8963,5 +9080,8 @@ testDominantCompositionTie();
 
 // Board anonymizer edge cases
 testBoardAnonymizerConsistency();
+
+// Participant profile
+testParticipantProfile();
 
 console.log("All tests passed");

@@ -135,6 +135,7 @@ export function computeConcentrationMetrics(rankings = []) {
     topItems: sorted.slice(0, 5).map((item, index) => ({
       rank: item.rank || index + 1,
       name: item.displayName || item.nickname || item.participantId || "",
+      displayId: item.displayId || item.participantId || "",
       totalTokens: Number(item.totalTokens || 0),
       pct: Math.round(Number(item.totalTokens || 0) / total * 100)
     }))
@@ -168,12 +169,12 @@ export function renderConcentrationSidepanel(container, rankings = [], { localeT
     </div>
     <div class="rank-mini">
       ${metrics.topItems.map((item) => `
-        <div class="rank-mini-row">
-          <span class="n">${item.rank}</span>
+        <a class="rank-mini-row" href="${item.displayId ? `/profile.html?id=${encodeURIComponent(item.displayId)}` : '#'}" title="${escapeHtml(item.name)} · ${formatTokens(item.totalTokens)}">
+          <span class="n">#${item.rank}</span>
           <span class="nm">${escapeHtml(item.name)}</span>
           <span class="pct">${item.pct}%</span>
           <div class="rank-mini-bar"><i style="width:${Math.max(8, Math.round((item.pct / topBar) * 100))}%"></i></div>
-        </div>
+        </a>
       `).join("")}
     </div>
   `;
@@ -201,12 +202,20 @@ export function renderTokenComposition(container, summary = {}) {
   const parts = COMPOSITION_PARTS.map((part) => {
     const tokens = Number(summary[part.key] || 0);
     const ratio = tokens / total;
+    let pctStr = "0%";
+    if (tokens > 0) {
+      const p = ratio * 100;
+      if (p < 0.1) pctStr = "<0.1%";
+      else if (p < 1) pctStr = `${p.toFixed(1)}%`;
+      else pctStr = `${Math.round(p)}%`;
+    }
     return {
       ...part,
       label: t(part.labelKey),
       tokens,
       ratio,
-      pct: Math.round(ratio * 100)
+      pct: Math.round(ratio * 100),
+      pctStr
     };
   });
 
@@ -235,7 +244,7 @@ export function renderTokenComposition(container, summary = {}) {
           ${rings}
         </svg>
         <div class="comp-donut-center">
-          <strong>${dominant.pct}%</strong>
+          <strong>${dominant.pctStr || `${dominant.pct}%`}</strong>
           <span>${escapeHtml(dominant.label)}</span>
         </div>
       </div>
@@ -245,7 +254,7 @@ export function renderTokenComposition(container, summary = {}) {
             <div class="comp-mix-head">
               <span class="swatch" style="background:${part.color}"></span>
               <span class="comp-label">${escapeHtml(part.label)}</span>
-              <b>${part.pct}%</b>
+              <b>${part.pctStr}</b>
             </div>
             <div class="comp-mix-track"><i style="width:${Math.max(part.pct, part.tokens > 0 ? 2 : 0)}%;background:${part.color}"></i></div>
           </div>
@@ -657,6 +666,18 @@ export function renderActivityHeatmap(grid, heatmap = [], {
   for (const pt of heatmap) totalsByDay[pt.day] = pt.totalTokens || 0;
   const maxVal = Math.max(...Object.values(totalsByDay), 0);
 
+  if (layout === "heatfull") {
+    renderHeatFullStrip(grid, {
+      totalsByDay,
+      maxVal,
+      to,
+      businessDay,
+      tooltip,
+      localeTokenCompact
+    });
+    return;
+  }
+
   if (layout === "heat90") {
     renderHeat90Strip(grid, {
       totalsByDay,
@@ -731,6 +752,59 @@ function renderHeat90Strip(grid, {
   }
 }
 
+// Full-history strip: spans from the participant's earliest usage day to the
+// anchor day, aligned to real weekly columns (7 rows, Monday to Sunday).
+function renderHeatFullStrip(grid, {
+  totalsByDay,
+  maxVal,
+  businessDay = "",
+  to = "",
+  tooltip,
+  localeTokenCompact
+}) {
+  grid.classList.remove("heat90");
+  grid.classList.add("heat-calendar-weeks");
+  const dayKeys = Object.keys(totalsByDay).sort();
+  if (!dayKeys.length) return;
+  const anchorDay = to || businessDay || new Date().toISOString().split("T")[0];
+  const firstDay = dayKeys[0] < anchorDay ? dayKeys[0] : anchorDay;
+
+  // Align start to the Monday of that week
+  const startDate = new Date(`${firstDay}T00:00:00Z`);
+  const startDayOfWeek = startDate.getUTCDay(); // 0 = Sun, 1 = Mon ...
+  const startOffset = (startDayOfWeek + 6) % 7;
+  const alignedStart = new Date(startDate);
+  alignedStart.setUTCDate(startDate.getUTCDate() - startOffset);
+
+  // Align end to the Sunday of that week
+  const endDate = new Date(`${anchorDay}T00:00:00Z`);
+  const endDayOfWeek = endDate.getUTCDay();
+  const endOffset = (6 - ((endDayOfWeek + 6) % 7));
+  const alignedEnd = new Date(endDate);
+  alignedEnd.setUTCDate(endDate.getUTCDate() + endOffset);
+
+  const totalDays = Math.max(7, Math.round((alignedEnd - alignedStart) / 86400000) + 1);
+  const weekCount = Math.max(1, Math.ceil(totalDays / 7));
+  grid.style.setProperty("--heat-weeks", String(weekCount));
+  const frame = grid.closest(".heatmap-scroll-frame");
+  if (frame) frame.style.setProperty("--heat-weeks", String(weekCount));
+
+  for (let i = 0; i < totalDays; i++) {
+    const cellDate = new Date(alignedStart);
+    cellDate.setUTCDate(alignedStart.getUTCDate() + i);
+    const dayStr = cellDate.toISOString().split("T")[0];
+    const isOutOfRange = dayStr < firstDay || dayStr > anchorDay;
+    const tokens = isOutOfRange ? 0 : (totalsByDay[dayStr] || 0);
+    appendHeatmapCell(grid, {
+      dayStr,
+      tokens,
+      level: isOutOfRange ? -1 : heatLevel(tokens, maxVal),
+      tooltip: isOutOfRange ? null : tooltip,
+      localeTokenCompact
+    });
+  }
+}
+
 function appendHeatmapCell(grid, {
   dayStr,
   tokens,
@@ -739,13 +813,19 @@ function appendHeatmapCell(grid, {
   localeTokenCompact
 }) {
   const cell = document.createElement("i");
+  if (level === -1) {
+    cell.className = "heatmap-cell level-empty";
+    grid.appendChild(cell);
+    return;
+  }
   cell.className = `heatmap-cell level-${level}`;
   cell.dataset.date = dayStr;
   cell.dataset.tokens = tokens;
 
   if (tooltip) {
     cell.addEventListener("mouseenter", () => {
-      tooltip.innerHTML = `<strong>${dayStr}</strong><br>${localeTokenCompact(tokens)} ${t("unit.tokens") || "tokens"}`;
+      const unit = t("unit.tokens") || "tokens";
+      tooltip.innerHTML = `<strong>${dayStr}</strong><div class="tooltip-val">${localeTokenCompact(tokens)} <span class="tooltip-unit">${unit}</span></div>`;
       tooltip.style.opacity = "1";
       const rect = cell.getBoundingClientRect();
       tooltip.style.left = `${rect.left + window.scrollX - tooltip.offsetWidth / 2 + rect.width / 2}px`;
@@ -764,7 +844,7 @@ export function renderGauge(fillEl, valEl, cacheHitRate) {
   valEl.textContent = `${pct}%`;
 }
 
-export function renderBarChart(container, items = [], { collapseAfter, collapseLabel, localeTokenCompact }) {
+export function renderBarChart(container, items = [], { collapseAfter, collapseLabel, localeTokenCompact, showCost = false, renderCost: customRenderCost = null } = {}) {
   container.innerHTML = "";
   if (!items.length) {
     container.innerHTML = `<div style="text-align: center; padding: 30px 0; color: var(--muted);">${t("web.analytics.noData") || "No usage data found"}</div>`;
@@ -777,26 +857,41 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
     displayItems = [...topItems, {
       name: collapseLabel || t("web.analytics.otherModels") || "Other Models",
       tokens: otherItems.reduce((sum, item) => sum + item.tokens, 0),
-      ratio: otherItems.reduce((sum, item) => sum + item.ratio, 0)
+      ratio: otherItems.reduce((sum, item) => sum + item.ratio, 0),
+      estimatedCostUsd: otherItems.reduce((sum, item) => sum + (Number(item.estimatedCostUsd) || 0), 0),
+      missingPriceTokens: otherItems.reduce((sum, item) => sum + (Number(item.missingPriceTokens) || 0), 0)
     }];
   }
   const totalTokens = displayItems.reduce((sum, item) => sum + Number(item.tokens || 0), 0);
+  const costRenderer = customRenderCost || renderCost;
   for (const item of displayItems) {
     const ratio = Number.isFinite(Number(item.ratio))
       ? Number(item.ratio)
       : totalTokens > 0
         ? Number(item.tokens || 0) / totalTokens
         : 0;
-    const ratioPct = Math.round(ratio * 100);
-    const barWidth = Math.max(0, Math.min(100, ratio * 100));
+    const rawPct = ratio * 100;
+    let ratioPctStr = "0%";
+    if (item.tokens > 0) {
+      if (rawPct < 0.1) ratioPctStr = "<0.1%";
+      else if (rawPct < 1) ratioPctStr = `${rawPct.toFixed(1)}%`;
+      else ratioPctStr = `${Math.round(rawPct)}%`;
+    }
+    const barWidth = Math.max(0, Math.min(100, rawPct));
     const tokenLabel = localeTokenCompact(item.tokens);
+    const hasCost = showCost && (item.estimatedCostUsd !== undefined && item.estimatedCostUsd !== null);
+    const costHtml = hasCost ? `<span class="usage-share-cost">${costRenderer(item)}</span>` : "";
     const row = document.createElement("div");
     row.className = "usage-share-row";
-    row.title = `${item.name}: ${tokenLabel} (${ratioPct}%)`;
+    row.title = `${item.name}: ${tokenLabel} (${ratioPctStr})`;
     row.innerHTML = `
       <div class="lbl">
-        <span>${escapeHtml(item.name)}</span>
-        <span class="usage-share-value"><strong>${tokenLabel}</strong><span>${ratioPct}%</span></span>
+        <span class="usage-share-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
+        <span class="usage-share-value">
+          <strong>${tokenLabel}</strong>
+          ${costHtml}
+          <span>${ratioPctStr}</span>
+        </span>
       </div>
       <div class="usage-share-track">
         <i style="width:${barWidth}%"></i>
@@ -851,6 +946,7 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
   const sourceVariantCount = {};
   const entries = rankings.slice(0, displayCount).map((item) => ({
     name: item.displayName || item.nickname || item.participantId || "",
+    displayId: item.displayId || item.participantId || "",
     totalTokens: Number(item.totalTokens || 0),
     primaryProvider: item.primaryProvider || item.primaryProviderId || "other"
   }));
@@ -944,6 +1040,12 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
     rect.addEventListener("mouseleave", () => {
       if (tooltip) tooltip.style.opacity = "0";
     });
+    if (item.displayId) {
+      rect.style.cursor = "pointer";
+      rect.addEventListener("click", () => {
+        window.location.assign(`/profile.html?id=${encodeURIComponent(item.displayId)}`);
+      });
+    }
     svg.appendChild(rect);
 
     // Word-cloud style: centered label stack, ellipsis when too wide, larger type by cell size.
@@ -985,6 +1087,12 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
       class: treemapTextTone(fill).trim() || undefined,
       "clip-path": `url(#${clipId})`
     });
+    if (item.displayId) {
+      group.style.cursor = "pointer";
+      group.addEventListener("click", () => {
+        window.location.assign(`/profile.html?id=${encodeURIComponent(item.displayId)}`);
+      });
+    }
     const name = svgEl("text", {
       x: cx,
       y: stackTop,

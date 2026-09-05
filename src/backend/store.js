@@ -760,7 +760,7 @@ export class Store {
   }
 
   analyticsAllCacheKey({ participantId = "" } = {}) {
-    return `analytics-all|${STORAGE_SCHEMA_VERSION}|${JSON.stringify({ participantId: participantId || "" })}`;
+    return `analytics-all|${STORAGE_SCHEMA_VERSION}|heat365|${JSON.stringify({ participantId: participantId || "" })}`;
   }
 
   readAnalyticsAllCache(args = {}) {
@@ -1471,20 +1471,189 @@ export class Store {
     };
   }
 
-  participantTrend(participantId, { grain = "day", range = "last30", startDay = "", endDay = "", includeCost = false } = {}) {
+  participantTrend(participantId, { grain = "day", range = "last30", startDay = "", endDay = "", includeCost = false, fields = "" } = {}) {
     const participant = this.db.participants[participantId];
     if (!participant) return null;
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
     const daySet = daySetForRange(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && matchesDaySet(item.day, daySet));
     const bounds = rangeBounds(days, rows);
+    const items = aggregateUsageRows(rows, normalizeGrain(grain), { participants: this.db.participants, includeCost });
     return {
       participantId,
       nickname: participant.nickname,
       grain: normalizeGrain(grain),
       from: bounds.from,
       to: bounds.to,
-      items: aggregateUsageRows(rows, normalizeGrain(grain), { participants: this.db.participants, includeCost })
+      items: fields === "totals"
+        ? items.map(({ models, workdirs, providers, ...rest }) => rest)
+        : items
+    };
+  }
+
+  participantSummary(participantId) {
+    const businessDay = this.currentBusinessDay();
+    const ranges = {
+      today: new Set(daysForQuery({ range: "today" }, { businessDay })),
+      yesterday: new Set(daysForQuery({ range: "yesterday" }, { businessDay })),
+      week: new Set(daysForQuery({ range: "this_week" }, { businessDay })),
+      lastWeek: new Set(daysForQuery({ range: "last_week" }, { businessDay })),
+      thisMonth: new Set(daysForQuery({ range: "this_month" }, { businessDay })),
+      lastMonth: new Set(daysForQuery({ range: "last_month" }, { businessDay }))
+    };
+    const totals = Object.fromEntries(
+      Object.keys(ranges).map((key) => [key, { tokens: 0, cost: 0 }])
+    );
+    for (const item of Object.values(this.db.usageDaily || {})) {
+      if (item.participantId !== participantId) continue;
+      for (const [key, days] of Object.entries(ranges)) {
+        if (!days.has(item.day)) continue;
+        totals[key].tokens += item.totalTokens || 0;
+        totals[key].cost += item.estimatedCostUsd || 0;
+      }
+    }
+    return {
+      todayTokens: totals.today.tokens,
+      yesterdayTokens: totals.yesterday.tokens,
+      weekTokens: totals.week.tokens,
+      lastWeekTokens: totals.lastWeek.tokens,
+      thisMonthTokens: totals.thisMonth.tokens,
+      lastMonthTokens: totals.lastMonth.tokens,
+      todayCost: totals.today.cost,
+      yesterdayCost: totals.yesterday.cost,
+      weekCost: totals.week.cost,
+      lastWeekCost: totals.lastWeek.cost,
+      thisMonthCost: totals.thisMonth.cost,
+      lastMonthCost: totals.lastMonth.cost
+    };
+  }
+
+  participantMonthlyRanks(participantId) {
+    const months = new Map();
+    for (const item of Object.values(this.db.usageDaily || {})) {
+      if (!item.day || !item.totalTokens) continue;
+      const month = item.day.slice(0, 7);
+      const m = months.get(month) || new Map();
+      m.set(item.participantId, (m.get(item.participantId) || 0) + item.totalTokens);
+      months.set(month, m);
+    }
+    const result = [];
+    const sortedMonths = [...months.keys()].sort();
+    for (const month of sortedMonths) {
+      const pMap = months.get(month);
+      const sorted = [...pMap.entries()].sort((a, b) => b[1] - a[1]);
+      const rankIdx = sorted.findIndex(([id]) => id === participantId);
+      const totalParticipants = sorted.length;
+      if (rankIdx !== -1) {
+        result.push({
+          month,
+          rank: rankIdx + 1,
+          totalTokens: sorted[rankIdx][1],
+          totalParticipants
+        });
+      } else {
+        result.push({
+          month,
+          rank: null,
+          totalTokens: 0,
+          totalParticipants
+        });
+      }
+    }
+    return result;
+  }
+
+  // All-time identity view of one participant: totals, sources/models, activity
+  // streaks and the public all-time rank. Range-scoped views go through
+  // participantDetail/participantTrend instead.
+  participantProfile(participantId, { includeCost = false } = {}) {
+    const participant = this.db.participants[participantId];
+    if (!participant) return null;
+    const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId);
+    const totals = {
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      estimatedCostUsd: 0,
+      costQuality: "",
+      hasKnownPrice: false,
+      missingPriceTokens: 0,
+      missingPriceModels: {}
+    };
+    const providers = new Map();
+    const models = new Map();
+    const activeDaySet = new Set();
+    const tokensByDay = new Map();
+    let lastActiveDay = "";
+    for (const item of rows) {
+      totals.totalTokens += item.totalTokens || 0;
+      totals.inputTokens += item.inputTokens || 0;
+      totals.outputTokens += item.outputTokens || 0;
+      totals.cacheReadTokens += item.cacheReadTokens || 0;
+      totals.cacheWriteTokens += item.cacheWriteTokens || 0;
+      totals.reasoningTokens += item.reasoningTokens || 0;
+      const providerKey = item.providerId || "unknown";
+      providers.set(providerKey, (providers.get(providerKey) || 0) + (item.totalTokens || 0));
+      const modelKey = item.model || "unknown";
+      models.set(modelKey, (models.get(modelKey) || 0) + (item.totalTokens || 0));
+      if (item.day) {
+        activeDaySet.add(item.day);
+        if (item.day > lastActiveDay) lastActiveDay = item.day;
+        tokensByDay.set(item.day, (tokensByDay.get(item.day) || 0) + (item.totalTokens || 0));
+      }
+      if (includeCost) {
+        aggregateCost(totals, item);
+      }
+    }
+    // All-time single-day peak across the participant's daily usage facts.
+    // usageDaily rows are per (day, provider, model), so aggregate per day first.
+    let peakDay = null;
+    for (const [day, tokens] of tokensByDay.entries()) {
+      if (!peakDay || tokens > peakDay.totalTokens || (tokens === peakDay.totalTokens && day < peakDay.day)) {
+        peakDay = { day, totalTokens: tokens };
+      }
+    }
+    let currentStreak = 0;
+    let cursor = lastActiveDay;
+    while (cursor && activeDaySet.has(cursor)) {
+      currentStreak += 1;
+      cursor = addDays(cursor, -1);
+    }
+    let bestStreak = 0;
+    let run = 0;
+    let prev = "";
+    for (const day of [...activeDaySet].sort()) {
+      run = prev && addDays(prev, 1) === day ? run + 1 : 1;
+      bestStreak = Math.max(bestStreak, run);
+      prev = day;
+    }
+    const ranking = this.publicLeaderboard({ period: "all", includeCost });
+    const rank = ranking.findIndex((item) => item.participantId === participantId) + 1;
+    const percentile = ranking.length ? Math.round(((ranking.length - rank) / ranking.length) * 100) : 100;
+    const monthlyRanks = this.participantMonthlyRanks(participantId);
+    const summary = this.participantSummary(participantId);
+    return {
+      participantId,
+      nickname: participant.nickname,
+      createdAt: participant.createdAt || "",
+      lastActiveDay,
+      ...totals,
+      currentStreak,
+      bestStreak,
+      peakDay,
+      activeDays: activeDaySet.size,
+      rank: rank || null,
+      percentile,
+      participantCount: ranking.length,
+      monthlyRanks,
+      summary,
+      providers: [...providers.entries()].map(([name, totalTokens]) => ({ name, totalTokens })).sort((a, b) => b.totalTokens - a.totalTokens),
+      models: [...models.entries()].map(([name, totalTokens]) => ({ name, totalTokens })).sort((a, b) => b.totalTokens - a.totalTokens).slice(0, 10),
+      businessDay: this.currentBusinessDay(),
+      ...(includeCost ? costFields(totals) : {})
     };
   }
 
@@ -1628,7 +1797,7 @@ export class Store {
       ? cacheReadTokens / (inputTokens + cacheReadTokens) 
       : 0;
 
-    const heatmapDays = trailingDays(90, { businessDay });
+    const heatmapDays = trailingDays(365, { businessDay });
     const heatmapDaySet = new Set(heatmapDays);
     const heatmapRows = Object.values(this.db.usageDaily).filter((item) => {
       const matchesDay = heatmapDaySet.has(item.day);
@@ -2431,6 +2600,8 @@ function daysForRange(range, { startDay = "", endDay = "", businessDay = localDa
     return daysBetween(toDay(start), toDay(end));
   }
   const offset = range === "yesterday" ? 1 : 0;
+  if (range === "last7" || range === "7d") return trailingDays(7, { businessDay });
+  if (range === "last30") return trailingDays(30, { businessDay });
   const count = range === "7d" ? 7 : 1;
   return Array.from({ length: count }, (_, index) => {
     return addDays(today, -index - offset);

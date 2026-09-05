@@ -455,6 +455,29 @@ export class MySqlStore extends Store {
   }
 
   async publicLeaderboard(args = {}) {
+    // The all-period league ranking is league-global and recomputed by every
+    // profile view, leaderboard fetch and nav resolution. Cache it per
+    // businessDay in aggregateCache so all usage writes invalidate it for free.
+    const cacheable = (args.period === "all" || args.range === "all")
+      && !args.source && !args.providerId && !args.participantId
+      && !args.startDay && !args.endDay;
+    if (cacheable) {
+      const includeCost = Boolean(args.includeCost);
+      const cacheKey = `leaderboard-all|${STORAGE_SCHEMA_VERSION}|${this.currentBusinessDay()}|cost=${includeCost ? 1 : 0}`;
+      if (this.aggregateCache?.[cacheKey]) return this.aggregateCache[cacheKey].value;
+      const result = await this.mysqlComputePublicLeaderboard(args);
+      this.aggregateCache ||= {};
+      this.aggregateCache[cacheKey] = { value: result };
+      return result;
+    }
+    return this.mysqlComputePublicLeaderboard(args);
+  }
+
+  // Not named computePublicLeaderboard: the JSON store's cachedAggregate
+  // dispatches to this.computePublicLeaderboard synchronously for scoped
+  // reads (withScopedUsageRows), so it must keep resolving to the in-memory
+  // implementation there.
+  async mysqlComputePublicLeaderboard(args = {}) {
     const { whereSql, params } = this.mysqlUsageScope({ ...args, providerId: args.source || "" }, "u");
     const includeCost = Boolean(args.includeCost);
     const [rows] = await this.pool.query(
@@ -667,7 +690,15 @@ export class MySqlStore extends Store {
     const effectiveArgs = { ...args, participantId, range: args.range || "last30" };
     const grain = mysqlNormalizeGrain(args.grain || "day");
     const { whereSql, params, days } = this.mysqlUsageScope(effectiveArgs, "u");
-    const items = await this.mysqlAggregateUsageRows({ whereSql, params, grain, includeCost: Boolean(args.includeCost) });
+    // fields=totals serves day-sum consumers (e.g. the profile heatmap) with a
+    // single aggregate query instead of the four-query full breakdown path.
+    const items = await this.mysqlAggregateUsageRows({
+      whereSql,
+      params,
+      grain,
+      includeCost: Boolean(args.includeCost),
+      includeBreakdowns: args.fields !== "totals"
+    });
     return {
       participantId,
       nickname: participant.nickname,
@@ -678,6 +709,77 @@ export class MySqlStore extends Store {
     };
   }
 
+  async participantMonthlyRanks(participantId) {
+    // month groups are league-global; cache them per businessDay and derive
+    // the per-participant view so every profile view skips the full GROUP BY.
+    const cacheKey = `monthly-ranks|${STORAGE_SCHEMA_VERSION}|${this.currentBusinessDay()}`;
+    let monthGroups = this.aggregateCache?.[cacheKey]?.value;
+    if (!monthGroups) {
+      const [rows] = await this.pool.query(
+        `SELECT DATE_FORMAT(day, '%Y-%m') AS month, participantId, SUM(totalTokens) AS totalTokens
+         FROM usage_daily
+         GROUP BY DATE_FORMAT(day, '%Y-%m'), participantId
+         ORDER BY month ASC, totalTokens DESC`
+      );
+      monthGroups = new Map();
+      for (const row of rows) {
+        const list = monthGroups.get(row.month) || [];
+        list.push({ participantId: row.participantId, totalTokens: Number(row.totalTokens || 0) });
+        monthGroups.set(row.month, list);
+      }
+      this.aggregateCache ||= {};
+      this.aggregateCache[cacheKey] = { value: monthGroups };
+    }
+    const result = [];
+    for (const month of [...monthGroups.keys()].sort()) {
+      const list = monthGroups.get(month);
+      const rankIdx = list.findIndex((item) => item.participantId === participantId);
+      const totalParticipants = list.length;
+      if (rankIdx !== -1) {
+        result.push({
+          month,
+          rank: rankIdx + 1,
+          totalTokens: list[rankIdx].totalTokens,
+          totalParticipants
+        });
+      } else {
+        result.push({
+          month,
+          rank: null,
+          totalTokens: 0,
+          totalParticipants
+        });
+      }
+    }
+    return result;
+  }
+
+  async participantProfile(participantId, args = {}) {
+    const participant = this.db.participants[participantId];
+    if (!participant) return null;
+    const includeCost = Boolean(args.includeCost);
+    const rows = await this.usageRowsForQuery({ period: "all", participantId });
+    // All-time rank must come from the full SQL leaderboard, not from the
+    // participant-scoped rows swapped in below, so pin the ranking result
+    // while the shared JSON computation runs against the scoped rows.
+    const ranking = await this.publicLeaderboard({ period: "all", includeCost });
+    const monthlyRanks = await this.participantMonthlyRanks(participantId);
+    const hadOwnPublicLeaderboard = Object.hasOwn(this, "publicLeaderboard");
+    const previousPublicLeaderboard = this.publicLeaderboard;
+    const hadOwnMonthlyRanks = Object.hasOwn(this, "participantMonthlyRanks");
+    const previousMonthlyRanks = this.participantMonthlyRanks;
+    this.publicLeaderboard = () => ranking;
+    this.participantMonthlyRanks = () => monthlyRanks;
+    try {
+      return this.withScopedUsageRows(rows, () => Store.prototype.participantProfile.call(this, participantId, args));
+    } finally {
+      if (hadOwnPublicLeaderboard) this.publicLeaderboard = previousPublicLeaderboard;
+      else delete this.publicLeaderboard;
+      if (hadOwnMonthlyRanks) this.participantMonthlyRanks = previousMonthlyRanks;
+      else delete this.participantMonthlyRanks;
+    }
+  }
+
   async analytics(args = {}) {
     if (args.period === "all" || args.range === "all") {
       const hit = this.readAnalyticsAllCache(args);
@@ -686,7 +788,7 @@ export class MySqlStore extends Store {
 
     const businessDay = this.currentBusinessDay();
     const cacheArgs = { ...args, businessDay };
-    const cacheKey = `analytics|${STORAGE_SCHEMA_VERSION}|${JSON.stringify(cacheArgs)}`;
+    const cacheKey = `analytics|${STORAGE_SCHEMA_VERSION}|heat365|${JSON.stringify(cacheArgs)}`;
     if (!(args.period === "all" || args.range === "all") && this.aggregateCache?.[cacheKey]) {
       return this.aggregateCache[cacheKey].value;
     }
@@ -698,7 +800,8 @@ export class MySqlStore extends Store {
     } else {
       periodDays = mysqlDaysForQuery(args, { businessDay }) || [];
     }
-    const heatmapDays = mysqlTrailingDays(90, { businessDay });
+
+    const heatmapDays = mysqlTrailingDays(365, { businessDay });
     const unionDays = [...new Set([...periodDays, ...heatmapDays])];
 
     if (!unionDays.length) return Store.prototype.analytics.call(this, args);
@@ -1023,7 +1126,7 @@ export class MySqlStore extends Store {
     }));
   }
 
-  async mysqlAggregateUsageRows({ whereSql = "", params = [], grain = "day", includeAdminFields = false, includeCost = false } = {}) {
+  async mysqlAggregateUsageRows({ whereSql = "", params = [], grain = "day", includeAdminFields = false, includeCost = false, includeBreakdowns = true } = {}) {
     const period = mysqlPeriodExpressions(grain, "u");
     const groupColumns = includeAdminFields
       ? `${period.groupBy}, u.participantId, p.nickname`
@@ -1052,21 +1155,23 @@ export class MySqlStore extends Store {
     );
     const keyFor = (row) => includeAdminFields ? `${toDayString(row.periodStart)}|${row.participantId}` : toDayString(row.periodStart);
     const breakdowns = {};
-    for (const [field, column] of Object.entries({ models: "model", workdirs: "workdirDisplayName", providers: "providerId" })) {
-      const [breakdownRows] = await this.pool.query(
-        `SELECT ${period.selectStart} AS periodStart
-                ${selectParticipant},
-                u.${column} AS name,
-                COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
-                ${mysqlCostAggregateSelect("u")}
-         FROM usage_daily u
-         ${joinParticipant}
-         ${whereSql}
-         GROUP BY ${period.groupBy}${includeAdminFields ? ", u.participantId, p.nickname" : ""}, u.${column}
-         ORDER BY totalTokens DESC`,
-        params
-      );
-      breakdowns[field] = groupBreakdowns(breakdownRows.map((row) => ({ ...row, aggregateKey: keyFor(row) })), "aggregateKey", { includeCost });
+    if (includeBreakdowns) {
+      for (const [field, column] of Object.entries({ models: "model", workdirs: "workdirDisplayName", providers: "providerId" })) {
+        const [breakdownRows] = await this.pool.query(
+          `SELECT ${period.selectStart} AS periodStart
+                  ${selectParticipant},
+                  u.${column} AS name,
+                  COALESCE(SUM(u.totalTokens), 0) AS totalTokens,
+                  ${mysqlCostAggregateSelect("u")}
+           FROM usage_daily u
+           ${joinParticipant}
+           ${whereSql}
+           GROUP BY ${period.groupBy}${includeAdminFields ? ", u.participantId, p.nickname" : ""}, u.${column}
+           ORDER BY totalTokens DESC`,
+          params
+        );
+        breakdowns[field] = groupBreakdowns(breakdownRows.map((row) => ({ ...row, aggregateKey: keyFor(row) })), "aggregateKey", { includeCost });
+      }
     }
     return rows.map((row) => {
       const item = mysqlAggregateRow(row);
@@ -1079,9 +1184,11 @@ export class MySqlStore extends Store {
         sourceQuality: row.sourceQuality || "exact",
         lastSyncedAt: row.lastSyncedAt || "",
         ...(includeCost ? mysqlCostFields(row) : {}),
-        models: breakdowns.models.get(aggregateKey) || [],
-        workdirs: breakdowns.workdirs.get(aggregateKey) || [],
-        providers: breakdowns.providers.get(aggregateKey) || []
+        ...(includeBreakdowns ? {
+          models: breakdowns.models.get(aggregateKey) || [],
+          workdirs: breakdowns.workdirs.get(aggregateKey) || [],
+          providers: breakdowns.providers.get(aggregateKey) || []
+        } : {})
       };
     });
   }

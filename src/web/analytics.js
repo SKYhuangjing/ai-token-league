@@ -201,6 +201,12 @@ function initParticipantSelectUi() {
 
 initParticipantSelectUi();
 
+// Plan A: 公开看板专注于全社区宏观大盘，单人画像由点击下钻承接；嵌入 admin 时依然支持单人排查
+if (!isEmbedded) {
+  const whoWrap = document.querySelector(".who");
+  if (whoWrap) whoWrap.hidden = true;
+}
+
 async function loadParticipantDropdown() {
   const select = document.querySelector("#participant-select");
 
@@ -361,28 +367,97 @@ function renderParticipantTreemapPanel() {
 
 function renderKPIs() {
   const summary = state.data.summary || {};
-  document.querySelector("#kpi-total-tokens").textContent = localeTokenCompact(summary.totalTokens);
-  document.querySelector("#kpi-cache-savings").textContent = formatCost(summary.cacheSavingsUsd);
+  const totalTokens = Number(summary.totalTokens || 0);
 
+  // 1. Total Tokens
+  const totalTokensEl = document.querySelector("#kpi-total-tokens");
+  if (totalTokensEl) totalTokensEl.textContent = localeTokenCompact(totalTokens);
+
+  // 2. Active Contributors
+  const activeCountEl = document.querySelector("#kpi-active-count");
+  const activeSubEl = document.querySelector("#kpi-active-sub");
+  const participants = state.data.participantRanking || [];
+  const totalParticipants = state.data.participantCount || participants.length || 0;
+  const activeDevs = participants.filter((p) => (p.totalTokens || 0) > 0).length || participants.length;
+  if (activeCountEl) activeCountEl.textContent = String(activeDevs);
+  if (activeSubEl) {
+    activeSubEl.textContent = totalParticipants > 0
+      ? `${Math.round((activeDevs / totalParticipants) * 100)}% of ${totalParticipants}`
+      : `${activeDevs} active`;
+  }
+
+  // 3. Cache savings & hit rate
+  const cacheSavingsEl = document.querySelector("#kpi-cache-savings");
+  if (cacheSavingsEl) cacheSavingsEl.textContent = formatCost(summary.cacheSavingsUsd);
+  const hitRateEl = document.querySelector("#kpi-hit-rate");
+  if (hitRateEl) hitRateEl.textContent = `${Math.round((summary.cacheHitRate || 0) * 100)}%`;
+
+  // 4. Estimated cost & Unit cost & Savings rate
   const totalCostBeforeSavings = (summary.estimatedCostUsd || 0) + (summary.cacheSavingsUsd || 0);
   const savingsRate = totalCostBeforeSavings > 0 ? (summary.cacheSavingsUsd || 0) / totalCostBeforeSavings : 0;
-  document.querySelector("#kpi-savings-rate").textContent = `${t("web.analytics.savingsRate")}: ${Math.round(savingsRate * 100)}%`;
+  const savingsRateEl = document.querySelector("#kpi-savings-rate");
+  if (savingsRateEl) savingsRateEl.textContent = `(${Math.round(savingsRate * 100)}% saved)`;
 
-  const totalTokens = Number(summary.totalTokens || 0);
   const unitCost = totalTokens > 0 ? (summary.estimatedCostUsd || 0) / (totalTokens / 100_000_000) : null;
-  document.querySelector("#kpi-unit-cost").textContent = formatCost(unitCost);
-  document.querySelector("#kpi-estimated-cost").textContent = formatCost(summary.estimatedCostUsd);
+  const unitCostEl = document.querySelector("#kpi-unit-cost");
+  if (unitCostEl) unitCostEl.textContent = formatCost(unitCost);
+  const estCostEl = document.querySelector("#kpi-estimated-cost");
+  if (estCostEl) estCostEl.textContent = formatCost(summary.estimatedCostUsd);
+
+  // 5. Leading Source / Top Provider
+  const topProviderEl = document.querySelector("#kpi-top-provider");
+  const topProviderSubEl = document.querySelector("#kpi-top-provider-sub");
+  const topProvider = (state.data.providers || [])[0];
+  if (topProviderEl) {
+    topProviderEl.textContent = topProvider ? sourceName(topProvider.name) : "-";
+  }
+  if (topProviderSubEl) {
+    const pct = topProvider ? Math.round((topProvider.ratio || 0) * 100) : 0;
+    topProviderSubEl.textContent = topProvider ? `${pct}% share` : "-";
+  }
+
+  // 6. Peak Burn Day in period
+  const peakDayEl = document.querySelector("#kpi-peak-day");
+  const peakDateEl = document.querySelector("#kpi-peak-day-date");
+  const timeSeries = state.data.timeSeries || [];
+  let maxDay = null;
+  for (const item of timeSeries) {
+    if (!maxDay || (item.totalTokens || 0) > (maxDay.totalTokens || 0)) {
+      maxDay = item;
+    }
+  }
+  if (peakDayEl) peakDayEl.textContent = maxDay ? localeTokenCompact(maxDay.totalTokens) : "-";
+  if (peakDateEl) peakDateEl.textContent = maxDay ? (maxDay.day || maxDay.label || "-") : "-";
+
+  // Live Summary
+  const liveSummaryEl = document.querySelector("#an-live-summary");
+  if (liveSummaryEl) {
+    liveSummaryEl.textContent = `${activeDevs} active · ${localeTokenCompact(totalTokens)} burned`;
+  }
 }
 
 function renderHeatmap() {
-  renderActivityHeatmap(document.querySelector("#heatmap-grid"), state.data?.heatmap || [], {
-    from: state.data?.from,
-    to: state.data?.to,
-    businessDay: state.data?.businessDay,
+  const series = state.data?.heatmap || [];
+  const anchorDay = state.data?.businessDay || series[series.length - 1]?.day || "";
+  renderActivityHeatmap(document.querySelector("#heatmap-grid"), series, {
+    businessDay: anchorDay,
+    to: anchorDay,
     tooltip: document.querySelector("#chart-tooltip"),
     localeTokenCompact,
-    layout: "heat90"
+    layout: "heatfull"
   });
+  const metaEl = document.querySelector("#analytics-heatmap-meta");
+  if (metaEl) {
+    if (series.length) {
+      const first = series[0].day;
+      const last = series[series.length - 1].day;
+      metaEl.textContent = `${t("web.analytics.heatmapSubtitle")} · ${first} → ${last}`;
+      metaEl.removeAttribute("data-i18n");
+    } else {
+      metaEl.setAttribute("data-i18n", "web.analytics.heatmapSubtitle");
+      metaEl.textContent = t("web.analytics.heatmapSubtitle");
+    }
+  }
 }
 
 async function init() {
