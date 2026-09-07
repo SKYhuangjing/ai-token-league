@@ -622,6 +622,7 @@ function renderHeatmap() {
   }));
   renderActivityHeatmap(grid, series, {
     layout: "heatfull",
+    levels: 12,
     businessDay: state.heatAll.businessDay || state.profile?.businessDay || "",
     to: state.heatAll.businessDay || state.profile?.businessDay || "",
     tooltip: tooltipEl,

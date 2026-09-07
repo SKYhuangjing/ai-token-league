@@ -657,7 +657,8 @@ export function renderActivityHeatmap(grid, heatmap = [], {
   businessDay = "",
   tooltip,
   localeTokenCompact,
-  layout = "calendar"
+  layout = "calendar",
+  levels = 4
 } = {}) {
   if (!grid) return;
   grid.innerHTML = "";
@@ -673,7 +674,8 @@ export function renderActivityHeatmap(grid, heatmap = [], {
       to,
       businessDay,
       tooltip,
-      localeTokenCompact
+      localeTokenCompact,
+      levels
     });
     return;
   }
@@ -685,7 +687,8 @@ export function renderActivityHeatmap(grid, heatmap = [], {
       to,
       businessDay,
       tooltip,
-      localeTokenCompact
+      localeTokenCompact,
+      levels
     });
     return;
   }
@@ -707,20 +710,28 @@ export function renderActivityHeatmap(grid, heatmap = [], {
     appendHeatmapCell(grid, {
       dayStr,
       tokens,
-      level: heatLevel(tokens, maxVal),
+      level: heatLevel(tokens, maxVal, levels),
       tooltip,
       localeTokenCompact
     });
   }
 }
 
-function heatLevel(tokens, maxVal) {
+// levels <= 4 keeps the legacy linear buckets so existing 5-shade layouts
+// (analytics, download) render unchanged. Higher level counts use a sqrt
+// scale: daily usage is heavy-tailed (median day often <10% of the peak),
+// so linear buckets pile most days into the lowest shade.
+function heatLevel(tokens, maxVal, levels = 4) {
   if (!(tokens > 0 && maxVal > 0)) return 0;
   const ratio = tokens / maxVal;
-  if (ratio > 0.75) return 4;
-  if (ratio > 0.50) return 3;
-  if (ratio > 0.25) return 2;
-  return 1;
+  if (levels <= 4) {
+    if (ratio > 0.75) return 4;
+    if (ratio > 0.50) return 3;
+    if (ratio > 0.25) return 2;
+    return 1;
+  }
+  const scaled = Math.sqrt(ratio) * levels;
+  return Math.max(1, Math.min(levels, Math.ceil(scaled)));
 }
 
 function renderHeat90Strip(grid, {
@@ -729,7 +740,8 @@ function renderHeat90Strip(grid, {
   businessDay = "",
   to = "",
   tooltip,
-  localeTokenCompact
+  localeTokenCompact,
+  levels = 4
 }) {
   grid.classList.add("heat90");
   const anchorDay = to || businessDay || new Date().toISOString().split("T")[0];
@@ -745,7 +757,7 @@ function renderHeat90Strip(grid, {
     appendHeatmapCell(grid, {
       dayStr,
       tokens,
-      level: heatLevel(tokens, maxVal),
+      level: heatLevel(tokens, maxVal, levels),
       tooltip,
       localeTokenCompact
     });
@@ -760,7 +772,8 @@ function renderHeatFullStrip(grid, {
   businessDay = "",
   to = "",
   tooltip,
-  localeTokenCompact
+  localeTokenCompact,
+  levels = 4
 }) {
   grid.classList.remove("heat90");
   grid.classList.add("heat-calendar-weeks");
@@ -798,7 +811,7 @@ function renderHeatFullStrip(grid, {
     appendHeatmapCell(grid, {
       dayStr,
       tokens,
-      level: isOutOfRange ? -1 : heatLevel(tokens, maxVal),
+      level: isOutOfRange ? -1 : heatLevel(tokens, maxVal, levels),
       tooltip: isOutOfRange ? null : tooltip,
       localeTokenCompact
     });

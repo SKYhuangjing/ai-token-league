@@ -5795,6 +5795,38 @@ function testWebDownloadStructure() {
   console.log("  testWebDownloadStructure passed");
 }
 
+function testWebProfileHeatmapScale() {
+  const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
+  const js = fs.readFileSync("src/web/profile.js", "utf8");
+  const html = fs.readFileSync("src/web/profile.html", "utf8");
+  const css = fs.readFileSync("src/web/styles.css", "utf8");
+
+  // heatLevel must keep the legacy linear buckets for 4-level layouts and
+  // switch to a sqrt scale for finer profiles (heavy-tailed daily usage).
+  assert.match(shared, /function heatLevel\(tokens, maxVal, levels = 4\)/);
+  assert.match(shared, /if \(levels <= 4\)[\s\S]*?if \(ratio > 0\.75\) return 4;/);
+  assert.match(shared, /Math\.sqrt\(ratio\) \* levels/);
+  assert.match(shared, /levels = 4\s*\n\} = \{\}\)/);
+  assert.match(js, /levels: 12/);
+
+  // Legend must expose one dot per level (level-0 empty plus 12 active shades).
+  const dots = html.match(/<i class="heatmap-cell level-\d+"><\/i>/g) || [];
+  assert.equal(dots.length, 13, "profile legend must show 13 heatmap dots");
+
+  // CSS must define a monotonic 12-step alpha ladder scoped to the profile page
+  // without touching the shared analytics block.
+  const alphas = [...css.matchAll(/\.page-profile :is\(\.heatmap-grid, \.heat-legend-dots\) \.heatmap-cell\.level-(\d+) \{ background: rgba\(var\(--heat\), ([\d.]+)\); \}/g)]
+    .map((m) => ({ level: Number(m[1]), alpha: Number(m[2]) }))
+    .sort((a, b) => a.level - b.level);
+  assert.equal(alphas.length, 12, "profile scope must define 12 active heat levels");
+  assert.equal(alphas[0].level, 1);
+  assert.equal(alphas[11].level, 12);
+  for (let i = 1; i < alphas.length; i++) {
+    assert.ok(alphas[i].alpha > alphas[i - 1].alpha, "heat alpha ladder must be strictly monotonic");
+  }
+  console.log("  testWebProfileHeatmapScale passed");
+}
+
 function testDesktopRendererExports() {
   const renderer = fs.readFileSync("src/desktop/renderer.js", "utf8");
   for (const fn of [
@@ -6634,6 +6666,7 @@ testWebLeaderboardStructure();
 testWebAnalyticsParticipantRankingStructure();
 testWebAdminStructure();
 testWebDownloadStructure();
+testWebProfileHeatmapScale();
 testDesktopRendererExports();
 testTauriBridgeExports();
 
