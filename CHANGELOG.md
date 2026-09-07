@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.15] - 2026-09-07
+
+### Added
+
+- [Web] New public participant profile page at `/profile.html`, reachable from every user label on the leaderboard and in the admin console: identity card with persona tags, bento metric tiles (best day, cache leverage, attendance saturation), a multi-period scoreboard, monthly rank history, an all-time activity heatmap, drill-down views (trend / rhythm / composition / model / source), and a filterable data log workbench. The old details popover is retired; cards and labels now link straight to the profile page.
+- [Web] The web "Profile" tab is now a plain link instead of a dropdown switcher, which also removes its z-index conflicts with floating layers on other pages.
+
+### Fixed
+
+- [Desktop] Codex history usage no longer silently shrinks when Codex archives sessions. Codex periodically moves rollout files from `sessions/YYYY/MM/DD/` into a flat `archived_sessions/`; the collector previously hashed the full file path into its source fingerprint, so such a move invalidated the scan cache, forced a full re-parse whose result depended on file order, and let a lower total overwrite server history (observed as a one-day drop from 7.0B to 6.83B August tokens). Fingerprints are now derived from the rollout filename (which embeds the session UUID), same-name copies across the two directories are deduplicated, and the parse order is a deterministic function of the file set — verified on 1,076 real rollout files where pre-move and post-move layouts now produce byte-identical totals, matching ccusage on all 158 completed days token-for-token.
+- [Desktop] Scans no longer silently truncate Codex and Claude Code sources at 1,000 files: heavy users already exceed 1,000 Codex rollout files, and the cap dropped the remainder invisibly while making totals depend on directory read order. The walk limit is now 10,000.
+- [Web] Fixed `data-i18n` re-translation overwriting dynamically rendered names, and removed 52 orphaned translation keys; previously hardcoded profile texts (persona tags, trait labels, peak month, weekday/weekend) are now bilingual.
+
+### Changed
+
+- [Web] Leaderboard and monthly-rank queries are cached per business day with write-path invalidation, and the trend API gained a lightweight `fields=totals` mode (profile page ~200ms, leaderboard ~5ms on a full league).
+
 ## [0.7.14] - 2026-08-28
 
 ### Added

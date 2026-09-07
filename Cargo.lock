@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-token-league"
-version = "0.7.14"
+version = "0.7.15"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "atl-collector"
-version = "0.7.14"
+version = "0.7.15"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "collector-core"
-version = "0.7.14"
+version = "0.7.15"
 dependencies = [
  "base64 0.22.1",
  "chrono",
