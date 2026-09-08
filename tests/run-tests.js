@@ -3658,6 +3658,68 @@ async function testHealthEndpoint() {
   } finally { await cleanup(); }
 }
 
+// PROFILE_WORK_START/END must flow from env into the hour-of-day trend
+// response (workWindow), never into day-grain responses, and invalid values
+// fall back to the 09:30–18:30 defaults.
+async function testHourlyWorkWindowEnv() {
+  const saved = {
+    DB_PATH: process.env.DB_PATH,
+    BOARD_SECURITY_LEVEL: process.env.BOARD_SECURITY_LEVEL,
+    PROFILE_WORK_START: process.env.PROFILE_WORK_START,
+    PROFILE_WORK_END: process.env.PROFILE_WORK_END
+  };
+  const dbPath = path.join(tmp, `db-work-window-${Date.now()}.json`);
+  process.env.DB_PATH = dbPath;
+  delete process.env.BOARD_SECURITY_LEVEL;
+  process.env.PROFILE_WORK_START = "10:00";
+  process.env.PROFILE_WORK_END = "19:30";
+  const nonce = Date.now();
+  const { createServer, store, PROFILE_WORK_WINDOW } = await import(`../src/backend/server.js?work-window-${nonce}=${nonce}`);
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.deepEqual(PROFILE_WORK_WINDOW, { start: "10:00", end: "19:30" }, "valid env values are honored");
+
+    const identity = generateIdentity();
+    const deviceId = newId("d");
+    store.registerDevice({
+      participantId: identity.participantId, deviceId,
+      nickname: "work-window-user",
+      identityPublicKey: identity.identityPublicKey,
+      os: "test", appVersion: APP_VERSION
+    });
+    const today = localDay();
+    store.upsertUsageBatch(makeHourlySnapshotPayload(
+      [makeSnapshotItem({ day: today, hour: 10, inputTokens: 4000, totalTokens: 4000, sourceFingerprint: `ww_${today}` })],
+      identity.participantId, deviceId, { day: today, hour: 10 }
+    ));
+
+    const hourlyRes = await fetch(`${baseUrl}/api/board/participants/${identity.participantId}/trend?grain=hour-of-day&range=last7`);
+    assert.equal(hourlyRes.status, 200);
+    const hourly = await hourlyRes.json();
+    assert.equal(hourly.grain, "hour-of-day");
+    assert.deepEqual(hourly.workWindow, { start: "10:00", end: "19:30" }, "hour-of-day response carries the env work window");
+
+    const dayRes = await fetch(`${baseUrl}/api/board/participants/${identity.participantId}/trend?grain=day&range=last7`);
+    const day = await dayRes.json();
+    assert.equal(Object.hasOwn(day, "workWindow"), false, "day-grain responses must not carry workWindow");
+
+    process.env.PROFILE_WORK_START = "25:99";
+    const fallback = await import(`../src/backend/server.js?work-window-fallback-${nonce}=${nonce}`);
+    assert.equal(fallback.PROFILE_WORK_WINDOW.start, "09:30", "invalid start falls back to default");
+    assert.equal(fallback.PROFILE_WORK_WINDOW.end, "19:30", "valid end survives an invalid start");
+    console.log("  testHourlyWorkWindowEnv passed");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  }
+}
+
 async function testDeviceRegistrationEndpoint() {
   const { baseUrl, cleanup, dbPath } = await createTestServer();
   try {
@@ -5827,6 +5889,58 @@ function testWebProfileHeatmapScale() {
   console.log("  testWebProfileHeatmapScale passed");
 }
 
+function testWebProfileHourlyCard() {
+  const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
+  const js = fs.readFileSync("src/web/profile.js", "utf8");
+  const html = fs.readFileSync("src/web/profile.html", "utf8");
+  const css = fs.readFileSync("src/web/styles.css", "utf8");
+  const i18n = fs.readFileSync("src/shared/i18n.js", "utf8");
+
+  // Shared chart library exposes the hourly rhythm render + stats helpers.
+  assert.match(shared, /export function renderHourlyRhythm\(/);
+  assert.match(shared, /export function computeHourlyRhythmStats\(/);
+
+  // Profile page renders the card and fetches grain=hour-of-day with the range.
+  assert.match(html, /profile-hourly-card/);
+  assert.match(html, /id="profile-hourly-chart"/);
+  assert.match(html, /id="profile-hourly-stats"/);
+  assert.match(html, /id="profile-hourly-split"/);
+  assert.match(html, /data-i18n="web\.profile\.hourlyTitle"/);
+  assert.match(js, /grain: "hour-of-day"/);
+  assert.match(js, /renderHourlyRhythmCard/);
+  assert.match(js, /renderHourlyRhythm, computeHourlyRhythmStats/);
+  assert.match(js, /hourly\.workWindow/);
+  const serverJs = fs.readFileSync("src/backend/server.js", "utf8");
+  assert.match(serverJs, /PROFILE_WORK_START/);
+  assert.match(serverJs, /PROFILE_WORK_END/);
+  assert.match(serverJs, /workWindow = PROFILE_WORK_WINDOW/);
+
+  // Card chart styling exists and i18n keys ship in both locales.
+  assert.match(css, /\.hourly-rhythm\b/);
+  assert.match(css, /\.hourly-rhythm \.d\.peak \.col/);
+  assert.match(i18n, /"web\.profile\.hourlyTitle": "编码时段节律"/);
+  assert.match(i18n, /"web\.profile\.hourlyTitle": "Hourly rhythm"/);
+  assert.match(i18n, /"web\.profile\.hourlyCoverage"/);
+  assert.match(i18n, /"web\.profile\.hourlyGoldenHour"/);
+  assert.match(i18n, /"web\.profile\.hourlySplitTitle"/);
+  assert.match(i18n, /"web\.profile\.hourlyWorkShare"/);
+  assert.match(i18n, /"web\.profile\.hourlyOffShare"/);
+  assert.match(i18n, /"web\.profile\.hourlyArchetypeWork"/);
+  assert.match(i18n, /"web\.profile\.hourlyArchetypeNight"/);
+  assert.match(i18n, /"web\.profile\.hourlyArchetypeAll"/);
+  assert.match(i18n, /"web\.profile\.hourlyTagNight"/);
+  assert.match(i18n, /"web\.profile\.hourlyTagOvertime"/);
+  assert.match(i18n, /"web\.profile\.hourlyTagDaytime"/);
+  assert.match(i18n, /"web\.profile\.hourlyNightShare"/);
+  assert.match(js, /renderHourlyFeatureTags/);
+  assert.match(css, /\.feature-tag\.feature-night/);
+  assert.match(css, /\.feature-tag\.feature-overtime/);
+  assert.match(css, /\.feature-tag\.feature-daytime/);
+  assert.match(i18n, /"web\.profile\.emptyHourly"/);
+
+  console.log("  testWebProfileHourlyCard passed");
+}
+
 function testDesktopRendererExports() {
   const renderer = fs.readFileSync("src/desktop/renderer.js", "utf8");
   for (const fn of [
@@ -6651,6 +6765,7 @@ await testSelfServiceDeletionRejectsCrossParticipantDevice();
 await testSelfServiceDeletionRejectsInvalidSignature();
 await testLeaderboardEndpoint();
 await testBoardParticipantDetailAndTrend();
+await testHourlyWorkWindowEnv();
 await testAdminParticipantDetailUsesRangeAndGrainSeparately();
 await testModelPricesPublicEndpoint();
 await testAdminCrudViaHttp();
@@ -6667,6 +6782,7 @@ testWebAnalyticsParticipantRankingStructure();
 testWebAdminStructure();
 testWebDownloadStructure();
 testWebProfileHeatmapScale();
+testWebProfileHourlyCard();
 testDesktopRendererExports();
 testTauriBridgeExports();
 
@@ -8296,6 +8412,65 @@ function testParticipantProfile() {
   console.log("  testParticipantProfile passed");
 }
 
+function testParticipantHourlyRhythm() {
+  const store = new Store(path.join(tmp, "db-participant-hourly-rhythm.json"));
+  store.currentBusinessDay = () => "2026-08-27";
+  const identity = generateIdentity();
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "hourly-rhythm-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+
+  const seedHourly = (day, hour, tokens) => {
+    store.upsertUsageBatch(makeHourlySnapshotPayload(
+      [makeSnapshotItem({
+        day, hour,
+        inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+        totalTokens: tokens,
+        sourceFingerprint: `hr_${day}_${hour}`
+      })],
+      identity.participantId, deviceId, { day, hour }
+    ));
+  };
+  seedHourly("2026-08-26", 14, 5000);
+  seedHourly("2026-08-26", 15, 3000);
+  seedHourly("2026-08-25", 14, 2000);
+  seedHourly("2026-08-25", 2, 1000);
+  seedHourly("2026-07-01", 14, 999000); // outside last30
+
+  assert.equal(store.participantTrend("nonexistent", { grain: "hour-of-day" }), null);
+
+  const rhythm = store.participantTrend(identity.participantId, { grain: "hour-of-day", range: "last30" });
+  assert.equal(rhythm.grain, "hour-of-day");
+  assert.equal(rhythm.items.length, 24, "hourly rhythm must always return 24 buckets");
+  assert.equal(rhythm.items[14].totalTokens, 7000, "hour 14 sums across days in range");
+  assert.equal(rhythm.items[15].totalTokens, 3000);
+  assert.equal(rhythm.items[2].totalTokens, 1000);
+  assert.equal(rhythm.items[0].totalTokens, 0, "unused hours stay zero");
+  assert.equal(rhythm.items[14].label, "14:00");
+  assert.equal(rhythm.items[14].hour, 14);
+  assert.equal(rhythm.coverage.days, 2, "coverage counts distinct days with hourly rows in range");
+  assert.equal(rhythm.from, "2026-08-25");
+  assert.equal(rhythm.to, "2026-08-26");
+  assert.ok(!("estimatedCostUsd" in rhythm.items[14]), "cost fields stay off without includeCost");
+
+  const withCost = store.participantTrend(identity.participantId, { grain: "hour-of-day", range: "last30", includeCost: true });
+  assert.ok("estimatedCostUsd" in withCost.items[14], "includeCost adds cost fields");
+
+  const empty = store.participantHourlyRhythm(identity.participantId, { range: "custom", startDay: "2026-01-01", endDay: "2026-01-07" });
+  assert.equal(empty.coverage.days, 0);
+  assert.equal(empty.from, "", "empty range has no coverage extent");
+  assert.ok(empty.items.every((item) => item.totalTokens === 0), "empty range returns zeroed buckets");
+
+  if (fs.existsSync(path.join(tmp, "db-participant-hourly-rhythm.json"))) fs.unlinkSync(path.join(tmp, "db-participant-hourly-rhythm.json"));
+  console.log("  testParticipantHourlyRhythm passed");
+}
+
 function testStoreZeroTokenItems() {
   const store = new Store(path.join(tmp, "db-zero-tokens.json"));
   const identity = generateIdentity();
@@ -9116,5 +9291,6 @@ testBoardAnonymizerConsistency();
 
 // Participant profile
 testParticipantProfile();
+testParticipantHourlyRhythm();
 
 console.log("All tests passed");

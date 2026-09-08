@@ -39,6 +39,20 @@ const USAGE_UPLOAD_SUCCESS_LOG = String(process.env.USAGE_UPLOAD_SUCCESS_LOG || 
 const SLOW_USAGE_UPLOAD_LOG_MS = Number(process.env.SLOW_USAGE_UPLOAD_LOG_MS || 1000);
 const API_PRETTY_JSON = String(process.env.API_PRETTY_JSON || "").toLowerCase() === "true";
 const BRAND_LOGO_URL = process.env.BRAND_LOGO_URL || "";
+const PROFILE_WORK_WINDOW = parseProfileWorkWindow(process.env.PROFILE_WORK_START, process.env.PROFILE_WORK_END);
+
+// Work window for the profile hourly rhythm (上班/下班 split). Whole-hour
+// buckets attribute boundary hours by overlap, so half-hour boundaries like
+// 09:30–18:30 stay meaningful. Invalid values fall back to the defaults.
+function parseProfileWorkWindow(start, end) {
+  const time = /^([01]?\d|2[0-3]):[0-5]\d$/;
+  const parsedStart = time.test(start || "") ? start : "09:30";
+  const parsedEnd = time.test(end || "") ? end : "18:30";
+  if ((start && !time.test(start)) || (end && !time.test(end))) {
+    console.warn(`Invalid PROFILE_WORK_START/PROFILE_WORK_END (${start}–${end}), falling back to ${parsedStart}–${parsedEnd}`);
+  }
+  return { start: parsedStart, end: parsedEnd };
+}
 
 if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
   console.error("FATAL: BOARD_SECURITY_LEVEL=authenticated requires PUBLIC_BOARD_AUTH_USERNAME to be set");
@@ -47,7 +61,7 @@ if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
 
 const store = await createConfiguredStore();
 
-export { store };
+export { store, PROFILE_WORK_WINDOW };
 
 let boardAnonymizer = null;
 if (BOARD_SECURITY_LEVEL === "anonymous") {
@@ -581,6 +595,7 @@ async function handleApi(req, res) {
       fields: url.searchParams.get("fields") === "totals" ? "totals" : ""
     });
     if (!trend) return sendJson(res, 404, { error: "participant not found" });
+    if (trend.grain === "hour-of-day") trend.workWindow = PROFILE_WORK_WINDOW;
     return sendJson(res, 200, withBusinessDay({
       displayId: participantId,
       displayName: trend.nickname || participantId,
@@ -810,6 +825,7 @@ async function handleApi(req, res) {
       fields: url.searchParams.get("fields") === "totals" ? "totals" : ""
     });
     if (!detail) return sendJson(res, 404, { error: "participant not found" });
+    if (detail.grain === "hour-of-day") detail.workWindow = PROFILE_WORK_WINDOW;
     return sendJson(res, 200, withBusinessDay(transformTrendResult(detail)));
   }
   if (req.method === "GET" && req.url.startsWith("/api/board/analytics")) {

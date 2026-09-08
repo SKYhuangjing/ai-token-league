@@ -234,6 +234,20 @@ PUBLIC_BOARD_AUTH_PASSWORD=<your-password>
 - `/api/devices/register`、`/api/usage/daily-batch`、`/api/health` 不受榜单安全级别保护。
 - admin API 在三种模式下均返回真实运营数据。
 
+### 1.8 个人页上班时段窗口
+
+个人主页「编码时段节律」卡的上班/下班拆分口径由服务端环境变量控制，随 `grain=hour-of-day` 的 trend 接口下发：
+
+```text
+PROFILE_WORK_START=09:30
+PROFILE_WORK_END=18:30
+```
+
+- 默认 `09:30–18:30`；格式必须为 `HH:MM`，非法值启动时告警并回退默认。
+- 统计为小时桶粒度：边界小时按与窗口的重叠分钟数折算（如 09:30 开始时，09:00 桶按 50% 计入上班）。
+- 窗口支持跨午夜（如 `PROFILE_WORK_START=22:00`、`PROFILE_WORK_END=07:00`）。
+- 仅影响个人页展示口径，不影响任何榜单与存储数据。
+
 ---
 
 ## 2. 下载通道配置

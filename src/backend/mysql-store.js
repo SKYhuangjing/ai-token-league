@@ -685,6 +685,9 @@ export class MySqlStore extends Store {
   }
 
   async participantTrend(participantId, args = {}) {
+    if ((args.grain || "day") === "hour-of-day") {
+      return this.mysqlParticipantHourlyRhythm(participantId, args);
+    }
     const participant = this.db.participants[participantId];
     if (!participant) return null;
     const effectiveArgs = { ...args, participantId, range: args.range || "last30" };
@@ -705,6 +708,56 @@ export class MySqlStore extends Store {
       grain,
       from: days?.[0] || "",
       to: days?.at(-1) || "",
+      items
+    };
+  }
+
+  // Hour-of-day twin of participantTrend: 24 fixed buckets over the requested
+  // day range, aggregated in SQL from usage_hourly (idx_hourly_scope leads with
+  // participantId). Coverage days tell the client how much of the range
+  // actually has hourly data (hourly history starts later than daily history).
+  async mysqlParticipantHourlyRhythm(participantId, args = {}) {
+    const participant = this.db.participants[participantId];
+    if (!participant) return null;
+    const includeCost = Boolean(args.includeCost);
+    const { whereSql, params } = this.mysqlUsageScope(
+      { ...args, participantId, range: args.range || "last30" },
+      "h"
+    );
+    const costSelect = includeCost ? ", SUM(h.estimatedCostUsd) AS estimatedCostUsd" : "";
+    const [rows] = await this.pool.query(
+      `SELECT h.hour AS hour, SUM(h.totalTokens) AS totalTokens${costSelect}
+       FROM usage_hourly h${whereSql}
+       GROUP BY h.hour
+       ORDER BY h.hour ASC`,
+      params
+    );
+    const [coverageRows] = await this.pool.query(
+      `SELECT COUNT(DISTINCT h.day) AS days,
+              DATE_FORMAT(MIN(h.day), '%Y-%m-%d') AS fromDay,
+              DATE_FORMAT(MAX(h.day), '%Y-%m-%d') AS toDay
+       FROM usage_hourly h${whereSql}`,
+      params
+    );
+    const items = [];
+    const byHour = new Map(rows.map((row) => [Number(row.hour), row]));
+    for (let hour = 0; hour < 24; hour++) {
+      const row = byHour.get(hour);
+      items.push({
+        hour,
+        label: `${String(hour).padStart(2, "0")}:00`,
+        totalTokens: Number(row?.totalTokens || 0),
+        ...(includeCost ? { estimatedCostUsd: Number(row?.estimatedCostUsd || 0) } : {})
+      });
+    }
+    const coverage = coverageRows[0] || {};
+    return {
+      participantId,
+      nickname: participant.nickname,
+      grain: "hour-of-day",
+      from: coverage.fromDay || "",
+      to: coverage.toDay || "",
+      coverage: { days: Number(coverage.days || 0) },
       items
     };
   }

@@ -3,7 +3,7 @@ import { formatTokenCompact } from "/shared/display.js";
 import {
   escapeHtml, sourceName, formatTokenRaw, renderCost,
   renderTrendChart, renderBarChart, renderActivityHeatmap,
-  renderWeekdayRhythm, providerSourceColor
+  renderWeekdayRhythm, renderHourlyRhythm, computeHourlyRhythmStats, providerSourceColor
 } from "/shared/chart-helpers.js";
 import {
   initPublicNavProfile,
@@ -231,6 +231,11 @@ function renderLiveStatus(profile) {
 function renderFeaturesStrip(profile) {
   const strip = document.querySelector("#profile-features-strip");
   if (!strip) return;
+  // Hour-rhythm badges are appended by renderHourlyFeatureTags on range
+  // switches; keep them across this innerHTML overwrite (loadHero and
+  // loadRange run concurrently on the cost toggle).
+  const hourTags = [...strip.querySelectorAll(".feature-tag.feature-hour")];
+  hourTags.forEach((tag) => tag.remove());
   const tags = [];
   const topSource = profile.providers?.[0];
   if (topSource) {
@@ -249,6 +254,7 @@ function renderFeaturesStrip(profile) {
     tags.push(`<span class="feature-tag feature-throughput">${escapeHtml(t("web.profile.featureThroughput"))}</span>`);
   }
   strip.innerHTML = tags.join("");
+  strip.append(...hourTags);
 }
 
 function renderHero(profile) {
@@ -707,15 +713,22 @@ async function loadRange() {
     ? `/api/admin/participants/${encodeURIComponent(state.displayId)}/trend?${costParams({ grain: state.grain, range: state.range })}&fields=totals`
     : `/api/board/participants/${encodeURIComponent(state.displayId)}/trend?${costParams({ grain: state.grain, range: state.range })}&fields=totals`;
 
+  // grain=hour-of-day：时段节律的 24 桶分布
+  const hourlyUrl = state.mode === "admin"
+    ? `/api/admin/participants/${encodeURIComponent(state.displayId)}/trend?${costParams({ grain: "hour-of-day", range: state.range })}`
+    : `/api/board/participants/${encodeURIComponent(state.displayId)}/trend?${costParams({ grain: "hour-of-day", range: state.range })}`;
+
   const detailPromise = fetch(detailUrl);
   const trendPromise = fetch(trendUrl);
+  const hourlyPromise = fetch(hourlyUrl).catch(() => null);
   const timerPromise = new Promise((resolve) => setTimeout(resolve, 240));
 
   try {
-    const [detailResponse, trendResponse] = await Promise.all([detailPromise, trendPromise, timerPromise]);
+    const [detailResponse, trendResponse, hourlyResponse] = await Promise.all([detailPromise, trendPromise, hourlyPromise, timerPromise]);
     if (rangeLoadToken !== loadToken) return;
     const detail = await detailResponse.json();
     const trend = await trendResponse.json();
+    const hourly = hourlyResponse && hourlyResponse.ok ? await hourlyResponse.json() : null;
     if (rangeLoadToken !== loadToken) return;
     state.rangeDetail = detail;
 
@@ -724,6 +737,7 @@ async function loadRange() {
     }
 
     renderTrend(trend.items || [], { from: trend.from, to: trend.to });
+    renderHourlyRhythmCard(hourly);
     renderBreakdowns(detail);
     renderWeekdayAndSplit(detail);
     renderLogWorkbench(detail.rows || []);
@@ -803,6 +817,119 @@ function renderTrend(items, { from, to }) {
       totalTokens: Number(item.totalTokens || 0)
     }));
     renderTrendChart(svg, series, state.grain, tooltipEl, localeTokenCompact, { highlightPeak: true, height: 220 });
+  }
+}
+
+let hourlyItemsCache = [];
+let hourlyWorkWindow = null;
+
+function renderHourlySplit() {
+  const splitEl = document.querySelector("#profile-hourly-split");
+  if (!splitEl) return;
+  const stats = computeHourlyRhythmStats(hourlyItemsCache, hourlyWorkWindow || {});
+  if (!stats.total) {
+    splitEl.innerHTML = "";
+    return;
+  }
+  const workPct = Math.round(stats.workShare * 100);
+  const offPct = 100 - workPct;
+  const offTokens = stats.total - stats.workTokens;
+  let archetype = t("web.profile.hourlyArchetypeAll");
+  if (stats.nightShare >= 0.25) archetype = t("web.profile.hourlyArchetypeNight");
+  else if (workPct >= 65) archetype = t("web.profile.hourlyArchetypeWork");
+  const workLabel = t("web.profile.hourlyWorkShare", { from: stats.workStart, to: stats.workEnd });
+  const offLabel = t("web.profile.hourlyOffShare");
+  splitEl.innerHTML = `
+    <div class="split-rhythm-box">
+      <div class="split-label-row">
+        <span class="split-title mono">${escapeHtml(t("web.profile.hourlySplitTitle"))}</span>
+        <span class="split-tag">${escapeHtml(archetype)}</span>
+      </div>
+      <div class="split-track">
+        <div class="split-fill work" style="width: ${workPct}%"></div>
+        <div class="split-fill off" style="width: ${offPct}%"></div>
+      </div>
+      <div class="split-values">
+        <span>${escapeHtml(workLabel)}: <strong class="mono">${workPct}%</strong> <small>(${localeTokenCompact(stats.workTokens)})</small></span>
+        <span>${escapeHtml(offLabel)}: <strong class="mono">${offPct}%</strong> <small>(${localeTokenCompact(offTokens)})</small></span>
+      </div>
+    </div>
+  `;
+}
+
+// Hour-rhythm badges appended to the hero features strip. Re-rendered on
+// every range switch; max two badges, priority night > overtime > daytime.
+function renderHourlyFeatureTags(stats) {
+  const strip = document.querySelector("#profile-features-strip");
+  if (!strip) return;
+  strip.querySelectorAll(".feature-tag.feature-hour").forEach((tag) => tag.remove());
+  if (!stats || !stats.total) return;
+  const pct = (share) => String(Math.round(share * 100));
+  const candidates = [
+    stats.nightShare >= 0.20 && {
+      cls: "feature-night",
+      label: t("web.profile.hourlyTagNight"),
+      hint: t("web.profile.hourlyTagNightHint", { pct: pct(stats.nightShare) })
+    },
+    stats.eveningShare >= 0.35 && {
+      cls: "feature-overtime",
+      label: t("web.profile.hourlyTagOvertime"),
+      hint: t("web.profile.hourlyTagOvertimeHint", { pct: pct(stats.eveningShare) })
+    },
+    stats.workShare >= 0.60 && {
+      cls: "feature-daytime",
+      label: t("web.profile.hourlyTagDaytime"),
+      hint: t("web.profile.hourlyTagDaytimeHint", { pct: pct(stats.workShare) })
+    }
+  ].filter(Boolean).slice(0, 2);
+  for (const item of candidates) {
+    const span = document.createElement("span");
+    span.className = `feature-tag feature-hour ${item.cls}`;
+    span.title = item.hint;
+    span.textContent = item.label;
+    strip.appendChild(span);
+  }
+}
+
+function renderHourlyRhythmCard(hourly) {
+  const chartEl = document.querySelector("#profile-hourly-chart");
+  const metaEl = document.querySelector("#profile-hourly-meta");
+  const statsEl = document.querySelector("#profile-hourly-stats");
+  const card = document.querySelector(".profile-hourly-card");
+  if (card) card.setAttribute("aria-busy", "false");
+  if (!chartEl) return;
+  const items = (hourly && hourly.items) || [];
+  hourlyItemsCache = items;
+  hourlyWorkWindow = (hourly && hourly.workWindow) || null;
+  const stats = computeHourlyRhythmStats(items, hourlyWorkWindow || {});
+  renderHourlyFeatureTags(stats);
+  if (!stats.total) {
+    chartEl.innerHTML = emptyState(t("web.profile.emptyHourly"));
+    if (metaEl) metaEl.textContent = "";
+    if (statsEl) statsEl.innerHTML = "";
+    renderHourlySplit();
+    return;
+  }
+  renderHourlyRhythm(chartEl, items, { localeTokenCompact, tooltip: tooltipEl });
+  renderHourlySplit();
+  if (metaEl) {
+    const rangeLabel = formatRange(hourly.from, hourly.to);
+    const coverage = t("web.profile.hourlyCoverage", { count: hourly.coverage?.days ?? 0 });
+    metaEl.textContent = `${rangeLabel} · ${coverage}`;
+  }
+  if (statsEl) {
+    const peakLabel = stats.peakHour >= 0 ? `${String(stats.peakHour).padStart(2, "0")}:00` : "-";
+    const peakTitle = stats.peakHour >= 0 ? `${peakLabel} · ${formatTokenRaw(items.find((item) => Number(item.hour) === stats.peakHour)?.totalTokens || 0)}` : "";
+    statsEl.innerHTML = `
+      <div class="spark-pill" title="${escapeHtml(peakTitle)}">
+        <span class="spark-label">${t("web.profile.hourlyGoldenHour")}</span>
+        <strong class="spark-val mono">${peakLabel} · ${(stats.peakShare * 100).toFixed(1)}%</strong>
+      </div>
+      <div class="spark-pill" title="">
+        <span class="spark-label">${t("web.profile.hourlyNightShare")}</span>
+        <strong class="spark-val mono">${(stats.nightShare * 100).toFixed(1)}%</strong>
+      </div>
+    `;
   }
 }
 
@@ -993,7 +1120,7 @@ function renderWeekdayAndSplit(detail) {
   }));
 
   if (weekdayEl) {
-    renderWeekdayRhythm(weekdayEl, timeSeries);
+    renderWeekdayRhythm(weekdayEl, timeSeries, { tooltip: tooltipEl, localeTokenCompact });
   }
 
   if (splitEl && timeSeries.length) {

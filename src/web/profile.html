@@ -264,6 +264,19 @@
           </div>
         </section>
 
+        <!-- 编码时段节律：24 小时分布 (含黄金时段、深夜占比胶囊) -->
+        <section class="card profile-section-card profile-hourly-card" aria-busy="true">
+          <div class="card-head-bar">
+            <div>
+              <h3 data-i18n="web.profile.hourlyTitle">Hourly rhythm</h3>
+              <p id="profile-hourly-meta" class="card-subtitle-meta"></p>
+            </div>
+            <div class="profile-spark-pills" id="profile-hourly-stats"></div>
+          </div>
+          <div id="profile-hourly-chart" class="hourly-rhythm"></div>
+          <div class="hourly-work-split" id="profile-hourly-split"></div>
+        </section>
+
         <!-- 二级分析：周内燃烧节律 + 主力模型排名（并排等高） -->
         <div class="profile-charts-split profile-rhythm-models">
           <section class="card profile-section-card profile-weekday-card">

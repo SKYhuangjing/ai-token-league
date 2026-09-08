@@ -1472,6 +1472,9 @@ export class Store {
   }
 
   participantTrend(participantId, { grain = "day", range = "last30", startDay = "", endDay = "", includeCost = false, fields = "" } = {}) {
+    if (grain === "hour-of-day") {
+      return this.participantHourlyRhythm(participantId, { range, startDay, endDay, includeCost });
+    }
     const participant = this.db.participants[participantId];
     if (!participant) return null;
     const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
@@ -1488,6 +1491,46 @@ export class Store {
       items: fields === "totals"
         ? items.map(({ models, workdirs, providers, ...rest }) => rest)
         : items
+    };
+  }
+
+  // Hour-of-day distribution over a day range: aggregates usage_hourly rows
+  // into 24 fixed buckets. Hours are collector-local, so the buckets read as
+  // the participant's own daily routine.
+  participantHourlyRhythm(participantId, { range = "last30", startDay = "", endDay = "", includeCost = false } = {}) {
+    const participant = this.db.participants[participantId];
+    if (!participant) return null;
+    const days = daysForDetailRange(range, { startDay, endDay, businessDay: this.currentBusinessDay() });
+    const daySet = daySetForRange(days);
+    const rows = Object.values(this.db.usageHourly || {}).filter(
+      (item) => item.participantId === participantId && matchesDaySet(item.day, daySet)
+    );
+    const items = [];
+    for (let hour = 0; hour < 24; hour++) {
+      items.push({
+        hour,
+        label: `${String(hour).padStart(2, "0")}:00`,
+        totalTokens: 0,
+        ...(includeCost ? { estimatedCostUsd: 0 } : {})
+      });
+    }
+    const coveredDays = new Set();
+    for (const row of rows) {
+      const bucket = items[row.hour ?? 0];
+      if (!bucket) continue;
+      bucket.totalTokens += row.totalTokens || 0;
+      if (includeCost) bucket.estimatedCostUsd += row.estimatedCostUsd || 0;
+      if (row.day) coveredDays.add(row.day);
+    }
+    const sortedDays = [...coveredDays].sort();
+    return {
+      participantId,
+      nickname: participant.nickname,
+      grain: "hour-of-day",
+      from: sortedDays[0] || "",
+      to: sortedDays.at(-1) || "",
+      coverage: { days: sortedDays.length },
+      items
     };
   }
 

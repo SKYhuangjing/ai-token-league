@@ -6411,6 +6411,97 @@ body.page-home .shell {
   color: var(--ink);
 }
 
+/* 24-hour coding rhythm (profile hourly card), sibling of .weekday */
+.hourly-rhythm {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 4px;
+  align-items: end;
+  height: 168px;
+  padding-top: 6px;
+  margin-top: 10px;
+}
+
+.hourly-rhythm .d {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  height: 100%;
+  min-width: 0;
+}
+
+.hourly-rhythm .col-wrap {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.hourly-rhythm .col {
+  width: 100%;
+  border-radius: 4px 4px 1px 1px;
+  background: var(--teal);
+  opacity: 0.72;
+  transition: opacity 0.15s ease;
+}
+
+.hourly-rhythm .d:hover .col {
+  opacity: 0.92;
+}
+
+.hourly-rhythm .d.peak .col {
+  background: var(--ink);
+  opacity: 1;
+}
+
+.hourly-rhythm .val {
+  font-family: var(--font-data);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.hourly-rhythm .d.peak .val {
+  color: var(--ink);
+}
+
+.hourly-rhythm .d span {
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.hourly-rhythm .d.peak span {
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .hourly-rhythm {
+    gap: 2px;
+    height: 140px;
+  }
+
+  .hourly-rhythm .d span {
+    font-size: 9px;
+  }
+
+  .hourly-rhythm .val {
+    display: none;
+  }
+
+  .hourly-rhythm .h-label.minor {
+    visibility: hidden;
+  }
+}
+
 .dist-split {
   display: grid;
   grid-template-columns: 1.45fr 0.9fr;
@@ -9905,6 +9996,24 @@ small.pct {
   color: #92631c;
 }
 
+.feature-tag.feature-night {
+  background: rgba(61, 90, 128, 0.08);
+  border-color: rgba(61, 90, 128, 0.28);
+  color: #3d5a80;
+}
+
+.feature-tag.feature-overtime {
+  background: rgba(166, 61, 61, 0.08);
+  border-color: rgba(166, 61, 61, 0.26);
+  color: #a63d3d;
+}
+
+.feature-tag.feature-daytime {
+  background: rgba(143, 111, 18, 0.09);
+  border-color: rgba(143, 111, 18, 0.28);
+  color: #8f6f12;
+}
+
 /* 右侧联赛战报：三排跨列拼版，三行等高 */
 .profile-stats-panel {
   display: flex;
@@ -10663,6 +10772,16 @@ small.pct {
 }
 
 .split-fill.weekend {
+  background: #b67810;
+  transition: width 0.3s ease;
+}
+
+.hourly-work-split .split-fill.work {
+  background: var(--teal);
+  transition: width 0.3s ease;
+}
+
+.hourly-work-split .split-fill.off {
   background: #b67810;
   transition: width 0.3s ease;
 }

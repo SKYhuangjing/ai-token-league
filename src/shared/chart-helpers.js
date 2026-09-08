@@ -295,7 +295,7 @@ export function renderParetoChart(container, rankings = []) {
   }).join("");
 }
 
-export function renderWeekdayRhythm(container, timeSeries = []) {
+export function renderWeekdayRhythm(container, timeSeries = [], { tooltip = null, localeTokenCompact = (v) => v } = {}) {
   if (!container) return;
   const buckets = Array.from({ length: 7 }, () => 0);
   for (const point of timeSeries) {
@@ -323,8 +323,9 @@ export function renderWeekdayRhythm(container, timeSeries = []) {
   container.innerHTML = labels.map((label, index) => {
     const height = Math.max(6, Math.round((buckets[index] / max) * 100));
     const share = Math.round((buckets[index] / total) * 100);
+    const nativeTitle = tooltip ? "" : ` title="${escapeHtml(label)} · ${share}%"`;
     return `
-      <div class="d${index === peak ? " peak" : ""}" title="${escapeHtml(label)} · ${share}%">
+      <div class="d${index === peak ? " peak" : ""}"${nativeTitle}>
         <div class="col-wrap">
           <div class="col" style="height:${height}%"></div>
         </div>
@@ -333,6 +334,120 @@ export function renderWeekdayRhythm(container, timeSeries = []) {
       </div>
     `;
   }).join("");
+  if (!tooltip) return;
+  [...container.children].forEach((bar, index) => {
+    const tokens = buckets[index];
+    const share = Math.round((tokens / total) * 100);
+    bar.addEventListener("mouseenter", () => {
+      tooltip.innerHTML = `<strong>${escapeHtml(labels[index])}</strong><br>${localeTokenCompact(tokens)} ${escapeHtml(t("unit.tokens") || "tokens")} · ${share}%`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, bar);
+    });
+    bar.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+  });
+}
+
+// Work-share attribution from whole-hour buckets: each boundary hour counts
+// proportionally to its overlap with the [workStart, workEnd) window, so a
+// 09:30 start attributes half of the 09:00 bucket. Windows may cross midnight.
+function hourOverlapFraction(hour, startMin, endMin) {
+  const segments = endMin <= startMin
+    ? [[startMin, 1440], [0, endMin]]
+    : [[startMin, endMin]];
+  const hourStart = hour * 60;
+  const hourEnd = hourStart + 60;
+  let overlap = 0;
+  for (const [segStart, segEnd] of segments) {
+    overlap += Math.max(0, Math.min(segEnd, hourEnd) - Math.max(segStart, hourStart));
+  }
+  return Math.min(1, overlap / 60);
+}
+
+export function computeHourlyRhythmStats(items = [], { workStart = "09:30", workEnd = "18:30" } = {}) {
+  const parseMinutes = (value) => {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || ""));
+    if (!match) return null;
+    const minutes = Number(match[1]) * 60 + Number(match[2]);
+    return minutes >= 0 && minutes < 1440 ? minutes : null;
+  };
+  const startMin = parseMinutes(workStart) ?? parseMinutes("09:30");
+  const endMin = parseMinutes(workEnd) ?? parseMinutes("18:30");
+  // Echo the window actually used, not the raw params: an invalid input must
+  // not surface in labels while computation silently fell back.
+  const usedStart = `${String(Math.floor(startMin / 60)).padStart(2, "0")}:${String(startMin % 60).padStart(2, "0")}`;
+  const usedEnd = `${String(Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}`;
+  let total = 0;
+  let night = 0;
+  let evening = 0;
+  let work = 0;
+  let peakHour = -1;
+  let peakTokens = 0;
+  for (const item of items) {
+    const tokens = Number(item.totalTokens || 0);
+    const hour = Number(item.hour);
+    total += tokens;
+    if (hour >= 0 && hour < 6) night += tokens;
+    if (hour >= 18 && hour < 24) evening += tokens;
+    if (hour >= 0 && hour < 24) work += tokens * hourOverlapFraction(hour, startMin, endMin);
+    if (tokens > peakTokens) {
+      peakTokens = tokens;
+      peakHour = hour;
+    }
+  }
+  if (!total) return { total, peakHour: -1, peakShare: 0, nightShare: 0, eveningShare: 0, workTokens: 0, workShare: 0, workStart: usedStart, workEnd: usedEnd };
+  return {
+    total,
+    peakHour,
+    peakShare: peakTokens / total,
+    nightShare: night / total,
+    eveningShare: evening / total,
+    workTokens: work,
+    workShare: work / total,
+    workStart: usedStart,
+    workEnd: usedEnd
+  };
+}
+
+export function renderHourlyRhythm(container, items = [], { localeTokenCompact = (v) => v, tooltip = null } = {}) {
+  if (!container) return;
+  const buckets = Array.from({ length: 24 }, (_, hour) => {
+    const match = items.find((item) => Number(item.hour) === hour);
+    return match ? Number(match.totalTokens || 0) : 0;
+  });
+  const total = buckets.reduce((sum, value) => sum + value, 0);
+  if (!total) {
+    container.innerHTML = `<div class="empty-state">${escapeHtml(t("web.analytics.noData"))}</div>`;
+    return;
+  }
+  const max = Math.max(...buckets, 1);
+  const peak = buckets.indexOf(Math.max(...buckets));
+  container.innerHTML = buckets.map((tokens, hour) => {
+    const height = Math.max(4, Math.round((tokens / max) * 100));
+    const share = (tokens / total) * 100;
+    const shareText = share >= 10 ? `${Math.round(share)}%` : `${share.toFixed(1)}%`;
+    const label = String(hour).padStart(2, "0");
+    const nativeTitle = tooltip ? "" : ` title="${escapeHtml(`${label}:00 · ${localeTokenCompact(tokens)} · ${share.toFixed(1)}%`)}"`;
+    return `
+      <div class="d${hour === peak ? " peak" : ""}"${nativeTitle}>
+        <div class="col-wrap">
+          <div class="col" style="height:${height}%"></div>
+        </div>
+        <strong class="val">${shareText}</strong>
+        <span class="h-label${hour % 3 === 0 ? "" : " minor"}">${label}</span>
+      </div>
+    `;
+  }).join("");
+  if (!tooltip) return;
+  [...container.children].forEach((bar, hour) => {
+    const tokens = buckets[hour];
+    const share = ((tokens / total) * 100).toFixed(1);
+    bar.addEventListener("mouseenter", () => {
+      tooltip.innerHTML = `<strong>${String(hour).padStart(2, "0")}:00</strong><br>${localeTokenCompact(tokens)} ${escapeHtml(t("unit.tokens") || "tokens")} · ${share}%`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, bar);
+    });
+    bar.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+  });
 }
 
 export function computeAnalyticsInsights(data = {}) {
