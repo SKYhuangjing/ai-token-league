@@ -5839,6 +5839,9 @@ function testWebDownloadStructure() {
   assert.match(js, /range=this_month/);
   assert.match(js, /range=last30/);
   assert.match(js, /renderParticipantTreemap/);
+  // Source-top / today-top rows keep their original article markup; click-through is JS-only.
+  assert.match(js, /bindProfileRowNavigation/);
+  assert.doesNotMatch(js, /<a class="top-row/);
   assert.match(js, /renderDonutChart/);
   assert.match(js, /renderActivityHeatmap/);
   assert.match(js, /document\.body\.classList\.add\("is-refreshing"\)/);
@@ -5855,6 +5858,45 @@ function testWebDownloadStructure() {
   assert.match(js, /darwin|windows|platform/i);
   assert.match(fs.readFileSync("src/web/styles.css", "utf8"), /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation-duration: 0\.01ms/);
   console.log("  testWebDownloadStructure passed");
+}
+
+function testWebTreemapConcentrationRedesign() {
+  const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
+  const styles = fs.readFileSync("src/web/styles.css", "utf8");
+  const i18n = fs.readFileSync("src/shared/i18n.js", "utf8");
+  // Treemap cells keep the original look: per-cell gap inset, radius from gap, flat palette fill, no stroke.
+  assert.match(shared, /Math\.min\(8, item\.width \/ 10, item\.height \/ 10\)/);
+  assert.match(shared, /const radius = Math\.min\(8, gap \+ 2\);/);
+  assert.match(shared, /rx: String\(radius\)/);
+  assert.doesNotMatch(shared, /linearGradient/);
+  assert.doesNotMatch(shared, /shadeHex/);
+  assert.match(styles, /\.participant-treemap-node\s*\{[^}]*stroke:\s*none;/s);
+  // Adaptive layout: viewBox height follows the host board's real box, with a ResizeObserver re-layout.
+  assert.match(shared, /let renderHeight = fallbackHeight;/);
+  assert.match(shared, /Math\.round\(width \* availHeight \/ availWidth\)/);
+  assert.match(shared, /svg\.style\.aspectRatio = `\$\{width\} \/ \$\{renderHeight\}`/);
+  assert.match(shared, /new ResizeObserver\(rerender\)/);
+  // Side panel: no duplicate concentration chips; one concentration box with stacked ownership bar and a Top-5 list with token values.
+  assert.doesNotMatch(shared, /insight-chips/);
+  assert.doesNotMatch(shared, /insightChipTop/);
+  assert.match(shared, /class="conc-stack"/);
+  assert.match(shared, /seg-top1/);
+  assert.match(shared, /seg-top2to5/);
+  assert.match(shared, /seg-top6to10/);
+  assert.match(shared, /seg-rest/);
+  assert.match(shared, /concentrationRankTitle/);
+  assert.match(shared, /class="tv"/);
+  assert.match(styles, /\.conc-stack\s*\{/);
+  assert.match(styles, /\.rank-mini-row\s*\{[^}]*grid-template-columns:\s*18px minmax\(0, 1fr\) auto auto;/s);
+  // Dead chip keys removed from both locales; new segment keys present in both locales.
+  assert.doesNotMatch(i18n, /"web\.analytics\.insightChipTop1"/);
+  assert.doesNotMatch(i18n, /"web\.analytics\.insightChipTop5"/);
+  assert.doesNotMatch(i18n, /"web\.analytics\.insightChipTop5Combined"/);
+  assert.doesNotMatch(i18n, /"web\.analytics\.concentrationSummary"/);
+  for (const key of ["web.analytics.concentrationRankTitle", "web.analytics.concSeg2to5", "web.analytics.concSeg6to10"]) {
+    assert.strictEqual((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}"`, "g")) || []).length, 2, `${key} must exist in both locales`);
+  }
+  console.log("  testWebTreemapConcentrationRedesign passed");
 }
 
 function testWebProfileHeatmapScale() {
@@ -6781,6 +6823,7 @@ testWebLeaderboardStructure();
 testWebAnalyticsParticipantRankingStructure();
 testWebAdminStructure();
 testWebDownloadStructure();
+testWebTreemapConcentrationRedesign();
 testWebProfileHeatmapScale();
 testWebProfileHourlyCard();
 testDesktopRendererExports();

@@ -4669,31 +4669,6 @@ body.is-embedded .analytics-card {
   font-weight: inherit;
 }
 
-.insight-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.insight-chips span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: rgba(22, 21, 18, 0.05);
-  color: var(--ink);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.insight-chips span em {
-  font-style: normal;
-  font-family: var(--font-data);
-  color: var(--teal);
-  font-weight: 700;
-}
-
 /* —— Landing premium (墨青 editorial) —— */
 
 body.page-home {
@@ -5015,41 +4990,6 @@ body.page-home .shell {
   letter-spacing: 0.02em;
 }
 
-.landing-shell .insight-chips {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.landing-shell .insight-chips span {
-  display: grid;
-  justify-items: center;
-  gap: 3px;
-  padding: 9px 6px 8px;
-  border: 1px solid rgba(216, 208, 191, 0.75);
-  border-radius: 10px;
-  background: rgba(255, 253, 247, 0.72);
-  text-align: center;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--muted);
-  transition: border-color 0.18s ease, background 0.18s ease;
-}
-
-.landing-shell .insight-chips span em {
-  font-style: normal;
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-}
-
-.landing-shell .insight-chips span:hover {
-  border-color: rgba(5, 143, 126, 0.3);
-  background: rgba(5, 143, 126, 0.06);
-}
-
 .landing-shell .conc-box {
   border-radius: 10px;
   border-color: rgba(216, 208, 191, 0.85);
@@ -5071,7 +5011,7 @@ body.page-home .shell {
 }
 
 .landing-shell .dist-side .rank-mini-row {
-  grid-template-columns: 20px 1fr auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
   gap: 8px;
   font-size: 12px;
 }
@@ -5079,6 +5019,10 @@ body.page-home .shell {
 .landing-shell .dist-side .rank-mini-row .nm {
   font-weight: 700;
   color: var(--ink);
+}
+
+.landing-shell .dist-side .rank-mini-row .tv {
+  color: var(--muted);
 }
 
 .landing-shell .dist-side .rank-mini-row .pct {
@@ -5405,6 +5349,11 @@ body.page-home .shell {
   grid-template-columns: 22px 1fr auto;
   gap: 8px;
   align-items: center;
+}
+
+/* Click-through rows navigate via JS; pointer cursor is the only visual addition. */
+.top-row[data-display-id] {
+  cursor: pointer;
 }
 
 .top-row .n {
@@ -6618,7 +6567,8 @@ body.page-home .shell {
   background: #fbfaf6;
 }
 
-.conc-box .c-title {
+.conc-box .c-title,
+.rank-mini .c-title {
   font-size: 11px;
   font-weight: 700;
   color: var(--muted);
@@ -6629,7 +6579,7 @@ body.page-home .shell {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .conc-metrics strong {
@@ -6638,12 +6588,31 @@ body.page-home .shell {
   font-size: 18px;
 }
 
-.conc-metrics small,
-.conc-summary {
+.conc-metrics small {
   display: block;
   color: var(--muted);
   font-size: 11px;
 }
+
+/* Stacked ownership bar: 第一名 / 第2-5名 / 第6-10名 / 其他 */
+.conc-stack {
+  display: flex;
+  height: 8px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--line-soft);
+}
+
+.conc-stack i {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.conc-stack .seg-top1 { background: var(--gold); }
+.conc-stack .seg-top2to5 { background: var(--teal); }
+.conc-stack .seg-top6to10 { background: rgba(5, 143, 126, 0.45); }
+.conc-stack .seg-rest { background: #d8d0bf; }
 
 .rank-mini {
   display: grid;
@@ -6652,7 +6621,7 @@ body.page-home .shell {
 
 .rank-mini-row {
   display: grid;
-  grid-template-columns: 18px 1fr auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
   gap: 6px;
   align-items: center;
   font-size: 11px;
@@ -6670,13 +6639,18 @@ body.page-home .shell {
   white-space: nowrap;
 }
 
+.rank-mini-row .tv {
+  font-family: var(--font-data);
+  color: var(--muted);
+}
+
 .rank-mini-row .pct {
   font-family: var(--font-data);
   color: var(--muted);
 }
 
 .rank-mini-bar {
-  grid-column: 2 / 4;
+  grid-column: 2 / 5;
   height: 4px;
   background: var(--line-soft);
   border-radius: 99px;

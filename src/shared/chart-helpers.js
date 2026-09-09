@@ -153,12 +153,15 @@ export function renderConcentrationSidepanel(container, rankings = [], { localeT
   container.hidden = false;
   const formatTokens = localeTokenCompact || ((value) => formatTokenCompact(value));
   const topBar = metrics.topItems[0]?.pct || 1;
+  // Stacked ownership bar: top1 / #2-5 / #6-10 / everyone else — one visual, no repeated stat chips.
+  const seg = (from, to) => `${Math.max(0, to - from)}%`;
+  const segments = [
+    { cls: "seg-top1", width: seg(0, metrics.top1), label: t("web.analytics.concentrationTop1"), pct: metrics.top1 },
+    { cls: "seg-top2to5", width: seg(metrics.top1, metrics.top5), label: t("web.analytics.concSeg2to5"), pct: metrics.top5 - metrics.top1 },
+    { cls: "seg-top6to10", width: seg(metrics.top5, metrics.top10), label: t("web.analytics.concSeg6to10"), pct: metrics.top10 - metrics.top5 },
+    { cls: "seg-rest", width: seg(metrics.top10, 100), label: t("web.analytics.otherParticipants"), pct: 100 - metrics.top10 }
+  ];
   container.innerHTML = `
-    <div class="insight-chips">
-      <span>${escapeHtml(t("web.analytics.insightChipTop1"))} <em>${metrics.top1}%</em></span>
-      <span>${escapeHtml(t("web.analytics.insightChipTop5"))} <em>${metrics.top5}%</em></span>
-      <span>${escapeHtml(t("web.analytics.insightChipTop5Combined"))} <em>${metrics.top5}%</em></span>
-    </div>
     <div class="conc-box">
       <div class="c-title">${escapeHtml(t("web.analytics.concentrationTitle"))}</div>
       <div class="conc-metrics">
@@ -166,12 +169,19 @@ export function renderConcentrationSidepanel(container, rankings = [], { localeT
         <div><strong>${metrics.top5}%</strong><small>${escapeHtml(t("web.analytics.concentrationTop5"))}</small></div>
         <div><strong>${metrics.top10}%</strong><small>${escapeHtml(t("web.analytics.concentrationTop10"))}</small></div>
       </div>
+      <div class="conc-stack">
+        ${segments.filter((s) => s.width !== "0%").map((s) =>
+          `<i class="${s.cls}" style="width:${s.width}" title="${escapeHtml(`${s.label} ${s.pct}%`)}"></i>`
+        ).join("")}
+      </div>
     </div>
     <div class="rank-mini">
+      <div class="c-title">${escapeHtml(t("web.analytics.concentrationRankTitle"))}</div>
       ${metrics.topItems.map((item) => `
         <a class="rank-mini-row" href="${item.displayId ? `/profile.html?id=${encodeURIComponent(item.displayId)}` : '#'}" title="${escapeHtml(item.name)} · ${formatTokens(item.totalTokens)}">
           <span class="n">#${item.rank}</span>
           <span class="nm">${escapeHtml(item.name)}</span>
+          <span class="tv" title="${escapeHtml(formatTokenRaw(item.totalTokens))}">${formatTokens(item.totalTokens)}</span>
           <span class="pct">${item.pct}%</span>
           <div class="rank-mini-bar"><i style="width:${Math.max(8, Math.round((item.pct / topBar) * 100))}%"></i></div>
         </a>
@@ -1067,10 +1077,42 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
     Math.max(TREEMAP_MIN_PARTICIPANTS, Math.ceil(rankings.length / 2))
   );
   const width = 900;
-  const height = Math.max(360, Math.ceil((displayCount + 1) / 6) * 115);
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const fallbackHeight = Math.max(360, Math.ceil((displayCount + 1) / 6) * 115);
+  // Adaptive: relayout at the host board's real box so the mosaic fills the
+  // grid-stretched height instead of leaving a blank strip under the chart.
+  const host = svg.parentElement;
+  let renderHeight = fallbackHeight;
+  if (host) {
+    const hostStyle = window.getComputedStyle(host);
+    const availWidth = host.clientWidth
+      - (parseFloat(hostStyle.paddingLeft) || 0)
+      - (parseFloat(hostStyle.paddingRight) || 0);
+    const availHeight = host.clientHeight
+      - (parseFloat(hostStyle.paddingTop) || 0)
+      - (parseFloat(hostStyle.paddingBottom) || 0);
+    if (availWidth >= 240 && availHeight >= 160) {
+      renderHeight = Math.min(900, Math.max(160, Math.round(width * availHeight / availWidth)));
+    }
+  }
+  svg.setAttribute("viewBox", `0 0 ${width} ${renderHeight}`);
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-  svg.style.aspectRatio = `${width} / ${height}`;
+  svg.style.aspectRatio = `${width} / ${renderHeight}`;
+  if (host && typeof ResizeObserver !== "undefined" && !svg.__treemapResizeObserver) {
+    let resizeRaf = 0;
+    const rerender = () => {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(() => {
+        renderParticipantTreemap(svg, labels, rankings, {
+          localeTokenCompact,
+          tooltip,
+          sideContainer,
+          legendContainer
+        });
+      });
+    };
+    svg.__treemapResizeObserver = new ResizeObserver(rerender);
+    svg.__treemapResizeObserver.observe(host);
+  }
   const sourceVariantCount = {};
   const entries = rankings.slice(0, displayCount).map((item) => ({
     name: item.displayName || item.nickname || item.participantId || "",
@@ -1085,7 +1127,7 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
 
   const totalTokens = entries.reduce((sum, item) => sum + item.totalTokens, 0);
   if (totalTokens <= 0) {
-    const empty = svgEl("text", { x: width / 2, y: height / 2, class: "participant-treemap-empty" });
+    const empty = svgEl("text", { x: width / 2, y: renderHeight / 2, class: "participant-treemap-empty" });
     empty.textContent = t("web.analytics.noData");
     svg.appendChild(empty);
     return;
@@ -1133,7 +1175,7 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
   desc.textContent = t("web.analytics.participantTreemapSubtitle");
   svg.append(title, desc);
 
-  const rectangles = layoutTreemap(entries, 0, 0, width, height, true);
+  const rectangles = layoutTreemap(entries, 0, 0, width, renderHeight, true);
   let defs = svg.querySelector("defs");
   if (!defs) {
     defs = svgEl("defs");

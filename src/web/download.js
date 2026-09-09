@@ -237,6 +237,20 @@ function renderHomeParticipantTreemapFallback() {
 
 const HOME_TOP_LIMIT = 5;
 
+function profileUrl(displayId) {
+  return `/profile.html?id=${encodeURIComponent(displayId)}`;
+}
+
+// Click-through only: rows keep their original markup and styling, a data attribute gates navigation.
+function bindProfileRowNavigation(container) {
+  if (!container) return;
+  container.querySelectorAll(".top-row[data-display-id]").forEach((row) => {
+    row.addEventListener("click", () => {
+      window.location.assign(profileUrl(row.dataset.displayId));
+    });
+  });
+}
+
 function renderLeaderboardPreview(items) {
   const el = document.querySelector("#home-top-today");
   if (!el) return;
@@ -255,7 +269,8 @@ function renderLeaderboardPreview(items) {
   el.innerHTML = preview
     .map((item) => {
       const pct = Math.max(6, (item.totalTokens / max) * 100);
-      return `<article class="top-row" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+      const displayIdAttr = item.displayId ? ` data-display-id="${escapeHtml(item.displayId)}"` : "";
+      return `<article class="top-row"${displayIdAttr} data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
         <span class="n">${item.rank}</span>
         <span class="nm">${escapeHtml(item.displayName)}</span>
         <span class="tv" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</span>
@@ -263,6 +278,7 @@ function renderLeaderboardPreview(items) {
       </article>`;
     })
     .join("");
+  bindProfileRowNavigation(el);
 }
 
 function rankIconSvg(rank) {
@@ -297,7 +313,8 @@ function renderSourceTop(sources = []) {
           const medalIcon = rank >= 1 && rank <= 3
             ? `<span class="source-top-medal-icon medal-icon-${rank}">${rankIconSvg(rank)}</span>`
             : "";
-          return `<article class="top-row${rankClass}" data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+          const displayIdAttr = item.displayId ? ` data-display-id="${escapeHtml(item.displayId)}"` : "";
+          return `<article class="top-row${rankClass}"${displayIdAttr} data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
             <span class="rank-badge rank-badge-${rank}">${medalIcon}<span class="n">${rank || ""}</span></span>
             <span class="nm">${avatar}${escapeHtml(item.displayName || "")}</span>
             <span class="tv" title="${escapeHtml(formatTokenRaw(item.totalTokens))}">${localeTokenCompact(item.totalTokens)}</span>
@@ -319,6 +336,7 @@ function renderSourceTop(sources = []) {
       </div>`;
     })
     .join("");
+  bindProfileRowNavigation(el);
 }
 
 async function loadSourceLeaderboard() {
