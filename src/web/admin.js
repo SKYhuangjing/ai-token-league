@@ -522,28 +522,70 @@ async function loadDevices() {
   }
 }
 
+// Keep the recency-first order, but pull devices sharing a nickname up to sit
+// right after that nickname's first (most recent) occurrence.
+function groupDevicesByNickname(devices) {
+  const groups = new Map();
+  for (const item of devices) {
+    const key = item.nickname || item.deviceId;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return [...groups.values()].flat();
+}
+
+const DEVICE_STALE_DAYS = 14;
+
+// Full days since the device last checked in, or null when still active.
+function deviceStaleDays(lastSeenAt) {
+  if (!lastSeenAt) return null;
+  const days = Math.floor((Date.now() - new Date(lastSeenAt).getTime()) / 86400000);
+  return days > DEVICE_STALE_DAYS ? days : null;
+}
+
+// Normalize raw clientPlatform strings ("darwin-arm64", "win32-x64", ...) into
+// a friendly OS · arch label; keep the raw value as the tooltip.
+function devicePlatformLabel(platform) {
+  const raw = platform || "";
+  const os = /^win/.test(raw) ? "Windows" : /^(darwin|macos)/.test(raw) ? "macOS" : /^linux/.test(raw) ? "Linux" : "";
+  const arch = /aarch64|arm64/.test(raw) ? "arm64" : /x86_64|\bx64\b/.test(raw) ? "x64" : "";
+  const label = [os, arch].filter(Boolean).join(" · ");
+  return label || raw || "-";
+}
+
+// The stored lanIp is a comma list of every interface address; prefer the first
+// routable one over link-local 169.254.* and show the full list on hover.
+function devicePrimaryLanIp(lanIp) {
+  const list = String(lanIp || "").split(",").map((part) => part.trim()).filter(Boolean);
+  const primary = list.find((ip) => !ip.startsWith("169.254.")) || list[0] || "";
+  return { primary: primary || "-", full: list.join(", ") || "-" };
+}
+
 function renderDevices(devices) {
   const statusEl = document.querySelector("#devices-status");
   const tbody = document.querySelector("#devices-tbody");
   statusEl.textContent = devices.length === 1 ? t("admin.devices.countOne") : t("admin.devices.count", { count: devices.length });
   if (!devices.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.devices.empty")}</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="5">${t("admin.devices.empty")}</td></tr>`;
     return;
   }
-  tbody.innerHTML = devices.map((item) => `<tr>
-    <td>${escapeHtml(item.nickname)}</td>
-    <td><span class="pill device-id-chip" title="${escapeHtml(item.deviceId)}">${escapeHtml(String(item.deviceId || "").slice(-8))}</span></td>
-    <td><span class="truncated-cell" title="${escapeHtml(item.lanIp || "-")}">${escapeHtml(item.lanIp || "-")}</span></td>
-    <td>${escapeHtml(item.clientAppVersion || "-")}</td>
-    <td>${escapeHtml(item.clientPlatform || item.os || "-")}</td>
+  tbody.innerHTML = groupDevicesByNickname(devices).map((item) => {
+    const staleDays = deviceStaleDays(item.lastSeenAt);
+    const platform = item.clientPlatform || item.os || "";
+    const lanIp = devicePrimaryLanIp(item.lanIp);
+    return `<tr${staleDays ? ' class="device-stale"' : ""}>
+    <td><span class="device-name" title="${escapeHtml(item.nickname)}"><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></span>${staleDays ? ` <span class="pill device-stale-pill">${t("admin.devices.staleDays", { days: staleDays })}</span>` : ""}</td>
+    <td><span class="truncated-cell" title="${escapeHtml(platform ? `${devicePlatformLabel(platform)} (${platform})` : "-")}">${escapeHtml(devicePlatformLabel(platform))}</span> <span class="device-version">${escapeHtml(item.clientAppVersion || "-")}</span></td>
+    <td><span class="truncated-cell" title="${escapeHtml(lanIp.full)}">${escapeHtml(lanIp.primary)}</span></td>
     <td>${escapeHtml(item.lastSeenAt ? new Date(item.lastSeenAt).toLocaleDateString() : "-")}</td>
     <td>
-      <div class="row-actions danger-actions">
+      <div class="row-actions device-actions">
         <button type="button" class="danger-link" data-delete-device="${escapeHtml(item.deviceId)}" data-delete-device-label="${escapeHtml(item.nickname || item.deviceId)}">${t("admin.devices.resetDevice")}</button>
         <button type="button" class="danger-link" data-delete-participant="${escapeHtml(item.participantId)}" data-delete-nickname="${escapeHtml(item.nickname)}">${t("admin.usage.clearUserData")}</button>
       </div>
     </td>
-  </tr>`).join("");
+  </tr>`;
+  }).join("");
   tbody.querySelectorAll("[data-delete-device]").forEach((button) => {
     button.addEventListener("click", () => {
       deleteDeviceData(button.dataset.deleteDevice, button.dataset.deleteDeviceLabel).catch((error) => {

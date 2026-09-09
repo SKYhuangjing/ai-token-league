@@ -903,6 +903,13 @@ export class MySqlStore extends Store {
         return this.computeAnalytics(args);
       }
     );
+    // The scoped in-memory usageHourly only carries today/yesterday rows, so
+    // the community hour-of-day buckets computed inside computeAnalytics are
+    // incomplete here — replace them with the real SQL aggregate.
+    if (!args.participantId) {
+      result.hourlyRhythm = await this.mysqlCommunityHourlyRhythm(args);
+      result.hourlyByWeekday = await this.mysqlCommunityHourlyWeekday(args);
+    }
     if (args.participantId && periodDays.length) {
       result.rankStats = await this.mysqlAnalyticsRankStats(args.participantId, periodDays, { businessDay });
     }
@@ -912,6 +919,75 @@ export class MySqlStore extends Store {
     this.aggregateCache ||= {};
     this.aggregateCache[cacheKey] = { value: result };
     return result;
+  }
+
+  // Community twin of mysqlParticipantHourlyRhythm: 24 buckets over the
+  // analytics period scope, no participant filter.
+  async mysqlCommunityHourlyRhythm(args = {}) {
+    const { whereSql, params } = this.mysqlUsageScope(
+      { ...args, range: args.range || "this_month" },
+      "h"
+    );
+    const [rows] = await this.pool.query(
+      `SELECT h.hour AS hour, SUM(h.totalTokens) AS totalTokens
+       FROM usage_hourly h${whereSql}
+       GROUP BY h.hour
+       ORDER BY h.hour ASC`,
+      params
+    );
+    const [coverageRows] = await this.pool.query(
+      `SELECT COUNT(DISTINCT h.day) AS days,
+              DATE_FORMAT(MIN(h.day), '%Y-%m-%d') AS fromDay,
+              DATE_FORMAT(MAX(h.day), '%Y-%m-%d') AS toDay
+       FROM usage_hourly h${whereSql}`,
+      params
+    );
+    const byHour = new Map(rows.map((row) => [Number(row.hour), row]));
+    const items = [];
+    for (let hour = 0; hour < 24; hour++) {
+      items.push({
+        hour,
+        label: `${String(hour).padStart(2, "0")}:00`,
+        totalTokens: Number(byHour.get(hour)?.totalTokens || 0)
+      });
+    }
+    const coverage = coverageRows[0] || {};
+    return {
+      grain: "hour-of-day",
+      from: coverage.fromDay || "",
+      to: coverage.toDay || "",
+      coverage: { days: Number(coverage.days || 0) },
+      items
+    };
+  }
+
+  // Weekday × hour twin of the community rhythm: per-(day,hour) sums from
+  // usage_hourly, bucketed into Mon-first 7×24 in JS so the weekday rule stays
+  // identical to the JSON store's UTC-day derivation.
+  async mysqlCommunityHourlyWeekday(args = {}) {
+    const { whereSql, params } = this.mysqlUsageScope(
+      { ...args, range: args.range || "this_month" },
+      "h"
+    );
+    const [rows] = await this.pool.query(
+      `SELECT DATE_FORMAT(h.day, '%Y-%m-%d') AS day, h.hour AS hour, SUM(h.totalTokens) AS totalTokens
+       FROM usage_hourly h${whereSql}
+       GROUP BY h.day, h.hour
+       ORDER BY h.day ASC, h.hour ASC`,
+      params
+    );
+    const items = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+    const days = new Set();
+    for (const row of rows) {
+      const weekday = new Date(`${row.day}T00:00:00Z`).getUTCDay();
+      const rowIndex = weekday === 0 ? 6 : weekday - 1;
+      const hour = Number(row.hour ?? 0);
+      if (items[rowIndex] && hour >= 0 && hour < 24) {
+        items[rowIndex][hour] += Number(row.totalTokens || 0);
+      }
+      days.add(row.day);
+    }
+    return { items, coverageDays: days.size };
   }
 
   async mysqlAnalyticsRankStats(participantId, days = [], { businessDay = this.currentBusinessDay() } = {}) {

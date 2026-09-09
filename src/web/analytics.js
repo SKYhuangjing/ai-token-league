@@ -5,7 +5,10 @@ import {
   renderGauge as sharedRenderGauge, renderBarChart as sharedRenderBarChart,
   renderParticipantTreemap as sharedRenderParticipantTreemap,
   renderAnalyticsInsights, renderTokenComposition, renderParetoChart, renderWeekdayRhythm,
-  renderActivityHeatmap, aggregateTimeSeriesByWeek
+  renderActivityHeatmap, aggregateTimeSeriesByWeek,
+  renderConcentrationTrend, renderShareAreaStacked, renderCompareBars,
+  renderHourClock, renderHourWeekdayMatrix, computeHourlyRhythmStats,
+  renderSourceDonutCard
 } from "/shared/chart-helpers.js";
 
 const isEmbedded = window.self !== window.top;
@@ -43,7 +46,6 @@ initI18n();
 
 const state = {
   period: "this_month",
-  participantId: "",
   data: null,
   loading: false
 };
@@ -61,11 +63,6 @@ function setLoading(on) {
     btn.disabled = on;
     btn.style.pointerEvents = on ? "none" : "";
   });
-  const sel = document.querySelector("#participant-select");
-  if (sel) sel.disabled = on;
-  const trigger = document.querySelector("#participant-select-trigger");
-  if (trigger) trigger.disabled = on;
-  if (on) setParticipantSelectOpen(false);
   if (!on && shell) {
     if (analyticsSettleTimer) window.clearTimeout(analyticsSettleTimer);
     shell.classList.remove("is-settled");
@@ -90,18 +87,6 @@ function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
 }
 
-function applyBoardIdentityEyebrow(mode) {
-  const eyebrowKey = {
-    anonymous: "web.publicBoardAnonymous",
-    public: "web.publicBoardPublic",
-    authenticated: "web.publicBoardAuthenticated"
-  }[mode] || "web.publicBoard";
-  const eyebrow = document.querySelector("#board-identity-eyebrow");
-  if (!eyebrow) return;
-  eyebrow.setAttribute("data-i18n", eyebrowKey);
-  eyebrow.textContent = t(eyebrowKey);
-}
-
 document.querySelectorAll("[data-filter='period']").forEach((group) => {
   group.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
@@ -114,7 +99,6 @@ document.querySelectorAll("[data-filter='period']").forEach((group) => {
 
     setLoading(true);
     try {
-      await loadParticipantDropdown();
       await loadAnalytics();
     } finally {
       setLoading(false);
@@ -122,142 +106,21 @@ document.querySelectorAll("[data-filter='period']").forEach((group) => {
   });
 });
 
-document.querySelector("#participant-select").addEventListener("change", async (event) => {
-  if (state.loading) return;
-  state.participantId = event.target.value;
-  syncParticipantSelectUi();
-
-  setLoading(true);
-  try {
-    await loadAnalytics();
-  } finally {
-    setLoading(false);
+// Embedded (admin) framing: the board reads as company-wide statistics there.
+// Cost KPIs default to visible for internal stats and only hide when the admin
+// cost toggle is explicitly off (admin.js persists "true"/"false").
+if (isEmbedded) {
+  const badge = document.querySelector("#an-scope-badge");
+  if (badge) {
+    badge.setAttribute("data-i18n", "web.analytics.staffStatsBadge");
+    badge.textContent = t("web.analytics.staffStatsBadge");
   }
-});
-
-function syncParticipantSelectUi() {
-  const select = document.querySelector("#participant-select");
-  const trigger = document.querySelector("#participant-select-trigger");
-  const menu = document.querySelector("#participant-select-menu");
-  const valueEl = trigger?.querySelector(".atl-select-value");
-  if (!select || !trigger || !menu || !valueEl) return;
-
-  const selected = select.options[select.selectedIndex] || select.options[0];
-  valueEl.textContent = selected?.textContent || "";
-  valueEl.removeAttribute("data-i18n");
-
-  menu.innerHTML = [...select.options].map((opt) => {
-    const selectedClass = opt.value === select.value ? " is-selected" : "";
-    return `<li class="atl-select-option${selectedClass}" role="option" data-value="${escapeHtml(opt.value)}" aria-selected="${opt.value === select.value ? "true" : "false"}">${escapeHtml(opt.textContent)}</li>`;
-  }).join("");
-}
-
-function setParticipantSelectOpen(open) {
-  const wrap = document.querySelector("[data-atl-select]");
-  const trigger = document.querySelector("#participant-select-trigger");
-  const menu = document.querySelector("#participant-select-menu");
-  if (!wrap || !trigger || !menu) return;
-  wrap.classList.toggle("is-open", open);
-  trigger.setAttribute("aria-expanded", open ? "true" : "false");
-  menu.hidden = !open;
-}
-
-function initParticipantSelectUi() {
-  const wrap = document.querySelector("[data-atl-select]");
-  const select = document.querySelector("#participant-select");
-  const trigger = document.querySelector("#participant-select-trigger");
-  const menu = document.querySelector("#participant-select-menu");
-  if (!wrap || !select || !trigger || !menu) return;
-
-  trigger.addEventListener("click", (event) => {
-    event.preventDefault();
-    if (state.loading || trigger.disabled) return;
-    setParticipantSelectOpen(menu.hidden);
-  });
-
-  menu.addEventListener("click", (event) => {
-    const option = event.target.closest("[data-value]");
-    if (!option) return;
-    const nextValue = option.getAttribute("data-value") || "";
-    if (select.value !== nextValue) {
-      select.value = nextValue;
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    } else {
-      syncParticipantSelectUi();
-    }
-    setParticipantSelectOpen(false);
-  });
-
-  document.addEventListener("click", (event) => {
-    if (!wrap.contains(event.target)) setParticipantSelectOpen(false);
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") setParticipantSelectOpen(false);
-  });
-
-  syncParticipantSelectUi();
-}
-
-initParticipantSelectUi();
-
-// Plan A: 公开看板专注于全社区宏观大盘，单人画像由点击下钻承接；嵌入 admin 时依然支持单人排查
-if (!isEmbedded) {
-  const whoWrap = document.querySelector(".who");
-  if (whoWrap) whoWrap.hidden = true;
-}
-
-async function loadParticipantDropdown() {
-  const select = document.querySelector("#participant-select");
-
-  const prevVal = select.value;
-  select.innerHTML = `<option value="" data-i18n="web.analytics.allCommunity">${t("web.analytics.allCommunity") || "All Community (Combined)"}</option>`;
-
-  let items = [];
-  if (isEmbedded) {
-    const response = await fetch(`/api/admin/usage?range=month`);
-    if (response.ok) {
-      const data = await response.json();
-      items = (data.participants || []).map(p => ({
-        displayId: p.participantId,
-        displayName: p.nickname
-      }));
-    }
-  } else {
-    const response = await fetch(`/api/board/leaderboard?period=${state.period}`);
-    if (response.ok) {
-      const data = await response.json();
-      if (data.identityMode) applyBoardIdentityEyebrow(data.identityMode);
-      items = (data.items || []).map(item => ({
-        displayId: item.displayId,
-        displayName: item.displayName
-      }));
-    }
-  }
-
-  for (const item of items) {
-    const option = document.createElement("option");
-    option.value = item.displayId;
-    option.textContent = item.displayName;
-    select.appendChild(option);
-  }
-
-  if ([...select.options].some(opt => opt.value === prevVal)) {
-    select.value = prevVal;
-    state.participantId = prevVal;
-  } else {
-    select.value = "";
-    state.participantId = "";
-  }
-  syncParticipantSelectUi();
-  setParticipantSelectOpen(false);
+  const showCost = localStorage.getItem("ai-token-league.admin.showCost") !== "false";
+  document.querySelectorAll(".an-kpi-cost").forEach((card) => { card.hidden = !showCost; });
 }
 
 async function loadAnalytics() {
-  const params = new URLSearchParams({
-    period: state.period,
-    participantId: state.participantId
-  });
+  const params = new URLSearchParams({ period: state.period });
 
   const apiPath = isEmbedded ? "/api/admin/analytics" : "/api/board/analytics";
   const response = await fetch(`${apiPath}?${params.toString()}`);
@@ -297,6 +160,12 @@ async function loadAnalytics() {
   renderTrendChart();
   renderBarCharts();
   renderParticipantTreemapPanel();
+  renderConcentrationTrendCard();
+  renderCommunityHourlyCard();
+  renderHourWeekdayCard();
+  renderWorkdirCards();
+  renderCompositionTrendCards();
+  if (isEmbedded) loadEcoSection().catch((err) => console.error("Eco section failed:", err));
 }
 
 function renderInsights() {
@@ -340,8 +209,11 @@ function renderTrendChart() {
 }
 
 function renderBarCharts() {
-  sharedRenderBarChart(document.querySelector("#model-chart"), state.data.models, { collapseAfter: 4, localeTokenCompact });
-  sharedRenderBarChart(document.querySelector("#provider-chart"), state.data.providers.map(p => ({ ...p, name: sourceName(p.name) })), { localeTokenCompact });
+  sharedRenderBarChart(document.querySelector("#model-chart"), state.data.models, { collapseAfter: 11, localeTokenCompact });
+  renderSourceDonutCard(document.querySelector("#provider-donut"), (state.data.providers || []).map(p => ({ name: p.name, label: sourceName(p.name), tokens: p.tokens })), {
+    localeTokenCompact,
+    tooltip: document.querySelector("#chart-tooltip")
+  });
 }
 
 function renderParticipantTreemapPanel() {
@@ -350,12 +222,11 @@ function renderParticipantTreemapPanel() {
   const labels = document.querySelector("#participant-treemap-labels");
   if (!card || !svg || !labels) return;
 
-  const isCommunityScope = !state.participantId;
-  card.hidden = !isCommunityScope;
+  card.hidden = false;
   sharedRenderParticipantTreemap(
     svg,
     labels,
-    isCommunityScope ? state.data?.participantRanking || [] : [],
+    state.data?.participantRanking || [],
     {
       localeTokenCompact,
       tooltip: document.querySelector("#chart-tooltip"),
@@ -363,6 +234,243 @@ function renderParticipantTreemapPanel() {
       legendContainer: document.querySelector("#treemap-legend")
     }
   );
+}
+
+const SHARE_TREND_LEGEND_COLORS = ["#087f79", "#b67810", "#466cae", "#76558f", "#6b5b95"];
+
+function renderShareTrendLegend(container, series = []) {
+  if (!container) return;
+  container.innerHTML = series
+    .map((row, index) => {
+      const color = row.other ? "#b5aea0" : SHARE_TREND_LEGEND_COLORS[index % SHARE_TREND_LEGEND_COLORS.length];
+      const label = row.other ? t("web.analytics.otherShare") : row.name;
+      return `<span><i style="background:${color}"></i><span title="${escapeHtml(label)}">${escapeHtml(String(label))}</span></span>`;
+    })
+    .join("");
+}
+
+function renderConcentrationTrendCard() {
+  const svg = document.querySelector("#concentration-trend");
+  if (!svg) return;
+  renderConcentrationTrend(svg, state.data?.concentrationMonthly || [], {
+    tooltip: document.querySelector("#chart-tooltip"),
+    localeTokenCompact
+  });
+  const legend = document.querySelector("#concentration-legend");
+  if (legend) {
+    legend.innerHTML = [
+      ["#b67810", "web.analytics.concentrationTop1"],
+      ["#087f79", "web.analytics.concentrationTop5"],
+      ["#9a9488", "web.analytics.concentrationTop10"]
+    ].map(([color, key]) => `<span><i style="background:${color}"></i><span>${escapeHtml(t(key))}</span></span>`).join("");
+  }
+}
+
+function renderCommunityHourlyCard() {
+  const svg = document.querySelector("#community-hourly-clock");
+  const metaEl = document.querySelector("#community-hourly-meta");
+  if (!svg) return;
+  const rhythm = state.data?.hourlyRhythm;
+  const total = (rhythm?.items || []).reduce((sum, item) => sum + (item.totalTokens || 0), 0);
+  if (!rhythm || !total) {
+    svg.innerHTML = "";
+    if (metaEl) metaEl.textContent = t("web.analytics.noHourly");
+    return;
+  }
+  const stats = computeHourlyRhythmStats(rhythm.items, {
+    workStart: rhythm.workWindow?.start || "09:30",
+    workEnd: rhythm.workWindow?.end || "18:30"
+  });
+  renderHourClock(svg, rhythm.items, {
+    tooltip: document.querySelector("#chart-tooltip"),
+    localeTokenCompact,
+    peakHour: stats.peakHour
+  });
+  if (metaEl) {
+    metaEl.textContent = t("web.analytics.hourlyRhythmMeta", {
+      days: rhythm.coverage?.days || 0,
+      peak: String(stats.peakHour).padStart(2, "0"),
+      night: Math.round(stats.nightShare * 100)
+    });
+  }
+}
+
+function renderHourWeekdayCard() {
+  const container = document.querySelector("#hour-weekday-matrix");
+  const metaEl = document.querySelector("#hw-matrix-meta");
+  if (!container) return;
+  const data = state.data?.hourlyByWeekday;
+  renderHourWeekdayMatrix(container, data?.items || [], {
+    tooltip: document.querySelector("#chart-tooltip"),
+    localeTokenCompact
+  });
+  if (metaEl) {
+    metaEl.textContent = data?.coverageDays
+      ? t("web.analytics.matrixMeta", { days: data.coverageDays })
+      : t("web.analytics.noHourly");
+  }
+}
+
+function renderWorkdirCards() {
+  const section = document.querySelector("#workdir-section");
+  if (!section) return;
+  // Workdir data is admin-only: the public board route strips these fields.
+  const workdirs = state.data?.workdirs;
+  if (!Array.isArray(workdirs) || !workdirs.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  sharedRenderBarChart(document.querySelector("#workdir-chart"), workdirs, { collapseAfter: 6, collapseLabel: t("web.analytics.otherShare"), localeTokenCompact });
+
+  const monthly = state.data?.workdirMonthly || [];
+  const months = state.data?.monthlyComposition?.months || [];
+  const compareEl = document.querySelector("#workdir-trend");
+  const slopeMeta = document.querySelector("#workdir-slope-meta");
+  if (!compareEl) return;
+  // Compare the last two COMPLETE months: an in-progress month next to a full
+  // one reads as a mass decline that is really just a partial month.
+  const businessDay = state.data?.businessDay || "";
+  const inProgressMonth = businessDay ? businessDay.slice(0, 7) : "";
+  const completeMonths = months.filter((month) => month !== inProgressMonth);
+  if (completeMonths.length < 2 || !monthly.length) {
+    renderCompareBars(compareEl, [], {});
+    if (slopeMeta) slopeMeta.textContent = t("web.analytics.noData");
+    return;
+  }
+  const toMonth = completeMonths[completeMonths.length - 1];
+  const fromMonth = completeMonths[completeMonths.length - 2];
+  const fromIndex = months.indexOf(fromMonth);
+  const toIndex = months.indexOf(toMonth);
+  const label = (month) => month.slice(2).replace("-", "/");
+  if (slopeMeta) slopeMeta.textContent = `${label(fromMonth)} → ${label(toMonth)}`;
+  const rows = monthly
+    .filter((row) => !row.other)
+    .map((row) => ({
+      name: row.name,
+      from: row.series[fromIndex] || 0,
+      to: row.series[toIndex] || 0
+    }))
+    .filter((row) => row.from > 0 || row.to > 0)
+    .sort((a, b) => b.to - a.to)
+    .slice(0, 8);
+  renderCompareBars(compareEl, rows, {
+    localeTokenCompact,
+    prevLabel: label(fromMonth),
+    currLabel: label(toMonth)
+  });
+}
+
+function renderCompositionTrendCards() {
+  const composition = state.data?.monthlyComposition;
+  if (!composition) return;
+  const months = composition.months || [];
+  renderShareAreaStacked(document.querySelector("#model-trend"), months, composition.models || [], {
+    tooltip: document.querySelector("#chart-tooltip"),
+    localeTokenCompact
+  });
+  renderShareTrendLegend(document.querySelector("#model-trend-legend"), composition.models || []);
+  const providerSeries = (composition.providers || []).map((row) => ({ ...row, name: sourceName(row.name) }));
+  renderShareAreaStacked(document.querySelector("#provider-trend"), months, providerSeries, {
+    tooltip: document.querySelector("#chart-tooltip"),
+    localeTokenCompact
+  });
+  renderShareTrendLegend(document.querySelector("#provider-trend-legend"), providerSeries);
+}
+
+// ---- Client ecosystem cards (admin embed only) ----
+// Mirrors admin.js device normalization; kept local because admin.js is not
+// an importable module.
+
+function ecoPlatformLabel(platform) {
+  const raw = platform || "";
+  const os = /^win/.test(raw) ? "Windows" : /^(darwin|macos)/.test(raw) ? "macOS" : /^linux/.test(raw) ? "Linux" : "";
+  const arch = /aarch64|arm64/.test(raw) ? "arm64" : /x86_64|\bx64\b/.test(raw) ? "x64" : "";
+  return [os, arch].filter(Boolean).join(" · ") || raw || "-";
+}
+
+function ecoStaleDays(lastSeenAt) {
+  if (!lastSeenAt) return null;
+  const days = Math.floor((Date.now() - new Date(lastSeenAt).getTime()) / 86400000);
+  return days > 14 ? days : null;
+}
+
+function renderEcoCountRows(container, rows, { unit }) {
+  if (!container) return;
+  const total = rows.reduce((sum, row) => sum + row.count, 0) || 1;
+  container.innerHTML = rows.map((row) => {
+    const pct = Math.round((row.count / total) * 100);
+    return `<div class="usage-share-row" title="${escapeHtml(String(row.name))}: ${row.count}">
+      <div class="lbl">
+        <span class="usage-share-name" title="${escapeHtml(String(row.name))}">${escapeHtml(String(row.name))}</span>
+        <span class="usage-share-value"><strong>${row.count} ${escapeHtml(unit)}</strong><span>${pct}%</span></span>
+      </div>
+      <div class="usage-share-track"><i style="width:${pct}%"></i></div>
+    </div>`;
+  }).join("");
+}
+
+function compareVersions(a, b) {
+  const parse = (v) => String(v || "0").split(".").map(Number);
+  const [aParts, bParts] = [parse(a), parse(b)];
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    const diff = (aParts[i] || 0) - (bParts[i] || 0);
+    if (diff) return diff;
+  }
+  return 0;
+}
+
+async function loadEcoSection() {
+  const section = document.querySelector("#admin-eco-section");
+  if (!section) return;
+  const response = await fetch("/api/admin/devices");
+  if (!response.ok) throw new Error("devices request failed");
+  const devices = await response.json();
+
+  const versionCounts = new Map();
+  for (const device of devices) {
+    const version = device.clientAppVersion || "-";
+    versionCounts.set(version, (versionCounts.get(version) || 0) + 1);
+  }
+  const versionRows = [...versionCounts.entries()]
+    .sort((a, b) => compareVersions(b[0], a[0]))
+    .map(([name, count]) => ({ name, count }));
+  renderEcoCountRows(document.querySelector("#eco-version-chart"), versionRows, { unit: t("web.analytics.ecoDeviceUnit") });
+  // The fleet's newest observed client is the practical upgrade baseline:
+  // shared/version.js is a Node module and cannot be imported in the browser.
+  const latestVersion = versionRows[0]?.name || "";
+  const outdated = latestVersion
+    ? devices.filter((device) => device.clientAppVersion && compareVersions(device.clientAppVersion, latestVersion) < 0).length
+    : 0;
+  const versionMeta = document.querySelector("#eco-version-meta");
+  if (versionMeta) versionMeta.textContent = t("web.analytics.ecoOutdated", { count: outdated, version: latestVersion });
+
+  const platformCounts = new Map();
+  for (const device of devices) {
+    const label = ecoPlatformLabel(device.clientPlatform || device.os);
+    platformCounts.set(label, (platformCounts.get(label) || 0) + 1);
+  }
+  const platformRows = [...platformCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }));
+  renderEcoCountRows(document.querySelector("#eco-platform-chart"), platformRows, { unit: t("web.analytics.ecoDeviceUnit") });
+
+  const stale = devices.filter((device) => ecoStaleDays(device.lastSeenAt)).length;
+  const active = devices.length - stale;
+  const split = document.querySelector("#eco-activity-split");
+  if (split) {
+    const activePct = devices.length ? Math.round((active / devices.length) * 100) : 0;
+    split.innerHTML = `
+      <div class="eco-activity-bar"><i class="eco-active" style="width:${activePct}%"></i><i class="eco-stale" style="width:${100 - activePct}%"></i></div>
+      <div class="eco-activity-legend">
+        <span><i class="eco-active"></i>${escapeHtml(t("web.analytics.ecoActiveDevices", { count: active }))}</span>
+        <span><i class="eco-stale"></i>${escapeHtml(t("web.analytics.ecoStaleDevices", { count: stale }))}</span>
+      </div>`;
+  }
+  const activityMeta = document.querySelector("#eco-activity-meta");
+  if (activityMeta) activityMeta.textContent = t("web.analytics.ecoTotalDevices", { count: devices.length });
+
+  section.hidden = false;
 }
 
 function renderKPIs() {
@@ -463,7 +571,6 @@ function renderHeatmap() {
 async function init() {
   setLoading(true);
   try {
-    await loadParticipantDropdown();
     await loadAnalytics();
   } finally {
     setLoading(false);

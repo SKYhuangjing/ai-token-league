@@ -357,6 +357,368 @@ export function renderWeekdayRhythm(container, timeSeries = [], { tooltip = null
   });
 }
 
+const SHARE_TREND_PALETTE = ["#087f79", "#b67810", "#466cae", "#76558f", "#6b5b95"];
+const SHARE_TREND_OTHER_COLOR = "#b5aea0";
+
+// Adaptive viewBox height for card charts: measure the chart frame's real box
+// (grid rows stretch cards to the tallest sibling) so the drawing fills the
+// card instead of leaving a blank strip under a width-scaled fixed aspect.
+// Same measurement + ResizeObserver pattern as renderParticipantTreemap.
+function adaptiveViewBoxHeight(svg, baseWidth, { min = 200, max = 470, fallback = 240 } = {}) {
+  const host = svg.parentElement;
+  let height = fallback;
+  if (host) {
+    const hostStyle = window.getComputedStyle(host);
+    const availWidth = host.clientWidth - (parseFloat(hostStyle.paddingLeft) || 0) - (parseFloat(hostStyle.paddingRight) || 0);
+    const availHeight = host.clientHeight - (parseFloat(hostStyle.paddingTop) || 0) - (parseFloat(hostStyle.paddingBottom) || 0);
+    if (availWidth > 100 && availHeight > 80) {
+      height = Math.round(baseWidth * availHeight / availWidth);
+    }
+  }
+  return Math.max(min, Math.min(max, height));
+}
+
+function observeAdaptiveResize(svg, redraw) {
+  if (typeof ResizeObserver === "undefined" || svg.__adaptiveResize) return;
+  let raf = 0;
+  svg.__adaptiveResize = new ResizeObserver(() => {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(redraw);
+  });
+  svg.__adaptiveResize.observe(svg.parentElement || svg);
+  // First paint settles late (sibling cards grow, fonts land): re-measure on
+  // the next frames AND after a short timer so the initial viewBox is not
+  // stuck on the fallback measured before the row finished stretching.
+  requestAnimationFrame(() => requestAnimationFrame(redraw));
+  setTimeout(redraw, 150);
+}
+
+// Monthly 100% stacked AREA for composition evolution cards: one smooth band
+// per name (top-N plus "other"), share of each month's total. Unlike stacked
+// columns the continuous bands read as a mix that drifts over time.
+export function renderShareAreaStacked(svg, months = [], series = [], { tooltip = null, localeTokenCompact = (v) => v } = {}) {
+  if (!svg) return;
+  svg.innerHTML = "";
+  if (months.length < 2 || !series.length) {
+    svg.setAttribute("viewBox", "0 0 800 240");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.innerHTML = `<text x="400" y="120" text-anchor="middle" class="st-empty">${escapeHtml(t("web.analytics.noData"))}</text>`;
+    return;
+  }
+  const width = 800;
+  const height = adaptiveViewBoxHeight(svg, 800, { min: 200, max: 470, fallback: 240 });
+  const padLeft = 34;
+  const padRight = 10;
+  const padBottom = 22;
+  const padTop = 10;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padBottom - padTop;
+  const n = months.length;
+  const xAt = (index) => padLeft + (plotW * index) / (n - 1);
+  const yAt = (pct) => padTop + plotH * (1 - Math.max(0, Math.min(1, pct)));
+  const totals = months.map((_, index) => series.reduce((sum, row) => sum + (row.series[index] || 0), 0));
+  const shares = series.map((row) => row.series.map((value, index) => (totals[index] > 0 ? (value || 0) / totals[index] : 0)));
+  const cumulative = shares.map((_, seriesIndex) => {
+    const line = [];
+    let acc = 0;
+    for (let m = 0; m < n; m++) {
+      acc = 0;
+      for (let s = 0; s <= seriesIndex; s++) acc += shares[s][m];
+      line.push(acc);
+    }
+    return line;
+  });
+  const lowerLine = (seriesIndex) => (seriesIndex === 0 ? months.map(() => 0) : cumulative[seriesIndex - 1]);
+
+  const parts = [];
+  parts.push(`<g class="st-grid">`);
+  for (let pct = 0; pct <= 100; pct += 25) {
+    const y = yAt(pct / 100);
+    parts.push(`<line x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}"${pct === 0 ? ' class="st-baseline"' : ""}></line>`);
+    parts.push(`<text x="${padLeft - 6}" y="${y + 3}" text-anchor="end" class="st-axis">${pct}%</text>`);
+  }
+  parts.push(`</g>`);
+  series.forEach((row, seriesIndex) => {
+    const upper = cumulative[seriesIndex];
+    const lower = lowerLine(seriesIndex);
+    const topPts = upper.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`);
+    const bottomPts = lower.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`).reverse();
+    const color = row.other ? SHARE_TREND_OTHER_COLOR : SHARE_TREND_PALETTE[seriesIndex % SHARE_TREND_PALETTE.length];
+    parts.push(`<path class="sa-band" d="M ${topPts.join(" L ")} L ${bottomPts.join(" L ")} Z" fill="${color}" fill-opacity="${row.other ? 0.55 : 0.8}" stroke="${color}" stroke-opacity="0.5" stroke-width="0.6"></path>`);
+  });
+  months.forEach((month, index) => {
+    if (n > 8 && index % 2 === 1 && index !== n - 1) return;
+    parts.push(`<text x="${xAt(index)}" y="${height - 6}" text-anchor="middle" class="st-axis">${escapeHtml(String(month || "").slice(2).replace("-", "/"))}</text>`);
+  });
+  const guide = `<line class="st-guide" x1="0" y1="${padTop}" x2="0" y2="${padTop + plotH}"></line>`;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.innerHTML = parts.join("") + guide;
+  const guideEl = svg.querySelector(".st-guide");
+
+  if (!tooltip) return;
+  const hit = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  months.forEach((month, index) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("class", "st-hit");
+    rect.setAttribute("x", String(padLeft + (plotW * index) / n - plotW / (2 * n)));
+    rect.setAttribute("y", String(padTop));
+    rect.setAttribute("width", String(plotW / n));
+    rect.setAttribute("height", String(plotH));
+    rect.setAttribute("fill", "transparent");
+    rect.addEventListener("mouseenter", () => {
+      const lines = series
+        .map((row) => ({ row, value: row.series[index] || 0 }))
+        .filter((item) => item.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .map(({ row, value }) => `${escapeHtml(row.other ? t("web.analytics.otherShare") : row.name)} · ${Math.round((value / (totals[index] || 1)) * 100)}% · ${localeTokenCompact(value)}`);
+      tooltip.innerHTML = `<strong>${escapeHtml(month)}</strong><br>${lines.join("<br>")}`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, rect);
+      if (guideEl) {
+        guideEl.setAttribute("x1", String(xAt(index)));
+        guideEl.setAttribute("x2", String(xAt(index)));
+        guideEl.style.opacity = "1";
+      }
+    });
+    rect.addEventListener("mouseleave", () => {
+      tooltip.style.opacity = "0";
+      if (guideEl) guideEl.style.opacity = "0";
+    });
+    hit.appendChild(rect);
+  });
+  svg.appendChild(hit);
+  observeAdaptiveResize(svg, () => renderShareAreaStacked(svg, months, series, { tooltip, localeTokenCompact }));
+}
+
+// Monthly concentration as cumulative bands: top-1 stays a gold line, ranks
+// 2–5 and 6–10 become stacked bands under it. Nested cumulative shares read as
+// bands (not three always-ordered lines), and the right edge annotates the
+// latest values so the current state is stated, not just implied.
+export function renderConcentrationTrend(svg, rows = [], { tooltip = null, localeTokenCompact = (v) => v } = {}) {
+  if (!svg) return;
+  svg.innerHTML = "";
+  if (!rows.length) return;
+  const width = 800;
+  const height = adaptiveViewBoxHeight(svg, 800, { min: 200, max: 470, fallback: 240 });
+  const padLeft = 34;
+  const padRight = 44;
+  const padBottom = 22;
+  const padTop = 10;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padBottom - padTop;
+  const n = rows.length;
+  const xAt = (index) => padLeft + (n === 1 ? plotW / 2 : (plotW * index) / (n - 1));
+  const yAt = (pct) => padTop + plotH * (1 - Math.max(0, Math.min(1, pct)));
+  const metrics = [
+    { key: "top1Pct", label: t("web.analytics.concentrationTop1"), color: "#b67810", band: false },
+    { key: "top5Pct", label: t("web.analytics.concentrationTop5"), color: "#087f79", band: true, bandFrom: "top1Pct", bandOpacity: 0.22 },
+    { key: "top10Pct", label: t("web.analytics.concentrationTop10"), color: "#087f79", band: true, bandFrom: "top5Pct", bandOpacity: 0.1 }
+  ];
+
+  const parts = [];
+  parts.push(`<g class="st-grid">`);
+  for (let pct = 0; pct <= 100; pct += 25) {
+    const y = yAt(pct / 100);
+    parts.push(`<line x1="${padLeft}" y1="${y}" x2="${padLeft + plotW}" y2="${y}"${pct === 0 ? ' class="st-baseline"' : ""}></line>`);
+    parts.push(`<text x="${padLeft - 6}" y="${y + 3}" text-anchor="end" class="st-axis">${pct}%</text>`);
+  }
+  parts.push(`</g>`);
+  // Bands first (drawn beneath), from the widest down.
+  for (const metric of [...metrics].reverse()) {
+    if (!metric.band) continue;
+    const upper = rows.map((row) => row[metric.key] || 0);
+    const lower = rows.map((row) => row[metric.bandFrom] || 0);
+    const topPts = upper.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`);
+    const bottomPts = lower.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`).reverse();
+    parts.push(`<path d="M ${topPts.join(" L ")} L ${bottomPts.join(" L ")} Z" fill="${metric.color}" fill-opacity="${metric.bandOpacity}"></path>`);
+  }
+  const last = rows[n - 1];
+  for (const metric of metrics) {
+    const points = rows.map((row, index) => `${xAt(index).toFixed(1)},${yAt(row[metric.key] || 0).toFixed(1)}`);
+    if (metric.band) {
+      parts.push(`<polyline points="${points.join(" ")}" fill="none" stroke="${metric.color}" stroke-width="1.4" stroke-opacity="0.75" stroke-linejoin="round"></polyline>`);
+    } else {
+      parts.push(`<polyline class="ct-top1" points="${points.join(" ")}" fill="none" stroke="${metric.color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"></polyline>`);
+    }
+    rows.forEach((row, index) => {
+      parts.push(`<circle class="ct-point" cx="${xAt(index).toFixed(1)}" cy="${yAt(row[metric.key] || 0).toFixed(1)}" r="${metric.band ? 2.2 : 3}" fill="${metric.color}" fill-opacity="${metric.band ? 0.8 : 1}"></circle>`);
+    });
+    parts.push(`<text x="${padLeft + plotW + 6}" y="${yAt(last[metric.key] || 0) + 3}" class="st-axis" fill="${metric.color}" font-weight="600">${Math.round((last[metric.key] || 0) * 100)}%</text>`);
+  }
+  rows.forEach((row, index) => {
+    if (n > 8 && index % 2 === 1 && index !== n - 1) return;
+    parts.push(`<text x="${xAt(index)}" y="${height - 6}" text-anchor="middle" class="st-axis">${escapeHtml(String(row.month || "").slice(2).replace("-", "/"))}</text>`);
+  });
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.innerHTML = parts.join("");
+  const pointEls = [...svg.querySelectorAll(".ct-point")];
+
+  if (!tooltip) return;
+  rows.forEach((row, index) => {
+    const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    hit.setAttribute("class", "st-hit");
+    hit.setAttribute("x", String(xAt(index) - plotW / (2 * Math.max(n, 1))));
+    hit.setAttribute("y", String(padTop));
+    hit.setAttribute("width", String(plotW / Math.max(n, 1)));
+    hit.setAttribute("height", String(plotH));
+    hit.setAttribute("fill", "transparent");
+    hit.addEventListener("mouseenter", () => {
+      const lines = metrics.map((metric) => `${escapeHtml(metric.label)} ${Math.round((row[metric.key] || 0) * 100)}%`);
+      tooltip.innerHTML = `<strong>${escapeHtml(row.month)}</strong><br>${lines.join("<br>")}<br>${localeTokenCompact(row.totalTokens)} · ${row.participants} ${escapeHtml(t("web.analytics.activeDevs") || "")}`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, hit);
+      pointEls.forEach((el) => { el.setAttribute("r", String(Number(el.getAttribute("r")) * 1.6)); });
+    });
+    hit.addEventListener("mouseleave", () => {
+      tooltip.style.opacity = "0";
+      pointEls.forEach((el) => { el.setAttribute("r", String(Number(el.getAttribute("r")) / 1.6)); });
+    });
+    svg.appendChild(hit);
+  });
+  observeAdaptiveResize(svg, () => renderConcentrationTrend(svg, rows, { tooltip, localeTokenCompact }));
+}
+
+// 24-hour activity clock: radial sectors around a clock face where 0h sits at
+// the top and sector radius encodes that hour's tokens. Peak hour is gold,
+// night hours (0–6) are stone — the day reads literally as a dial.
+export function renderHourClock(svg, items = [], { tooltip = null, localeTokenCompact = (v) => v, peakHour = -1 } = {}) {
+  if (!svg) return;
+  svg.innerHTML = "";
+  const total = items.reduce((sum, item) => sum + (item.totalTokens || 0), 0);
+  if (!total) {
+    svg.setAttribute("viewBox", "0 0 420 320");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.innerHTML = `<text x="210" y="160" text-anchor="middle" class="st-empty">${escapeHtml(t("web.analytics.noData"))}</text>`;
+    return;
+  }
+  const width = 420;
+  const height = 320;
+  const cx = width / 2;
+  const cy = height / 2;
+  const rMin = 58;
+  const rMax = 128;
+  const maxTokens = Math.max(...items.map((item) => item.totalTokens || 0), 1);
+  const buckets = Array.from({ length: 24 }, (_, hour) => items.find((item) => Number(item.hour) === hour) || { hour, totalTokens: 0 });
+  const sectorGap = 1.6;
+  const polar = (hour, radius) => {
+    const angle = ((hour / 24) * 360 - 90 + sectorGap / 2) * (Math.PI / 180);
+    return [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)];
+  };
+  const sectorPath = (hour, radius) => {
+    const a0 = ((hour / 24) * 360 - 90 + sectorGap / 2) * (Math.PI / 180);
+    const a1 = (((hour + 1) / 24) * 360 - 90 - sectorGap / 2) * (Math.PI / 180);
+    const [x0, y0] = [cx + rMin * Math.cos(a0), cy + rMin * Math.sin(a0)];
+    const [x1, y1] = [cx + radius * Math.cos(a0), cy + radius * Math.sin(a0)];
+    const [x2, y2] = [cx + radius * Math.cos(a1), cy + radius * Math.sin(a1)];
+    const [x3, y3] = [cx + rMin * Math.cos(a1), cy + rMin * Math.sin(a1)];
+    return `M ${x0.toFixed(1)} ${y0.toFixed(1)} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${radius} ${radius} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)} L ${x3.toFixed(1)} ${y3.toFixed(1)} A ${rMin} ${rMin} 0 0 0 ${x0.toFixed(1)} ${y0.toFixed(1)} Z`;
+  };
+
+  const parts = [];
+  for (const bucket of buckets) {
+    const tokens = bucket.totalTokens || 0;
+    const radius = tokens > 0 ? rMin + (rMax - rMin) * Math.sqrt(tokens / maxTokens) : rMin + 2;
+    const isPeak = bucket.hour === peakHour;
+    const color = isPeak ? "#b67810" : bucket.hour < 6 ? "#b5aea0" : "#087f79";
+    const opacity = tokens > 0 ? (isPeak ? 0.95 : bucket.hour < 6 ? 0.55 : 0.8) : 0.12;
+    parts.push(`<path class="hc-sector" data-opacity="${opacity}" d="${sectorPath(bucket.hour, radius)}" fill="${color}" fill-opacity="${opacity}"></path>`);
+  }
+  for (const hour of [0, 6, 12, 18]) {
+    const [x, y] = polar(hour, rMax + 16);
+    parts.push(`<text x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="middle" class="st-axis">${String(hour).padStart(2, "0")}</text>`);
+  }
+  if (peakHour >= 0) {
+    parts.push(`<text x="${cx}" y="${cy - 4}" text-anchor="middle" class="hc-peak">${String(peakHour).padStart(2, "0")}:00</text>`);
+    parts.push(`<text x="${cx}" y="${cy + 12}" text-anchor="middle" class="hc-peak-sub">${escapeHtml(t("web.analytics.goldenHour"))}</text>`);
+  }
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.innerHTML = parts.join("");
+
+  if (!tooltip) return;
+  const sectors = [...svg.querySelectorAll(".hc-sector")];
+  buckets.forEach((bucket, index) => {
+    const el = sectors[index];
+    if (!el) return;
+    el.style.cursor = "pointer";
+    el.addEventListener("mouseenter", () => {
+      el.setAttribute("fill-opacity", "1");
+      tooltip.innerHTML = `<strong>${String(bucket.hour).padStart(2, "0")}:00</strong><br>${localeTokenCompact(bucket.totalTokens || 0)} ${escapeHtml(t("unit.tokens") || "tokens")} · ${Math.round(((bucket.totalTokens || 0) / total) * 100)}%`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, el);
+    });
+    el.addEventListener("mouseleave", () => {
+      tooltip.style.opacity = "0";
+      el.setAttribute("fill-opacity", String(el.dataset.opacity || "0.8"));
+    });
+  });
+}
+
+// Weekday × hour activity matrix: 7 rows (Mon-first) × 24 columns, cell ink
+// density encodes tokens. Collapses weekday rhythm and hourly rhythm into a
+// single "when does the company code" picture.
+export function renderHourWeekdayMatrix(container, items = [], { tooltip = null, localeTokenCompact = (v) => v } = {}) {
+  if (!container) return;
+  const maxVal = Math.max(1, ...items.flat());
+  const total = items.flat().reduce((sum, value) => sum + value, 0);
+  if (!total) {
+    container.innerHTML = `<div class="empty-state">${escapeHtml(t("web.analytics.noData"))}</div>`;
+    return;
+  }
+  const weekdayLabels = [
+    t("web.analytics.weekdayMon"), t("web.analytics.weekdayTue"), t("web.analytics.weekdayWed"), t("web.analytics.weekdayThu"),
+    t("web.analytics.weekdayFri"), t("web.analytics.weekdaySat"), t("web.analytics.weekdaySun")
+  ];
+  const alpha = (value) => (value > 0 ? (0.07 + 0.85 * Math.sqrt(value / maxVal)).toFixed(2) : "0");
+  let html = `<div class="hw-cols">${Array.from({ length: 25 }, (_, i) => i === 0 ? "<span></span>" : `<span>${i - 1 === 0 || (i - 1) % 3 === 0 ? String(i - 1).padStart(2, "0") : ""}</span>`).join("")}</div>`;
+  items.forEach((row, weekdayIndex) => {
+    html += `<div class="hw-row"><span class="hw-day">${escapeHtml(weekdayLabels[weekdayIndex])}</span>${row
+      .map((value, hour) => `<i class="hw-cell" data-w="${weekdayIndex}" data-h="${hour}" style="background:rgba(8,127,121,${alpha(value)})"></i>`)
+      .join("")}</div>`;
+  });
+  container.innerHTML = html;
+  if (!tooltip) return;
+  container.querySelectorAll(".hw-cell").forEach((cell) => {
+    cell.addEventListener("mouseenter", () => {
+      const value = items[Number(cell.dataset.w)][Number(cell.dataset.h)];
+      tooltip.innerHTML = `<strong>${escapeHtml(weekdayLabels[Number(cell.dataset.w)])} ${String(cell.dataset.h).padStart(2, "0")}:00</strong><br>${localeTokenCompact(value || 0)} ${escapeHtml(t("unit.tokens") || "tokens")}`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, cell);
+    });
+    cell.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+  });
+}
+
+// Month-over-month grouped bar rows: one row per name with a muted "previous
+// month" bar and a teal "current month" bar plus a delta badge. Reads instantly
+// — no axis or slope interpretation needed.
+export function renderCompareBars(container, rows = [], { localeTokenCompact = (v) => v, prevLabel = "", currLabel = "" } = {}) {
+  if (!container) return;
+  if (!rows.length) {
+    container.innerHTML = `<div class="empty-state">${escapeHtml(t("web.analytics.noData"))}</div>`;
+    return;
+  }
+  const maxVal = Math.max(...rows.flatMap((row) => [row.from || 0, row.to || 0]), 1);
+  container.innerHTML = rows.map((row) => {
+    const from = row.from || 0;
+    const to = row.to || 0;
+    const delta = from > 0 ? Math.round((to / from - 1) * 100) : null;
+    const deltaClass = delta === null || delta === 0 ? "flat" : delta > 0 ? "up" : "down";
+    const deltaText = delta === null ? "新增" : `${delta > 0 ? "+" : ""}${delta}%`;
+    const bar = (value, kind) => `<div class="cmp-bar cmp-${kind}"><i style="width:${Math.max(1, Math.round((value / maxVal) * 100))}%"></i><span>${escapeHtml(localeTokenCompact(value))}</span></div>`;
+    return `<div class="cmp-row" title="${escapeHtml(String(row.name))} · ${escapeHtml(prevLabel)} ${escapeHtml(localeTokenCompact(from))} → ${escapeHtml(currLabel)} ${escapeHtml(localeTokenCompact(to))}">
+      <div class="cmp-head">
+        <span class="cmp-name" title="${escapeHtml(String(row.name))}">${escapeHtml(String(row.name))}</span>
+        <span class="cmp-delta ${deltaClass}">${escapeHtml(deltaText)}</span>
+      </div>
+      ${bar(from, "prev")}
+      ${bar(to, "curr")}
+    </div>`;
+  }).join("");
+}
+
 // Work-share attribution from whole-hour buckets: each boundary hour counts
 // proportionally to its overlap with the [workStart, workEnd) window, so a
 // 09:30 start attributes half of the 09:00 bucket. Windows may cross midnight.
@@ -774,6 +1136,61 @@ export function renderDonutChart(container, items = [], { collapseAfter, collaps
     </svg>
     <div class="donut-legend">${legend}</div>
   </div>`;
+}
+
+// Card-scale source donut: a larger ring with the community total in the
+// center and legend rows carrying token values — denser than a plain bar list
+// and visually balanced against tall sibling cards.
+export function renderSourceDonutCard(container, items = [], { localeTokenCompact = (v) => v, tooltip = null } = {}) {
+  if (!container) return;
+  const tokensOf = (item) => Number(item.tokens || item.totalTokens || 0);
+  const total = items.reduce((sum, item) => sum + tokensOf(item), 0);
+  if (!total || !items.length) {
+    container.innerHTML = `<div class="empty-state">${escapeHtml(t("web.analytics.noData"))}</div>`;
+    return;
+  }
+  const radius = 80;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+  const segments = items.map((item) => {
+    const tokens = tokensOf(item);
+    const ratio = tokens / total;
+    const dash = ratio * circumference;
+    const segment = { color: providerSourceColor(item.id || item.name || "other"), dash, offset, item, tokens, ratio };
+    offset -= dash;
+    return segment;
+  });
+  container.innerHTML = `<div class="asd-wrap">
+    <svg class="asd-donut" viewBox="0 0 200 200" role="img">
+      <circle cx="100" cy="100" r="${radius}" fill="none" stroke="var(--line-soft)" stroke-width="26"></circle>
+      ${segments.map((segment, index) => `<circle class="asd-seg" data-i="${index}" cx="100" cy="100" r="${radius}" fill="none" stroke="${segment.color}" stroke-width="26" stroke-dasharray="${segment.dash} ${circumference}" stroke-dashoffset="${segment.offset}" transform="rotate(-90 100 100)"></circle>`).join("")}
+      <text x="100" y="97" text-anchor="middle" class="asd-center-val">${escapeHtml(localeTokenCompact(total))}</text>
+      <text x="100" y="116" text-anchor="middle" class="asd-center-lab">${escapeHtml(t("web.totalTokens"))}</text>
+    </svg>
+    <div class="asd-legend">
+      ${segments.map((segment) => `<div class="asd-row" data-name="${escapeHtml(segment.item.label || segment.item.name)}">
+        <span class="swatch" style="background:${segment.color}"></span>
+        <span class="asd-name" title="${escapeHtml(segment.item.name)}">${escapeHtml(segment.item.label || segment.item.name)}</span>
+        <strong class="asd-tokens">${escapeHtml(localeTokenCompact(segment.tokens))}</strong>
+        <span class="asd-pct">${Math.round(segment.ratio * 100)}%</span>
+      </div>`).join("")}
+    </div>
+  </div>`;
+  if (!tooltip) return;
+  [...container.querySelectorAll(".asd-seg")].forEach((el) => {
+    const segment = segments[Number(el.dataset.i)];
+    el.style.cursor = "pointer";
+    el.addEventListener("mouseenter", () => {
+      el.setAttribute("stroke-width", "30");
+      tooltip.innerHTML = `<strong>${escapeHtml(segment.item.label || segment.item.name)}</strong><br>${escapeHtml(localeTokenCompact(segment.tokens))} · ${Math.round(segment.ratio * 100)}%`;
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, el);
+    });
+    el.addEventListener("mouseleave", () => {
+      el.setAttribute("stroke-width", "26");
+      tooltip.style.opacity = "0";
+    });
+  });
 }
 
 export function renderActivityHeatmap(grid, heatmap = [], {

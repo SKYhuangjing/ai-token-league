@@ -1750,6 +1750,7 @@ export class Store {
 
     const modelBreakdown = {};
     const providerBreakdown = {};
+    const workdirBreakdown = {};
 
     const dailySeries = {};
     const activeParticipantsByDay = {};
@@ -1775,6 +1776,9 @@ export class Store {
 
       modelBreakdown[item.model] = (modelBreakdown[item.model] || 0) + tokens;
       providerBreakdown[item.providerId] = (providerBreakdown[item.providerId] || 0) + tokens;
+      if (item.workdirDisplayName) {
+        workdirBreakdown[item.workdirDisplayName] = (workdirBreakdown[item.workdirDisplayName] || 0) + tokens;
+      }
 
       if (dailySeries[item.day]) {
         dailySeries[item.day].totalTokens += tokens;
@@ -1803,6 +1807,10 @@ export class Store {
       .sort((a, b) => b.tokens - a.tokens);
 
     const providers = Object.entries(providerBreakdown)
+      .map(([name, val]) => ({ name, tokens: val, ratio: totalTokens ? val / totalTokens : 0 }))
+      .sort((a, b) => b.tokens - a.tokens);
+
+    const workdirs = Object.entries(workdirBreakdown)
       .map(([name, val]) => ({ name, tokens: val, ratio: totalTokens ? val / totalTokens : 0 }))
       .sort((a, b) => b.tokens - a.tokens);
 
@@ -1877,11 +1885,96 @@ export class Store {
       },
       models,
       providers,
+      workdirs,
       timeSeries: hourlySeries || timeSeries,
       timeGrain: hourlySeries ? "hour" : "day",
       heatmap
     };
     if (!participantId) {
+      // Trailing-year monthly rollups power the admin evolution cards
+      // (concentration / composition / workdir). heatmapRows already covers the
+      // trailing 365 days in both stores — the MySQL analytics path scopes
+      // usageDaily to period ∪ heatmap days before calling this method.
+      const monthTotals = new Map();
+      for (const row of heatmapRows) {
+        const month = String(row.day || "").slice(0, 7);
+        if (!month) continue;
+        let bucket = monthTotals.get(month);
+        if (!bucket) {
+          bucket = { totalTokens: 0, participants: new Map(), models: new Map(), providers: new Map(), workdirs: new Map() };
+          monthTotals.set(month, bucket);
+        }
+        const tokens = row.totalTokens || 0;
+        bucket.totalTokens += tokens;
+        if (row.participantId) {
+          bucket.participants.set(row.participantId, (bucket.participants.get(row.participantId) || 0) + tokens);
+        }
+        bumpNameTotal(bucket.models, row.model, tokens);
+        bumpNameTotal(bucket.providers, row.providerId, tokens);
+        bumpNameTotal(bucket.workdirs, row.workdirDisplayName, tokens);
+      }
+      const months = [...monthTotals.keys()].sort();
+      const sumList = (list) => list.reduce((acc, value) => acc + value, 0);
+      result.concentrationMonthly = months.map((month) => {
+        const bucket = monthTotals.get(month);
+        const totals = [...bucket.participants.values()].sort((a, b) => b - a);
+        const total = sumList(totals) || bucket.totalTokens;
+        const topShare = (count) => (total > 0 ? sumList(totals.slice(0, count)) / total : 0);
+        return {
+          month,
+          totalTokens: bucket.totalTokens,
+          participants: bucket.participants.size,
+          top1Pct: topShare(1),
+          top5Pct: topShare(5),
+          top10Pct: topShare(10)
+        };
+      });
+      result.monthlyComposition = {
+        months,
+        models: monthlyNamedSeries(monthTotals, months, "models"),
+        providers: monthlyNamedSeries(monthTotals, months, "providers")
+      };
+      result.workdirMonthly = monthlyNamedSeries(monthTotals, months, "workdirs");
+
+      // Community hour-of-day distribution over the selected period. The JSON
+      // store keeps usage_hourly in memory; the MySQL analytics override
+      // replaces this field with a SQL aggregate after computeAnalytics.
+      const hourBuckets = Array.from({ length: 24 }, (_, hour) => ({
+        hour,
+        label: `${String(hour).padStart(2, "0")}:00`,
+        totalTokens: 0
+      }));
+      const coveredDays = new Set();
+      for (const row of Object.values(this.db.usageHourly || {})) {
+        if (!matchesDaySet(row.day, daySet)) continue;
+        const bucket = hourBuckets[row.hour ?? 0];
+        if (!bucket) continue;
+        bucket.totalTokens += row.totalTokens || 0;
+        if (row.day) coveredDays.add(row.day);
+      }
+      const sortedCoveredDays = [...coveredDays].sort();
+      result.hourlyRhythm = {
+        grain: "hour-of-day",
+        from: sortedCoveredDays[0] || "",
+        to: sortedCoveredDays.at(-1) || "",
+        coverage: { days: sortedCoveredDays.length },
+        items: hourBuckets
+      };
+
+      // Weekday × hour matrix (Mon-first rows, 24 columns) for the activity
+      // matrix card; same hour-row source and day scope as hourlyRhythm.
+      const weekdayHourBuckets = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+      for (const row of Object.values(this.db.usageHourly || {})) {
+        if (!matchesDaySet(row.day, daySet)) continue;
+        const weekday = new Date(`${row.day}T00:00:00Z`).getUTCDay();
+        const rowIndex = weekday === 0 ? 6 : weekday - 1;
+        const hour = Number(row.hour ?? 0);
+        if (weekdayHourBuckets[rowIndex] && hour >= 0 && hour < 24) {
+          weekdayHourBuckets[rowIndex][hour] += row.totalTokens || 0;
+        }
+      }
+      result.hourlyByWeekday = { items: weekdayHourBuckets, coverageDays: sortedCoveredDays.length };
+
       const providerTotalsByParticipant = new Map();
       for (const row of rows) {
         const bucket = providerTotalsByParticipant.get(row.participantId) || {};
@@ -2904,6 +2997,41 @@ function sortedBreakdown(obj) {
   return Object.entries(obj)
     .sort((a, b) => b[1] - a[1])
     .map(([name, totalTokens]) => ({ name, totalTokens }));
+}
+
+function bumpNameTotal(map, name, tokens) {
+  if (!name) return;
+  map.set(name, (map.get(name) || 0) + tokens);
+}
+
+// Per-month named series for the evolution cards: rank names by trailing-year
+// totals, keep the top N, and fold the rest into an "other" row so the stacked
+// chart stays readable.
+function monthlyNamedSeries(monthTotals, months, field, { top = 5 } = {}) {
+  const grand = new Map();
+  for (const bucket of monthTotals.values()) {
+    for (const [name, value] of bucket[field]) {
+      grand.set(name, (grand.get(name) || 0) + value);
+    }
+  }
+  const ranked = [...grand.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name).filter(Boolean);
+  const keep = ranked.slice(0, top);
+  const rest = ranked.slice(top);
+  const series = keep.map((name) => ({
+    name,
+    series: months.map((month) => monthTotals.get(month)[field].get(name) || 0)
+  }));
+  if (rest.length) {
+    series.push({
+      name: "other",
+      other: true,
+      series: months.map((month) => {
+        const map = monthTotals.get(month)[field];
+        return rest.reduce((sum, name) => sum + (map.get(name) || 0), 0);
+      })
+    });
+  }
+  return series;
 }
 
 function addCostBreakdownItem(map, name, item) {

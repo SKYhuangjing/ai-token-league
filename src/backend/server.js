@@ -855,6 +855,7 @@ async function handleApi(req, res) {
       endDay,
       participantId: realId
     });
+    if (data.hourlyRhythm) data.hourlyRhythm.workWindow = PROFILE_WORK_WINDOW;
 
     let identity;
     if (realId && BOARD_SECURITY_LEVEL === "anonymous") {
@@ -866,13 +867,15 @@ async function handleApi(req, res) {
       identity = { displayName: "Community", displayId: "" };
     }
 
+    // Workdir names are real project paths — they stay admin-only.
     const safeData = data.participantRanking
       ? {
           ...data,
           participantRanking: data.participantRanking.map((item) => transformBoardItem(item))
         }
       : data;
-    return sendJson(res, 200, withBusinessDay({ ...safeData, ...identity }));
+    const { workdirs, workdirMonthly, ...publicData } = safeData;
+    return sendJson(res, 200, withBusinessDay({ ...publicData, ...identity }));
   }
   if (req.method === "GET" && req.url.startsWith("/api/admin/analytics")) {
     const url = new URL(req.url, "http://localhost");
@@ -893,6 +896,7 @@ async function handleApi(req, res) {
       endDay,
       participantId: realId
     });
+    if (data.hourlyRhythm) data.hourlyRhythm.workWindow = PROFILE_WORK_WINDOW;
 
     let identity;
     if (realId) {

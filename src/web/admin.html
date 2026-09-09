@@ -33,7 +33,9 @@
       <nav class="admin-tabs" aria-label="Admin sections">
         <button type="button" data-admin-tab="usage" class="active" data-i18n="admin.tab.usage">Usage ranking</button>
         <button type="button" data-admin-tab="pricing" data-i18n="admin.tab.pricing">Model prices</button>
+        <!-- 质量 Tab 暂时下线（2026-09-09）：信息与模型价格/用量表重复，恢复时取消注释即可
         <button type="button" data-admin-tab="quality" data-i18n="admin.tab.quality">Quality</button>
+        -->
         <button type="button" data-admin-tab="devices" data-i18n="admin.tab.devices">Devices</button>
         <button type="button" data-admin-tab="analytics" data-i18n="admin.tab.analytics">Visual Analytics</button>
         <button type="button" data-admin-tab="sources" data-i18n="admin.tab.sources">Source stats</button>
@@ -233,6 +235,7 @@
         </div>
       </section>
 
+      <!-- 质量 Tab 暂时下线（2026-09-09）：与下线同步注释，恢复时连同上方 nav 按钮一起取消注释
       <section class="board admin-panel" data-admin-panel="quality">
         <div class="board-header">
           <h2 data-i18n="admin.quality.title">Quality and explainability</h2>
@@ -260,6 +263,7 @@
           </section>
         </div>
       </section>
+      -->
 
       <section class="board admin-panel" data-admin-panel="devices">
         <div class="board-header">
@@ -271,10 +275,8 @@
             <thead>
               <tr>
                 <th data-i18n="admin.devices.nickname">Nickname</th>
-                <th data-i18n="admin.devices.device">Device</th>
+                <th data-i18n="admin.devices.client">Client</th>
                 <th data-i18n="admin.devices.lanIp">LAN IP</th>
-                <th data-i18n="admin.devices.clientVersion">Client version</th>
-                <th data-i18n="admin.devices.platform">Platform</th>
                 <th data-i18n="admin.devices.lastSeen">Last seen</th>
                 <th data-i18n="admin.devices.action">Action</th>
               </tr>

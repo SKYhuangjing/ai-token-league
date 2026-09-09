@@ -5753,6 +5753,10 @@ function testWebAnalyticsParticipantRankingStructure() {
   assert.match(html, /class="an-main"/);
   assert.match(html, /class="[^"]*\ban-composition-card\b/);
   assert.match(html, /id="analytics-loading"[^>]*aria-live="polite"/);
+  // P0: the per-participant dropdown is gone from both public and embedded use
+  assert.doesNotMatch(html, /participant-select/);
+  assert.doesNotMatch(html, /class="who"/);
+  assert.doesNotMatch(js, /loadParticipantDropdown/);
   assert.match(js, /function renderParticipantTreemapPanel/);
   assert.match(js, /sharedRenderParticipantTreemap/);
   assert.match(js, /classList\.add\("is-embedded"\)/);
@@ -5761,13 +5765,155 @@ function testWebAnalyticsParticipantRankingStructure() {
   assert.match(js, /height === lastReportedHeight/);
   assert.match(js, /requestAnimationFrame/);
   assert.match(js, /shell\?\.classList\.toggle\("is-refreshing", on\)/);
-  assert.match(js, /setLoading\(true\)[\s\S]*loadParticipantDropdown\(\)[\s\S]*setLoading\(false\)/);
+  assert.match(js, /setLoading\(true\)[\s\S]*loadAnalytics\(\)[\s\S]*setLoading\(false\)/);
   assert.match(shared, /export function renderParticipantTreemap/);
   assert.match(shared, /linePath\.setAttribute\("pathLength", "1"\)/);
   assert.match(shared, /TREEMAP_MAX_PARTICIPANTS = 30/);
   assert.match(shared, /Math\.min\(\s*rankings\.length,\s*TREEMAP_MAX_PARTICIPANTS/);
-  assert.match(js, /card\.hidden = !isCommunityScope/);
+  assert.match(js, /card\.hidden = false/);
   console.log("  testWebAnalyticsParticipantRankingStructure passed");
+}
+
+function testWebAnalyticsGlobalStatsBoard() {
+  const html = fs.readFileSync("src/web/analytics.html", "utf8");
+  const js = fs.readFileSync("src/web/analytics.js", "utf8");
+  const shared = fs.readFileSync("src/shared/chart-helpers.js", "utf8");
+  const store = fs.readFileSync("src/backend/store.js", "utf8");
+  const mysql = fs.readFileSync("src/backend/mysql-store.js", "utf8");
+  const server = fs.readFileSync("src/backend/server.js", "utf8");
+  // New cards markup
+  assert.match(html, /id="concentration-trend"/);
+  assert.match(html, /id="community-hourly-clock"/);
+  assert.match(html, /id="hour-weekday-matrix"/);
+  assert.match(html, /id="workdir-section"/);
+  assert.match(html, /id="workdir-chart"/);
+  assert.match(html, /id="workdir-trend"/);
+  assert.match(html, /id="workdir-slope-meta"/);
+  assert.match(html, /id="model-trend"/);
+  assert.match(html, /id="provider-trend"/);
+  assert.match(html, /id="provider-donut"/);
+  assert.doesNotMatch(html, /id="provider-chart"/);
+  assert.match(html, /id="admin-eco-section"/);
+  assert.match(html, /id="eco-version-chart"/);
+  assert.match(html, /id="eco-platform-chart"/);
+  assert.match(html, /id="eco-activity-split"/);
+  assert.match(html, /an-kpi-cost/);
+  // Frontend wiring
+  assert.match(js, /function renderConcentrationTrendCard/);
+  assert.match(js, /function renderCommunityHourlyCard/);
+  assert.match(js, /function renderHourWeekdayCard/);
+  assert.match(js, /function renderWorkdirCards/);
+  assert.match(js, /function renderCompositionTrendCards/);
+  assert.match(js, /async function loadEcoSection/);
+  assert.match(js, /function ecoPlatformLabel/);
+  assert.match(js, /function ecoStaleDays/);
+  assert.match(js, /web\.analytics\.staffStatsBadge/);
+  assert.match(js, /ai-token-league\.admin\.showCost/);
+  assert.match(js, /renderShareAreaStacked/);
+  assert.match(js, /renderCompareBars/);
+  assert.match(js, /renderHourClock/);
+  assert.match(js, /renderHourWeekdayMatrix/);
+  // Shared chart components — deliberately varied chart families
+  assert.match(shared, /export function renderShareAreaStacked/);
+  assert.match(shared, /export function renderConcentrationTrend/);
+  assert.match(shared, /export function renderCompareBars/);
+  assert.match(shared, /export function renderHourClock/);
+  assert.match(shared, /export function renderHourWeekdayMatrix/);
+  assert.match(shared, /export function renderSourceDonutCard/);
+  assert.doesNotMatch(shared, /export function renderSlopeChart/);
+  assert.doesNotMatch(shared, /export function renderShareTrendStacked/);
+  // Backend aggregates
+  assert.match(store, /result\.concentrationMonthly/);
+  assert.match(store, /result\.monthlyComposition/);
+  assert.match(store, /result\.workdirMonthly/);
+  assert.match(store, /result\.hourlyRhythm/);
+  assert.match(store, /result\.hourlyByWeekday/);
+  assert.match(store, /function monthlyNamedSeries/);
+  assert.match(mysql, /mysqlCommunityHourlyRhythm/);
+  assert.match(mysql, /mysqlCommunityHourlyWeekday/);
+  // Public board route must strip workdir fields; both routes attach workWindow
+  assert.match(server, /workdirs, workdirMonthly, \.\.\.publicData/);
+  assert.match(server, /data\.hourlyRhythm\.workWindow = PROFILE_WORK_WINDOW/);
+  // i18n keys must exist in both locales
+  const i18n = fs.readFileSync("src/shared/i18n.js", "utf8");
+  for (const key of [
+    "web.analytics.staffStatsBadge", "web.analytics.concentrationTrendTitle", "web.analytics.hourlyRhythmTitle",
+    "web.analytics.hourlyRhythmMeta", "web.analytics.noHourly", "web.analytics.workdirTitle",
+    "web.analytics.workdirTrendTitle", "web.analytics.compositionTrendTitle", "web.analytics.providerTrendTitle",
+    "web.analytics.monthlyTrendMeta", "web.analytics.ecoSectionTitle", "web.analytics.ecoVersionTitle",
+    "web.analytics.ecoPlatformTitle", "web.analytics.ecoActivityTitle", "web.analytics.ecoOutdated",
+    "web.analytics.ecoActiveDevices", "web.analytics.ecoStaleDevices", "web.analytics.ecoTotalDevices"
+  ]) {
+    const count = i18n.split(`"${key}"`).length - 1;
+    assert.equal(count, 2, `i18n key ${key} must exist in both locales`);
+  }
+  console.log("  testWebAnalyticsGlobalStatsBoard passed");
+}
+
+function testAnalyticsGlobalMonthlyRollups() {
+  const store = new Store(path.join(tmp, "db-analytics-monthly.json"));
+  store.currentBusinessDay = () => "2026-09-09";
+  const row = (day, participantId, model, workdir, providerId, tokens) => ({
+    usageKey: `k_${day}_${participantId}_${model}_${workdir}_${tokens}`,
+    day, hour: 0, participantId, deviceId: "d_test", toolCode: "codex",
+    providerId, workdirHash: `h_${workdir}`, workdirDisplayName: workdir, model,
+    inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+    totalTokens: tokens, estimatedCostUsd: 0, sourceQuality: "exact", uploadedAt: day
+  });
+  store.db.usageDaily = {
+    a1: row("2026-09-01", "p1", "glm-5.3", "projA", "codex_local", 300),
+    a2: row("2026-09-02", "p1", "glm-5.3", "projA", "codex_local", 100),
+    a3: row("2026-09-02", "p2", "kimi-k3", "projB", "zcode_local", 100),
+    a4: row("2026-08-05", "p1", "glm-5.3", "projA", "codex_local", 500),
+    a5: row("2026-08-06", "p2", "kimi-k3", "projB", "zcode_local", 100)
+  };
+  store.db.usageHourly = {
+    h1: { ...row("2026-09-01", "p1", "glm-5.3", "projA", "codex_local", 50), hour: 9 },
+    h2: { ...row("2026-09-01", "p2", "kimi-k3", "projB", "zcode_local", 30), hour: 22 }
+  };
+
+  const month = store.analytics({ period: "this_month" });
+  assert.equal(month.concentrationMonthly.length, 2, "trailing year covers both fixture months");
+  const sept = month.concentrationMonthly.find((item) => item.month === "2026-09");
+  assert.equal(sept.totalTokens, 500);
+  assert.equal(sept.participants, 2);
+  assert.ok(Math.abs(sept.top1Pct - 0.8) < 1e-9, "top1 share is p1 400/500");
+  assert.equal(sept.top5Pct, 1, "two participants fit inside top5");
+  const aug = month.concentrationMonthly.find((item) => item.month === "2026-08");
+  assert.ok(Math.abs(aug.top1Pct - 500 / 600) < 1e-9);
+
+  assert.equal(month.monthlyComposition.months.length, 2);
+  const glm = month.monthlyComposition.models.find((item) => item.name === "glm-5.3");
+  assert.deepEqual(glm.series, [500, 400], "model series ordered by month ascending");
+  const projA = month.workdirMonthly.find((item) => item.name === "projA");
+  assert.deepEqual(projA.series, [500, 400]);
+
+  assert.equal(month.workdirs.length, 2, "range workdir top for this_month");
+  assert.equal(month.workdirs[0].name, "projA");
+  assert.equal(month.workdirs[0].tokens, 400);
+
+  assert.equal(month.hourlyRhythm.items.length, 24);
+  assert.equal(month.hourlyRhythm.items[9].totalTokens, 50, "community hour bucket 9");
+  assert.equal(month.hourlyRhythm.items[22].totalTokens, 30, "community hour bucket 22");
+  assert.equal(month.hourlyRhythm.coverage.days, 1, "coverage counts distinct days with hourly rows");
+
+  const matrix = month.hourlyByWeekday;
+  assert.equal(matrix.items.length, 7, "weekday matrix has Mon-first 7 rows");
+  assert.ok(matrix.items.every((row) => row.length === 24), "each weekday row has 24 hour cells");
+  const flatTotal = matrix.items.flat().reduce((sum, value) => sum + value, 0);
+  assert.equal(flatTotal, 80, "matrix totals equal the fixture's hourly tokens");
+  const sep1Weekday = new Date("2026-09-01T00:00:00Z").getUTCDay();
+  const sep1Row = sep1Weekday === 0 ? 6 : sep1Weekday - 1;
+  assert.equal(matrix.items[sep1Row][9], 50, "hour-9 tokens land on Sep 1's weekday row");
+  assert.equal(matrix.items[sep1Row][22], 30, "hour-22 tokens land on Sep 1's weekday row");
+  assert.equal(matrix.coverageDays, 1);
+
+  const scoped = store.analytics({ period: "this_month", participantId: "p1" });
+  assert.ok(!scoped.concentrationMonthly, "monthly rollups stay community-only");
+  assert.ok(!scoped.hourlyRhythm, "hourly rhythm stays community-only");
+
+  if (fs.existsSync(path.join(tmp, "db-analytics-monthly.json"))) fs.unlinkSync(path.join(tmp, "db-analytics-monthly.json"));
+  console.log("  testAnalyticsGlobalMonthlyRollups passed");
 }
 
 function testWebAdminStructure() {
@@ -6821,6 +6967,8 @@ testDesktopHtmlSettingsTabs();
 testDesktopHtmlDataI18n();
 testWebLeaderboardStructure();
 testWebAnalyticsParticipantRankingStructure();
+testWebAnalyticsGlobalStatsBoard();
+testAnalyticsGlobalMonthlyRollups();
 testWebAdminStructure();
 testWebDownloadStructure();
 testWebTreemapConcentrationRedesign();
