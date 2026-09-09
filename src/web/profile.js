@@ -904,12 +904,15 @@ function renderHourlyRhythmCard(hourly) {
   const stats = computeHourlyRhythmStats(items, hourlyWorkWindow || {});
   renderHourlyFeatureTags(stats);
   if (!stats.total) {
-    chartEl.innerHTML = emptyState(t("web.profile.emptyHourly"));
-    if (metaEl) metaEl.textContent = "";
+    // Keep the card compact: message goes in the subtitle slot, the 168px bar grid collapses.
+    chartEl.hidden = true;
+    chartEl.innerHTML = "";
+    if (metaEl) metaEl.textContent = t("web.profile.emptyHourly");
     if (statsEl) statsEl.innerHTML = "";
     renderHourlySplit();
     return;
   }
+  chartEl.hidden = false;
   renderHourlyRhythm(chartEl, items, { localeTokenCompact, tooltip: tooltipEl });
   renderHourlySplit();
   if (metaEl) {

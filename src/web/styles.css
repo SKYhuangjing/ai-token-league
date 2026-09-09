@@ -6371,6 +6371,11 @@ body.page-home .shell {
   margin-top: 10px;
 }
 
+/* Class display rule would beat the UA [hidden] style, so hiding needs its own rule. */
+.hourly-rhythm[hidden] {
+  display: none;
+}
+
 .hourly-rhythm .d {
   display: flex;
   flex-direction: column;
