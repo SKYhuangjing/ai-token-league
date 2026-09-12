@@ -1,13 +1,15 @@
-import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import "/theme-switcher.js";
 import { formatTokenCompact } from "/shared/display.js";
 import {
   escapeHtml, sourceName, formatTokenRaw, renderCost,
   renderTrendChart, renderBarChart, renderActivityHeatmap,
-  renderWeekdayRhythm, renderHourlyRhythm, computeHourlyRhythmStats, providerSourceColor
+  renderWeekdayRhythm, renderHourlyRhythm, computeHourlyRhythmStats, rankSeriesColor
 } from "/shared/chart-helpers.js";
 import {
   initPublicNavProfile,
   rememberProfileId,
+  clearRememberedProfileId,
   resolveDefaultProfileId,
   profilePageUrl,
   setProfileSwitcherLabel
@@ -172,6 +174,7 @@ function emptyState(message, { hint = "" } = {}) {
 
 function renderNotFound({ status = 0 } = {}) {
   state.notFound = true;
+  if (state.displayId) clearRememberedProfileId();
   heroEl?.setAttribute("aria-busy", "false");
   document.body.classList.add("profile-error");
   const nameEl = document.querySelector("#profile-name");
@@ -555,8 +558,10 @@ function renderDelta(elId, current, previous) {
     return;
   }
   const pct = Math.round(((cur - prev) / prev) * 100);
-  const up = pct > 0;
-  el.textContent = `${up ? "+" : ""}${pct}%`;
+  // cur > 0 can still round to -100%, which reads as "dropped to zero"; clamp it.
+  const clamped = cur > 0 && pct === -100 ? -99 : pct;
+  const up = clamped > 0;
+  el.textContent = `${up ? "+" : ""}${clamped}%`;
   el.className = `delta ${up ? "up" : "down"}`;
   el.hidden = false;
 }
@@ -1007,16 +1012,16 @@ function renderSourcesBreakdown(detail) {
   }
 
   // 1. Multi-segment distribution stack bar
-  const stackSegments = providers.map((item) => {
+  const stackSegments = providers.map((item, sourceIndex) => {
     const tokens = Number(item.totalTokens || 0);
     const pct = total ? Math.round((tokens / total) * 100) : 0;
-    const color = providerSourceColor(item.name);
+    const color = rankSeriesColor(sourceIndex);
     const name = sourceName(item.name);
     return `<div class="source-stack-seg" style="width: ${Math.max(1, pct)}%; background: ${color};" title="${escapeHtml(name)}: ${escapeHtml(localeTokenCompact(tokens))} (${pct}%)"></div>`;
   }).join("");
 
   // 2. Provider eco-cards
-  const cardsHtml = providers.map((item) => {
+  const cardsHtml = providers.map((item, sourceIndex) => {
     const tokens = Number(item.totalTokens || 0);
     const rawPct = total ? (tokens / total) * 100 : 0;
     let pctLabel = "0%";
@@ -1027,7 +1032,7 @@ function renderSourcesBreakdown(detail) {
     } else if (tokens > 0) {
       pctLabel = "<0.1%";
     }
-    const color = providerSourceColor(item.name);
+    const color = rankSeriesColor(sourceIndex);
     const name = sourceName(item.name);
 
     let roleText = t("web.profile.trialEngine");
@@ -1308,8 +1313,7 @@ if (showCostToggle) {
 
 const langContainer = document.querySelector("#lang-switcher-container");
 if (langContainer) {
-  langContainer.innerHTML = createLangSwitcher();
-  bindLangSwitcher("lang-switcher", () => {
+  mountLangSwitcher(langContainer, () => {
     window.location.reload();
   });
 }
@@ -1341,6 +1345,23 @@ document.querySelector("#profile-pick-another")?.addEventListener("click", async
     }
   }
   await loadHero();
+  if (state.notFound) {
+    const retryKey = "ai-token-league.public.profileFallbackTried";
+    try {
+      if (!sessionStorage.getItem(retryKey)) {
+        const fallbackId = await resolveDefaultProfileId({ mode: state.mode });
+        if (fallbackId && fallbackId !== state.displayId) {
+          sessionStorage.setItem(retryKey, "1");
+          window.location.replace(profilePageUrl(fallbackId, { mode: state.mode }));
+          return;
+        }
+      }
+      sessionStorage.removeItem(retryKey);
+    } catch {
+      /* stay on not-found */
+    }
+    return;
+  }
   await loadRange();
   loadHeatmap();
 })();

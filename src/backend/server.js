@@ -1140,7 +1140,8 @@ async function fetchReleaseJson(url, headers = {}) {
 }
 
 function serveStatic(req, res) {
-  const requested = req.url === "/" ? "/web/download.html" : new URL(req.url, "http://localhost").pathname;
+  const pathname = new URL(req.url, "http://localhost").pathname;
+  const requested = pathname === "/" ? "/web/download.html" : pathname;
   if (requested === "/admin.html" && !checkBasicAuth(req, res)) return;
   if (requested === "/leaderboard.html" && !checkBoardAuth(req, res)) return;
   if (requested === "/CHANGELOG.md" || requested === "/CHANGELOG.zh-CN.md") {

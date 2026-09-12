@@ -1,10 +1,15 @@
-import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import "/theme-switcher.js";
 import { formatContributionPercent, formatTokenCompact } from "/shared/display.js";
 import {
   escapeHtml, sourceName, formatTokenRaw,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
   renderModelSegments, renderCost, formatPricePer100M
 } from "/shared/chart-helpers.js";
+import {
+  formatPeriodCaption, updatePeriodPillCaptions
+} from "/console-ui.js";
+import { initPublicNavProfile, rememberProfileId } from "/public-nav-profile.js";
 
 function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
@@ -19,7 +24,11 @@ const state = {
   identityMode: "public",
   showCost: false,
   viewMode: "meter",
-  loading: false
+  loading: false,
+  items: [],
+  from: "",
+  to: "",
+  businessDay: ""
 };
 const storageKeys = {
   showCost: "ai-token-league.public.showCost",
@@ -32,6 +41,7 @@ const sourceFilter = document.querySelector("#source-filter");
 let leaderboardSettleTimer = null;
 
 function profileUrl(displayId) {
+  rememberProfileId(displayId);
   return `/profile.html?id=${encodeURIComponent(displayId)}`;
 }
 
@@ -85,11 +95,23 @@ async function loadLeaderboard() {
       state.identityMode = data.identityMode;
       applyIdentityMode(data.identityMode);
     }
-    render(data.items || []);
-    statusEl.textContent = t("web.leaderboard.participantCount", { count: data.items.length, plural: data.items.length === 1 ? "" : "s" });
+    state.items = data.items || [];
+    state.from = data.from || "";
+    state.to = data.to || "";
+    state.businessDay = data.businessDay || "";
+    updatePeriodChrome();
+    render(state.items);
+    statusEl.textContent = t("web.leaderboard.participantCount", { count: state.items.length, plural: state.items.length === 1 ? "" : "s" });
   } finally {
     setLeaderboardLoading(false);
   }
+}
+
+function updatePeriodChrome() {
+  const meta = { from: state.from, to: state.to, businessDay: state.businessDay };
+  updatePeriodPillCaptions(document, meta);
+  const label = document.querySelector("#leaderboard-period-label");
+  if (label) label.textContent = formatPeriodCaption(state.period, meta);
 }
 
 function setLeaderboardLoading(on) {
@@ -102,9 +124,7 @@ function setLeaderboardLoading(on) {
   });
   if (on || !surface) return;
   if (leaderboardSettleTimer) window.clearTimeout(leaderboardSettleTimer);
-  surface.classList.remove("is-settled");
-  requestAnimationFrame(() => surface.classList.add("is-settled"));
-  leaderboardSettleTimer = window.setTimeout(() => surface.classList.remove("is-settled"), 560);
+  surface.classList.add("is-settled");
 }
 
 function applyIdentityMode(mode) {
@@ -146,8 +166,9 @@ function renderListView(items, communityTotal) {
     return;
   }
   tbody.innerHTML = items
-    .map(
-      (item) => `<tr>
+    .map((item) => {
+      const rankClass = item.rank <= 10 ? `meter-rank-${Math.min(item.rank, 10)}` : "";
+      return `<tr class="${rankClass}">
         <td><span class="rank">#${item.rank}</span></td>
         <td>
           <a class="link-button participant-link" href="${profileUrl(item.displayId)}" data-display-id="${escapeHtml(item.displayId)}">
@@ -158,8 +179,8 @@ function renderListView(items, communityTotal) {
         <td class="contribution-cell">${formatContributionPercent(item.totalTokens, communityTotal)}</td>
         ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}<small class="price-sub">${formatPricePer100M(item)}</small></td>` : ""}
         <td>${renderModels(item.models)}</td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join("");
 }
 
@@ -366,8 +387,7 @@ function localizedCostQualityLabel(value = "") {
 // 初始化语言切换器
 const langContainer = document.querySelector("#lang-switcher-container");
 if (langContainer) {
-  langContainer.innerHTML = createLangSwitcher();
-  bindLangSwitcher("lang-switcher", () => {
+  mountLangSwitcher(langContainer, () => {
     // 语言切换后重新加载页面以应用新语言
     window.location.reload();
   });
@@ -375,6 +395,7 @@ if (langContainer) {
 
 // 应用当前语言翻译
 updatePageTranslations();
+initPublicNavProfile().catch(() => {});
 
 loadLeaderboard().catch((error) => {
   statusEl.textContent = error.message;

@@ -14,6 +14,14 @@ export function rememberProfileId(displayId) {
   }
 }
 
+export function clearRememberedProfileId() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getRememberedProfileId() {
   try {
     return String(localStorage.getItem(STORAGE_KEY) || "").trim();
@@ -29,9 +37,26 @@ export function profilePageUrl(displayId, { mode = "public" } = {}) {
   return `/profile.html?${params.toString()}`;
 }
 
+async function profileExists(displayId, { mode = "public" } = {}) {
+  const id = String(displayId || "").trim();
+  if (!id) return false;
+  try {
+    const url = mode === "admin"
+      ? `/api/admin/profile/${encodeURIComponent(id)}`
+      : `/api/board/profile/${encodeURIComponent(id)}`;
+    const response = await fetch(url);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveDefaultProfileId({ mode = "public" } = {}) {
   const remembered = getRememberedProfileId();
-  if (remembered) return remembered;
+  if (remembered) {
+    if (await profileExists(remembered, { mode })) return remembered;
+    clearRememberedProfileId();
+  }
 
   try {
     if (mode === "admin") {
@@ -43,7 +68,9 @@ export async function resolveDefaultProfileId({ mode = "public" } = {}) {
     const response = await fetch("/api/board/leaderboard?period=all");
     if (!response.ok) return "";
     const data = await response.json();
-    return data.items?.[0]?.displayId || "";
+    const id = data.items?.[0]?.displayId || "";
+    if (id) rememberProfileId(id);
+    return id;
   } catch {
     return "";
   }
@@ -180,10 +207,49 @@ function bindSwitcherRoot(root, {
   };
 }
 
+async function wirePlainProfileNavLink({ mode = "public", currentId = "" } = {}) {
+  const navLink = document.querySelector("#nav-profile-link");
+  if (!navLink) return;
+
+  const applyHref = (id) => {
+    if (!id) return;
+    navLink.href = profilePageUrl(id, { mode });
+  };
+
+  if (currentId) applyHref(currentId);
+  else {
+    resolveDefaultProfileId({ mode }).then((id) => {
+      if (id) applyHref(id);
+    }).catch(() => {});
+  }
+
+  navLink.addEventListener("click", async (event) => {
+    let id = "";
+    try {
+      id = new URL(navLink.getAttribute("href") || "", window.location.origin).searchParams.get("id") || "";
+    } catch {
+      id = "";
+    }
+    if (id) {
+      rememberProfileId(id);
+      return;
+    }
+    event.preventDefault();
+    const resolved = await resolveDefaultProfileId({ mode });
+    if (!resolved) {
+      window.location.href = "/profile.html";
+      return;
+    }
+    rememberProfileId(resolved);
+    window.location.href = profilePageUrl(resolved, { mode });
+  });
+}
+
 /**
  * Wire Personal tab:
  * - Profile page: nav is a plain current link; user switcher lives in subbar.
- * - Other pages: nav dropdown picks a person and navigates.
+ * - Other pages: plain nav link resolves to last/default person.
+ * - Optional `[data-nav-profile]` dropdown still supported when present.
  * - Admin: opens profile in a new browser tab.
  */
 export async function initPublicNavProfile({
@@ -211,6 +277,8 @@ export async function initPublicNavProfile({
       openInNewTab: false
     });
   }
+
+  await wirePlainProfileNavLink({ mode, currentId });
 
   const root = document.querySelector("[data-nav-profile]");
   if (!root) return null;

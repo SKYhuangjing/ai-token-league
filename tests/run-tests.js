@@ -5768,8 +5768,8 @@ function testWebAnalyticsParticipantRankingStructure() {
   assert.match(js, /setLoading\(true\)[\s\S]*loadAnalytics\(\)[\s\S]*setLoading\(false\)/);
   assert.match(shared, /export function renderParticipantTreemap/);
   assert.match(shared, /linePath\.setAttribute\("pathLength", "1"\)/);
-  assert.match(shared, /TREEMAP_MAX_PARTICIPANTS = 30/);
-  assert.match(shared, /Math\.min\(\s*rankings\.length,\s*TREEMAP_MAX_PARTICIPANTS/);
+  assert.match(shared, /TREEMAP_DISPLAY_COUNT = 18/);
+  assert.match(shared, /const displayCount = Math\.min\(rankings\.length, TREEMAP_DISPLAY_COUNT\)/);
   assert.match(js, /card\.hidden = false/);
   console.log("  testWebAnalyticsParticipantRankingStructure passed");
 }
@@ -5807,7 +5807,6 @@ function testWebAnalyticsGlobalStatsBoard() {
   assert.match(js, /async function loadEcoSection/);
   assert.match(js, /function ecoPlatformLabel/);
   assert.match(js, /function ecoStaleDays/);
-  assert.match(js, /web\.analytics\.staffStatsBadge/);
   assert.match(js, /ai-token-league\.admin\.showCost/);
   assert.match(js, /renderShareAreaStacked/);
   assert.match(js, /renderCompareBars/);
@@ -5837,7 +5836,7 @@ function testWebAnalyticsGlobalStatsBoard() {
   // i18n keys must exist in both locales
   const i18n = fs.readFileSync("src/shared/i18n.js", "utf8");
   for (const key of [
-    "web.analytics.staffStatsBadge", "web.analytics.concentrationTrendTitle", "web.analytics.hourlyRhythmTitle",
+    "web.analytics.concentrationTrendTitle", "web.analytics.hourlyRhythmTitle",
     "web.analytics.hourlyRhythmMeta", "web.analytics.noHourly", "web.analytics.workdirTitle",
     "web.analytics.workdirTrendTitle", "web.analytics.compositionTrendTitle", "web.analytics.providerTrendTitle",
     "web.analytics.monthlyTrendMeta", "web.analytics.ecoSectionTitle", "web.analytics.ecoVersionTitle",

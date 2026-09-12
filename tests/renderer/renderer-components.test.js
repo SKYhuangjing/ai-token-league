@@ -375,10 +375,10 @@ describe('renderProviderOverview', () => {
   it('renders the four-segment composition bar and legend', () => {
     const html = renderProviderOverview(overview, 'claude_code_local', { t });
     expect(html).toContain('provider-overview-bar');
-    expect(html).toContain('background:#0f4f4c');
-    expect(html).toContain('background:#1c7570');
-    expect(html).toContain('background:#35aaa0');
-    expect(html).toContain('background:#8fddd4');
+    expect(html).toContain('background:#b4552f');
+    expect(html).toContain('background:#cf6a42');
+    expect(html).toContain('background:#e0956b');
+    expect(html).toContain('background:#f2ddcd');
     expect(html).toContain('provider-overview-legend');
     expect(html).toContain('Cache read');
     expect(html).toContain('59%');

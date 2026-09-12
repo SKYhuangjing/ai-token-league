@@ -1,14 +1,11 @@
 import { tokenCompositionDetails } from "/shared/composition.js";
-import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
 import { formatTokenCompact } from "/shared/display.js";
-import { renderDonutChart, smoothLinePath, sourceName, providerSourceColor } from "/shared/chart-helpers.js";
+import { renderDonutChart, smoothLinePath, sourceName, rankSeriesColor } from "/shared/chart-helpers.js";
 
 initI18n();
-const langContainer = document.querySelector("#lang-switcher-container");
-if (langContainer) {
-  langContainer.innerHTML = createLangSwitcher();
-  bindLangSwitcher("lang-switcher", () => window.location.reload());
-}
+mountLangSwitcher("#lang-switcher-container", () => window.location.reload());
+import "/theme-switcher.js";
 updatePageTranslations();
 
 const state = {
@@ -47,14 +44,10 @@ const rankingStatus = document.querySelector("#ranking-status");
 const rankingPrev = document.querySelector("#ranking-prev");
 const rankingNext = document.querySelector("#ranking-next");
 const rankingPageLabel = document.querySelector("#ranking-page-label");
-const detailBoard = document.querySelector("#detail-board");
-const detailBackdrop = document.querySelector("#admin-detail-backdrop");
 const participantFilter = document.querySelector("#participant-filter");
 const sourceFilter = document.querySelector("#source-filter");
 const sourcesStatus = document.querySelector("#sources-status");
 const pricingStatus = document.querySelector("#pricing-status");
-let detailCloseTimer = null;
-let detailTrigger = null;
 let qualityCacheKey = "";
 let qualityCacheData = null;
 let priceTargetMenu = null;
@@ -381,7 +374,6 @@ document.querySelector("#start-date").addEventListener("change", applyCustomRang
 document.querySelector("#end-date").addEventListener("change", applyCustomRangeFromInputs);
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !detailBoard.hidden) closeDetail();
 });
 
 document.querySelector("#raw-tokens").addEventListener("change", (event) => {
@@ -409,8 +401,6 @@ rankingNext.addEventListener("click", () => {
   loadUsage();
 });
 
-document.querySelector("#close-admin-detail").addEventListener("click", closeDetail);
-detailBackdrop.addEventListener("click", closeDetail);
 
 document.querySelector("#export-csv").addEventListener("click", () => {
   exportCsv().catch((error) => {
@@ -577,7 +567,7 @@ function renderDevices(devices) {
     <td><span class="device-name" title="${escapeHtml(item.nickname)}"><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></span>${staleDays ? ` <span class="pill device-stale-pill">${t("admin.devices.staleDays", { days: staleDays })}</span>` : ""}</td>
     <td><span class="truncated-cell" title="${escapeHtml(platform ? `${devicePlatformLabel(platform)} (${platform})` : "-")}">${escapeHtml(devicePlatformLabel(platform))}</span> <span class="device-version">${escapeHtml(item.clientAppVersion || "-")}</span></td>
     <td><span class="truncated-cell" title="${escapeHtml(lanIp.full)}">${escapeHtml(lanIp.primary)}</span></td>
-    <td>${escapeHtml(item.lastSeenAt ? new Date(item.lastSeenAt).toLocaleDateString() : "-")}</td>
+    <td>${escapeHtml(formatStamp(item.lastSeenAt).slice(0, 10))}</td>
     <td>
       <div class="row-actions device-actions">
         <button type="button" class="danger-link" data-delete-device="${escapeHtml(item.deviceId)}" data-delete-device-label="${escapeHtml(item.nickname || item.deviceId)}">${t("admin.devices.resetDevice")}</button>
@@ -934,10 +924,26 @@ async function mapModelPriceAlias(model, targetModel) {
   await loadUsage();
 }
 
+const REMOTE_PRICING_STATUS_KEYS = {
+  fresh: "admin.pricing.statusFresh",
+  stale: "admin.pricing.statusStale",
+  empty: "admin.pricing.statusEmpty",
+  failed: "admin.pricing.statusFailed"
+};
+
+function formatStamp(value) {
+  if (!value || value === "-") return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = (num) => String(num).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function renderRemotePricingStatus(remote) {
-  const status = remote.status || "empty";
-  const fetchedAt = remote.fetchedAt || "-";
-  const expiresAt = remote.expiresAt || "-";
+  const rawStatus = remote.status || "empty";
+  const status = REMOTE_PRICING_STATUS_KEYS[rawStatus] ? t(REMOTE_PRICING_STATUS_KEYS[rawStatus]) : rawStatus;
+  const fetchedAt = formatStamp(remote.fetchedAt);
+  const expiresAt = formatStamp(remote.expiresAt);
   const count = remote.modelCount || 0;
   const error = remote.lastError ? ` · ${escapeHtml(remote.lastError)}` : "";
   return `<strong>${t("admin.pricing.openrouterStatus", { status: escapeHtml(status) })}</strong><span>${t("admin.pricing.openrouterDetail", { count, fetched: escapeHtml(fetchedAt), expires: escapeHtml(expiresAt) })}${error}</span>`;
@@ -983,18 +989,13 @@ function renderRanking(data) {
       <td>
         <div class="row-actions">
           <button type="button" class="link-button" data-expand-ranking-row="${escapeHtml(key)}">${expanded ? t("admin.usage.collapseRow") : t("admin.usage.expandRow")}</button>
-          <button type="button" class="link-button" data-ranking-detail="${escapeHtml(item.participantId)}">${t("admin.usage.viewDetail")}</button>
+          <a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${t("admin.usage.viewProfile")}</a>
         </div>
       </td>
     </tr>
     ${expanded ? `<tr class="expanded-row"><td colspan="8">${renderExpandedUsage(item)}</td></tr>` : ""}`;
     })
     .join("");
-  rankingTbody.querySelectorAll("[data-ranking-detail]").forEach((button) => {
-    button.addEventListener("click", () => {
-      loadDetail(button.dataset.rankingDetail);
-    });
-  });
   rankingTbody.querySelectorAll("[data-expand-ranking-row]").forEach((button) => {
     button.addEventListener("click", () => {
       state.expandedRankingKey = state.expandedRankingKey === button.dataset.expandRankingRow ? "" : button.dataset.expandRankingRow;
@@ -1024,7 +1025,7 @@ function render(items) {
         <td>
           <div class="row-actions">
             <button type="button" class="link-button" data-expand-row="${escapeHtml(key)}">${expanded ? t("admin.usage.collapseRow") : t("admin.usage.expandRow")}</button>
-            <button type="button" class="link-button" data-usage-detail="${escapeHtml(item.participantId)}" data-period-start="${escapeHtml(item.periodStart)}" data-period-end="${escapeHtml(item.periodEnd)}">${t("admin.usage.viewDetail")}</button>
+            <a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${t("admin.usage.viewProfile")}</a>
           </div>
         </td>
       </tr>
@@ -1033,14 +1034,6 @@ function render(items) {
       </td></tr>` : ""}`;
     })
     .join("");
-  tbody.querySelectorAll("[data-usage-detail]").forEach((button) => {
-    button.addEventListener("click", () => {
-      loadDetail(button.dataset.usageDetail, {
-        start: button.dataset.periodStart,
-        end: button.dataset.periodEnd
-      });
-    });
-  });
   tbody.querySelectorAll("[data-expand-row]").forEach((button) => {
     button.addEventListener("click", () => {
       state.expandedUsageKey = state.expandedUsageKey === button.dataset.expandRow ? "" : button.dataset.expandRow;
@@ -1073,43 +1066,6 @@ async function deleteParticipantData(participantId, nickname, { statusElement = 
     : t("admin.usage.noData", { label });
 }
 
-async function loadDetail(participantId, rowRange = null) {
-  if (detailCloseTimer) clearTimeout(detailCloseTimer);
-  detailTrigger = document.activeElement;
-  detailBoard.hidden = false;
-  detailBackdrop.hidden = false;
-  requestAnimationFrame(() => {
-    detailBoard.classList.add("is-open");
-    detailBackdrop.classList.add("is-open");
-    document.body.classList.add("detail-open");
-    document.querySelector("#close-admin-detail")?.focus({ preventScroll: true });
-  });
-  document.querySelector("#detail-status").textContent = t("admin.loading");
-  const detailRange = normalizeDetailRange(rowRange);
-  const response = await fetchAdmin(`/api/admin/participants/${encodeURIComponent(participantId)}?${detailQueryString(detailRange)}`);
-  const detail = await response.json();
-  const detailLabel = detailRange ? formatPeriodRange(detailRange.start, detailRange.end) : selectedRange().label;
-  document.querySelector("#detail-title").textContent = `${detail.nickname} · ${detailLabel}`;
-  document.querySelector("#detail-status").textContent = `${formatPeriodRange(detail.from, detail.to)} · ${state.grain} ${t("admin.detail.grain")} · ${detail.rows?.length || 0} ${t("admin.detail.rawRows")}`;
-  document.querySelector("#detail-summary").innerHTML = renderDetailSummary(detail);
-  document.querySelector("#detail-composition").innerHTML = renderCompositionBlock(detail);
-  document.querySelector("#detail-workdirs").innerHTML = renderBars(detail.workdirs);
-  document.querySelector("#detail-days").innerHTML = renderBars((detail.periodRows || []).map((item) => ({ ...item, name: formatPeriod(item) })));
-  document.querySelector("#detail-rows").innerHTML = detail.rows
-    .map((row) => `<tr>
-      <td>${escapeHtml(row.day)}</td>
-      <td>${escapeHtml(row.workdirDisplayName)}</td>
-      <td>${escapeHtml(row.model)}</td>
-      <td class="tokens" title="${formatTokenRaw(row.totalTokens)}">${renderAccountingToken(row.totalTokens, row.estimatedCostUsd)}</td>
-      <td class="tokens" title="${formatTokenRaw(row.inputTokens)}">${renderAccountingToken(row.inputTokens, row.inputCostUsd)}</td>
-      <td class="tokens" title="${formatTokenRaw(row.outputTokens)}">${renderAccountingToken(row.outputTokens, row.outputCostUsd)}</td>
-      <td class="tokens" title="${formatTokenRaw((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0))}">${renderAccountingToken((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0), sumKnownCosts(row.cacheReadCostUsd, row.cacheWriteCostUsd))}</td>
-      <td class="tokens" title="${formatTokenRaw(row.reasoningTokens)}">${renderAccountingToken(row.reasoningTokens, row.reasoningCostUsd)}</td>
-      ${state.showCost ? `<td>${escapeHtml(localizedCostQualityLabel(row.costQuality))}</td>` : ""}
-      <td>${renderQuality(row.sourceQuality)}</td>
-    </tr>`)
-    .join("");
-}
 
 function activeAdminTab() {
   return document.querySelector("[data-admin-tab].active")?.dataset.adminTab || "usage";
@@ -1259,12 +1215,12 @@ function renderSourceTrends(sources, data) {
     return;
   }
   const maxTokens = Math.max(...trendSources.flatMap((item) => item.trend.map((point) => Number(point.totalTokens) || 0)), 0);
-  container.innerHTML = trendSources.map((item) => renderSourceTrendFacet(item, maxTokens)).join("");
+  container.innerHTML = trendSources.map((item, sourceIndex) => renderSourceTrendFacet(item, maxTokens, sourceIndex)).join("");
   bindSourceTrendTooltips(container);
 }
 
-function renderSourceTrendFacet(source, maxTokens) {
-  const color = providerSourceColor(source.name, 0);
+function renderSourceTrendFacet(source, maxTokens, sourceIndex) {
+  const color = rankSeriesColor(sourceIndex);
   const width = 320;
   const height = 64;
   const pad = { top: 7, right: 5, bottom: 8, left: 5 };
@@ -1349,9 +1305,9 @@ function renderSourceTable(sources) {
     tableBody.innerHTML = `<tr><td class="empty" colspan="5">${t("admin.sources.empty")}</td></tr>`;
     return;
   }
-  tableBody.innerHTML = sources.map((item) => {
+  tableBody.innerHTML = sources.map((item, sourceIndex) => {
     const label = escapeHtml(sourceName(item.name));
-    const color = providerSourceColor(item.name, 0);
+    const color = rankSeriesColor(sourceIndex);
     const peakTitle = item.peakDay ? `${item.peakDay.day} · ${formatTokenRaw(item.peakDay.totalTokens)}` : "";
     return `<tr>
       <td><span class="source-cell"><i class="swatch" style="background:${color}"></i><strong title="${escapeHtml(item.name)}">${label}</strong></span></td>
@@ -1370,20 +1326,6 @@ function renderSourceTable(sources) {
   }).join("");
 }
 
-function closeDetail() {
-  detailBoard.classList.remove("is-open");
-  detailBackdrop.classList.remove("is-open");
-  document.body.classList.remove("detail-open");
-  if (detailBoard.hidden) return;
-  detailCloseTimer = setTimeout(() => {
-    detailBoard.hidden = true;
-    detailBackdrop.hidden = true;
-    if (detailTrigger && typeof detailTrigger.focus === "function") {
-      detailTrigger.focus({ preventScroll: true });
-    }
-    detailTrigger = null;
-  }, 180);
-}
 
 function queryString() {
   const params = new URLSearchParams({
@@ -1510,29 +1452,7 @@ function bindCostQualityActions(root) {
 
 document.querySelector("#admin-cost-status")?.addEventListener("click", openPricingMissingTasks);
 
-function detailQueryString(rowRange = null) {
-  const params = new URLSearchParams({
-    grain: state.grain,
-    range: rowRange ? "custom" : state.range
-  });
-  if (state.showCost) params.set("includeCost", "1");
-  if (rowRange) {
-    params.set("start", rowRange.start);
-    params.set("end", rowRange.end);
-  } else if (state.range === "custom") {
-    if (state.start) params.set("start", state.start);
-    if (state.end) params.set("end", state.end);
-  }
-  return params.toString();
-}
 
-function normalizeDetailRange(rowRange) {
-  if (!rowRange?.start || !rowRange?.end) return null;
-  return {
-    start: rowRange.start,
-    end: rowRange.end
-  };
-}
 
 function qualityQueryString() {
   const params = new URLSearchParams({ range: state.range });
@@ -1712,18 +1632,6 @@ function renderExpandedUsage(item) {
   </div>`;
 }
 
-function renderDetailSummary(detail) {
-  const items = [
-    [t("admin.detail.total"), formatToken(detail.totalTokens), formatTokenRaw(detail.totalTokens)],
-    [t("admin.detail.workdirs"), String(detail.workdirs?.length || 0)],
-    [t("admin.detail.models"), String(detail.models?.length || 0)]
-  ];
-  if (state.showCost) items.push([t("admin.detail.estCost"), renderCost(detail), costTitle(detail)]);
-  return items.map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}>
-    <span>${escapeHtml(label)}</span>
-    <strong class="${summaryValueClass(value)}">${value}</strong>
-  </article>`).join("");
-}
 
 function renderCompositionBlock(item) {
   const rows = tokenCompositionDetails(item)
@@ -1947,10 +1855,6 @@ function formatPeriod(item) {
   return item.periodStart === item.periodEnd ? item.periodStart : `${item.periodStart} - ${item.periodEnd}`;
 }
 
-function formatPeriodRange(from, to) {
-  if (!from && !to) return "-";
-  return from === to ? from : t("common.dateRange", { from, to });
-}
 
 function formatNumber(value) {
   return new Intl.NumberFormat().format(value || 0);

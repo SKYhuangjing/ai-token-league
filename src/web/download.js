@@ -1,13 +1,14 @@
-import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import "/theme-switcher.js";
 import { formatTokenCompact } from "/shared/display.js";
 import { parseLatestChangelog } from "/shared/changelog.js";
 import {
   escapeHtml, escapeAttribute, sourceName, formatCost, formatTokenRaw,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
   renderModelSegments, renderCost, renderTrendChart,
-  renderBarChart, renderDonutChart, renderActivityHeatmap, renderParticipantTreemap,
-  providerSourceColor
+  renderBarChart, renderDonutChart, renderActivityHeatmap, renderParticipantTreemap
 } from "/shared/chart-helpers.js";
+import { initPublicNavProfile, rememberProfileId } from "/public-nav-profile.js";
 
 initI18n();
 
@@ -44,8 +45,13 @@ function renderAuthFallback(selector) {
     const peakEl = document.querySelector("#home-trend-peak");
     if (peakEl) {
       peakEl.hidden = true;
-      peakEl.textContent = "";
+      peakEl.innerHTML = "";
       peakEl.removeAttribute("title");
+    }
+    const onlineEl = document.querySelector("#home-trend-online");
+    if (onlineEl) {
+      onlineEl.hidden = true;
+      onlineEl.innerHTML = "";
     }
   }
 }
@@ -110,8 +116,10 @@ function renderDelta(elId, current, previous) {
     return;
   }
   const pct = Math.round(((cur - prev) / prev) * 100);
-  const up = pct > 0;
-  el.textContent = `${up ? "+" : ""}${pct}%`;
+  // cur > 0 can still round to -100%, which reads as "dropped to zero"; clamp it.
+  const clamped = cur > 0 && pct === -100 ? -99 : pct;
+  const up = clamped > 0;
+  el.textContent = `${up ? "+" : ""}${clamped}%`;
   el.className = `delta ${up ? "up" : "down"}`;
   el.hidden = false;
 }
@@ -149,10 +157,15 @@ function renderHomeTrendPeak(series = [], grain = "day") {
       activePeak = { ...point, activeCount };
     }
   }
+  const onlineEl = document.querySelector("#home-trend-online");
   if (!tokenPeak || !(tokenPeak.totalTokens > 0)) {
     peakEl.hidden = true;
-    peakEl.textContent = "";
+    peakEl.innerHTML = "";
     peakEl.removeAttribute("title");
+    if (onlineEl) {
+      onlineEl.hidden = true;
+      onlineEl.innerHTML = "";
+    }
     return;
   }
   const tokenDay = formatTrendPeakLabel(tokenPeak, grain);
@@ -160,15 +173,22 @@ function renderHomeTrendPeak(series = [], grain = "day") {
   const activeCount = Number(activePeak?.activeCount || 0);
   const activeDay = activeCount > 0 ? formatTrendPeakLabel(activePeak, grain) : "";
   peakEl.hidden = false;
-  peakEl.textContent = activeCount > 0
-    ? t("web.home.trendPeakWithActive", { day: tokenDay, value, activeDay, active: activeCount })
-    : t("web.home.trendPeak", { day: tokenDay, value });
+  peakEl.innerHTML = `${escapeHtml(t("common.peak") || "峰值")} <em>${escapeHtml(tokenDay)} · ${escapeHtml(value)}</em>`;
   peakEl.title = t("web.home.trendPeakTitle", {
     day: tokenDay,
     value,
     activeDay: activeDay || "-",
     active: activeCount || "-"
   });
+  if (onlineEl) {
+    if (activeCount > 0 && activeDay) {
+      onlineEl.hidden = false;
+      onlineEl.innerHTML = `${escapeHtml(t("web.home.onlineLabel") || "最高在线")} <em>${escapeHtml(activeDay)} · ${escapeHtml(String(activeCount))}</em>`;
+    } else {
+      onlineEl.hidden = true;
+      onlineEl.innerHTML = "";
+    }
+  }
 }
 
 function formatTrendPeakLabel(point = {}, grain = "day") {
@@ -221,8 +241,7 @@ function homeRenderParticipantTreemap() {
   renderParticipantTreemap(svg, labels, state.analyticsData?.participantRanking || [], {
     localeTokenCompact,
     tooltip: document.querySelector("#chart-tooltip"),
-    sideContainer: document.querySelector("#home-treemap-side"),
-    legendContainer: document.querySelector("#home-treemap-legend")
+    sideContainer: document.querySelector("#home-treemap-side")
   });
 }
 
@@ -238,6 +257,7 @@ function renderHomeParticipantTreemapFallback() {
 const HOME_TOP_LIMIT = 5;
 
 function profileUrl(displayId) {
+  rememberProfileId(displayId);
   return `/profile.html?id=${encodeURIComponent(displayId)}`;
 }
 
@@ -298,41 +318,21 @@ function renderSourceTop(sources = []) {
   }
   el.innerHTML = blocks
     .map((source) => {
-      const sourceTotal = Number(source.totalTokens || 0);
-      const barColor = providerSourceColor(source.name);
+      const count = Number(source.participantCount || 0);
       const rows = (source.items || [])
-        .map((item) => {
-          const share = sourceTotal > 0
-            ? Math.max(6, (Number(item.totalTokens || 0) / sourceTotal) * 100)
-            : 0;
-          const rank = Number(item.rank) || 0;
-          const rankClass = rank >= 1 && rank <= 3 ? ` is-rank-${rank}` : "";
-          const avatar = item.avatarColor
-            ? `<i class="source-top-avatar" style="background:${escapeAttribute(item.avatarColor)}"></i>`
-            : "";
-          const medalIcon = rank >= 1 && rank <= 3
-            ? `<span class="source-top-medal-icon medal-icon-${rank}">${rankIconSvg(rank)}</span>`
-            : "";
+        .map((item, index) => {
           const displayIdAttr = item.displayId ? ` data-display-id="${escapeHtml(item.displayId)}"` : "";
-          return `<article class="top-row${rankClass}"${displayIdAttr} data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
-            <span class="rank-badge rank-badge-${rank}">${medalIcon}<span class="n">${rank || ""}</span></span>
-            <span class="nm">${avatar}${escapeHtml(item.displayName || "")}</span>
-            <span class="tv" title="${escapeHtml(formatTokenRaw(item.totalTokens))}">${localeTokenCompact(item.totalTokens)}</span>
-            <div class="mini-bar"><i style="width:${share}%;background:${barColor}"></i></div>
-          </article>`;
+          return `<li${displayIdAttr} data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
+            <span class="source-top-row-name">${String(index + 1).padStart(2, "0")} · ${escapeHtml(item.displayName || "")}</span>
+            <b title="${escapeHtml(formatTokenRaw(item.totalTokens))}">${localeTokenCompact(item.totalTokens)}</b>
+          </li>`;
         })
         .join("");
-      const count = Number(source.participantCount || 0);
       return `<div class="source-top-block">
-        <div class="source-top-head">
-          <span class="source-top-title">
-            <i class="source-top-dot" style="background:${barColor}"></i>
-            <span class="source-top-name">${escapeHtml(sourceName(source.name))}</span>
-          </span>
-          <span class="source-top-total" title="${escapeHtml(formatTokenRaw(sourceTotal))}">${localeTokenCompact(sourceTotal)}</span>
-        </div>
-        <div class="source-top-sub">${escapeHtml(t("web.home.sourceTopParticipantCount", { count, plural: count === 1 ? "" : "s" }))}</div>
-        <div class="source-top-rows">${rows}</div>
+        <h3 class="source-top-name">${escapeHtml(sourceName(source.name))}</h3>
+        <strong class="source-top-total" title="${escapeHtml(formatTokenRaw(Number(source.totalTokens || 0)))}">${localeTokenCompact(Number(source.totalTokens || 0))}</strong>
+        <p class="source-top-sub">${escapeHtml(t("web.home.sourceTopParticipantCount", { count, plural: count === 1 ? "" : "s" }))}</p>
+        <ol class="source-top-rows">${rows}</ol>
       </div>`;
     })
     .join("");
@@ -537,13 +537,19 @@ const SECTION_CLASS = {
   "新增": "cl-added", "变更": "cl-changed", "修复": "cl-fixed"
 };
 
+// Changelog items carry inline markdown from CHANGELOG.md; render `code`
+// spans as real <code> after escaping so no other markdown leaks through.
+function formatChangelogText(text) {
+  return escapeHtml(text).replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
 function renderChangelog({ version, date, sections }) {
   if (changelogSectionEl) changelogSectionEl.hidden = false;
   if (changelogVersionEl) changelogVersionEl.textContent = `v${version} · ${date}`;
   changelogBodyEl.innerHTML = sections.map(sec =>
     `<div class="cl-group ${SECTION_CLASS[sec.heading] || ""}">
       <h3>${escapeHtml(sec.heading)}</h3>
-      <ul>${sec.items.map(item => `<li><span class="cl-badge cl-badge-${badgeClass(item.tag)}">${escapeHtml(item.tag)}</span>${escapeHtml(item.text)}</li>`).join("")}</ul>
+      <ul>${sec.items.map(item => `<li><span class="cl-badge cl-badge-${badgeClass(item.tag)}">${escapeHtml(item.tag)}</span>${formatChangelogText(item.text)}</li>`).join("")}</ul>
     </div>`
   ).join("");
 }
@@ -625,10 +631,10 @@ async function loadLeaderboard() {
 
 const langContainer = document.querySelector("#lang-switcher-container");
 if (langContainer) {
-  langContainer.innerHTML = createLangSwitcher();
-  bindLangSwitcher("lang-switcher", () => { window.location.reload(); });
+  mountLangSwitcher(langContainer, () => { window.location.reload(); });
 }
 updatePageTranslations();
+initPublicNavProfile().catch(() => {});
 
 async function init() {
   document.body.classList.add("is-refreshing");

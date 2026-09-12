@@ -1,4 +1,5 @@
-import { initI18n, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
+import "/theme-switcher.js";
 import { formatTokenCompact } from "/shared/display.js";
 import {
   escapeHtml, sourceName, formatCost, renderTrendChart as sharedRenderTrendChart,
@@ -8,8 +9,13 @@ import {
   renderActivityHeatmap, aggregateTimeSeriesByWeek,
   renderConcentrationTrend, renderShareAreaStacked, renderCompareBars,
   renderHourClock, renderHourWeekdayMatrix, computeHourlyRhythmStats,
-  renderSourceDonutCard
+  renderSourceDonutCard,
+  THEME_PALETTE
 } from "/shared/chart-helpers.js";
+import {
+  formatPeriodCaption, updatePeriodPillCaptions
+} from "/console-ui.js";
+import { initPublicNavProfile } from "/public-nav-profile.js";
 
 const isEmbedded = window.self !== window.top;
 if (isEmbedded) {
@@ -65,19 +71,13 @@ function setLoading(on) {
   });
   if (!on && shell) {
     if (analyticsSettleTimer) window.clearTimeout(analyticsSettleTimer);
-    shell.classList.remove("is-settled");
-    requestAnimationFrame(() => shell.classList.add("is-settled"));
-    analyticsSettleTimer = window.setTimeout(() => {
-      shell.classList.remove("is-settled");
-      analyticsSettleTimer = null;
-    }, 620);
+    shell.classList.add("is-settled");
   }
 }
 
 const langContainer = document.querySelector("#lang-switcher-container");
 if (langContainer) {
-  langContainer.innerHTML = createLangSwitcher();
-  bindLangSwitcher("lang-switcher", () => {
+  mountLangSwitcher(langContainer, () => {
     window.location.reload();
   });
 }
@@ -110,11 +110,6 @@ document.querySelectorAll("[data-filter='period']").forEach((group) => {
 // Cost KPIs default to visible for internal stats and only hide when the admin
 // cost toggle is explicitly off (admin.js persists "true"/"false").
 if (isEmbedded) {
-  const badge = document.querySelector("#an-scope-badge");
-  if (badge) {
-    badge.setAttribute("data-i18n", "web.analytics.staffStatsBadge");
-    badge.textContent = t("web.analytics.staffStatsBadge");
-  }
   const showCost = localStorage.getItem("ai-token-league.admin.showCost") !== "false";
   document.querySelectorAll(".an-kpi-cost").forEach((card) => { card.hidden = !showCost; });
 }
@@ -136,18 +131,18 @@ async function loadAnalytics() {
     dateRangeEl.textContent = `${state.data.from} - ${state.data.to}`;
   }
 
+  const periodMeta = {
+    from: state.data.from || "",
+    to: state.data.to || "",
+    businessDay: state.data.businessDay || ""
+  };
+  updatePeriodPillCaptions(document, periodMeta);
+  const periodLabel = document.querySelector("#analytics-period-label");
+  if (periodLabel) periodLabel.textContent = formatPeriodCaption(state.period, periodMeta);
+
   const trendMeta = document.querySelector("#trend-meta");
   if (trendMeta) {
-    const periodLabels = {
-      today: "web.period.today",
-      yesterday: "web.period.yesterday",
-      this_week: "web.period.thisWeek",
-      last_week: "web.period.lastWeek",
-      this_month: "web.period.thisMonth",
-      last_month: "web.period.lastMonth",
-      all: "web.period.all"
-    };
-    trendMeta.textContent = t(periodLabels[state.period] || "web.analytics.burnTrend");
+    trendMeta.textContent = formatPeriodCaption(state.period, periodMeta);
   }
 
   renderKPIs();
@@ -203,9 +198,30 @@ function renderTrendChart() {
   const isAllPeriod = state.period === "all";
   const series = isAllPeriod ? aggregateTimeSeriesByWeek(dailySeries) : dailySeries;
   const grain = isAllPeriod ? "week" : (state.data.timeGrain || "day");
+  // Render at the frame's real box so the chart fills the stretched card
+  // without preserveAspectRatio="none" distorting text and dots.
+  const frame = svg.closest(".chart-frame") || svg.parentElement;
+  const box = frame ? frame.getBoundingClientRect() : { width: 0, height: 0 };
   sharedRenderTrendChart(svg, series, grain, tooltip, localeTokenCompact, {
-    showActiveSeries: true
+    showActiveSeries: true,
+    width: Math.max(320, Math.round(box.width)),
+    height: Math.max(180, Math.round(box.height))
   });
+}
+
+// The trend card is stretched by the an-main grid, so its frame box changes
+// with the composition card and the viewport; re-render at the real size.
+if ("ResizeObserver" in window) {
+  const trendFrame = document.querySelector("#trend-chart")?.closest(".chart-frame");
+  let lastTrendBox = "";
+  new ResizeObserver(() => {
+    if (!trendFrame) return;
+    const box = trendFrame.getBoundingClientRect();
+    const key = `${Math.round(box.width)}x${Math.round(box.height)}`;
+    if (key === lastTrendBox) return;
+    lastTrendBox = key;
+    renderTrendChart();
+  }).observe(trendFrame);
 }
 
 function renderBarCharts() {
@@ -230,21 +246,20 @@ function renderParticipantTreemapPanel() {
     {
       localeTokenCompact,
       tooltip: document.querySelector("#chart-tooltip"),
-      sideContainer: document.querySelector("#treemap-side"),
-      legendContainer: document.querySelector("#treemap-legend")
+      sideContainer: document.querySelector("#treemap-side")
     }
   );
 }
 
-const SHARE_TREND_LEGEND_COLORS = ["#087f79", "#b67810", "#466cae", "#76558f", "#6b5b95"];
-
 function renderShareTrendLegend(container, series = []) {
   if (!container) return;
+  const palette = THEME_PALETTE.theme.trend;
   container.innerHTML = series
     .map((row, index) => {
-      const color = row.other ? "#b5aea0" : SHARE_TREND_LEGEND_COLORS[index % SHARE_TREND_LEGEND_COLORS.length];
+      const color = row.other ? THEME_PALETTE.theme.rankOther : palette[index % palette.length];
+      const swatch = row.other ? `background:${color};opacity:0.55` : `background:${color}`;
       const label = row.other ? t("web.analytics.otherShare") : row.name;
-      return `<span><i style="background:${color}"></i><span title="${escapeHtml(label)}">${escapeHtml(String(label))}</span></span>`;
+      return `<span><i style="${swatch}"></i><span title="${escapeHtml(label)}">${escapeHtml(String(label))}</span></span>`;
     })
     .join("");
 }
@@ -259,9 +274,9 @@ function renderConcentrationTrendCard() {
   const legend = document.querySelector("#concentration-legend");
   if (legend) {
     legend.innerHTML = [
-      ["#b67810", "web.analytics.concentrationTop1"],
-      ["#087f79", "web.analytics.concentrationTop5"],
-      ["#9a9488", "web.analytics.concentrationTop10"]
+      [THEME_PALETTE.theme.concentration[0], "web.analytics.concentrationTop1"],
+      [THEME_PALETTE.theme.concentration[1], "web.analytics.concentrationTop5"],
+      [THEME_PALETTE.theme.concentration[2], "web.analytics.concentrationTop10"]
     ].map(([color, key]) => `<span><i style="background:${color}"></i><span>${escapeHtml(t(key))}</span></span>`).join("");
   }
 }
@@ -321,7 +336,14 @@ function renderWorkdirCards() {
     return;
   }
   section.hidden = false;
-  sharedRenderBarChart(document.querySelector("#workdir-chart"), workdirs, { collapseAfter: 6, collapseLabel: t("web.analytics.otherShare"), localeTokenCompact });
+  // Wide (side-by-side) layout shows twice the rows; the stacked single
+  // column keeps the compact top-5. Re-renders when the breakpoint flips.
+  const wideLayout = !window.matchMedia("(max-width: 960px)").matches;
+  sharedRenderBarChart(document.querySelector("#workdir-chart"), workdirs, {
+    collapseAfter: wideLayout ? 11 : 6,
+    collapseLabel: t("web.analytics.otherShare"),
+    localeTokenCompact
+  });
 
   const monthly = state.data?.workdirMonthly || [];
   const months = state.data?.monthlyComposition?.months || [];
@@ -359,6 +381,15 @@ function renderWorkdirCards() {
     prevLabel: label(fromMonth),
     currLabel: label(toMonth)
   });
+}
+
+// The workdir chart's row count tracks the 960px side-by-side/stacked
+// breakpoint; re-render when the viewport crosses it.
+if ("matchMedia" in window) {
+  const wideQuery = window.matchMedia("(max-width: 960px)");
+  const onLayoutFlip = () => renderWorkdirCards();
+  if (wideQuery.addEventListener) wideQuery.addEventListener("change", onLayoutFlip);
+  else if (wideQuery.addListener) wideQuery.addListener(onLayoutFlip);
 }
 
 function renderCompositionTrendCards() {
@@ -490,8 +521,8 @@ function renderKPIs() {
   if (activeCountEl) activeCountEl.textContent = String(activeDevs);
   if (activeSubEl) {
     activeSubEl.textContent = totalParticipants > 0
-      ? `${Math.round((activeDevs / totalParticipants) * 100)}% of ${totalParticipants}`
-      : `${activeDevs} active`;
+      ? t("web.analytics.activeOfTotal", { pct: Math.round((activeDevs / totalParticipants) * 100), count: totalParticipants })
+      : t("web.analytics.activeCount", { count: activeDevs });
   }
 
   // 3. Cache savings & hit rate
@@ -504,7 +535,7 @@ function renderKPIs() {
   const totalCostBeforeSavings = (summary.estimatedCostUsd || 0) + (summary.cacheSavingsUsd || 0);
   const savingsRate = totalCostBeforeSavings > 0 ? (summary.cacheSavingsUsd || 0) / totalCostBeforeSavings : 0;
   const savingsRateEl = document.querySelector("#kpi-savings-rate");
-  if (savingsRateEl) savingsRateEl.textContent = `(${Math.round(savingsRate * 100)}% saved)`;
+  if (savingsRateEl) savingsRateEl.textContent = t("web.analytics.savingsRateSub", { pct: Math.round(savingsRate * 100) });
 
   const unitCost = totalTokens > 0 ? (summary.estimatedCostUsd || 0) / (totalTokens / 100_000_000) : null;
   const unitCostEl = document.querySelector("#kpi-unit-cost");
@@ -521,7 +552,7 @@ function renderKPIs() {
   }
   if (topProviderSubEl) {
     const pct = topProvider ? Math.round((topProvider.ratio || 0) * 100) : 0;
-    topProviderSubEl.textContent = topProvider ? `${pct}% share` : "-";
+    topProviderSubEl.textContent = topProvider ? t("web.analytics.sourceShare", { pct }) : "-";
   }
 
   // 6. Peak Burn Day in period
@@ -536,12 +567,6 @@ function renderKPIs() {
   }
   if (peakDayEl) peakDayEl.textContent = maxDay ? localeTokenCompact(maxDay.totalTokens) : "-";
   if (peakDateEl) peakDateEl.textContent = maxDay ? (maxDay.day || maxDay.label || "-") : "-";
-
-  // Live Summary
-  const liveSummaryEl = document.querySelector("#an-live-summary");
-  if (liveSummaryEl) {
-    liveSummaryEl.textContent = `${activeDevs} active · ${localeTokenCompact(totalTokens)} burned`;
-  }
 }
 
 function renderHeatmap() {
@@ -577,4 +602,5 @@ async function init() {
   }
 }
 
+initPublicNavProfile().catch(() => {});
 init().catch(err => console.error("Init failed:", err));

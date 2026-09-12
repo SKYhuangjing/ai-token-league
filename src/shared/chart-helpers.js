@@ -1,32 +1,126 @@
 import { t } from "./i18n.js";
 import { formatTokenCompact } from "./display.js";
 
-const TREEMAP_MIN_PARTICIPANTS = 12;
-const TREEMAP_MAX_PARTICIPANTS = 30;
+const TREEMAP_DISPLAY_COUNT = 18;
 
 const SOURCE_PALETTE = {
-  claude_code_local: { base: "#1f6f66", alt: "#2a8a80", light: "#3d9e93" },
-  codex_local: { base: "#b67810", alt: "#c9922e", light: "#d4a84a" },
-  cursor_dashboard_usage: { base: "#6b5b95", alt: "#8574ad", light: "#9d8fc4" },
-  opencode_local: { base: "#34558b", alt: "#4a6fa5", light: "#6b8dbd" },
-  mimocode_local: { base: "#a63d40", alt: "#bd5a5d", light: "#d08083" },
-  hermes_local: { base: "#6b7a3f", alt: "#83934f", light: "#a0af70" },
-  openclaw_local: { base: "#c96a2b", alt: "#d6823f", light: "#e39b60" },
-  zcode_local: { base: "#4a4e8f", alt: "#63679e", light: "#8286b8" },
-  workbuddy_local: { base: "#a84a7c", alt: "#b96891", light: "#cb87a8" },
-  dsh_local: { base: "#2a6f8f", alt: "#3d87a8", light: "#5b9dbd" },
-  kimi_local: { base: "#1f6f5c", alt: "#358a74", light: "#5aa892" },
-  other: { base: "#8a8478", alt: "#9a9488", light: "#b5aea0" }
+  claude_code_local: { base: "#b4552f", alt: "#c46b45", light: "#d98d68" },
+  codex_local: { base: "#cf6a42", alt: "#d9845f", light: "#e3a07e" },
+  cursor_dashboard_usage: { base: "#9a8f7d", alt: "#b0a693", light: "#c8bfb0" },
+  opencode_local: { base: "#c2a05a", alt: "#cfb279", light: "#ddc79c" },
+  mimocode_local: { base: "#a14d3d", alt: "#b4675a", light: "#c98b80" },
+  hermes_local: { base: "#6d6a5e", alt: "#848174", light: "#a09d8f" },
+  openclaw_local: { base: "#7a6a55", alt: "#90806b", light: "#a89a86" },
+  zcode_local: { base: "#8f7a45", alt: "#a3905c", light: "#b6a878" },
+  workbuddy_local: { base: "#a67a5b", alt: "#b89276", light: "#cbad96" },
+  dsh_local: { base: "#b08968", alt: "#c09d7e", light: "#d0b394" },
+  kimi_local: { base: "#8b7355", alt: "#a08a6c", light: "#b7a48c" },
+  other: { base: "#b5aea0", alt: "#c4bcae", light: "#d6cec2" }
 };
 
-// Single source of truth for the four token composition segment colors.
-// Labels are i18n keys so callers resolve them with their own t().
+// Token composition: single green-hue ramp (Arena grammar).
+// ── Theme palette:reads the CSS "THEME SWITCH POINT" tokens once per page
+// load (with literal fallbacks so tests / non-DOM environments keep working).
+// Switching the site color scheme = editing that one CSS block; every chart
+// below follows automatically. ──
+const THEME_FALLBACK = {
+  accent: "#cf6a42",
+  accentInk: "#b4552f",
+  accent2: "#2c796c",
+  accent3: "#c5a359",
+  rankOther: "#92958d",
+  accentTriple: "207, 106, 66",
+  comp: ["#b4552f", "#cf6a42", "#e0956b", "#f2ddcd"],
+  tm2: "#d9a55c",
+  trend4: "#8b7355",
+  trend5: "#d9a55c",
+  trend6: "#6d6a5e",
+  trend7: "#9a8f7d",
+  avatar: ["#cf6a42", "#8b7355", "#b4552f", "#9a8f7d", "#c2a05a", "#7a6a55"],
+  heat: "207, 106, 66",
+  night: "#c9c4ba"
+};
+
+let THEME_CACHE = null;
+
+function theme() {
+  if (THEME_CACHE) return THEME_CACHE;
+  let rootStyle = null;
+  try {
+    if (typeof document !== "undefined") {
+      rootStyle = getComputedStyle(document.documentElement);
+    }
+  } catch (error) {
+    rootStyle = null;
+  }
+  const read = (name, fallback) => {
+    try {
+      const value = rootStyle ? rootStyle.getPropertyValue(name).trim() : "";
+      return value || fallback;
+    } catch (error) {
+      return fallback;
+    }
+  };
+  const palette = {
+    accent: read("--accent", THEME_FALLBACK.accent),
+    accentInk: read("--accent-ink", THEME_FALLBACK.accentInk),
+    accent2: read("--accent-2", THEME_FALLBACK.accent2),
+    accent3: read("--accent-3", THEME_FALLBACK.accent3),
+    rankOther: read("--rank-other", THEME_FALLBACK.rankOther),
+    accentTriple: read("--accent-triple", THEME_FALLBACK.accentTriple),
+    comp: [
+      read("--comp-1", THEME_FALLBACK.comp[0]),
+      read("--comp-2", THEME_FALLBACK.comp[1]),
+      read("--comp-3", THEME_FALLBACK.comp[2]),
+      read("--comp-4", THEME_FALLBACK.comp[3])
+    ],
+    tm2: read("--tm-2", THEME_FALLBACK.tm2),
+    avatar: THEME_FALLBACK.avatar,
+    heat: read("--heat", THEME_FALLBACK.heat),
+    night: read("--night", THEME_FALLBACK.night)
+  };
+  palette.rank = [palette.accent, palette.accent2, palette.accent3];
+  palette.concentration = [palette.accentInk, palette.accent, `rgba(${palette.accentTriple}, 0.45)`];
+  // 7 entries: monthlyNamedSeries names up to 8 series (top 6 + dominant-era
+  // adds). Follows the rank colour language (orange / green / gold) then the
+  // trend ramp tokens so a theme switch propagates; "other" is drawn
+  // separately from rankOther with lower opacity.
+  palette.trend = [
+    palette.accent,
+    palette.accent2,
+    palette.accent3,
+    read("--trend-4", THEME_FALLBACK.trend4),
+    read("--trend-5", THEME_FALLBACK.trend5),
+    read("--trend-6", THEME_FALLBACK.trend6),
+    read("--trend-7", THEME_FALLBACK.trend7)
+  ];
+  palette.treemap = [
+    { fill: palette.rank[0], dark: false },
+    { fill: palette.tm2, dark: true },
+    { fill: palette.accent2, dark: false }
+  ];
+  THEME_CACHE = palette;
+  return palette;
+}
+
+export const THEME_PALETTE = { get theme() { return theme(); } };
+
 export const COMPOSITION_PARTS = [
-  { key: "inputTokens", labelKey: "common.input", color: "#0f4f4c" },
-  { key: "outputTokens", labelKey: "common.output", color: "#1c7570" },
-  { key: "cacheReadTokens", labelKey: "common.cacheRead", color: "#35aaa0" },
-  { key: "cacheWriteTokens", labelKey: "common.cacheWrite", color: "#8fddd4" }
+  { key: "inputTokens", labelKey: "common.input", color: theme().comp[0] },
+  { key: "outputTokens", labelKey: "common.output", color: theme().comp[1] },
+  { key: "cacheReadTokens", labelKey: "common.cacheRead", color: theme().comp[2] },
+  { key: "cacheWriteTokens", labelKey: "common.cacheWrite", color: theme().comp[3] }
 ];
+
+const AVATAR_WARM_COLORS = ["#cf6a42", "#8b7355", "#b4552f", "#9a8f7d", "#c2a05a", "#7a6a55"];
+
+// Warm deterministic avatar dot color; replaces the legacy cool/purple hash palette.
+export function warmAvatarColor(id = "") {
+  const text = String(id || "");
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  return AVATAR_WARM_COLORS[hash % AVATAR_WARM_COLORS.length];
+}
 
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -55,6 +149,19 @@ export function providerSourceKey(providerId = "") {
   if (SOURCE_PALETTE[providerId]) return providerId;
   return "other";
 }
+
+// Rank series: colors encode the size rank of the current data (demo grammar),
+// not the source identity. 1st = brand orange, 2nd = deep teal, 3rd = gold, rest = gray.
+export function rankSeriesColor(index = 0) {
+  const palette = theme();
+  return index >= 0 && index < palette.rank.length ? palette.rank[index] : palette.rankOther;
+}
+
+// Treemap tiers by usage rank; the tail fades into warm orange tints.
+function treemapTiers() {
+  return theme().treemap;
+}
+const TREEMAP_OTHER_FILL = () => theme().rankOther;
 
 export function providerSourceColor(providerId = "", variant = 0) {
   const key = providerSourceKey(providerId);
@@ -194,10 +301,10 @@ export function renderSourceLegend(container) {
   if (!container) return;
   container.innerHTML = `
     <div class="src-legend">
-      <span><i style="background:${SOURCE_PALETTE.claude_code_local.base}"></i>${escapeHtml(sourceName("claude_code_local"))}</span>
-      <span><i style="background:${SOURCE_PALETTE.codex_local.base}"></i>${escapeHtml(sourceName("codex_local"))}</span>
-      <span><i style="background:${SOURCE_PALETTE.cursor_dashboard_usage.base}"></i>${escapeHtml(sourceName("cursor_dashboard_usage"))}</span>
-      <span><i style="background:${SOURCE_PALETTE.other.base}"></i>${escapeHtml(t("web.analytics.otherSources"))}</span>
+      <span><i style="background:${THEME_PALETTE.theme.rank[0]}"></i>${escapeHtml(t("web.analytics.rankLegend1"))}</span>
+      <span><i style="background:${THEME_PALETTE.theme.tm2}"></i>${escapeHtml(t("web.analytics.rankLegend2"))}</span>
+      <span><i style="background:${THEME_PALETTE.theme.rank[1]}"></i>${escapeHtml(t("web.analytics.rankLegend3"))}</span>
+      <span><i style="background:${THEME_PALETTE.theme.rankOther}"></i>${escapeHtml(t("web.analytics.rankLegendOther"))}</span>
     </div>
   `;
 }
@@ -357,8 +464,8 @@ export function renderWeekdayRhythm(container, timeSeries = [], { tooltip = null
   });
 }
 
-const SHARE_TREND_PALETTE = ["#087f79", "#b67810", "#466cae", "#76558f", "#6b5b95"];
-const SHARE_TREND_OTHER_COLOR = "#b5aea0";
+const SHARE_TREND_PALETTE = theme().trend;
+const SHARE_TREND_OTHER_COLOR = theme().rankOther;
 
 // Adaptive viewBox height for card charts: measure the chart frame's real box
 // (grid rows stretch cards to the tallest sibling) so the drawing fills the
@@ -430,7 +537,12 @@ export function renderShareAreaStacked(svg, months = [], series = [], { tooltip 
   });
   const lowerLine = (seriesIndex) => (seriesIndex === 0 ? months.map(() => 0) : cumulative[seriesIndex - 1]);
 
+  // 参考树图块的圆角:色带整体裁进圆角绘图区,四个角不再尖锐
+  let clipSeq = Number(svg.dataset.stClipSeq || 0) + 1;
+  svg.dataset.stClipSeq = String(clipSeq);
+  const clipId = `st-rounded-clip-${svg.id || clipSeq}-${clipSeq}`;
   const parts = [];
+  const bandParts = [];
   parts.push(`<g class="st-grid">`);
   for (let pct = 0; pct <= 100; pct += 25) {
     const y = yAt(pct / 100);
@@ -444,8 +556,10 @@ export function renderShareAreaStacked(svg, months = [], series = [], { tooltip 
     const topPts = upper.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`);
     const bottomPts = lower.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`).reverse();
     const color = row.other ? SHARE_TREND_OTHER_COLOR : SHARE_TREND_PALETTE[seriesIndex % SHARE_TREND_PALETTE.length];
-    parts.push(`<path class="sa-band" d="M ${topPts.join(" L ")} L ${bottomPts.join(" L ")} Z" fill="${color}" fill-opacity="${row.other ? 0.55 : 0.8}" stroke="${color}" stroke-opacity="0.5" stroke-width="0.6"></path>`);
+    bandParts.push(`<path class="sa-band" d="M ${topPts.join(" L ")} L ${bottomPts.join(" L ")} Z" fill="${color}" fill-opacity="${row.other ? 0.55 : 0.8}" stroke="${color}" stroke-opacity="0.5" stroke-width="0.6"></path>`);
   });
+  parts.push(`<clipPath id="${clipId}"><rect x="${padLeft}" y="${padTop}" width="${plotW}" height="${plotH}" rx="8" ry="8"></rect></clipPath>`);
+  parts.push(`<g clip-path="url(#${clipId})">${bandParts.join("")}</g>`);
   months.forEach((month, index) => {
     if (n > 8 && index % 2 === 1 && index !== n - 1) return;
     parts.push(`<text x="${xAt(index)}" y="${height - 6}" text-anchor="middle" class="st-axis">${escapeHtml(String(month || "").slice(2).replace("-", "/"))}</text>`);
@@ -511,9 +625,9 @@ export function renderConcentrationTrend(svg, rows = [], { tooltip = null, local
   const xAt = (index) => padLeft + (n === 1 ? plotW / 2 : (plotW * index) / (n - 1));
   const yAt = (pct) => padTop + plotH * (1 - Math.max(0, Math.min(1, pct)));
   const metrics = [
-    { key: "top1Pct", label: t("web.analytics.concentrationTop1"), color: "#b67810", band: false },
-    { key: "top5Pct", label: t("web.analytics.concentrationTop5"), color: "#087f79", band: true, bandFrom: "top1Pct", bandOpacity: 0.22 },
-    { key: "top10Pct", label: t("web.analytics.concentrationTop10"), color: "#087f79", band: true, bandFrom: "top5Pct", bandOpacity: 0.1 }
+    { key: "top1Pct", label: t("web.analytics.concentrationTop1"), color: theme().concentration[0], band: false },
+    { key: "top5Pct", label: t("web.analytics.concentrationTop5"), color: theme().concentration[1], band: true, bandFrom: "top1Pct", bandOpacity: 0.22 },
+    { key: "top10Pct", label: t("web.analytics.concentrationTop10"), color: theme().concentration[2], band: true, bandFrom: "top5Pct", bandOpacity: 0.1 }
   ];
 
   const parts = [];
@@ -621,8 +735,9 @@ export function renderHourClock(svg, items = [], { tooltip = null, localeTokenCo
     const tokens = bucket.totalTokens || 0;
     const radius = tokens > 0 ? rMin + (rMax - rMin) * Math.sqrt(tokens / maxTokens) : rMin + 2;
     const isPeak = bucket.hour === peakHour;
-    const color = isPeak ? "#b67810" : bucket.hour < 6 ? "#b5aea0" : "#087f79";
-    const opacity = tokens > 0 ? (isPeak ? 0.95 : bucket.hour < 6 ? 0.55 : 0.8) : 0.12;
+    const palette = theme();
+    const color = bucket.hour < 6 ? palette.night : palette.accent;
+    const opacity = tokens > 0 ? (isPeak ? 1 : bucket.hour < 6 ? 0.5 : 0.35) : 0.12;
     parts.push(`<path class="hc-sector" data-opacity="${opacity}" d="${sectorPath(bucket.hour, radius)}" fill="${color}" fill-opacity="${opacity}"></path>`);
   }
   for (const hour of [0, 6, 12, 18]) {
@@ -675,7 +790,7 @@ export function renderHourWeekdayMatrix(container, items = [], { tooltip = null,
   let html = `<div class="hw-cols">${Array.from({ length: 25 }, (_, i) => i === 0 ? "<span></span>" : `<span>${i - 1 === 0 || (i - 1) % 3 === 0 ? String(i - 1).padStart(2, "0") : ""}</span>`).join("")}</div>`;
   items.forEach((row, weekdayIndex) => {
     html += `<div class="hw-row"><span class="hw-day">${escapeHtml(weekdayLabels[weekdayIndex])}</span>${row
-      .map((value, hour) => `<i class="hw-cell" data-w="${weekdayIndex}" data-h="${hour}" style="background:rgba(8,127,121,${alpha(value)})"></i>`)
+      .map((value, hour) => `<i class="hw-cell" data-w="${weekdayIndex}" data-h="${hour}" style="background:rgba(${theme().heat},${alpha(value)})"></i>`)
       .join("")}</div>`;
   });
   container.innerHTML = html;
@@ -918,24 +1033,8 @@ function formatMonthDay(day) {
 /** Monotone cubic path through points — smooth, no overshoot (demo-style). */
 export function smoothLinePath(points = []) {
   if (!points.length) return "";
-  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
-  let d = `M ${points[0].x} ${points[0].y}`;
-  for (let i = 0; i < points.length - 1; i++) {
-    const curr = points[i];
-    const next = points[i + 1];
-    const prev = i > 0 ? points[i - 1] : curr;
-    const afterNext = i < points.length - 2 ? points[i + 2] : next;
-    const dx = next.x - curr.x;
-    const dy = next.y - curr.y;
-    const slopeCurr = (next.y - prev.y) / ((next.x - prev.x) || 1);
-    const slopeNext = (afterNext.y - curr.y) / ((afterNext.x - curr.x) || 1);
-    const signCurr = Math.sign(dy) || Math.sign(slopeCurr);
-    const signNext = Math.sign(dy) || Math.sign(slopeNext);
-    const tanCurr = signCurr === Math.sign(slopeCurr) ? slopeCurr : 0;
-    const tanNext = signNext === Math.sign(slopeNext) ? slopeNext : 0;
-    d += ` C ${curr.x + dx / 3} ${curr.y + tanCurr * dx / 3}, ${next.x - dx / 3} ${next.y - tanNext * dx / 3}, ${next.x} ${next.y}`;
-  }
-  return d;
+  // Straight segments through the points (demo grammar).
+  return points.map((pt, index) => `${index === 0 ? "M" : "L"} ${pt.x} ${pt.y}`).join(" ");
 }
 
 export function renderTrendChart(svg, series, grain, tooltip, localeTokenCompact, options = {}) {
@@ -1024,7 +1123,7 @@ export function renderTrendChart(svg, series, grain, tooltip, localeTokenCompact
       activePath.setAttribute("d", smoothLinePath(activePoints));
       activePath.setAttribute("class", "chart-line-active");
       activePath.setAttribute("fill", "none");
-      activePath.setAttribute("stroke", "var(--gold, #b67810)");
+      activePath.setAttribute("stroke", "var(--neutral, #a6aaa3)");
       activePath.setAttribute("stroke-width", "2");
       activePath.setAttribute("stroke-dasharray", "5 4");
       activePath.setAttribute("stroke-linecap", "round");
@@ -1054,19 +1153,23 @@ export function renderTrendChart(svg, series, grain, tooltip, localeTokenCompact
     }
   }
 
-  const peakTokens = highlightPeak
-    ? Math.max(...points.map((pt) => Number(pt.tokens) || 0), 0)
-    : 0;
-  let peakMarked = false;
+  // Demo grammar: no per-point dots — invisible hover targets keep the tooltips,
+  // and a single "current value" dot (panel fill + brand ring) caps the line end.
+  const last = points[points.length - 1];
+  const endDot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  endDot.setAttribute("cx", last.x);
+  endDot.setAttribute("cy", last.y);
+  endDot.setAttribute("r", "5");
+  endDot.setAttribute("class", "chart-dot");
+  svg.appendChild(endDot);
+
   for (const pt of points) {
-    const isPeak = highlightPeak && !peakMarked && peakTokens > 0 && Number(pt.tokens) === peakTokens;
-    if (isPeak) peakMarked = true;
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    circle.setAttribute("cx", pt.x);
-    circle.setAttribute("cy", pt.y);
-    circle.setAttribute("r", isPeak ? "5.5" : grain === "hour" ? "3" : grain === "week" ? "3.5" : "4.5");
-    circle.setAttribute("class", isPeak ? "chart-dot chart-dot-peak" : "chart-dot");
-    circle.addEventListener("mouseenter", () => {
+    const hit = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    hit.setAttribute("cx", pt.x);
+    hit.setAttribute("cy", pt.y);
+    hit.setAttribute("r", "10");
+    hit.setAttribute("fill", "transparent");
+    hit.addEventListener("mouseenter", () => {
       const header = grain === "hour"
         ? `${pt.day} ${pt.label}`
         : grain === "week"
@@ -1076,13 +1179,12 @@ export function renderTrendChart(svg, series, grain, tooltip, localeTokenCompact
       const activeHint = showActiveSeries && seriesPoint.activeCount != null
         ? `<br>${t("web.home.trendLegendActive") || "Active users"}: ${seriesPoint.activeCount}`
         : "";
-      const peakHint = isPeak ? `<br>${t("common.peak") || "Peak"}` : "";
-      tooltip.innerHTML = `<strong>${header}</strong><br>${localeTokenCompact(pt.tokens)} ${t("unit.tokens") || "tokens"}${peakHint}${activeHint}`;
+      tooltip.innerHTML = `<strong>${header}</strong><br>${localeTokenCompact(pt.tokens)} ${t("unit.tokens") || "tokens"}${activeHint}`;
       tooltip.style.opacity = "1";
-      positionTooltip(tooltip, circle);
+      positionTooltip(tooltip, hit);
     });
-    circle.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
-    svg.appendChild(circle);
+    hit.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+    svg.appendChild(hit);
   }
 }
 
@@ -1110,10 +1212,10 @@ export function renderDonutChart(container, items = [], { collapseAfter, collaps
   const radius = 15.5;
   const circumference = 2 * Math.PI * radius;
   let offset = 0;
-  const segments = displayItems.map((item) => {
+  const segments = displayItems.map((item, segIndex) => {
     const ratio = Math.max(0, Number(item.ratio) || 0);
     const dash = ratio * circumference;
-    const color = providerSourceColor(item.id || item.name || "other");
+    const color = rankSeriesColor(segIndex);
     const segment = { color, dash, offset, label: labelFn ? labelFn(item) : (item.label || item.name), ratio };
     offset -= dash;
     return segment;
@@ -1152,11 +1254,11 @@ export function renderSourceDonutCard(container, items = [], { localeTokenCompac
   const radius = 80;
   const circumference = 2 * Math.PI * radius;
   let offset = 0;
-  const segments = items.map((item) => {
+  const segments = items.map((item, segIndex) => {
     const tokens = tokensOf(item);
     const ratio = tokens / total;
     const dash = ratio * circumference;
-    const segment = { color: providerSourceColor(item.id || item.name || "other"), dash, offset, item, tokens, ratio };
+    const segment = { color: rankSeriesColor(segIndex), dash, offset, item, tokens, ratio };
     offset -= dash;
     return segment;
   });
@@ -1411,6 +1513,7 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
     const otherItems = items.slice(collapseAfter - 1);
     displayItems = [...topItems, {
       name: collapseLabel || t("web.analytics.otherModels") || "Other Models",
+      other: true,
       tokens: otherItems.reduce((sum, item) => sum + item.tokens, 0),
       ratio: otherItems.reduce((sum, item) => sum + item.ratio, 0),
       estimatedCostUsd: otherItems.reduce((sum, item) => sum + (Number(item.estimatedCostUsd) || 0), 0),
@@ -1437,7 +1540,7 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
     const hasCost = showCost && (item.estimatedCostUsd !== undefined && item.estimatedCostUsd !== null);
     const costHtml = hasCost ? `<span class="usage-share-cost">${costRenderer(item)}</span>` : "";
     const row = document.createElement("div");
-    row.className = "usage-share-row";
+    row.className = item.other ? "usage-share-row is-other" : "usage-share-row";
     row.title = `${item.name}: ${tokenLabel} (${ratioPctStr})`;
     row.innerHTML = `
       <div class="lbl">
@@ -1457,7 +1560,10 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
 }
 
 function treemapTextTone(fill) {
-  const darkSources = new Set(["#c9922e", "#d4a84a", "#9a9488", "#b5aea0"]);
+  const darkSources = new Set([
+    "#e3a07e", "#d98d68", "#c8bfb0", "#ddc79c", "#c98b80", "#b6a878", "#a89a86",
+    "#a09d8f", "#cbad96", "#d0b394", "#b7a48c", "#c4bcae", "#d6cec2", "#c4bcae"
+  ]);
   return darkSources.has(fill) ? " tm-dark" : "";
 }
 
@@ -1488,11 +1594,7 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
     return;
   }
 
-  const displayCount = Math.min(
-    rankings.length,
-    TREEMAP_MAX_PARTICIPANTS,
-    Math.max(TREEMAP_MIN_PARTICIPANTS, Math.ceil(rankings.length / 2))
-  );
+  const displayCount = Math.min(rankings.length, TREEMAP_DISPLAY_COUNT);
   const width = 900;
   const fallbackHeight = Math.max(360, Math.ceil((displayCount + 1) / 6) * 115);
   // Adaptive: relayout at the host board's real box so the mosaic fills the
@@ -1531,11 +1633,12 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
     svg.__treemapResizeObserver.observe(host);
   }
   const sourceVariantCount = {};
-  const entries = rankings.slice(0, displayCount).map((item) => ({
+  const entries = rankings.slice(0, displayCount).map((item, index) => ({
     name: item.displayName || item.nickname || item.participantId || "",
     displayId: item.displayId || item.participantId || "",
     totalTokens: Number(item.totalTokens || 0),
-    primaryProvider: item.primaryProvider || item.primaryProviderId || "other"
+    primaryProvider: item.primaryProvider || item.primaryProviderId || "other",
+    rank: index
   }));
   const otherTokens = rankings.slice(displayCount).reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
   if (otherTokens > 0) {
@@ -1600,10 +1703,11 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
   }
 
   rectangles.forEach((item, index) => {
-    const sourceKey = providerSourceKey(item.primaryProvider);
-    const variant = sourceVariantCount[sourceKey] || 0;
-    sourceVariantCount[sourceKey] = variant + 1;
-    const fill = providerSourceColor(item.primaryProvider, variant);
+    const isOther = item.primaryProvider === "other";
+    const rank = Number.isInteger(item.rank) ? item.rank : 99;
+    const tier = treemapTiers()[rank % treemapTiers().length];
+    const fill = isOther ? TREEMAP_OTHER_FILL() : tier.fill;
+    const darkText = isOther ? false : tier.dark;
     const gap = Math.min(8, item.width / 10, item.height / 10);
     const x = item.x + gap / 2;
     const y = item.y + gap / 2;
@@ -1614,7 +1718,7 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
     const rect = svgEl("rect", {
       x, y, width: boxWidth, height: boxHeight,
       rx: String(radius),
-      class: `participant-treemap-node tm-cell${treemapTextTone(fill)}`,
+      class: `participant-treemap-node tm-cell${darkText ? " tm-dark" : ""}`,
       fill,
       "aria-label": `${item.name}: ${formatTokens(item.totalTokens)}`
     });
@@ -1671,7 +1775,7 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
     const sizeClass = size === "md" ? "" : size === "sm" ? " tm-name-sm" : " tm-name-xs";
     const valueClass = size === "md" ? "" : size === "sm" ? " tm-val-sm" : " tm-val-xs";
     const group = svgEl("g", {
-      class: treemapTextTone(fill).trim() || undefined,
+      class: darkText ? "tm-dark" : undefined,
       "clip-path": `url(#${clipId})`
     });
     if (item.displayId) {
@@ -1711,15 +1815,19 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
 }
 
 function positionTooltip(tooltip, anchor) {
+  // position: fixed → clamp directly in viewport coords; the old page-coord
+  // math assumed a body offset parent and pushed tooltips off-edge.
   const rect = anchor.getBoundingClientRect();
   const ttW = tooltip.offsetWidth;
   const ttH = tooltip.offsetHeight;
   const vpW = window.innerWidth;
-  let left = rect.left + window.scrollX - ttW / 2 + rect.width / 2;
-  let top = rect.top + window.scrollY - ttH - 8;
+  const vpH = window.innerHeight;
+  let left = rect.left + rect.width / 2 - ttW / 2;
+  let top = rect.top - ttH - 8;
   if (left < 8) left = 8;
   if (left + ttW > vpW - 8) left = vpW - ttW - 8;
-  if (top < window.scrollY + 4) top = rect.bottom + window.scrollY + 8;
+  if (top < 4) top = rect.bottom + 8;
+  if (top + ttH > vpH - 4) top = Math.max(4, vpH - ttH - 4);
   tooltip.style.left = `${left}px`;
   tooltip.style.top = `${top}px`;
 }

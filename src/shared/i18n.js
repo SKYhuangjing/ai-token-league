@@ -55,7 +55,7 @@ const translations = {
     "desktop.share.chart.sourceMeter": "来源 Meter",
     "desktop.share.chart.modelShare": "模型占比",
     "desktop.share.chart.composition": "Token 构成",
-    "desktop.share.chart.league": "冲榜战绩",
+    "desktop.share.chart.league": "用量走势",
     "desktop.share.copyImage": "复制图片",
     "desktop.share.savePng": "保存 PNG",
     "desktop.share.totalTokens": "总令牌数",
@@ -172,7 +172,7 @@ const translations = {
     "web.leaderboard.anonymousDesc": "名称为系统生成的匿名展示名，真实昵称不会公开。",
     "web.leaderboard.rank": "排名",
     "web.leaderboard.colNickname": "昵称",
-    "web.leaderboard.colAlias": "匿名名",
+    "web.leaderboard.colAlias": "匿名名称",
     "web.leaderboard.aliasMark": "匿名",
     "web.leaderboard.aliasRotatesDaily": "匿名展示名 · 今日有效",
     "web.leaderboard.sourceFilter": "来源",
@@ -825,6 +825,10 @@ const translations = {
     "admin.pricing.targetRequired": "目标模型为必填项",
     "admin.pricing.openrouterStatus": "OpenRouter {status}",
     "admin.pricing.openrouterDetail": "{count} 个模型 · 获取于 {fetched} · 过期于 {expires}",
+    "admin.pricing.statusFresh": "数据有效",
+    "admin.pricing.statusStale": "数据已过期",
+    "admin.pricing.statusEmpty": "暂无数据",
+    "admin.pricing.statusFailed": "获取失败",
     "admin.pricing.priceLine": "输入 {input} · 输出 {output} · 缓存读取 {cacheRead}",
     "admin.pricing.aliasUses": "使用 {target}",
 
@@ -918,7 +922,7 @@ const translations = {
     "web.analytics.less": "少",
     "web.analytics.more": "多",
     "web.analytics.activityCalendar": "编码活动热力图",
-    "web.analytics.burnTrend": "Token 燃烧趋势",
+    "web.analytics.burnTrend": "Token 使用趋势",
     "web.analytics.modelShare": "模型市场份额",
     "web.analytics.efficiency": "效率指标",
     "web.analytics.totalSavings": "累计节省",
@@ -933,7 +937,7 @@ const translations = {
     "web.analytics.individualAnalysis": "成员分析",
     "web.analytics.noData": "该区间内暂无数据",
     "web.analytics.participantTreemap": "人员 Token 分布",
-    "web.analytics.participantTreemapSubtitle": "矩形面积代表当前周期的 Token 使用量",
+    "web.analytics.participantTreemapSubtitle": "矩形面积 ∝ 用量 · 颜色 = 用量位次",
     "web.analytics.otherParticipants": "其他人员",
     "web.analytics.moreParticipants": "还有 {count} 人未展示",
     "web.analytics.periodSection": "周期数据分析",
@@ -941,9 +945,6 @@ const translations = {
     "web.analytics.habitTip": "分析提示：热力图按天展示最近一年的 Token 消耗。颜色深浅代表当日强度，可与上方周期筛选对照阅读长期节奏。",
     "web.analytics.otherModels": "其他模型",
     "web.analytics.otherSources": "其他来源",
-    "web.analytics.macroBadge": "全社区宏观态势大盘",
-    "web.analytics.macroHint": "点击图表中的参与者可进入其个人画像",
-    "web.analytics.staffStatsBadge": "全员数据统计大盘",
     "web.analytics.concentrationTrendTitle": "集中度演变",
     "web.analytics.concentrationTrendMeta": "近 12 个月 · 头部参与者占比",
     "web.analytics.hourlyRhythmTitle": "全员编码时段节律",
@@ -970,21 +971,25 @@ const translations = {
     "web.analytics.ecoStaleDevices": "超 14 天未活跃 {count} 台",
     "web.analytics.ecoTotalDevices": "共 {count} 台设备",
     "web.analytics.activeDevs": "活跃贡献者",
+    "web.analytics.activeOfTotal": "占全员 {pct}%（共 {count} 人）",
+    "web.analytics.activeCount": "{count} 人活跃",
+    "web.analytics.savingsRateSub": "（省 {pct}%）",
+    "web.analytics.sourceShare": "占比 {pct}%",
     "web.analytics.topEngine": "主力接入来源",
     "web.analytics.peakBurnDay": "区间单日峰值",
-    "web.analytics.clickToDrilldown": "点击下钻画像 ↗",
+    "web.analytics.clickToDrilldown": "点击查看个人主页 ↗",
     "web.analytics.tokenComposition": "Token 构成",
-    "web.analytics.compositionMeta": "悬停看明细",
+    "web.analytics.compositionMeta": "按类型占比",
     "web.analytics.compositionNote": "totalTokens = input + output + cacheRead + cacheWrite。缓存读取高 = Prompt Caching 在吃重复上下文。",
     "web.analytics.paretoTitle": "累计贡献（Pareto）",
-    "web.analytics.paretoMeta": "金线 = 累计占比",
+    "web.analytics.paretoMeta": "橙条 = 累计占比",
     "web.analytics.paretoTop1": "Top 1",
     "web.analytics.paretoTop3": "Top 3",
     "web.analytics.paretoTop5": "Top 5",
     "web.analytics.paretoTop10": "Top 10",
     "web.analytics.paretoAll": "全部",
     "web.analytics.weekdayRhythm": "周内节奏",
-    "web.analytics.weekdayMeta": "哪天 Token 烧得最多",
+    "web.analytics.weekdayMeta": "哪天 Token 用量最高",
     "web.analytics.weekdayMon": "一",
     "web.analytics.weekdayTue": "二",
     "web.analytics.weekdayWed": "三",
@@ -1023,9 +1028,9 @@ const translations = {
     "web.nav.profilePick": "选择用户",
     "web.profile.title": "个人主页",
     "web.profile.adminMode": "管理员视角 · 真实身份",
-    "web.profile.weekdayTitle": "周内燃烧节律",
-    "web.profile.weekdaySub": "一周中哪天产出最充沛",
-    "web.profile.monthlyRankTitle": "月度排名战绩走势",
+    "web.profile.weekdayTitle": "周内用量节律",
+    "web.profile.weekdaySub": "一周中哪天用量最高",
+    "web.profile.monthlyRankTitle": "月度排名走势",
     "web.profile.modelsTitle": "主力模型排名",
     "web.profile.sourcesTitle": "接入来源占比",
     "web.profile.notFoundTitle": "参与者未找到",
@@ -1038,6 +1043,7 @@ const translations = {
     "web.profile.daysUnit": "天",
     "web.profile.lastActive": "最近活跃",
     "web.profile.joined": "首次上榜",
+    "web.profile.passMark": "联赛通行证",
     "web.profile.trend": "用量趋势",
     "web.profile.models": "模型",
     "web.profile.sources": "来源",
@@ -1060,8 +1066,8 @@ const translations = {
     "web.profile.hourlySplitTitle": "上班 / 下班节律",
     "web.profile.hourlyWorkShare": "上班 ({from}–{to})",
     "web.profile.hourlyOffShare": "下班 (其余时段)",
-    "web.profile.hourlyArchetypeWork": "朝九晚六主力型 💼",
-    "web.profile.hourlyArchetypeNight": "深夜爆发型 🌙",
+    "web.profile.hourlyArchetypeWork": "工作时段型",
+    "web.profile.hourlyArchetypeNight": "夜间活跃型",
     "web.profile.hourlyArchetypeAll": "全天候均衡型",
     "web.profile.hourlyTagNight": "暗夜行者 🌙",
     "web.profile.hourlyTagNightHint": "0–6 点产出占 {pct}%",
@@ -1119,16 +1125,18 @@ const translations = {
     "web.profile.primaryModel": "主力模型",
     "web.profile.sourceCount": "共 {count} 款接入工具",
     "web.profile.modelsCount": "共 {count} 款主力模型",
-    "web.profile.monthlyBurn": "月度消耗",
+    "web.profile.monthlyBurn": "月度用量",
     "web.profile.leagueRank": "全联盟排名",
     "web.home.footerDownload": "下载客户端",
     "web.home.versionLabel": "版本",
     "web.home.communityBadge": "Community",
     "web.home.trendRange": "近 30 天",
-    "web.home.trendPeak": "最高燃烧 {day} · {value}",
-    "web.home.trendPeakWithActive": "最高燃烧 {day} · {value} · 最高在线 {activeDay} · {active} 人",
-    "web.home.trendPeakTitle": "最高燃烧：{day} · {value}；最高在线：{activeDay} · {active} 人",
-    "web.home.trendLegendTokens": "totalTokens",
+    "web.home.onlineLabel": "最高在线",
+    "admin.usage.viewProfile": "个人页",
+    "web.home.trendPeak": "峰值 {day} · {value}",
+    "web.home.trendPeakWithActive": "峰值 {day} · {value} · 最高在线 {activeDay} · {active} 人",
+    "web.home.trendPeakTitle": "峰值：{day} · {value}；最高在线：{activeDay} · {active} 人",
+    "web.home.trendLegendTokens": "用量",
     "web.home.trendLegendActive": "活跃用户（相对）",
     "web.analytics.sourceComposition": "来源构成",
     "admin.usage.pendingRange": "待应用",
@@ -1141,15 +1149,67 @@ const translations = {
     "admin.cost.missingCountShort": "{count} 模型 →",
 
     // Web 端 - 社区智能首页
+    "web.console.viewDetail": "查看明细 ↓",
+    "web.console.hideDetail": "收起明细 ↑",
+    "web.console.viewMembers": "查看成员明细 ↓",
+    "web.console.viewSources": "查看来源明细 ↓",
+    "web.console.export": "导出数据",
+    "web.console.exportDone": "已导出当前周期数据",
     "web.home.communityIntelligence": "社区智能数据",
     "web.home.monthTrend": "近 30 天趋势",
-    "web.home.topToday": "今日 Top",
+    "web.home.topToday": "用量排行",
     "web.home.allTimeTotal": "累计全部",
     "web.home.monthAnalytics": "本月数据分析",
     "web.home.participantTreemap": "本月人员 Token 分布",
-    "web.home.participantTreemapSubtitle": "面积 ∝ 用量 · 颜色 = 主要来源",
     "web.home.sourceTopTitle": "本月来源 Top 3",
-    "web.home.sourceTopSubtitle": "颜色 = 来源 · 条形 = 来源内占比",
+    "web.home.sourceTopSubtitle": "各来源内用量最高的参与者",
+    "web.home.participantTreemapSubtitle": "面积 ∝ 用量 · 颜色 = 用量位次",
+    "web.analytics.rankLegend1": "用量第 1 名",
+    "web.analytics.rankLegend2": "用量第 2 名",
+    "web.analytics.rankLegend3": "用量第 3 名",
+    "web.analytics.rankLegendOther": "其他人员",
+    "web.intro.homeKicker": "工作台 · 总览",
+    "web.intro.homeTitle": "团队用量总览",
+    "web.intro.homeDesc": "查看 AI coding 工具的使用趋势与团队分布。",
+    "web.intro.lbKicker": "社区 · 排行",
+    "web.intro.lbTitle": "团队用量排行",
+    "web.intro.lbDesc": "匿名社区成员的 Token 用量排名与贡献占比。",
+    "web.intro.anKicker": "分析 · 看板",
+    "web.intro.anTitle": "用量分析看板",
+    "web.intro.anDesc": "按周期查看趋势、构成、节律与来源分布。",
+    "web.kicker.homeTrend": "趋势 · 用量",
+    "web.kicker.homeRanking": "排行",
+    "web.kicker.homePeople": "人员 · 分布",
+    "web.kicker.homeSources": "来源 · 排行",
+    "web.kicker.homeUpdates": "更新",
+    "web.kicker.anTrend": "趋势 · 用量",
+    "web.kicker.anComposition": "构成",
+    "web.kicker.anPeople": "人员 · 分布",
+    "web.kicker.anPareto": "集中度 · Pareto",
+    "web.kicker.anModels": "模型",
+    "web.kicker.anSources": "来源",
+    "web.kicker.rhythmWeekday": "节律 · 周内",
+    "web.kicker.rhythmHours": "节律 · 时段",
+    "web.kicker.rhythmMatrix": "节律 · 矩阵",
+    "web.kicker.concentrationTrend": "集中度 · 演变",
+    "web.kicker.modelsShare": "模型 · 份额",
+    "web.kicker.modelsTrend": "模型 · 演变",
+    "web.kicker.sourcesMix": "来源 · 构成",
+    "web.kicker.sourcesTrend": "来源 · 演变",
+    "web.kicker.projectsRank": "项目 · 排行",
+    "web.kicker.projectsCompare": "项目 · 环比",
+    "web.kicker.activity": "活跃 · 长期",
+    "web.kicker.ecoVersions": "生态 · 版本",
+    "web.kicker.ecoPlatforms": "生态 · 平台",
+    "web.kicker.ecoDevices": "生态 · 设备",
+    "web.kicker.ranksMonthly": "战绩 · 月度",
+    "web.kicker.profileModels": "模型 · 排名",
+    "web.kicker.profileSources": "来源 · 占比",
+    "web.theme.switcherLabel": "主题方案",
+    "web.theme.orange": "暖橙",
+    "web.theme.oneaix": "岚紫",
+    "web.theme.prod": "墨绿",
+    "web.theme.arena": "森青",
     "web.home.sourceTopParticipantCount": "{count} 位参与者",
     "web.home.viewFullAnalytics": "查看完整分析",
     "web.home.getStarted": "开始使用",
@@ -1219,7 +1279,7 @@ const translations = {
     "desktop.share.chart.sourceMeter": "Source meter",
     "desktop.share.chart.modelShare": "Model share",
     "desktop.share.chart.composition": "Token mix",
-    "desktop.share.chart.league": "League run",
+    "desktop.share.chart.league": "Usage trend",
     "desktop.share.copyImage": "Copy image",
     "desktop.share.savePng": "Save PNG",
     "desktop.share.totalTokens": "Total tokens",
@@ -1987,6 +2047,10 @@ const translations = {
     "admin.pricing.targetRequired": "Target model is required",
     "admin.pricing.openrouterStatus": "OpenRouter {status}",
     "admin.pricing.openrouterDetail": "{count} models · fetched {fetched} · expires {expires}",
+    "admin.pricing.statusFresh": "up to date",
+    "admin.pricing.statusStale": "stale",
+    "admin.pricing.statusEmpty": "no data",
+    "admin.pricing.statusFailed": "fetch failed",
     "admin.pricing.priceLine": "in {input} · out {output} · cache read {cacheRead}",
     "admin.pricing.aliasUses": "uses {target}",
 
@@ -2080,7 +2144,7 @@ const translations = {
     "web.analytics.less": "Less",
     "web.analytics.more": "More",
     "web.analytics.activityCalendar": "Coding Activity Heatmap",
-    "web.analytics.burnTrend": "Token Burn Trend",
+    "web.analytics.burnTrend": "Token Usage Trend",
     "web.analytics.modelShare": "Model Market Share",
     "web.analytics.efficiency": "Efficiency Metrics",
     "web.analytics.totalSavings": "Total Savings",
@@ -2095,17 +2159,14 @@ const translations = {
     "web.analytics.individualAnalysis": "Individual Analysis",
     "web.analytics.noData": "No usage data found in this range",
     "web.analytics.participantTreemap": "Participant Token Distribution",
-    "web.analytics.participantTreemapSubtitle": "Rectangle area represents token usage in the selected period",
+    "web.analytics.participantTreemapSubtitle": "Rectangle area ∝ usage · color = usage rank",
     "web.analytics.otherParticipants": "Other participants",
     "web.analytics.moreParticipants": "{count} more participants not shown",
     "web.analytics.periodSection": "Period-Scoped Analytics",
     "web.analytics.habitSection": "Long-Term Behavioral Insights",
-    "web.analytics.habitTip": "Analysis tip: The heatmap shows daily token burn for the trailing year. Color intensity reflects each day and can be read against the period filter above.",
+    "web.analytics.habitTip": "Analysis tip: The heatmap shows daily token usage for the trailing year. Color intensity reflects each day and can be read against the period filter above.",
     "web.analytics.otherModels": "Other Models",
     "web.analytics.otherSources": "Other sources",
-    "web.analytics.macroBadge": "Community Macro Radar",
-    "web.analytics.macroHint": "Click a participant in the charts to open their profile",
-    "web.analytics.staffStatsBadge": "Company-wide statistics",
     "web.analytics.concentrationTrendTitle": "Concentration trend",
     "web.analytics.concentrationTrendMeta": "Last 12 months · top participant share",
     "web.analytics.hourlyRhythmTitle": "Company hourly rhythm",
@@ -2132,21 +2193,25 @@ const translations = {
     "web.analytics.ecoStaleDevices": "{count} inactive 14+ days",
     "web.analytics.ecoTotalDevices": "{count} devices total",
     "web.analytics.activeDevs": "Active Contributors",
+    "web.analytics.activeOfTotal": "{pct}% of {count} participants",
+    "web.analytics.activeCount": "{count} active",
+    "web.analytics.savingsRateSub": "({pct}% saved)",
+    "web.analytics.sourceShare": "{pct}% share",
     "web.analytics.topEngine": "Leading Source",
-    "web.analytics.peakBurnDay": "Peak Burn Day",
-    "web.analytics.clickToDrilldown": "Click to inspect profile ↗",
+    "web.analytics.peakBurnDay": "Peak Day",
+    "web.analytics.clickToDrilldown": "Click to view profile ↗",
     "web.analytics.tokenComposition": "Token composition",
-    "web.analytics.compositionMeta": "Hover for details",
+    "web.analytics.compositionMeta": "Share by type",
     "web.analytics.compositionNote": "totalTokens = input + output + cacheRead + cacheWrite. High cache read usually means Prompt Caching is absorbing repeated context.",
     "web.analytics.paretoTitle": "Cumulative share (Pareto)",
-    "web.analytics.paretoMeta": "Gold line = cumulative %",
+    "web.analytics.paretoMeta": "Orange bar = cumulative %",
     "web.analytics.paretoTop1": "Top 1",
     "web.analytics.paretoTop3": "Top 3",
     "web.analytics.paretoTop5": "Top 5",
     "web.analytics.paretoTop10": "Top 10",
     "web.analytics.paretoAll": "All",
     "web.analytics.weekdayRhythm": "Weekday rhythm",
-    "web.analytics.weekdayMeta": "Which weekday burns the most tokens",
+    "web.analytics.weekdayMeta": "Which weekday has the highest token usage",
     "web.analytics.weekdayMon": "Mon",
     "web.analytics.weekdayTue": "Tue",
     "web.analytics.weekdayWed": "Wed",
@@ -2187,7 +2252,7 @@ const translations = {
     "web.profile.adminMode": "Admin View · Verified Identity",
     "web.profile.weekdayTitle": "Weekday rhythm",
     "web.profile.weekdaySub": "Which day of the week is most productive",
-    "web.profile.monthlyRankTitle": "Monthly rank & standing",
+    "web.profile.monthlyRankTitle": "Monthly ranking trend",
     "web.profile.modelsTitle": "Primary model share",
     "web.profile.sourcesTitle": "Source distribution",
     "web.profile.notFoundTitle": "Participant not found",
@@ -2200,6 +2265,7 @@ const translations = {
     "web.profile.daysUnit": "days",
     "web.profile.lastActive": "Last active",
     "web.profile.joined": "First seen",
+    "web.profile.passMark": "League Pass",
     "web.profile.trend": "Usage trend",
     "web.profile.models": "Models",
     "web.profile.sources": "Sources",
@@ -2222,8 +2288,8 @@ const translations = {
     "web.profile.hourlySplitTitle": "Work / off-hours rhythm",
     "web.profile.hourlyWorkShare": "Work hours ({from}–{to})",
     "web.profile.hourlyOffShare": "Off hours (the rest)",
-    "web.profile.hourlyArchetypeWork": "Nine-to-six grinder 💼",
-    "web.profile.hourlyArchetypeNight": "Midnight burner 🌙",
+    "web.profile.hourlyArchetypeWork": "Work-hours pattern",
+    "web.profile.hourlyArchetypeNight": "Night-active pattern",
     "web.profile.hourlyArchetypeAll": "Around-the-clock operator",
     "web.profile.hourlyTagNight": "Night walker 🌙",
     "web.profile.hourlyTagNightHint": "0–6 AM output: {pct}%",
@@ -2281,16 +2347,18 @@ const translations = {
     "web.profile.primaryModel": "Primary model",
     "web.profile.sourceCount": "{count} tools",
     "web.profile.modelsCount": "{count} models used",
-    "web.profile.monthlyBurn": "Monthly burn",
+    "web.profile.monthlyBurn": "Monthly usage",
     "web.profile.leagueRank": "League rank",
     "web.home.footerDownload": "Download client",
     "web.home.versionLabel": "Version",
     "web.home.communityBadge": "Community",
     "web.home.trendRange": "Last 30 days",
-    "web.home.trendPeak": "Peak burn {day} · {value}",
-    "web.home.trendPeakWithActive": "Peak burn {day} · {value} · Peak active {activeDay} · {active}",
-    "web.home.trendPeakTitle": "Peak burn: {day} · {value}; Peak active: {activeDay} · {active}",
-    "web.home.trendLegendTokens": "totalTokens",
+    "web.home.onlineLabel": "Peak online",
+    "admin.usage.viewProfile": "Profile",
+    "web.home.trendPeak": "Peak {day} · {value}",
+    "web.home.trendPeakWithActive": "Peak {day} · {value} · Peak active {activeDay} · {active}",
+    "web.home.trendPeakTitle": "Peak: {day} · {value}; Peak active: {activeDay} · {active}",
+    "web.home.trendLegendTokens": "Usage",
     "web.home.trendLegendActive": "Active users (relative)",
     "web.analytics.sourceComposition": "Source composition",
     "admin.usage.pendingRange": "Pending",
@@ -2305,13 +2373,65 @@ const translations = {
     // Web - Community Intelligence Home
     "web.home.communityIntelligence": "Community Intelligence",
     "web.home.monthTrend": "Last 30 Days Trend",
-    "web.home.topToday": "Top Today",
+    "web.console.viewDetail": "View details ↓",
+    "web.console.hideDetail": "Hide details ↑",
+    "web.console.viewMembers": "View member details ↓",
+    "web.console.viewSources": "View source details ↓",
+    "web.console.export": "Export",
+    "web.console.exportDone": "Exported data for the current period",
+    "web.home.topToday": "Usage ranking",
     "web.home.allTimeTotal": "All-time total",
     "web.home.monthAnalytics": "This Month Analytics",
     "web.home.participantTreemap": "Monthly Participant Token Distribution",
-    "web.home.participantTreemapSubtitle": "Area ∝ usage · color = primary source",
     "web.home.sourceTopTitle": "Top 3 by Source This Month",
-    "web.home.sourceTopSubtitle": "Color = source · bar = share within source",
+    "web.home.sourceTopSubtitle": "Top participants within each source",
+    "web.home.participantTreemapSubtitle": "Area ∝ usage · color = usage rank",
+    "web.analytics.rankLegend1": "Top 1 by usage",
+    "web.analytics.rankLegend2": "Top 2 by usage",
+    "web.analytics.rankLegend3": "Top 3 by usage",
+    "web.analytics.rankLegendOther": "Everyone else",
+    "web.intro.homeKicker": "WORKSPACE / OVERVIEW",
+    "web.intro.homeTitle": "Team usage overview",
+    "web.intro.homeDesc": "Usage trends and team distribution across AI coding tools.",
+    "web.intro.lbKicker": "COMMUNITY / RANKING",
+    "web.intro.lbTitle": "Community leaderboard",
+    "web.intro.lbDesc": "Token usage ranking across anonymous community members.",
+    "web.intro.anKicker": "ANALYTICS / BOARD",
+    "web.intro.anTitle": "Usage analytics board",
+    "web.intro.anDesc": "Trends, composition, rhythm and sources by period.",
+    "web.kicker.homeTrend": "TREND / USAGE",
+    "web.kicker.homeRanking": "RANKING",
+    "web.kicker.homePeople": "PEOPLE / DISTRIBUTION",
+    "web.kicker.homeSources": "SOURCES / RANKING",
+    "web.kicker.homeUpdates": "UPDATES",
+    "web.kicker.anTrend": "TREND / USAGE",
+    "web.kicker.anComposition": "COMPOSITION",
+    "web.kicker.anPeople": "PEOPLE / DISTRIBUTION",
+    "web.kicker.anPareto": "CONCENTRATION / PARETO",
+    "web.kicker.anModels": "MODELS",
+    "web.kicker.anSources": "SOURCES",
+    "web.kicker.rhythmWeekday": "RHYTHM / WEEKDAY",
+    "web.kicker.rhythmHours": "RHYTHM / HOURS",
+    "web.kicker.rhythmMatrix": "RHYTHM / MATRIX",
+    "web.kicker.concentrationTrend": "CONCENTRATION / TREND",
+    "web.kicker.modelsShare": "MODELS / SHARE",
+    "web.kicker.modelsTrend": "MODELS / TREND",
+    "web.kicker.sourcesMix": "SOURCES / MIX",
+    "web.kicker.sourcesTrend": "SOURCES / TREND",
+    "web.kicker.projectsRank": "PROJECTS / RANKING",
+    "web.kicker.projectsCompare": "PROJECTS / COMPARISON",
+    "web.kicker.activity": "ACTIVITY / LONG-RUN",
+    "web.kicker.ecoVersions": "ECOSYSTEM / VERSIONS",
+    "web.kicker.ecoPlatforms": "ECOSYSTEM / PLATFORMS",
+    "web.kicker.ecoDevices": "ECOSYSTEM / DEVICES",
+    "web.kicker.ranksMonthly": "RANKS / MONTHLY",
+    "web.kicker.profileModels": "MODELS / RANKING",
+    "web.kicker.profileSources": "SOURCES / SHARE",
+    "web.theme.switcherLabel": "Theme scheme",
+    "web.theme.orange": "Orange",
+    "web.theme.oneaix": "Mist",
+    "web.theme.prod": "Forest",
+    "web.theme.arena": "Pine",
     "web.home.sourceTopParticipantCount": "{count} participant{plural}",
     "web.home.viewFullAnalytics": "View full analytics",
     "web.home.getStarted": "Get Started",
@@ -2456,42 +2576,72 @@ export function updatePageTranslations() {
       el.setAttribute("aria-label", t(key));
     }
   });
+
+  document.documentElement.classList.add("i18n-ready");
 }
 
 /**
- * 创建语言切换器 HTML
+ * 创建语言切换器 HTML（自定义分段控件，避免原生 select 切页闪没）
  */
-export function createLangSwitcher(onChange) {
-  const langs = getSupportedLangs();
+export function createLangSwitcher() {
   const current = getCurrentLang();
 
   return `
-    <div class="lang-switcher">
-      <select id="lang-switcher" class="lang-select">
-        ${langs.map((lang) => `
-          <option value="${lang.code}" ${lang.code === current ? "selected" : ""}>
-            ${lang.name}
-          </option>
-        `).join("")}
-      </select>
+    <div class="lang-switcher" id="lang-switcher" role="group" aria-label="Language">
+      <button type="button" class="lang-opt" data-lang="zh-CN" aria-pressed="${current === "zh-CN" ? "true" : "false"}">中文</button>
+      <button type="button" class="lang-opt" data-lang="en" aria-pressed="${current === "en" ? "true" : "false"}">EN</button>
     </div>
   `;
 }
 
+function syncLangSwitcherUi(root, lang = getCurrentLang()) {
+  if (!root) return;
+  root.querySelectorAll(".lang-opt").forEach((btn) => {
+    const active = btn.getAttribute("data-lang") === lang;
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    btn.classList.toggle("is-active", active);
+  });
+}
+
 /**
- * 绑定语言切换器事件
+ * 绑定语言切换器事件。
+ * HTML 可预置静态分段控件；首屏用 html[lang] + CSS 同步，避免模块加载后才改 DOM。
  */
 export function bindLangSwitcher(elementId, onChange) {
-  const select = document.getElementById(elementId);
-  if (!select) return;
+  const root = document.getElementById(elementId);
+  if (!root) return;
 
-  select.addEventListener("change", (e) => {
-    const newLang = e.target.value;
+  syncLangSwitcherUi(root);
+
+  if (root.dataset.langBound === "1") return;
+  root.dataset.langBound = "1";
+
+  root.addEventListener("click", (event) => {
+    const btn = event.target.closest(".lang-opt");
+    if (!btn || !root.contains(btn)) return;
+    const newLang = btn.getAttribute("data-lang");
+    if (!newLang || newLang === getCurrentLang()) return;
     if (setLang(newLang)) {
+      syncLangSwitcherUi(root, newLang);
       updatePageTranslations();
       if (onChange) onChange(newLang);
     }
   });
+}
+
+/**
+ * 挂载语言切换器：容器已有静态控件时只绑定，不整段替换 DOM。
+ */
+export function mountLangSwitcher(containerSelector, onChange, elementId = "lang-switcher") {
+  const container = typeof containerSelector === "string"
+    ? document.querySelector(containerSelector)
+    : containerSelector;
+  if (!container) return;
+
+  if (!document.getElementById(elementId)) {
+    container.innerHTML = createLangSwitcher();
+  }
+  bindLangSwitcher(elementId, onChange);
 }
 
 // 默认导出
@@ -2504,5 +2654,6 @@ export default {
   $t,
   updatePageTranslations,
   createLangSwitcher,
-  bindLangSwitcher
+  bindLangSwitcher,
+  mountLangSwitcher
 };

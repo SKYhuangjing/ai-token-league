@@ -3,55 +3,67 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title data-i18n="web.analytics.title">AI Token Analytics</title>
+  <title data-i18n="web.analytics.title">用量分析</title>
+  <script>
+    (() => {
+    try {
+      const lang = localStorage.getItem("ai-token-league.language");
+      if (lang === "en" || lang === "zh-CN") document.documentElement.lang = lang;
+          document.documentElement.dataset.bootLang = document.documentElement.lang;
+    } catch (_) {}
+    })();
+  </script>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="prefetch" href="/" />
+  <link rel="prefetch" href="/leaderboard.html" />
+  <link rel="prefetch" href="/analytics.html" />
+  <link rel="prefetch" href="/profile.html" />
+
 </head>
 <body>
   <main class="shell public-shell analytics-shell">
     <section class="masthead public-masthead">
       <div class="masthead-copy">
         <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg></div>
           <h1 data-i18n="app.name">AI Token League</h1>
-          <span id="board-identity-eyebrow" class="pill" data-i18n="web.publicBoard">Public community board</span>
+          <span id="board-identity-eyebrow" class="pill" data-i18n="web.publicBoard">匿名社区榜单</span>
         </div>
       </div>
       <div class="masthead-side">
         <nav class="public-nav" aria-label="Site">
-          <a href="/" class="nav-link" data-i18n="web.nav.home">Home</a>
-          <a href="/leaderboard.html" class="nav-link" data-i18n="web.nav.leaderboard">Leaderboard</a>
-          <a href="/analytics.html" class="nav-link current" data-i18n="web.nav.analytics">Analytics</a>
-          <a href="/profile.html" class="nav-link" id="nav-profile-link" data-i18n="web.nav.profile">Profile</a>
+          <a href="/" class="nav-link" data-i18n="web.nav.home">首页</a>
+          <a href="/leaderboard.html" class="nav-link" data-i18n="web.nav.leaderboard">排行榜</a>
+          <a href="/analytics.html" class="nav-link current" data-i18n="web.nav.analytics">分析</a>
+          <a href="/profile.html" class="nav-link" id="nav-profile-link" data-i18n="web.nav.profile">个人</a>
         </nav>
-        <div class="lang-switcher-container" id="lang-switcher-container"></div>
+        <div class="lang-switcher-container" id="lang-switcher-container">
+          <div class="lang-switcher" id="lang-switcher" role="group" aria-label="Language">
+            <button type="button" class="lang-opt" data-lang="zh-CN" aria-pressed="true">中文</button>
+            <button type="button" class="lang-opt" data-lang="en" aria-pressed="false">EN</button>
+          </div>
+        </div>
       </div>
-    </section>
+      </section>
 
-    <section class="an-toolbar" aria-label="Filters">
+      <section class="an-toolbar" aria-label="Filters">
       <div class="period-pills" data-filter="period">
-        <button data-value="today" data-i18n="web.period.today">Today</button>
-        <button data-value="yesterday" data-i18n="web.period.yesterday">Yesterday</button>
-        <button data-value="this_week" data-i18n="web.period.thisWeek">This week</button>
-        <button data-value="last_week" data-i18n="web.period.lastWeek">Last week</button>
-        <button data-value="this_month" class="active" data-i18n="web.period.thisMonth">This month</button>
-        <button data-value="last_month" data-i18n="web.period.lastMonth">Last month</button>
-        <button data-value="all" data-i18n="web.period.all">All</button>
+        <button data-value="today" data-i18n="web.period.today">今天</button>
+        <button data-value="yesterday" data-i18n="web.period.yesterday">昨天</button>
+        <button data-value="this_week" data-i18n="web.period.thisWeek">本周</button>
+        <button data-value="last_week" data-i18n="web.period.lastWeek">上周</button>
+        <button data-value="this_month" class="active" data-i18n="web.period.thisMonth">本月</button>
+        <button data-value="last_month" data-i18n="web.period.lastMonth">上月</button>
+        <button data-value="all" data-i18n="web.period.all">全部</button>
+      </div>
+      <div class="an-toolbar-actions">
+        <span class="console-period-label" id="analytics-period-label" aria-live="polite"></span>
       </div>
     </section>
-
-    <!-- 宏观态势说明与快捷下钻导引条 -->
-    <div class="an-subbar" id="an-subbar">
-      <div class="an-subbar-left">
-        <span class="an-badge-community" id="an-scope-badge" data-i18n="web.analytics.macroBadge">全社区宏观态势大盘</span>
-        <span class="an-subbar-hint" data-i18n="web.analytics.macroHint">点击图表中的参与者可进入其个人画像</span>
-      </div>
-      <div class="an-subbar-right">
-        <span class="an-live-stat mono" id="an-live-summary">--</span>
-      </div>
-    </div>
 
     <div id="analytics-loading" class="analytics-loading" role="status" aria-live="polite" data-i18n-aria-label="loading" hidden>
       <div class="analytics-spinner" aria-hidden="true"></div>
@@ -95,19 +107,21 @@
     <section class="an-main">
       <article class="card an-trend-card">
         <div class="card-head">
-          <h2 data-i18n="web.analytics.burnTrend">Token burn trend</h2>
+          <span class="section-kicker" data-i18n="web.kicker.anTrend">趋势 · 用量</span>
+          <h2 data-i18n="web.analytics.burnTrend">Token usage trend</h2>
           <span class="meta" id="trend-meta"></span>
         </div>
         <div class="chart-frame">
           <svg id="trend-chart" viewBox="0 0 800 200" preserveAspectRatio="none" class="chart-svg"></svg>
         </div>
         <div class="burn-legend">
-          <span><i style="background:var(--teal)"></i><span data-i18n="web.home.trendLegendTokens">totalTokens</span></span>
+          <span><i style="background:var(--orange)"></i><span data-i18n="web.home.trendLegendTokens">totalTokens</span></span>
           <span><i class="legend-active"></i><span data-i18n="web.home.trendLegendActive">Active users (relative)</span></span>
         </div>
       </article>
       <article class="card an-composition-card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.anComposition">构成</span>
           <h2 data-i18n="web.analytics.tokenComposition">Token composition</h2>
           <span class="meta" data-i18n="web.analytics.compositionMeta">Hover for details</span>
         </div>
@@ -118,12 +132,12 @@
     <article id="participant-ranking-card" class="card treemap-card">
       <div class="card-head">
         <div class="card-head-titles">
+          <span class="section-kicker" data-i18n="web.kicker.anPeople">人员 · 分布</span>
           <h2 data-i18n="web.analytics.participantTreemap">Participant distribution</h2>
           <span class="meta" data-i18n="web.analytics.participantTreemapSubtitle">Area ∝ usage · color = primary source</span>
         </div>
-        <span class="pill tm-drilldown-pill" data-i18n="web.analytics.clickToDrilldown">点击下钻画像 ↗</span>
+        <span class="pill tm-drilldown-pill" data-i18n="web.analytics.clickToDrilldown">点击查看个人主页 ↗</span>
       </div>
-      <div id="treemap-legend" class="src-legend-wrap"></div>
       <div class="dist-split">
         <div class="tm-board">
           <svg id="participant-treemap-svg" viewBox="0 0 900 360" preserveAspectRatio="xMidYMid meet" class="participant-treemap-svg treemap-svg"
@@ -140,6 +154,7 @@
     <section class="an-secondary">
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.anPareto">集中度 · Pareto</span>
           <h2 data-i18n="web.analytics.paretoTitle">Cumulative share</h2>
           <span class="meta" data-i18n="web.analytics.paretoMeta">Gold line = cumulative %</span>
         </div>
@@ -147,16 +162,7 @@
       </article>
       <article class="card">
         <div class="card-head">
-          <h2 data-i18n="web.analytics.weekdayRhythm">Weekday rhythm</h2>
-          <span class="meta" data-i18n="web.analytics.weekdayMeta">哪天 Token 烧得最多</span>
-        </div>
-        <div id="weekday-chart" class="weekday"></div>
-      </article>
-    </section>
-
-    <section class="an-secondary">
-      <article class="card">
-        <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.concentrationTrend">集中度 · 演变</span>
           <h2 data-i18n="web.analytics.concentrationTrendTitle">Concentration trend</h2>
           <span class="meta" data-i18n="web.analytics.concentrationTrendMeta">近 12 个月 · 头部参与者占比</span>
         </div>
@@ -165,8 +171,20 @@
         </div>
         <div class="burn-legend" id="concentration-legend"></div>
       </article>
+    </section>
+
+    <section class="an-secondary rhythm-row">
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.rhythmWeekday">节律 · 周内</span>
+          <h2 data-i18n="web.analytics.weekdayRhythm">Weekday rhythm</h2>
+          <span class="meta" data-i18n="web.analytics.weekdayMeta">哪天 Token 烧得最多</span>
+        </div>
+        <div id="weekday-chart" class="weekday"></div>
+      </article>
+      <article class="card">
+        <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.rhythmHours">节律 · 时段</span>
           <h2 data-i18n="web.analytics.hourlyRhythmTitle">全员编码时段节律</h2>
           <span class="meta" id="community-hourly-meta"></span>
         </div>
@@ -176,6 +194,7 @@
 
     <article class="card hw-matrix-card">
       <div class="card-head">
+        <span class="section-kicker" data-i18n="web.kicker.rhythmMatrix">节律 · 矩阵</span>
         <h2 data-i18n="web.analytics.matrixTitle">星期 × 小时 活跃矩阵</h2>
         <span class="meta" id="hw-matrix-meta"></span>
       </div>
@@ -185,12 +204,14 @@
     <section class="an-secondary">
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.modelsShare">模型 · 份额</span>
           <h2 data-i18n="web.analytics.modelShare">Model share</h2>
         </div>
         <div id="model-chart" class="bar-chart-container usage-share-chart"></div>
       </article>
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.modelsTrend">模型 · 演变</span>
           <h2 data-i18n="web.analytics.compositionTrendTitle">模型构成演变</h2>
           <span class="meta" data-i18n="web.analytics.monthlyTrendMeta">近 12 个月 · 占比堆叠</span>
         </div>
@@ -204,12 +225,14 @@
     <section class="an-secondary">
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.sourcesMix">来源 · 构成</span>
           <h2 data-i18n="web.detail.sources">Sources</h2>
         </div>
         <div id="provider-donut" class="an-donut-host"></div>
       </article>
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.sourcesTrend">来源 · 演变</span>
           <h2 data-i18n="web.analytics.providerTrendTitle">来源构成演变</h2>
           <span class="meta" data-i18n="web.analytics.monthlyTrendMeta">近 12 个月 · 占比堆叠</span>
         </div>
@@ -223,6 +246,7 @@
     <section class="an-secondary admin-only-section" id="workdir-section" hidden>
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.projectsRank">项目 · 排行</span>
           <h2 data-i18n="web.analytics.workdirTitle">项目用量 Top</h2>
           <span class="meta" data-i18n="web.analytics.workdirMeta">当前时间段 · 按工作目录聚合</span>
         </div>
@@ -230,20 +254,21 @@
       </article>
       <article class="card">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.projectsCompare">项目 · 环比</span>
           <h2 data-i18n="web.analytics.workdirTrendTitle">项目用量环比</h2>
           <span class="meta" id="workdir-slope-meta"></span>
         </div>
         <div class="burn-legend cmp-legend">
           <span><i style="background:#b5aea0"></i><span data-i18n="web.period.lastMonth">上月</span></span>
-          <span><i style="background:var(--teal)"></i><span data-i18n="web.period.thisMonth">本月</span></span>
+          <span><i style="background:var(--orange)"></i><span data-i18n="web.period.thisMonth">本月</span></span>
         </div>
         <div id="workdir-trend" class="bar-chart-container usage-share-chart cmp-chart"></div>
       </article>
     </section>
 
-    <div class="an-section-label" data-i18n="web.analytics.longTermSection">Long-term behavior</div>
     <article class="card heatmap-full-width">
       <div class="card-head">
+        <span class="section-kicker" data-i18n="web.kicker.activity">活跃 · 长期</span>
         <h2 data-i18n="web.analytics.activityCalendar">Activity heatmap</h2>
         <span class="meta" id="analytics-heatmap-meta" data-i18n="web.analytics.heatmapSubtitle">Last year</span>
       </div>
@@ -275,10 +300,10 @@
     </article>
 
     <section class="an-eco-section admin-only-section" id="admin-eco-section" hidden>
-      <div class="an-section-label" data-i18n="web.analytics.ecoSectionTitle">客户端生态</div>
       <div class="an-eco-grid">
         <article class="card">
           <div class="card-head">
+            <span class="section-kicker" data-i18n="web.kicker.ecoVersions">生态 · 版本</span>
             <h2 data-i18n="web.analytics.ecoVersionTitle">版本分布</h2>
             <span class="meta" id="eco-version-meta"></span>
           </div>
@@ -286,12 +311,14 @@
         </article>
         <article class="card">
           <div class="card-head">
+            <span class="section-kicker" data-i18n="web.kicker.ecoPlatforms">生态 · 平台</span>
             <h2 data-i18n="web.analytics.ecoPlatformTitle">平台分布</h2>
           </div>
           <div id="eco-platform-chart" class="bar-chart-container usage-share-chart eco-count-chart"></div>
         </article>
         <article class="card">
           <div class="card-head">
+            <span class="section-kicker" data-i18n="web.kicker.ecoDevices">生态 · 设备</span>
             <h2 data-i18n="web.analytics.ecoActivityTitle">设备活跃</h2>
             <span class="meta" id="eco-activity-meta"></span>
           </div>

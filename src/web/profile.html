@@ -3,12 +3,26 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title data-i18n="web.profile.title">Participant profile</title>
+    <title data-i18n="web.profile.title">个人主页</title>
+    <script>
+      (() => {
+        try {
+          const lang = localStorage.getItem("ai-token-league.language");
+          if (lang === "en" || lang === "zh-CN") document.documentElement.lang = lang;
+          document.documentElement.dataset.bootLang = document.documentElement.lang;
+        } catch (_) {}
+      })();
+    </script>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="prefetch" href="/" />
+    <link rel="prefetch" href="/leaderboard.html" />
+    <link rel="prefetch" href="/analytics.html" />
+    <link rel="prefetch" href="/profile.html" />
+
   </head>
   <body class="page-profile">
     <main class="shell public-shell landing-shell">
@@ -16,19 +30,25 @@
       <section class="masthead public-masthead">
         <div class="masthead-copy">
           <div class="brand-row">
+            <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg></div>
             <h1 data-i18n="app.name">AI Token League</h1>
-            <span class="pill" id="page-title-pill" data-i18n="web.profile.title">Participant profile</span>
+            <span class="pill" id="page-title-pill" data-i18n="web.profile.title">个人主页</span>
             <span class="pill profile-admin-pill" id="profile-admin-pill" hidden data-i18n="web.profile.adminMode">Admin View · Verified Identity</span>
           </div>
         </div>
         <div class="masthead-side">
           <nav class="public-nav" aria-label="Site">
-            <a href="/" class="nav-link" data-i18n="web.nav.home">Home</a>
-            <a href="/leaderboard.html" class="nav-link" id="nav-leaderboard-link" data-i18n="web.nav.leaderboard">Leaderboard</a>
-            <a href="/analytics.html" class="nav-link" data-i18n="web.nav.analytics">Analytics</a>
-            <a href="/profile.html" class="nav-link current" id="nav-profile-link" data-i18n="web.nav.profile">Profile</a>
+            <a href="/" class="nav-link" data-i18n="web.nav.home">首页</a>
+            <a href="/leaderboard.html" class="nav-link" id="nav-leaderboard-link" data-i18n="web.nav.leaderboard">排行榜</a>
+            <a href="/analytics.html" class="nav-link" data-i18n="web.nav.analytics">分析</a>
+            <a href="/profile.html" class="nav-link current" id="nav-profile-link" data-i18n="web.nav.profile">个人</a>
           </nav>
-          <div class="lang-switcher-container" id="lang-switcher-container"></div>
+          <div class="lang-switcher-container" id="lang-switcher-container">
+            <div class="lang-switcher" id="lang-switcher" role="group" aria-label="Language">
+              <button type="button" class="lang-opt" data-lang="zh-CN" aria-pressed="true">中文</button>
+              <button type="button" class="lang-opt" data-lang="en" aria-pressed="false">EN</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -52,11 +72,15 @@
         </div>
       </div>
 
-      <!-- 第一模块：人物通行证名片 (左) + 九维战力 Bento 阵列 (右) -->
+      <!-- 第一模块：身份卡 + 指标组 -->
       <section class="profile-hero-section" id="profile-hero" aria-busy="true">
         <div class="profile-layout-grid">
-          <!-- 左侧：人物身份通行证卡片 -->
+          <!-- 左侧：身份卡 -->
           <article class="card profile-id-card">
+            <div class="profile-id-pass-mark">
+              <span class="pass-mark-label" data-i18n="web.profile.passMark">League Pass</span>
+              <span class="pass-mark-rule" aria-hidden="true"></span>
+            </div>
             <div class="profile-id-head">
               <div class="profile-avatar-crest" id="profile-avatar-crest">
                 <span class="profile-avatar" id="profile-avatar" aria-hidden="true">·</span>
@@ -103,14 +127,14 @@
             </p>
           </article>
 
-          <!-- 右侧：联赛战报指标阵列（等高格子，色轨区分） -->
+          <!-- 右侧：周期指标 -->
           <div class="profile-stats-panel">
             <div class="profile-stats-grid" id="profile-stats"></div>
           </div>
         </div>
       </section>
 
-      <!-- 第二模块：顶部多周期对比战报 (复用首页 Scoreboard 结构) -->
+      <!-- 第二模块：多周期对比 -->
       <section class="kpi-row kpi-scoreboard profile-kpi-scoreboard" id="profile-scoreboard">
         <div class="kpi-pair" data-period-pair="today">
           <article class="kpi kpi-current period-today">
@@ -164,11 +188,12 @@
         </article>
       </section>
 
-      <!-- 第三模块：月度战绩走势图卡片 (复合走势与巅峰月度) -->
+      <!-- 第三模块：月度排名走势 -->
       <section class="card profile-section-card profile-monthly-card">
         <div class="card-head-bar">
           <div>
-            <h3 data-i18n="web.profile.monthlyRankTitle">Monthly rank & standing</h3>
+            <span class="section-kicker" data-i18n="web.kicker.ranksMonthly">战绩 · 月度</span>
+            <h3 data-i18n="web.profile.monthlyRankTitle">Monthly ranking trend</h3>
             <p class="card-subtitle-meta" id="monthly-peak-note"></p>
           </div>
         </div>
@@ -179,6 +204,7 @@
       <section class="card profile-section-card profile-heatmap-card" id="profile-recent" aria-busy="true">
         <div class="card-head-bar">
           <div>
+            <span class="section-kicker" data-i18n="web.kicker.activity">活跃 · 长期</span>
             <h3 data-i18n="web.analytics.activityCalendar">Activity heatmap</h3>
             <p id="profile-recent-meta" class="card-subtitle-meta"></p>
           </div>
@@ -231,7 +257,7 @@
                 <div class="period-pills profile-range-pills" data-profile-range>
                   <button data-value="last7" data-i18n="web.profile.last7Days">Last 7 days</button>
                   <button data-value="last30" class="active" data-i18n="web.profile.last30Days">Last 30 days</button>
-                  <button data-value="all" data-i18n="web.period.all">All</button>
+                  <button data-value="all" data-i18n="web.period.all">全部</button>
                 </div>
               </div>
             </div>
@@ -254,6 +280,7 @@
         <section class="card profile-section-card profile-trend-card" aria-busy="true">
           <div class="card-head-bar">
             <div>
+              <span class="section-kicker" data-i18n="web.kicker.anTrend">趋势 · 用量</span>
               <h3 data-i18n="web.profile.trend">Usage trend</h3>
               <p id="profile-trend-meta" class="card-subtitle-meta"></p>
             </div>
@@ -268,6 +295,7 @@
         <section class="card profile-section-card profile-hourly-card" aria-busy="true">
           <div class="card-head-bar">
             <div>
+              <span class="section-kicker" data-i18n="web.kicker.rhythmHours">节律 · 时段</span>
               <h3 data-i18n="web.profile.hourlyTitle">Hourly rhythm</h3>
               <p id="profile-hourly-meta" class="card-subtitle-meta"></p>
             </div>
@@ -277,11 +305,12 @@
           <div class="hourly-work-split" id="profile-hourly-split"></div>
         </section>
 
-        <!-- 二级分析：周内燃烧节律 + 主力模型排名（并排等高） -->
+        <!-- 二级分析：周内节律 + 主力模型排名（并排等高） -->
         <div class="profile-charts-split profile-rhythm-models">
           <section class="card profile-section-card profile-weekday-card">
             <div class="card-head-bar">
               <div>
+                <span class="section-kicker" data-i18n="web.kicker.rhythmWeekday">节律 · 周内</span>
                 <h3 data-i18n="web.profile.weekdayTitle">Weekday rhythm</h3>
                 <p class="card-subtitle-meta" data-i18n="web.profile.weekdaySub">Which day of the week is most productive</p>
               </div>
@@ -293,6 +322,7 @@
           <section class="card profile-section-card profile-models-card">
             <div class="card-head-bar">
               <div>
+                <span class="section-kicker" data-i18n="web.kicker.profileModels">模型 · 排名</span>
                 <h3 data-i18n="web.profile.modelsTitle">Primary model share</h3>
                 <p class="card-subtitle-meta" id="profile-models-meta"></p>
               </div>
@@ -305,6 +335,7 @@
         <section class="card profile-section-card profile-sources-card">
           <div class="card-head-bar">
             <div>
+              <span class="section-kicker" data-i18n="web.kicker.profileSources">来源 · 占比</span>
               <h3 data-i18n="web.profile.sourcesTitle">Source distribution</h3>
               <p class="card-subtitle-meta" id="profile-sources-meta"></p>
             </div>

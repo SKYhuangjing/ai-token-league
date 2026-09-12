@@ -4,33 +4,53 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-i18n="app.name">AI Token League</title>
+    <script>
+      (() => {
+        try {
+          const lang = localStorage.getItem("ai-token-league.language");
+          if (lang === "en" || lang === "zh-CN") document.documentElement.lang = lang;
+          document.documentElement.dataset.bootLang = document.documentElement.lang;
+        } catch (_) {}
+      })();
+    </script>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="prefetch" href="/" />
+    <link rel="prefetch" href="/leaderboard.html" />
+    <link rel="prefetch" href="/analytics.html" />
+    <link rel="prefetch" href="/profile.html" />
+
   </head>
   <body class="page-home">
     <main class="shell public-shell landing-shell">
       <section class="masthead public-masthead">
         <div class="masthead-copy">
           <div class="brand-row">
+            <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg></div>
             <h1 data-i18n="app.name">AI Token League</h1>
-            <span id="board-identity-eyebrow" class="pill" data-i18n="web.publicBoard">Public community board</span>
+            <span id="board-identity-eyebrow" class="pill" data-i18n="web.publicBoard">匿名社区榜单</span>
           </div>
         </div>
         <div class="masthead-side">
           <nav class="public-nav" aria-label="Site">
-            <a href="/" class="nav-link current" data-i18n="web.nav.home">Home</a>
-            <a href="/leaderboard.html" class="nav-link" data-i18n="web.nav.leaderboard">Leaderboard</a>
-            <a href="/analytics.html" class="nav-link" data-i18n="web.nav.analytics">Analytics</a>
-            <a href="/profile.html" class="nav-link" id="nav-profile-link" data-i18n="web.nav.profile">Profile</a>
+            <a href="/" class="nav-link current" data-i18n="web.nav.home">首页</a>
+            <a href="/leaderboard.html" class="nav-link" data-i18n="web.nav.leaderboard">排行榜</a>
+            <a href="/analytics.html" class="nav-link" data-i18n="web.nav.analytics">分析</a>
+            <a href="/profile.html" class="nav-link" id="nav-profile-link" data-i18n="web.nav.profile">个人</a>
           </nav>
-          <div class="lang-switcher-container" id="lang-switcher-container"></div>
+          <div class="lang-switcher-container" id="lang-switcher-container">
+            <div class="lang-switcher" id="lang-switcher" role="group" aria-label="Language">
+              <button type="button" class="lang-opt" data-lang="zh-CN" aria-pressed="true">中文</button>
+              <button type="button" class="lang-opt" data-lang="en" aria-pressed="false">EN</button>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section class="kpi-row kpi-scoreboard land-rise" id="board-preview" style="--rise:1">
+      <section class="kpi-row kpi-scoreboard land-rise" id="board-preview" style="--rise:2">
         <div class="kpi-pair" data-period-pair="today">
           <article class="kpi kpi-current period-today">
             <span class="lab" data-i18n="web.period.today">Today</span>
@@ -83,27 +103,30 @@
         </article>
       </section>
 
-      <section class="home-hero-grid land-rise" style="--rise:2">
+      <section class="home-hero-grid land-rise" style="--rise:3">
         <article class="card home-trend-card">
           <div class="card-head">
-            <h2 data-i18n="web.analytics.burnTrend">Token burn trend</h2>
-            <span class="meta home-trend-meta">
-              <span id="home-trend-peak" class="trend-peak" hidden></span>
-              <span data-i18n="web.home.trendRange">Last 30 days</span>
+            <span class="section-kicker" data-i18n="web.kicker.homeTrend">趋势 · 用量</span>
+          <h2 data-i18n="web.analytics.burnTrend">Token usage trend</h2>
+            <span class="meta home-trend-meta an-insights">
+              <span class="trend-chip" id="home-trend-peak" hidden></span>
+              <span class="trend-chip" id="home-trend-online" hidden></span>
+              <span class="trend-chip" data-i18n="web.home.trendRange">Last 30 days</span>
             </span>
           </div>
           <div class="chart-frame">
             <svg id="home-trend-chart" viewBox="0 0 800 260" preserveAspectRatio="none" class="chart-svg"></svg>
           </div>
           <div class="burn-legend">
-            <span><i style="background:var(--teal)"></i><span data-i18n="web.home.trendLegendTokens">totalTokens</span></span>
+            <span><i style="background:var(--orange)"></i><span data-i18n="web.home.trendLegendTokens">totalTokens</span></span>
             <span><i class="legend-active"></i><span data-i18n="web.home.trendLegendActive">Active users (relative)</span></span>
           </div>
         </article>
 
         <article class="card home-top-card">
           <div class="card-head">
-            <h2 data-i18n="web.home.topToday">今日 Top</h2>
+            <span class="section-kicker" data-i18n="web.kicker.homeRanking">排行</span>
+          <h2 data-i18n="web.home.topToday">用量排行</h2>
             <span class="meta home-top-meta">
               <span id="home-top-count">--</span>
               <a class="card-head-link" href="/leaderboard.html" data-i18n="web.nav.leaderboard">View leaderboard</a>
@@ -113,12 +136,12 @@
         </article>
       </section>
 
-      <article class="card treemap-card land-rise" style="--rise:3">
+      <article class="card treemap-card land-rise" style="--rise:4">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.homePeople">人员 · 分布</span>
           <h2 data-i18n="web.home.participantTreemap">本月人员 Token 分布</h2>
           <span class="meta" data-i18n="web.home.participantTreemapSubtitle">面积 ∝ 用量 · 颜色 = 主要来源</span>
         </div>
-        <div id="home-treemap-legend" class="src-legend-wrap"></div>
         <div class="dist-split">
           <div class="tm-board">
             <svg id="home-participant-treemap-svg" viewBox="0 0 900 360" preserveAspectRatio="xMidYMid meet" class="participant-treemap-svg treemap-svg"
@@ -135,6 +158,7 @@
 
       <article class="card source-top-card land-rise" style="--rise:4">
         <div class="card-head">
+          <span class="section-kicker" data-i18n="web.kicker.homeSources">来源 · 排行</span>
           <h2 data-i18n="web.home.sourceTopTitle">本月来源 Top 3</h2>
           <span class="meta" data-i18n="web.home.sourceTopSubtitle">颜色 = 来源 · 条形 = 来源内占比</span>
         </div>

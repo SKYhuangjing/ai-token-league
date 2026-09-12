@@ -1243,6 +1243,7 @@ export class Store {
       }
     }
     return {
+      businessDay,
       participantCount: Object.keys(this.db.participants).length,
       todayTokens: totals.today.tokens,
       yesterdayTokens: totals.yesterday.tokens,
@@ -3007,7 +3008,7 @@ function bumpNameTotal(map, name, tokens) {
 // Per-month named series for the evolution cards: rank names by trailing-year
 // totals, keep the top N, and fold the rest into an "other" row so the stacked
 // chart stays readable.
-function monthlyNamedSeries(monthTotals, months, field, { top = 5 } = {}) {
+function monthlyNamedSeries(monthTotals, months, field, { top = 6, peakShare = 0.25, maxNamed = 8 } = {}) {
   const grand = new Map();
   for (const bucket of monthTotals.values()) {
     for (const [name, value] of bucket[field]) {
@@ -3015,9 +3016,31 @@ function monthlyNamedSeries(monthTotals, months, field, { top = 5 } = {}) {
     }
   }
   const ranked = [...grand.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name).filter(Boolean);
-  const keep = ranked.slice(0, top);
-  const rest = ranked.slice(top);
-  const series = keep.map((name) => ({
+  // Rank by all-time total alone folds historically dominant names (e.g. a
+  // retired model that owned the earliest months) into "other", which makes
+  // those whole months read as unnamed. Also keep anything that ever held a
+  // peakShare of a single month, capped so the legend stays readable.
+  const monthFieldTotals = new Map();
+  for (const month of months) {
+    let sum = 0;
+    for (const value of monthTotals.get(month)[field].values()) sum += value;
+    monthFieldTotals.set(month, sum);
+  }
+  const keep = new Set(ranked.slice(0, top));
+  for (const name of ranked) {
+    if (keep.size >= maxNamed) break;
+    if (keep.has(name)) continue;
+    for (const month of months) {
+      const total = monthFieldTotals.get(month);
+      if (total > 0 && (monthTotals.get(month)[field].get(name) || 0) / total >= peakShare) {
+        keep.add(name);
+        break;
+      }
+    }
+  }
+  const keptRanked = ranked.filter((name) => keep.has(name));
+  const rest = ranked.filter((name) => !keep.has(name));
+  const series = keptRanked.map((name) => ({
     name,
     series: months.map((month) => monthTotals.get(month)[field].get(name) || 0)
   }));
