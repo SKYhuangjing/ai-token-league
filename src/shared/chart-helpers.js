@@ -309,7 +309,31 @@ export function renderSourceLegend(container) {
   `;
 }
 
-export function renderTokenComposition(container, summary = {}) {
+// Shared hover-tooltip wiring for DOM-built charts: one builder per anchor,
+// the floating tooltip follows the anchor while hovered. Scrolling under a
+// stationary pointer fires no boundary events, so any scroll hides it.
+let activeHoverTooltip = null;
+if (typeof document !== "undefined") {
+  document.addEventListener("scroll", () => {
+    if (activeHoverTooltip) activeHoverTooltip.style.opacity = "0";
+  }, { capture: true, passive: true });
+}
+
+export function bindHoverTooltip(container, tooltip, selector, build) {
+  if (!tooltip) return;
+  activeHoverTooltip = tooltip;
+  container.querySelectorAll(selector).forEach((el) => {
+    el.addEventListener("mouseenter", () => {
+      tooltip.innerHTML = build(el);
+      tooltip.style.opacity = "1";
+      positionTooltip(tooltip, el);
+    });
+    el.addEventListener("mousemove", () => positionTooltip(tooltip, el));
+    el.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+  });
+}
+
+export function renderTokenComposition(container, summary = {}, { tooltip = null, localeTokenCompact = (v) => String(v) } = {}) {
   if (!container) return;
   const total = Number(summary.totalTokens || 0);
   if (!total) {
@@ -379,9 +403,14 @@ export function renderTokenComposition(container, summary = {}) {
       </div>
     </div>
   `;
+  bindHoverTooltip(container, tooltip, ".comp-mix-row", (row) => {
+    const index = [...container.querySelectorAll(".comp-mix-row")].indexOf(row);
+    const part = parts[index];
+    return `<strong>${escapeHtml(part.label)}</strong><br>${localeTokenCompact(part.tokens)} ${escapeHtml(t("unit.tokens") || "tokens")} · ${part.pctStr}`;
+  });
 }
 
-export function renderParetoChart(container, rankings = []) {
+export function renderParetoChart(container, rankings = [], { tooltip = null, localeTokenCompact = (v) => String(v) } = {}) {
   if (!container) return;
   const sorted = [...rankings].sort((a, b) => Number(b.totalTokens || 0) - Number(a.totalTokens || 0));
   const total = sorted.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
@@ -410,6 +439,12 @@ export function renderParetoChart(container, rankings = []) {
       </div>
     `;
   }).join("");
+  bindHoverTooltip(container, tooltip, ".pareto-row", (row) => {
+    const index = [...container.querySelectorAll(".pareto-row")].indexOf(row);
+    const count = Math.min(thresholds[index], sorted.length);
+    const tokens = sorted.slice(0, count).reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+    return `<strong>${escapeHtml(labels[index])}</strong><br>${localeTokenCompact(tokens)} ${escapeHtml(t("unit.tokens") || "tokens")} · ${count} ${escapeHtml(t("web.analytics.activeDevs") || "")}`;
+  });
 }
 
 export function renderWeekdayRhythm(container, timeSeries = [], { tooltip = null, localeTokenCompact = (v) => v } = {}) {
@@ -809,7 +844,7 @@ export function renderHourWeekdayMatrix(container, items = [], { tooltip = null,
 // Month-over-month grouped bar rows: one row per name with a muted "previous
 // month" bar and a teal "current month" bar plus a delta badge. Reads instantly
 // — no axis or slope interpretation needed.
-export function renderCompareBars(container, rows = [], { localeTokenCompact = (v) => v, prevLabel = "", currLabel = "" } = {}) {
+export function renderCompareBars(container, rows = [], { localeTokenCompact = (v) => v, prevLabel = "", currLabel = "", tooltip = null } = {}) {
   if (!container) return;
   if (!rows.length) {
     container.innerHTML = `<div class="empty-state">${escapeHtml(t("web.analytics.noData"))}</div>`;
@@ -823,7 +858,8 @@ export function renderCompareBars(container, rows = [], { localeTokenCompact = (
     const deltaClass = delta === null || delta === 0 ? "flat" : delta > 0 ? "up" : "down";
     const deltaText = delta === null ? "新增" : `${delta > 0 ? "+" : ""}${delta}%`;
     const bar = (value, kind) => `<div class="cmp-bar cmp-${kind}"><i style="width:${Math.max(1, Math.round((value / maxVal) * 100))}%"></i><span>${escapeHtml(localeTokenCompact(value))}</span></div>`;
-    return `<div class="cmp-row" title="${escapeHtml(String(row.name))} · ${escapeHtml(prevLabel)} ${escapeHtml(localeTokenCompact(from))} → ${escapeHtml(currLabel)} ${escapeHtml(localeTokenCompact(to))}">
+    const nativeTitle = tooltip ? "" : ` title="${escapeHtml(String(row.name))} · ${escapeHtml(prevLabel)} ${escapeHtml(localeTokenCompact(from))} → ${escapeHtml(currLabel)} ${escapeHtml(localeTokenCompact(to))}"`;
+    return `<div class="cmp-row"${nativeTitle}>
       <div class="cmp-head">
         <span class="cmp-name" title="${escapeHtml(String(row.name))}">${escapeHtml(String(row.name))}</span>
         <span class="cmp-delta ${deltaClass}">${escapeHtml(deltaText)}</span>
@@ -832,6 +868,15 @@ export function renderCompareBars(container, rows = [], { localeTokenCompact = (
       ${bar(to, "curr")}
     </div>`;
   }).join("");
+  bindHoverTooltip(container, tooltip, ".cmp-row", (row) => {
+    const index = [...container.querySelectorAll(".cmp-row")].indexOf(row);
+    const item = rows[index];
+    const from = item.from || 0;
+    const to = item.to || 0;
+    const delta = from > 0 ? Math.round((to / from - 1) * 100) : null;
+    const deltaText = delta === null ? "新增" : `${delta > 0 ? "+" : ""}${delta}%`;
+    return `<strong>${escapeHtml(String(item.name))}</strong><br>${escapeHtml(prevLabel)} ${escapeHtml(localeTokenCompact(from))} → ${escapeHtml(currLabel)} ${escapeHtml(localeTokenCompact(to))}<br>${escapeHtml(deltaText)}`;
+  });
 }
 
 // Work-share attribution from whole-hour buckets: each boundary hour counts
@@ -1501,7 +1546,7 @@ export function renderGauge(fillEl, valEl, cacheHitRate) {
   valEl.textContent = `${pct}%`;
 }
 
-export function renderBarChart(container, items = [], { collapseAfter, collapseLabel, localeTokenCompact, showCost = false, renderCost: customRenderCost = null } = {}) {
+export function renderBarChart(container, items = [], { collapseAfter, collapseLabel, localeTokenCompact, showCost = false, renderCost: customRenderCost = null, tooltip = null } = {}) {
   container.innerHTML = "";
   if (!items.length) {
     container.innerHTML = `<div style="text-align: center; padding: 30px 0; color: var(--muted);">${t("web.analytics.noData") || "No usage data found"}</div>`;
@@ -1541,7 +1586,7 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
     const costHtml = hasCost ? `<span class="usage-share-cost">${costRenderer(item)}</span>` : "";
     const row = document.createElement("div");
     row.className = item.other ? "usage-share-row is-other" : "usage-share-row";
-    row.title = `${item.name}: ${tokenLabel} (${ratioPctStr})`;
+    if (!tooltip) row.title = `${item.name}: ${tokenLabel} (${ratioPctStr})`;
     row.innerHTML = `
       <div class="lbl">
         <span class="usage-share-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
@@ -1557,6 +1602,27 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
     `;
     container.appendChild(row);
   }
+  bindHoverTooltip(container, tooltip, ".usage-share-row", (row) => {
+    const index = [...container.children].indexOf(row);
+    const item = displayItems[index];
+    const costText = showCost && item.estimatedCostUsd !== undefined && item.estimatedCostUsd !== null
+      ? ` · ${costRenderer(item)}`
+      : "";
+    return `<strong>${escapeHtml(item.name)}</strong><br>${localeTokenCompact(item.tokens)} ${escapeHtml(t("unit.tokens") || "tokens")} · ${ratioPctStrOf(item, totalTokens)}${costText}`;
+  });
+}
+
+function ratioPctStrOf(item, totalTokens) {
+  const ratio = Number.isFinite(Number(item.ratio))
+    ? Number(item.ratio)
+    : totalTokens > 0
+      ? Number(item.tokens || 0) / totalTokens
+      : 0;
+  const rawPct = ratio * 100;
+  if (!(item.tokens > 0)) return "0%";
+  if (rawPct < 0.1) return "<0.1%";
+  if (rawPct < 1) return `${rawPct.toFixed(1)}%`;
+  return `${Math.round(rawPct)}%`;
 }
 
 function treemapTextTone(fill) {
@@ -1814,7 +1880,7 @@ export function renderParticipantTreemap(svg, labels, rankings = [], {
   });
 }
 
-function positionTooltip(tooltip, anchor) {
+export function positionTooltip(tooltip, anchor) {
   // position: fixed → clamp directly in viewport coords; the old page-coord
   // math assumed a body offset parent and pushed tooltips off-edge.
   const rect = anchor.getBoundingClientRect();

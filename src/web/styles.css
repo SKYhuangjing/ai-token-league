@@ -5272,7 +5272,7 @@ body.page-home .shell {
   fill: rgba(5, 143, 126, 0.14);
 }
 
-:is(body.page-home, body.page-profile, .analytics-shell, .landing-shell) .chart-tooltip {
+:is(body.page-home, body.page-profile, .analytics-shell, .landing-shell, .teams-shell) .chart-tooltip {
   border: 1px solid rgba(216, 208, 191, 0.95);
   border-radius: 9px;
   background: rgba(255, 253, 247, 0.97);
@@ -14277,6 +14277,50 @@ body.is-embedded .an-subbar {
   color: var(--muted);
 }
 
+/* inline "who is in this team" panel under the team chips */
+.teams-members-panel {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-2);
+}
+
+.teams-members-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.teams-members-panel-head b {
+  font: 650 14px/1.3 var(--font-ui);
+  color: var(--ink);
+}
+
+.teams-members-panel-count {
+  font: 500 11.5px/1.2 var(--font-ui);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.teams-members-panel-head .teams-chip-action:last-child {
+  margin-left: auto;
+}
+
+.teams-members-panel-hint {
+  margin: 4px 0 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.teams-people-cloud.is-panel {
+  max-height: 180px;
+}
+
+.teams-chip-action.is-active {
+  color: var(--accent-ink);
+}
+
 .teams-manage-members-head {
   display: flex;
   align-items: center;
@@ -14621,6 +14665,15 @@ body.is-embedded .an-subbar {
   color: var(--muted);
 }
 
+.tc-share {
+  font: 600 10.5px var(--font-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
 /* --- team cards --- */
 
 .teams-stack {
@@ -14872,6 +14925,29 @@ body.is-embedded .an-subbar {
   color: var(--muted);
 }
 
+/* member token cell: number on top, share-of-team bar underneath so the
+   heavy users scan without reading every number */
+.teams-token-num {
+  display: block;
+}
+
+.teams-token-bar {
+  display: block;
+  width: 76px;
+  height: 3px;
+  margin: 3px 0 1px auto;
+  border-radius: 2px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.teams-token-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
 .teams-member-row {
   cursor: pointer;
 }
@@ -15098,12 +15174,6 @@ a.teams-member-name:hover {
 
 .teams-member-row[aria-expanded="true"] > td:first-child::before {
   transform: rotate(90deg);
-}
-
-a.teams-member-name::after {
-  content: " ↗";
-  font-size: 10px;
-  color: var(--muted);
 }
 
 /* ===================== Teams manage people cloud (v4) ===================== */

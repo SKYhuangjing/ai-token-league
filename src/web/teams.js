@@ -1,7 +1,7 @@
 import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
 import "/theme-switcher.js";
 import { formatTokenCompact } from "/shared/display.js";
-import { escapeHtml, formatCost } from "/shared/chart-helpers.js";
+import { escapeHtml, formatCost, positionTooltip } from "/shared/chart-helpers.js";
 
 const isEmbedded = window.self !== window.top;
 if (isEmbedded) {
@@ -47,7 +47,8 @@ const state = {
   selected: new Set(),
   batchBusy: false,
   armedDelete: null,
-  armedDeleteTimer: 0
+  armedDeleteTimer: 0,
+  membersViewTeamId: null
 };
 
 const loadingEl = document.querySelector("#teams-loading");
@@ -70,8 +71,10 @@ function setLoading(on) {
   });
 }
 
+// toolCode vocabulary comes from collector-core TOOL_CODE constants; the
+// board's usage rows carry "claude_code" (not "claude") for Claude Code.
 function toolDisplayName(toolCode) {
-  const keyMap = { codex: "source.codex", claude: "source.claude", cursor: "source.cursor", mimocode: "source.mimocode", opencode: "source.opencode", hermes: "source.hermes", openclaw: "source.openclaw", zcode: "source.zcode", workbuddy: "source.workbuddy", dsh: "source.dsh", kimi: "source.kimi" };
+  const keyMap = { codex: "source.codex", claude_code: "source.claude", claude: "source.claude", cursor: "source.cursor", mimocode: "source.mimocode", opencode: "source.opencode", hermes: "source.hermes", openclaw: "source.openclaw", zcode: "source.zcode", workbuddy: "source.workbuddy", dsh: "source.dsh", kimi: "source.kimi" };
   if (keyMap[toolCode]) {
     const label = t(keyMap[toolCode]);
     if (label) return label;
@@ -82,6 +85,33 @@ function toolDisplayName(toolCode) {
 function fmtTokens(value) {
   return formatTokenCompact(value || 0, getCurrentLang());
 }
+
+function shortDay(day) {
+  return String(day || "").slice(5).replace("-", "/");
+}
+
+// Floating tooltip for chart marks: marks declare data-tip="…", one delegated
+// listener pair covers every (re)rendered chart without per-render rebinding.
+const chartTipEl = document.querySelector("#teams-tooltip");
+document.addEventListener("mouseover", (event) => {
+  const mark = event.target.closest?.("[data-tip]");
+  if (!mark || !chartTipEl) return;
+  chartTipEl.textContent = mark.dataset.tip;
+  chartTipEl.style.opacity = "1";
+  positionTooltip(chartTipEl, mark);
+});
+document.addEventListener("mouseout", (event) => {
+  const mark = event.target.closest?.("[data-tip]");
+  if (!mark || !chartTipEl) return;
+  // moving between children of the same mark keeps the tooltip up
+  if (event.relatedTarget && mark.contains(event.relatedTarget)) return;
+  chartTipEl.style.opacity = "0";
+});
+// scrolling under a stationary pointer fires no boundary events; drop the
+// tooltip so it cannot linger detached from its mark
+document.addEventListener("scroll", () => {
+  if (chartTipEl) chartTipEl.style.opacity = "0";
+}, { capture: true, passive: true });
 
 function dayLabel(day, index, total) {
   const cadence = total <= 7 ? 1 : total <= 14 ? 2 : 5;
@@ -292,7 +322,11 @@ function lineChartSvg({ values, prevValues = [], labels, yMax, formatValue }) {
     // last label right-aligns inside the viewBox so long dates never clip
     const anchor = last ? "end" : "middle";
     const lx = last ? width - 1 : xAt(i);
-    return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(v).toFixed(1)}" r="2.6" class="t-dot"><title>${escapeHtml(label.title)}</title></circle>` +
+    const prev = prevValues[i];
+    const tip = Number.isFinite(prev)
+      ? t("web.teams.daily.tipActivePrev", { day: label.title, n: v, prev })
+      : t("web.teams.daily.tipActive", { day: label.title, n: v });
+    return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(v).toFixed(1)}" r="2.6" class="t-dot" data-tip="${escapeHtml(tip)}"></circle>` +
       (label.text ? `<text x="${lx.toFixed(1)}" y="${height - 8}" text-anchor="${anchor}" class="t-axis">${escapeHtml(label.text)}</text>` : "");
   }).join("");
 
@@ -308,7 +342,7 @@ function renderDailyActive() {
   const yMax = Math.max(4, ...values, ...prevValues);
   const labels = days.map((day, index) => ({
     text: dayLabel(day, index, days.length),
-    title: `${day} · ${t("web.teams.daily.activeUnit", { n: org.daily[index].active })}`
+    title: shortDay(day)
   }));
   document.querySelector("#teams-daily-active").innerHTML = lineChartSvg({ values, prevValues, labels, yMax, formatValue: (v) => String(v) });
 }
@@ -343,12 +377,19 @@ function renderDailyTokens() {
       `<text x="${padLeft - 6}" y="${y + 3.5}" text-anchor="end" class="t-axis">${escapeHtml(fmtTokens(max * ratio))}</text>`;
   }).join("");
 
+  const windowTotal = values.reduce((sum, item) => sum + item, 0);
+
   const bars = values.map((v, i) => {
     const x = padLeft + slot * i + (slot - barW) / 2;
     const h = (v / max) * plotH;
     const y = padTop + plotH - h;
     const text = dayLabel(days[i], i, n);
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(v > 0 ? 1 : 0, h).toFixed(1)}" rx="2" class="t-bar"><title>${escapeHtml(days[i])} · ${escapeHtml(fmtTokens(v))}</title></rect>` +
+    const tip = t("web.teams.daily.tipTokens", {
+      day: shortDay(days[i]),
+      tokens: fmtTokens(v),
+      pct: windowTotal ? Math.round((v / windowTotal) * 100) : 0
+    });
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(v > 0 ? 1 : 0, h).toFixed(1)}" rx="2" class="t-bar" data-tip="${escapeHtml(tip)}"></rect>` +
       (text ? `<text x="${(padLeft + slot * i + slot / 2).toFixed(1)}" y="${height - 8}" text-anchor="middle" class="t-axis">${escapeHtml(text)}</text>` : "");
   }).join("");
 
@@ -359,9 +400,11 @@ function renderDailyTokens() {
 function renderCompare() {
   const { analysis } = state;
   const sorted = [...analysis.teams].sort((a, b) => a.deltaActive - b.deltaActive || b.tokens - a.tokens);
+  const orgTokens = sorted.reduce((sum, team) => sum + team.tokens, 0);
   const rows = sorted.map((team) => {
     const size = Math.max(1, team.memberCount);
     const bar = (value, cls) => `<div class="tc-track"><i class="${cls}" style="width:${(value / size) * 100}%"></i></div>`;
+    const share = orgTokens ? Math.round((team.tokens / orgTokens) * 100) : 0;
     return `
       <div class="teams-compare-row" data-team-jump="${escapeHtml(team.id)}" role="button" tabindex="0">
         <div class="tc-label"><b>${escapeHtml(team.name)}</b><span>${escapeHtml(t("web.teams.compare.members", { n: team.memberCount }))}</span></div>
@@ -371,6 +414,7 @@ function renderCompare() {
         </div>
         <div class="tc-side">
           <span class="tc-tokens">${escapeHtml(fmtTokens(team.tokens))}</span>
+          <span class="tc-share" title="${escapeHtml(t("web.teams.compare.shareOfTeams"))}">${share}%</span>
         </div>
       </div>`;
   }).join("");
@@ -411,7 +455,7 @@ function teamCardHtml(team) {
   const n = team.daily.length;
   const bars = team.daily.map((d, i) => {
     const text = dayLabel(d.day, i, n);
-    return `<span class="teams-bar" title="${escapeHtml(d.day)} · ${escapeHtml(fmtTokens(d.tokens))}"><i style="height:${Math.max(d.tokens > 0 ? 2 : 0, (d.tokens / maxDaily) * 100).toFixed(1)}%"></i><em>${escapeHtml(text)}</em></span>`;
+    return `<span class="teams-bar" data-tip="${escapeHtml(t("web.teams.team.tipDayTokens", { day: shortDay(d.day), tokens: fmtTokens(d.tokens) }))}"><i style="height:${Math.max(d.tokens > 0 ? 2 : 0, (d.tokens / maxDaily) * 100).toFixed(1)}%"></i><em>${escapeHtml(text)}</em></span>`;
   }).join("");
 
   const toolTotal = Math.max(1, team.tools.reduce((sum, item) => sum + item.tokens, 0));
@@ -434,6 +478,7 @@ function teamCardHtml(team) {
   // stable reading order across cards: active members first, inactive after
   const activeMembers = team.members.filter((m) => m.kind !== "paused" && m.kind !== "absent");
   const inactiveMembers = team.members.filter((m) => m.kind === "paused" || m.kind === "absent");
+  const maxMemberTokens = Math.max(1, ...team.members.map((m) => m.tokens));
   const toolsSep = getCurrentLang().startsWith("zh") ? "、" : ", ";
   const memberRows = [];
   for (const [groupMembers, group] of [[activeMembers, "active"], [inactiveMembers, "inactive"]]) {
@@ -443,12 +488,13 @@ function teamCardHtml(team) {
       const toolsText = member.tools.length ? member.tools.map((tool) => toolDisplayName(tool)).join(toolsSep) : "—";
       const open = state.expanded.has(`${team.id}:${member.participantId}`);
       const evidence = open ? memberEvidenceHtml(member) : "";
+      const barWidth = member.tokens > 0 ? Math.max(3, (member.tokens / maxMemberTokens) * 100) : 0;
       memberRows.push(`
       <tr class="teams-member-row${member.activeDays === 0 ? " is-inactive" : ""}" data-member-toggle="${escapeHtml(team.id)}:${escapeHtml(member.participantId)}" tabindex="0" aria-expanded="${open}">
         <td><a class="teams-member-name" href="/profile.html?id=${encodeURIComponent(member.participantId)}&mode=admin" target="_blank" rel="noopener" title="${escapeHtml(t("web.teams.team.memberProfile"))}">${escapeHtml(member.nickname)}</a>${kindChip(member.kind)}</td>
         <td class="num">${member.prevActiveDays} / ${state.days}</td>
         <td class="num"><b>${member.activeDays}</b> / ${state.days}</td>
-        <td class="num">${escapeHtml(fmtTokens(member.tokens))}</td>
+        <td class="num"><span class="teams-token-num">${escapeHtml(fmtTokens(member.tokens))}</span><span class="teams-token-bar"><i style="width:${barWidth.toFixed(1)}%"></i></span></td>
         <td class="teams-member-tools">${escapeHtml(toolsText)}</td>
       </tr>
       ${open ? `<tr class="teams-evidence-row"><td colspan="5">${evidence}</td></tr>` : ""}`);
@@ -467,6 +513,7 @@ function teamCardHtml(team) {
           <div class="tm-item"><small data-dyn-i18n="web.teams.team.telPaused"></small><strong>${pausedCount}</strong></div>
           <div class="tm-item"><small data-dyn-i18n="web.teams.team.telNew"></small><strong>${newCount}</strong></div>
           <div class="tm-item"><small data-dyn-i18n="web.teams.team.tokens"></small><strong class="mono">${escapeHtml(fmtTokens(team.tokens))}</strong>${tokenDeltaHtml}</div>
+          <div class="tm-item" title="${escapeHtml(t("web.teams.team.perCapitaTip"))}"><small data-dyn-i18n="web.teams.team.perCapita"></small><strong class="mono">${escapeHtml(fmtTokens(team.active ? team.tokens / team.active : 0))}</strong></div>
           <div class="tm-item"><small data-dyn-i18n="web.teams.team.cost"></small><strong class="cost-amount">${escapeHtml(formatCost(team.costUsd))}</strong></div>
         </div>
       </div>
@@ -500,7 +547,7 @@ function memberEvidenceHtml(member) {
   const max = Math.max(1, ...member.daily.map((d) => d.tokens));
   const bars = member.daily.map((d, i) => {
     const text = dayLabel(d.day, i, member.daily.length);
-    return `<span class="teams-bar evidence" title="${escapeHtml(d.day)} · ${escapeHtml(fmtTokens(d.tokens))}"><i style="height:${Math.max(d.tokens > 0 ? 2 : 0, (d.tokens / max) * 100).toFixed(1)}%"></i><em>${escapeHtml(text)}</em></span>`;
+    return `<span class="teams-bar evidence" data-tip="${escapeHtml(t("web.teams.team.tipDayTokens", { day: shortDay(d.day), tokens: fmtTokens(d.tokens) }))}"><i style="height:${Math.max(d.tokens > 0 ? 2 : 0, (d.tokens / max) * 100).toFixed(1)}%"></i><em>${escapeHtml(text)}</em></span>`;
   }).join("");
   return `<div class="teams-evidence">
     <div class="teams-bars evidence">${bars}</div>
@@ -529,17 +576,49 @@ function updateAssignBar(batchText) {
   });
 }
 
+function renderMembersPanel() {
+  const host = document.querySelector("#teams-members-panel-host");
+  if (!host) return;
+  const { management } = state;
+  const team = management.teams.find((item) => item.id === state.membersViewTeamId) || null;
+  if (!team) {
+    host.innerHTML = "";
+    return;
+  }
+  const members = management.participants.filter((item) => item.teamId === team.id);
+  const chips = members.map((item) =>
+    `<button type="button" class="teams-person is-tagged${state.selected.has(item.participantId) ? " is-selected" : ""}" data-person="${escapeHtml(item.participantId)}" title="${escapeHtml(item.nickname)}">${escapeHtml(item.nickname)}</button>`
+  ).join("") || `<p class="teams-manage-empty" data-i18n="web.teams.manage.noMembers"></p>`;
+  host.innerHTML = `
+    <div class="teams-members-panel" role="region" aria-label="${escapeHtml(team.name)}">
+      <div class="teams-members-panel-head">
+        <b>${escapeHtml(team.name)}</b>
+        <span class="teams-members-panel-count">${escapeHtml(t("web.teams.manage.teamCount", { n: team.memberCount }))}</span>
+        <button type="button" class="teams-chip-action" data-panel-jump="${escapeHtml(team.id)}" data-i18n="web.teams.manage.jumpToBoard"></button>
+        <button type="button" class="teams-chip-action is-danger" data-panel-close data-i18n="web.teams.manage.closePanel"></button>
+      </div>
+      <p class="teams-members-panel-hint" data-i18n="web.teams.manage.membersPanelHint"></p>
+      <div class="teams-people-cloud is-panel">${chips}</div>
+    </div>`;
+  updateDynamicTranslations(host);
+}
+
 function renderManage() {
   const { management } = state;
+  if (state.membersViewTeamId && !management.teams.some((team) => team.id === state.membersViewTeamId)) {
+    state.membersViewTeamId = null;
+  }
   const listEl = document.querySelector("#teams-manage-list");
   listEl.innerHTML = management.teams.map((team) => `
     <div class="teams-chip" data-team-id="${escapeHtml(team.id)}">
       <span class="teams-chip-name">${escapeHtml(team.name)}</span>
       <span class="teams-chip-count">${escapeHtml(t("web.teams.manage.teamCount", { n: team.memberCount }))}</span>
+      <button type="button" class="teams-chip-action${state.membersViewTeamId === team.id ? " is-active" : ""}" data-chip-members="${escapeHtml(team.id)}" aria-expanded="${state.membersViewTeamId === team.id}" data-i18n="web.teams.manage.viewMembers"></button>
       <button type="button" class="teams-chip-action" data-chip-rename="${escapeHtml(team.id)}" data-i18n="web.teams.manage.rename"></button>
       <button type="button" class="teams-chip-action is-danger" data-chip-delete="${escapeHtml(team.id)}" data-i18n="web.teams.manage.delete"></button>
     </div>`).join("") || `<p class="teams-manage-empty" data-i18n="web.teams.manage.noTeams"></p>`;
   updateDynamicTranslations(listEl);
+  renderMembersPanel();
 
   const assignHost = document.querySelector("#teams-assign-team-buttons");
   assignHost.innerHTML = management.teams.map((team) =>
@@ -701,7 +780,11 @@ function bindEvents() {
       const pid = person.dataset.person;
       if (state.selected.has(pid)) state.selected.delete(pid);
       else state.selected.add(pid);
-      person.classList.toggle("is-selected");
+      // the same member renders in the people cloud and (when open) the team
+      // members panel; keep every chip for this pid in sync
+      document.querySelectorAll(`[data-person="${CSS.escape(pid)}"]`).forEach((el) => {
+        el.classList.toggle("is-selected", state.selected.has(pid));
+      });
       updateAssignBar();
       return;
     }
@@ -721,6 +804,24 @@ function bindEvents() {
     }
     if (event.target.closest("#teams-clear-selection")) {
       state.selected.clear();
+      renderManage();
+      return;
+    }
+    const membersBtn = event.target.closest("[data-chip-members]");
+    if (membersBtn) {
+      const teamId = membersBtn.dataset.chipMembers;
+      state.membersViewTeamId = state.membersViewTeamId === teamId ? null : teamId;
+      renderManage();
+      return;
+    }
+    const panelJump = event.target.closest("[data-panel-jump]");
+    if (panelJump) {
+      setManageOpen(false);
+      jumpToTeam(panelJump.dataset.panelJump);
+      return;
+    }
+    if (event.target.closest("[data-panel-close]")) {
+      state.membersViewTeamId = null;
       renderManage();
       return;
     }
@@ -779,6 +880,12 @@ function bindEvents() {
       if (defsPop && !defsPop.hidden) {
         defsPop.hidden = true;
         document.querySelector("#teams-defs-toggle")?.setAttribute("aria-expanded", "false");
+        return;
+      }
+      if (state.membersViewTeamId) {
+        state.membersViewTeamId = null;
+        renderManage();
+        return;
       }
       if (state.selected.size && !event.target.closest("input")) {
         state.selected.clear();

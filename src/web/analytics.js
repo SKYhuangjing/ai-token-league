@@ -9,7 +9,7 @@ import {
   renderActivityHeatmap, aggregateTimeSeriesByWeek,
   renderConcentrationTrend, renderShareAreaStacked, renderCompareBars,
   renderHourClock, renderHourWeekdayMatrix, computeHourlyRhythmStats,
-  renderSourceDonutCard,
+  renderSourceDonutCard, bindHoverTooltip,
   THEME_PALETTE
 } from "/shared/chart-helpers.js";
 import {
@@ -168,15 +168,27 @@ function renderInsights() {
 }
 
 function renderComposition() {
-  renderTokenComposition(document.querySelector("#token-composition"), state.data?.summary || {});
+  renderTokenComposition(
+    document.querySelector("#token-composition"),
+    state.data?.summary || {},
+    { tooltip: document.querySelector("#chart-tooltip"), localeTokenCompact }
+  );
 }
 
 function renderPareto() {
-  renderParetoChart(document.querySelector("#pareto-chart"), state.data?.participantRanking || []);
+  renderParetoChart(
+    document.querySelector("#pareto-chart"),
+    state.data?.participantRanking || [],
+    { tooltip: document.querySelector("#chart-tooltip"), localeTokenCompact }
+  );
 }
 
 function renderWeekday() {
-  renderWeekdayRhythm(document.querySelector("#weekday-chart"), state.data?.timeSeries || []);
+  renderWeekdayRhythm(
+    document.querySelector("#weekday-chart"),
+    state.data?.timeSeries || [],
+    { tooltip: document.querySelector("#chart-tooltip"), localeTokenCompact }
+  );
 }
 
 function renderGauge() {
@@ -225,7 +237,7 @@ if ("ResizeObserver" in window) {
 }
 
 function renderBarCharts() {
-  sharedRenderBarChart(document.querySelector("#model-chart"), state.data.models, { collapseAfter: 11, localeTokenCompact });
+  sharedRenderBarChart(document.querySelector("#model-chart"), state.data.models, { collapseAfter: 11, localeTokenCompact, tooltip: document.querySelector("#chart-tooltip") });
   renderSourceDonutCard(document.querySelector("#provider-donut"), (state.data.providers || []).map(p => ({ name: p.name, label: sourceName(p.name), tokens: p.tokens })), {
     localeTokenCompact,
     tooltip: document.querySelector("#chart-tooltip")
@@ -342,7 +354,8 @@ function renderWorkdirCards() {
   sharedRenderBarChart(document.querySelector("#workdir-chart"), workdirs, {
     collapseAfter: wideLayout ? 11 : 6,
     collapseLabel: t("web.analytics.otherShare"),
-    localeTokenCompact
+    localeTokenCompact,
+    tooltip: document.querySelector("#chart-tooltip")
   });
 
   const monthly = state.data?.workdirMonthly || [];
@@ -379,7 +392,8 @@ function renderWorkdirCards() {
   renderCompareBars(compareEl, rows, {
     localeTokenCompact,
     prevLabel: label(fromMonth),
-    currLabel: label(toMonth)
+    currLabel: label(toMonth),
+    tooltip: document.querySelector("#chart-tooltip")
   });
 }
 
@@ -431,7 +445,7 @@ function renderEcoCountRows(container, rows, { unit }) {
   const total = rows.reduce((sum, row) => sum + row.count, 0) || 1;
   container.innerHTML = rows.map((row) => {
     const pct = Math.round((row.count / total) * 100);
-    return `<div class="usage-share-row" title="${escapeHtml(String(row.name))}: ${row.count}">
+    return `<div class="usage-share-row">
       <div class="lbl">
         <span class="usage-share-name" title="${escapeHtml(String(row.name))}">${escapeHtml(String(row.name))}</span>
         <span class="usage-share-value"><strong>${row.count} ${escapeHtml(unit)}</strong><span>${pct}%</span></span>
@@ -439,6 +453,11 @@ function renderEcoCountRows(container, rows, { unit }) {
       <div class="usage-share-track"><i style="width:${pct}%"></i></div>
     </div>`;
   }).join("");
+  bindHoverTooltip(container, document.querySelector("#chart-tooltip"), ".usage-share-row", (row) => {
+    const index = [...container.children].indexOf(row);
+    const item = rows[index];
+    return `<strong>${escapeHtml(String(item.name))}</strong><br>${item.count} ${escapeHtml(unit)} · ${Math.round((item.count / total) * 100)}%`;
+  });
 }
 
 function compareVersions(a, b) {
