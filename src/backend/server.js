@@ -952,7 +952,48 @@ async function handleApi(req, res) {
   if (req.method === "GET" && req.url === "/api/brand/logo") {
     return sendJson(res, 200, { logoUrl: BRAND_LOGO_URL || null });
   }
+  if (new URL(req.url, "http://localhost").pathname.startsWith("/api/admin/teams")) {
+    return handleAdminTeams(req, res);
+  }
   return sendJson(res, 404, { error: "not found" });
+}
+
+async function handleAdminTeams(req, res) {
+  const url = new URL(req.url, "http://localhost");
+  const parts = url.pathname.split("/").filter(Boolean);
+  // /api/admin/teams[/analysis|/:id|/ :id/members|/ :id/members/:participantId]
+  const teamId = parts[3] && parts[3] !== "analysis" ? decodeURIComponent(parts[3]) : "";
+  const memberId = parts[4] === "members" && parts[5] ? decodeURIComponent(parts[5]) : "";
+  try {
+    if (req.method === "GET" && parts[3] === "analysis") {
+      return sendJson(res, 200, await store.teamsAnalysis({ days: url.searchParams.get("days") || "7" }));
+    }
+    if (req.method === "GET" && parts.length === 3) {
+      return sendJson(res, 200, await store.teamManagementSnapshot());
+    }
+    if (req.method === "POST" && parts.length === 3) {
+      const body = await readBody(req);
+      return sendJson(res, 200, await store.createTeam({ name: body.name }));
+    }
+    if (req.method === "PUT" && teamId && parts.length === 4) {
+      const body = await readBody(req);
+      return sendJson(res, 200, await store.renameTeam(teamId, { name: body.name }));
+    }
+    if (req.method === "DELETE" && teamId && parts.length === 4) {
+      return sendJson(res, 200, await store.deleteTeam(teamId));
+    }
+    if (req.method === "POST" && teamId && parts[4] === "members" && parts.length === 5) {
+      const body = await readBody(req);
+      return sendJson(res, 200, await store.setParticipantTeam(body.participantId, teamId));
+    }
+    if (req.method === "DELETE" && teamId && memberId) {
+      return sendJson(res, 200, await store.setParticipantTeam(memberId, ""));
+    }
+    return sendJson(res, 404, { error: "not found" });
+  } catch (error) {
+    const status = /not found/.test(error.message) ? 404 : 400;
+    return sendJson(res, status, { error: error.message });
+  }
 }
 
 function includeCost(url) {

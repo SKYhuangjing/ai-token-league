@@ -28,6 +28,14 @@ export function normalizeSourceTrendDays(trendDays) {
   return Math.max(1, Math.min(Number.parseInt(trendDays, 10) || SOURCE_STATS_DEFAULT_TREND_DAYS, SOURCE_STATS_MAX_TREND_DAYS));
 }
 
+export const TEAMS_ANALYSIS_DAYS = [7, 14, 30];
+export const TEAMS_ANALYSIS_DEFAULT_DAYS = 7;
+
+export function normalizeTeamsAnalysisDays(days) {
+  const value = Number.parseInt(days, 10);
+  return TEAMS_ANALYSIS_DAYS.includes(value) ? value : TEAMS_ANALYSIS_DEFAULT_DAYS;
+}
+
 export const DEFAULT_DB = {
   schemaVersion: STORAGE_SCHEMA_VERSION,
   serverInstanceId: "",
@@ -44,6 +52,7 @@ export const DEFAULT_DB = {
     remote: { source: "openrouter", status: "empty", url: "", fetchedAt: "", expiresAt: "", pricingVersion: "", lastError: "" },
     prices: {}
   },
+  teams: {},
   uploadBatches: {},
   aggregateCache: {}
 };
@@ -69,6 +78,8 @@ export class Store {
     this.db.usageSyncBuckets ||= {};
     this.db.usageHourly ||= {};
     this.db.usageSyncBucketsHourly ||= {};
+    this.db.teams ||= {};
+    for (const participant of Object.values(this.db.participants || {})) participant.teamId ||= "";
     this.aggregateCache = {};
     this.analyticsAllCache = {};
     this.priceMapCache = null;
@@ -123,6 +134,7 @@ export class Store {
       nickname: input.nickname || existing?.nickname || "anonymous",
       avatarColor: existing?.avatarColor || colorFromId(input.participantId),
       identityPublicKey,
+      teamId: existing?.teamId || "",
       createdAt: existing?.createdAt || now,
       updatedAt: now,
       lastSeenAt: now
@@ -2590,6 +2602,220 @@ export class Store {
         providers: sortedBreakdown(item.providers)
       }));
   }
+
+  normalizeTeamName(name) {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) throw new Error("team name is required");
+    return trimmed.slice(0, 48);
+  }
+
+  listTeams() {
+    return Object.values(this.db.teams || {}).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  teamMemberIds(teamId) {
+    return Object.values(this.db.participants || {}).filter((item) => item.teamId === teamId).map((item) => item.id);
+  }
+
+  createTeam(input = {}) {
+    const name = this.normalizeTeamName(input.name);
+    const now = new Date().toISOString();
+    const team = { id: newId("team"), name, createdAt: now, updatedAt: now };
+    this.db.teams[team.id] = team;
+    this.save();
+    return team;
+  }
+
+  renameTeam(teamId, input = {}) {
+    const team = this.db.teams?.[teamId];
+    if (!team) throw new Error("team not found");
+    team.name = this.normalizeTeamName(input.name);
+    team.updatedAt = new Date().toISOString();
+    this.save();
+    return team;
+  }
+
+  deleteTeam(teamId) {
+    if (!this.db.teams?.[teamId]) throw new Error("team not found");
+    delete this.db.teams[teamId];
+    for (const participant of Object.values(this.db.participants || {})) {
+      if (participant.teamId === teamId) participant.teamId = "";
+    }
+    this.save();
+    return { deleted: true, id: teamId };
+  }
+
+  setParticipantTeam(participantId, teamId = "") {
+    const participant = this.db.participants?.[participantId];
+    if (!participant) throw new Error("participant not found");
+    const nextTeamId = teamId || "";
+    if (nextTeamId && !this.db.teams?.[nextTeamId]) throw new Error("team not found");
+    participant.teamId = nextTeamId;
+    participant.updatedAt = new Date().toISOString();
+    this.save();
+    return { participantId, teamId: nextTeamId };
+  }
+
+  teamManagementSnapshot() {
+    const known = new Set(Object.keys(this.db.teams || {}));
+    const teams = this.listTeams().map((team) => ({
+      id: team.id,
+      name: team.name,
+      memberCount: this.teamMemberIds(team.id).length
+    }));
+    const participants = Object.values(this.db.participants || {})
+      .map((item) => ({
+        participantId: item.id,
+        nickname: item.nickname || item.id,
+        teamId: known.has(item.teamId) ? item.teamId : ""
+      }))
+      .sort((a, b) => a.nickname.localeCompare(b.nickname) || a.participantId.localeCompare(b.participantId));
+    return {
+      teams,
+      participants,
+      untaggedCount: participants.filter((item) => !item.teamId).length
+    };
+  }
+
+  teamsAnalysis(args = {}) {
+    return this.computeTeamsAnalysis(args);
+  }
+
+  computeTeamsAnalysis({ days } = {}) {
+    const windowDays = normalizeTeamsAnalysisDays(days);
+    const businessDay = this.currentBusinessDay();
+    const currentDays = trailingDays(windowDays, { businessDay });
+    const previousDays = trailingDays(windowDays, { businessDay: addDays(currentDays[0], -1) });
+    const currentSet = new Set(currentDays);
+    const previousSet = new Set(previousDays);
+    const steadyThreshold = 3;
+    const usage = Object.values(this.db.usageDaily || {});
+    const knownTeams = this.db.teams || {};
+
+    const statsFor = (participantId) => {
+      const rows = usage.filter((row) => row.participantId === participantId);
+      const currentRows = rows.filter((row) => currentSet.has(row.day));
+      const previousRows = rows.filter((row) => previousSet.has(row.day));
+      const activeDays = new Set(currentRows.map((row) => row.day)).size;
+      const prevActiveDays = new Set(previousRows.map((row) => row.day)).size;
+      const sumTokens = (items) => items.reduce((sum, row) => sum + Number(row.totalTokens || 0), 0);
+      const tools = [...new Set(currentRows.map((row) => row.toolCode).filter(Boolean))].sort();
+      let kind = "absent";
+      if (activeDays > 0 && prevActiveDays === 0) kind = "new";
+      else if (activeDays === 0 && prevActiveDays > 0) kind = "paused";
+      else if (activeDays > prevActiveDays) kind = "rising";
+      else if (activeDays < prevActiveDays) kind = "falling";
+      else if (activeDays > 0) kind = "steady";
+      return {
+        activeDays,
+        prevActiveDays,
+        tokens: sumTokens(currentRows),
+        prevTokens: sumTokens(previousRows),
+        costUsd: currentRows.reduce((sum, row) => sum + Number(row.estimatedCostUsd || 0), 0),
+        tools,
+        lastSyncedAt: rows.reduce((latest, row) => (row.uploadedAt > latest ? row.uploadedAt : latest), ""),
+        daily: currentDays.map((day) => ({
+          day,
+          tokens: sumTokens(currentRows.filter((row) => row.day === day))
+        })),
+        kind,
+        cohort: activeDays >= steadyThreshold ? "steady" : activeDays > 0 ? "light" : "none",
+        active: activeDays > 0,
+        prevActive: prevActiveDays > 0
+      };
+    };
+
+    const dayRollup = (dayList, daySet, participantIds) => dayList.map((day) => {
+      const rows = usage.filter((row) => row.day === day && daySet.has(row.day) && participantIds.has(row.participantId));
+      return {
+        day,
+        tokens: rows.reduce((sum, row) => sum + Number(row.totalTokens || 0), 0),
+        active: new Set(rows.map((row) => row.participantId)).size
+      };
+    });
+
+    const teams = this.listTeams().map((team) => {
+      const members = Object.values(this.db.participants || {})
+        .filter((item) => item.teamId === team.id)
+        .map((item) => ({ participantId: item.id, nickname: item.nickname || item.id, ...statsFor(item.id) }));
+      const kindRank = { paused: 0, absent: 1, falling: 2, new: 3, rising: 4, steady: 5 };
+      members.sort((a, b) => (kindRank[a.kind] ?? 9) - (kindRank[b.kind] ?? 9) || b.activeDays - a.activeDays || a.nickname.localeCompare(b.nickname));
+      const memberIds = new Set(members.map((item) => item.participantId));
+      const toolMap = new Map();
+      const comboMap = new Map();
+      let multiToolUsers = 0;
+      for (const member of members) {
+        if (member.tools.length > 1) {
+          multiToolUsers += 1;
+          const label = member.tools.join(" + ");
+          comboMap.set(label, (comboMap.get(label) || 0) + 1);
+        }
+        for (const tool of member.tools) {
+          const current = toolMap.get(tool) || { tool, users: 0, tokens: 0 };
+          current.users += 1;
+          const rows = usage.filter((row) => row.participantId === member.participantId && currentSet.has(row.day) && row.toolCode === tool);
+          current.tokens += rows.reduce((sum, row) => sum + Number(row.totalTokens || 0), 0);
+          toolMap.set(tool, current);
+        }
+      }
+      const active = members.filter((item) => item.active).length;
+      const prevActive = members.filter((item) => item.prevActive).length;
+      return {
+        id: team.id,
+        name: team.name,
+        memberCount: members.length,
+        active,
+        prevActive,
+        deltaActive: active - prevActive,
+        steady: members.filter((item) => item.cohort === "steady").length,
+        light: members.filter((item) => item.cohort === "light").length,
+        none: members.filter((item) => item.cohort === "none").length,
+        newCount: members.filter((item) => item.kind === "new").length,
+        pausedCount: members.filter((item) => item.kind === "paused").length,
+        tokens: members.reduce((sum, item) => sum + item.tokens, 0),
+        prevTokens: members.reduce((sum, item) => sum + item.prevTokens, 0),
+        costUsd: members.reduce((sum, item) => sum + item.costUsd, 0),
+        multiToolUsers,
+        combos: [...comboMap.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
+        tools: [...toolMap.values()].sort((a, b) => b.tokens - a.tokens || a.tool.localeCompare(b.tool)),
+        members,
+        daily: dayRollup(currentDays, currentSet, memberIds)
+      };
+    });
+
+    const tagged = Object.values(this.db.participants || {}).filter((item) => knownTeams[item.teamId]);
+    const untagged = Object.values(this.db.participants || {}).filter((item) => !knownTeams[item.teamId]);
+    const taggedStats = tagged.map((item) => statsFor(item.id));
+    const untaggedStats = untagged.map((item) => statsFor(item.id));
+    const taggedIds = new Set(tagged.map((item) => item.id));
+    const active = taggedStats.filter((item) => item.active).length;
+    const prevActive = taggedStats.filter((item) => item.prevActive).length;
+    return {
+      days: windowDays,
+      steadyThreshold,
+      range: {
+        from: currentDays[0],
+        to: currentDays.at(-1),
+        prevFrom: previousDays[0],
+        prevTo: previousDays.at(-1)
+      },
+      org: {
+        taggedMembers: tagged.length,
+        active,
+        prevActive,
+        deltaActive: active - prevActive,
+        steady: taggedStats.filter((item) => item.cohort === "steady").length,
+        light: taggedStats.filter((item) => item.cohort === "light").length,
+        untagged: {
+          members: untagged.length,
+          active: untaggedStats.filter((item) => item.active).length
+        },
+        daily: dayRollup(currentDays, currentSet, taggedIds),
+        prevDaily: dayRollup(previousDays, previousSet, taggedIds)
+      },
+      teams
+    };
+  }
 }
 
 function buildLegacyUsageIndexes(usageDaily = {}) {
@@ -2745,7 +2971,7 @@ function daysForRange(range, { startDay = "", endDay = "", businessDay = localDa
   });
 }
 
-function trailingDays(count, { businessDay = localDay() } = {}) {
+export function trailingDays(count, { businessDay = localDay() } = {}) {
   const today = dayToUtcDate(businessDay);
   return Array.from({ length: count }, (_, index) => {
     const d = new Date(today);

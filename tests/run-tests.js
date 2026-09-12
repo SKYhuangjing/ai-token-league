@@ -377,6 +377,126 @@ function testDeleteDeviceDataKeepsParticipantAndOtherDevices() {
   console.log("  testDeleteDeviceDataKeepsParticipantAndOtherDevices passed");
 }
 
+async function testTeamsAnalysisAggregation() {
+  const store = new Store(path.join(tmp, "db-teams.json"), { persist: false, businessDayProvider: () => "2026-09-12" });
+  const team = store.createTeam({ name: "平台研发" });
+  const otherTeam = store.createTeam({ name: "业务研发" });
+  assert.equal(store.listTeams().length, 2);
+  assert.equal(store.teamManagementSnapshot().untaggedCount, 0);
+
+  const identityA = generateIdentity();
+  const identityB = generateIdentity();
+  const identityC = generateIdentity();
+  const identityD = generateIdentity();
+  const identityU = generateIdentity();
+  const members = [
+    { id: "p_steady", nickname: "steady-user", identity: identityA, deviceId: "d_steady" },
+    { id: "p_light", nickname: "light-user", identity: identityB, deviceId: "d_light" },
+    { id: "p_paused", nickname: "paused-user", identity: identityC, deviceId: "d_paused" },
+    { id: "p_new", nickname: "new-user", identity: identityD, deviceId: "d_new" }
+  ];
+  for (const member of members) {
+    store.registerDevice({ participantId: member.id, deviceId: member.deviceId, nickname: member.nickname, identityPublicKey: member.identity.identityPublicKey, os: "test", appVersion: "0.1.0" });
+    store.setParticipantTeam(member.id, team.id);
+  }
+  store.registerDevice({ participantId: "p_untagged", deviceId: "d_untagged", nickname: "untagged-user", identityPublicKey: identityU.identityPublicKey, os: "test", appVersion: "0.1.0" });
+
+  const usageRow = (participantId, deviceId, day, toolCode, tokens) => ({
+    day,
+    participantId,
+    deviceId,
+    toolCode,
+    providerId: `${toolCode}_local`,
+    workdirHash: "wd-test",
+    workdirDisplayName: "demo",
+    model: "gpt-5",
+    inputTokens: tokens,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: tokens,
+    estimatedCostUsd: 1,
+    uploadedAt: `${day}T10:00:00.000Z`
+  });
+  const seedUsage = [
+    ...["2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10"].flatMap((day) => [
+      usageRow("p_steady", "d_steady", day, "codex", 1000),
+      usageRow("p_steady", "d_steady", day, "claude", 500)
+    ]),
+    ...["2026-09-02", "2026-09-03", "2026-09-04"].map((day) => usageRow("p_steady", "d_steady", day, "codex", 900)),
+    usageRow("p_light", "d_light", "2026-09-07", "codex", 300),
+    usageRow("p_light", "d_light", "2026-08-31", "codex", 300),
+    usageRow("p_paused", "d_paused", "2026-08-31", "codex", 700),
+    usageRow("p_paused", "d_paused", "2026-09-02", "cursor", 700),
+    usageRow("p_new", "d_new", "2026-09-08", "claude", 400),
+    usageRow("p_new", "d_new", "2026-09-09", "claude", 400),
+    usageRow("p_untagged", "d_untagged", "2026-09-09", "codex", 999)
+  ];
+  store.db.usageDaily = Object.fromEntries(seedUsage.map((row, index) => [`k${index}`, row]));
+
+  const analysis = store.teamsAnalysis({ days: 7 });
+  assert.equal(analysis.steadyThreshold, 3);
+  assert.equal(analysis.range.from, "2026-09-06");
+  assert.equal(analysis.range.to, "2026-09-12");
+  assert.equal(analysis.range.prevFrom, "2026-08-30");
+  assert.equal(analysis.org.taggedMembers, 4);
+  assert.equal(analysis.org.active, 3);
+  assert.equal(analysis.org.prevActive, 3);
+  assert.equal(analysis.org.deltaActive, 0);
+  assert.equal(analysis.org.steady, 1);
+  assert.equal(analysis.org.light, 2);
+  assert.equal(analysis.org.untagged.members, 1);
+  assert.equal(analysis.org.untagged.active, 1);
+
+  const teamResult = analysis.teams.find((item) => item.id === team.id);
+  assert.equal(teamResult.memberCount, 4);
+  assert.equal(teamResult.active, 3);
+  assert.equal(teamResult.steady, 1);
+  assert.equal(teamResult.light, 2);
+  assert.equal(teamResult.none, 1);
+  assert.equal(teamResult.deltaActive, 0);
+  assert.equal(teamResult.newCount, 1);
+  assert.equal(teamResult.pausedCount, 1);
+  assert.equal(teamResult.tokens, 1000 * 5 + 500 * 5 + 300 + 400 + 400);
+  assert.equal(teamResult.multiToolUsers, 1);
+  assert.ok(teamResult.combos.some((combo) => combo.label === "claude + codex" && combo.count === 1));
+  assert.ok(teamResult.tools.find((item) => item.tool === "codex" && item.users === 2));
+  const byId = Object.fromEntries(teamResult.members.map((member) => [member.participantId, member]));
+  assert.equal(byId.p_steady.kind, "rising");
+  assert.equal(byId.p_light.kind, "steady");
+  assert.equal(byId.p_paused.kind, "paused");
+  assert.equal(byId.p_new.kind, "new");
+  assert.equal(byId.p_paused.activeDays, 0);
+  assert.equal(byId.p_paused.prevActiveDays, 2);
+  assert.equal(teamResult.members[0].participantId, "p_paused");
+  assert.equal(byId.p_steady.lastSyncedAt, "2026-09-10T10:00:00.000Z");
+  const dailyLast = teamResult.daily.at(-1);
+  assert.equal(dailyLast.day, "2026-09-12");
+  assert.equal(dailyLast.tokens, 0);
+
+  // invalid days fall back to the default window
+  assert.equal(store.teamsAnalysis({ days: 99 }).days, 7);
+
+  // re-registering a device keeps the team label
+  store.registerDevice({ participantId: "p_steady", deviceId: "d_steady_2", nickname: "steady-user", identityPublicKey: identityA.identityPublicKey, os: "test", appVersion: "0.1.0" });
+  assert.equal(store.getParticipant("p_steady").teamId, team.id);
+
+  // moving a member and deleting a team unassigns cleanly
+  store.setParticipantTeam("p_new", otherTeam.id);
+  assert.equal(store.teamMemberIds(otherTeam.id).includes("p_new"), true);
+  store.deleteTeam(otherTeam.id);
+  assert.equal(store.getParticipant("p_new").teamId, "");
+  assert.throws(() => store.createTeam({ name: "  " }), /team name is required/);
+  assert.throws(() => store.setParticipantTeam("p_missing", team.id), /participant not found/);
+  assert.throws(() => store.setParticipantTeam("p_new", "team_missing"), /team not found/);
+  assert.throws(() => store.renameTeam("team_missing", { name: "x" }), /team not found/);
+  const snapshot = store.teamManagementSnapshot();
+  assert.equal(snapshot.teams.length, 1);
+  assert.equal(snapshot.teams[0].memberCount, 3);
+  assert.equal(snapshot.untaggedCount, 2);
+}
+
 async function testParticipantDataDeleteMissingIsNoop() {
   const dbPath = path.join(tmp, "db-participant-delete-missing.json");
   const originalDbPath = process.env.DB_PATH;
@@ -1744,6 +1864,7 @@ async function testMysqlLoadSkipsUsageMirrors() {
       }]];
       if (String(sql).includes("FROM devices")) return [[]];
       if (String(sql).includes("FROM workdirs")) return [[]];
+      if (String(sql).includes("FROM teams")) return [[]];
       if (String(sql).includes("FROM model_prices")) return [[]];
       if (String(sql).includes("FROM model_price_aliases")) return [[]];
       if (String(sql).includes("FROM model_price_cache_meta")) return [[]];
@@ -3309,6 +3430,7 @@ testBackendUpload(identity, items);
 testDeleteParticipantDataAllowsResync();
 testDeleteDeviceDataKeepsParticipantAndOtherDevices();
 await testParticipantDataDeleteMissingIsNoop();
+await testTeamsAnalysisAggregation();
 await testBoardApiBusinessDayMetadata();
 testStoreBusinessDayScopedCache();
 testAdminUsageRowRangeFeedsParticipantDetail();
@@ -5943,9 +6065,10 @@ function testWebAdminStructure() {
   const js = fs.readFileSync("src/web/admin.js", "utf8");
   assert.match(js, /state\.range === "all"\) return "month"/);
   assert.match(js, /analytics-resize/);
+  assert.match(js, /teams-resize/);
   assert.match(js, /Number\.isFinite\(height\)/);
   assert.match(js, /event\.origin !== window\.location\.origin/);
-  assert.match(js, /event\.source !== iframe\?\.contentWindow/);
+  assert.match(js, /event\.source !== iframe\.contentWindow/);
   assert.match(js, /Math\.abs\(currentHeight - nextHeight\) > 1/);
   assert.match(js, /iframe && !iframe\.dataset\.loaded/);
   assert.match(js, /function setAdminPanelBusy/);

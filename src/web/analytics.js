@@ -535,7 +535,7 @@ function renderKPIs() {
   const totalCostBeforeSavings = (summary.estimatedCostUsd || 0) + (summary.cacheSavingsUsd || 0);
   const savingsRate = totalCostBeforeSavings > 0 ? (summary.cacheSavingsUsd || 0) / totalCostBeforeSavings : 0;
   const savingsRateEl = document.querySelector("#kpi-savings-rate");
-  if (savingsRateEl) savingsRateEl.textContent = t("web.analytics.savingsRateSub", { pct: Math.round(savingsRate * 100) });
+  if (savingsRateEl) savingsRateEl.textContent = t("web.analytics.savingsRate", { pct: Math.round(savingsRate * 100) });
 
   const unitCost = totalTokens > 0 ? (summary.estimatedCostUsd || 0) / (totalTokens / 100_000_000) : null;
   const unitCostEl = document.querySelector("#kpi-unit-cost");

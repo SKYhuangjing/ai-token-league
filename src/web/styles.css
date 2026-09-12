@@ -14034,3 +14034,1281 @@ body.is-embedded .an-subbar {
   margin-left: auto;
   color: var(--accent-ink);
 }
+
+.teams-create-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.teams-create-form input {
+  min-width: 180px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 500 14px/1 var(--font-ui);
+}
+
+.teams-create-form button[type="submit"] {
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent, #c4552a);
+  color: #fff;
+  font: 600 14px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-create-form button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.teams-create-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--danger, #b42318);
+  font: 500 13px/1.4 var(--font-ui);
+}
+
+/* ===================== Teams analysis board ===================== */
+/* All colors resolve through theme tokens (accent/data/surface groups are
+   redefined by the runtime theme switcher); no semantic literals here. */
+
+.teams-toolbar .an-toolbar-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.teams-manage-toggle {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-2);
+  color: var(--muted);
+  cursor: pointer;
+  font: 600 12px/1 var(--font-ui);
+  padding: 7px 14px;
+}
+
+.teams-manage-toggle:hover {
+  border-color: var(--muted);
+  color: var(--ink);
+}
+
+.teams-manage-toggle.is-open {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper-2);
+}
+
+.teams-board {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* hidden guards: class display rules must not defeat the hidden attribute */
+.teams-board[hidden],
+.teams-manage[hidden],
+.teams-empty[hidden] {
+  display: none;
+}
+
+/* --- empty / error state --- */
+
+.teams-empty {
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.teams-empty-copy h2 {
+  margin: 0 0 8px;
+  font: 650 18px/1.4 var(--font-ui);
+  color: var(--ink);
+}
+
+.teams-empty-copy p {
+  margin: 0 auto 16px;
+  max-width: 440px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.teams-empty-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border: 1px solid var(--accent-ink);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent-ink);
+  font: 600 12.5px/1 var(--font-ui);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.teams-empty-link:hover {
+  background: var(--accent-soft);
+}
+
+/* --- manage panel --- */
+
+.teams-manage-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.teams-create-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.teams-create-form input {
+  width: 220px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-2);
+  color: var(--ink);
+  font: 500 13px/1.2 var(--font-ui);
+}
+
+.teams-create-form input:focus {
+  outline: none;
+  border-color: var(--muted);
+}
+
+.teams-create-form button {
+  padding: 8px 16px;
+  border: 1px solid var(--ink);
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--paper-2);
+  font: 600 12.5px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-create-form button:hover:not(:disabled) {
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+}
+
+.teams-create-form button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.teams-create-error {
+  flex-basis: 100%;
+}
+
+.teams-manage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.teams-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-2);
+}
+
+.teams-chip-name {
+  font: 600 13px/1.2 var(--font-ui);
+  color: var(--ink);
+}
+
+.teams-chip-count {
+  font: 500 11px/1.2 var(--font-ui);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.teams-chip-action {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 600 11px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-chip-action.is-danger {
+  color: var(--data-negative);
+}
+
+.teams-chip-action.is-danger:hover {
+  color: var(--data-negative);
+}
+
+.teams-chip-input {
+  width: 130px;
+  padding: 2px 0;
+  border: 0;
+  border-bottom: 1.5px solid var(--accent);
+  background: none;
+  color: var(--ink);
+  font: 600 13px/1.2 var(--font-ui);
+  outline: none;
+}
+
+.teams-manage-empty {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.teams-manage-members-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+
+.teams-manage-members-head h3 {
+  margin: 0;
+  font: 650 14px/1.3 var(--font-ui);
+  color: var(--ink);
+}
+
+#teams-member-search {
+  width: 200px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-2);
+  color: var(--ink);
+  font: 500 12.5px/1.2 var(--font-ui);
+}
+
+#teams-member-search:focus {
+  outline: none;
+  border-color: var(--muted);
+}
+
+
+.teams-manage-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* --- story card --- */
+
+.teams-story {
+  padding: 22px 24px;
+}
+
+.teams-story-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.9fr);
+  gap: 18px 40px;
+  align-items: center;
+}
+
+.teams-cohort {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.teams-cohort-strip {
+  display: flex;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--line-soft);
+}
+
+.teams-cohort-strip.small {
+  height: 8px;
+}
+
+.teams-cohort-strip .seg {
+  display: block;
+  height: 100%;
+}
+
+.seg.steady {
+  background: var(--comp-1);
+}
+
+.seg.light {
+  background: var(--comp-3);
+}
+
+.seg.none {
+  background: var(--line);
+}
+
+.teams-cohort-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+.teams-cohort-key .key-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.teams-cohort-key .key-item i {
+  align-self: center;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+
+.key-item.steady i {
+  background: var(--comp-1);
+}
+
+.key-item.light i {
+  background: var(--comp-3);
+}
+
+.key-item.none i {
+  background: var(--line);
+}
+
+.teams-cohort-key .key-item b {
+  font: 650 18px/1 var(--font-data);
+  color: var(--data-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.teams-cohort-key .key-item em {
+  font: 500 12px/1.2 var(--font-ui);
+  font-style: normal;
+  color: var(--muted);
+}
+
+/* --- daily charts --- */
+
+.teams-daily-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.teams-chart-frame {
+  margin-top: 12px;
+}
+
+.teams-chart-frame svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* same recipe as .chart-line / .chart-line-active / .chart-grid-line,
+   but series colors ride the theme accent so schemes recolor the board */
+.teams-chart-frame .t-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.teams-chart-frame .t-line-prev {
+  fill: none;
+  stroke: #a6aaa3;
+  stroke-width: 2;
+  stroke-dasharray: 5 6;
+}
+
+.teams-chart-frame .t-dot {
+  fill: var(--paper-2);
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+
+.teams-chart-frame .t-grid {
+  stroke: var(--line-soft);
+  stroke-width: 1;
+}
+
+.teams-chart-frame .t-grid.t-baseline {
+  stroke: rgba(19, 32, 30, 0.25);
+}
+
+.teams-chart-frame .t-axis {
+  font: 500 10px var(--font-data);
+  fill: var(--muted);
+}
+
+.teams-chart-frame .t-bar {
+  fill: var(--accent);
+  opacity: 0.85;
+}
+
+.teams-chart-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.teams-line-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.teams-line-key i {
+  width: 16px;
+  border-top: 2.5px solid var(--accent);
+}
+
+.teams-line-key i.is-prev {
+  border-top: 2px dashed #a6aaa3;
+}
+
+/* --- compare card --- */
+
+.teams-compare-caption {
+  margin: 2px 0 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.teams-compare-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 110px;
+  gap: 16px;
+  align-items: center;
+  padding: 11px 8px;
+  margin: 0 -8px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.teams-compare-row:hover {
+  background: var(--surface-tint);
+}
+
+.teams-compare-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tc-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tc-label b {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 650 13.5px/1.3 var(--font-ui);
+  color: var(--ink);
+}
+
+.tc-label span {
+  font: 500 11px/1.3 var(--font-ui);
+  color: var(--muted);
+}
+
+.tc-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.tc-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tc-name {
+  flex: 0 0 30px;
+  font: 600 10.5px/1.3 var(--font-ui);
+  color: var(--muted);
+}
+
+.tc-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.tc-track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.tc-track .is-prev {
+  background: var(--line);
+}
+
+.tc-track .is-cur {
+  background: var(--accent);
+}
+
+.tc-count {
+  flex: 0 0 64px;
+  text-align: right;
+  font: 500 11.5px var(--font-data);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-count b {
+  color: var(--data-primary);
+  font-weight: 650;
+}
+
+.tc-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.tc-delta {
+  font: 700 15px/1 var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-delta.is-up {
+  color: var(--data-positive);
+}
+
+.tc-delta.is-down {
+  color: var(--data-negative);
+}
+
+.tc-delta.is-flat {
+  color: var(--muted);
+}
+
+.tc-tokens {
+  font: 500 11px var(--font-data);
+  color: var(--muted);
+}
+
+/* --- team cards --- */
+
+.teams-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.teams-team {
+  padding: 20px 22px 18px;
+  scroll-margin-top: 16px;
+}
+
+.teams-team-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.teams-team-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+}
+
+.tm-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tm-item small {
+  font: 600 10.5px/1.2 var(--font-ui);
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.tm-item strong {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  font: 650 20px/1 var(--font-ui);
+  color: var(--data-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-item strong i {
+  font: 500 12.5px/1 var(--font-ui);
+  font-style: normal;
+  color: var(--muted);
+}
+
+.tm-item strong.mono,
+.tm-item strong.cost-amount {
+  font-family: var(--font-data);
+  font-size: 16.5px;
+}
+
+.teams-tokens-delta {
+  font: 600 11.5px/1.2 var(--font-ui);
+}
+
+.teams-tokens-delta.is-up {
+  color: var(--data-positive);
+}
+
+.teams-tokens-delta.is-down {
+  color: var(--data-negative);
+}
+
+.teams-team-cohort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.teams-team-cohort .teams-cohort-strip {
+  flex: 0 1 340px;
+}
+
+.teams-cohort-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 600 12px/1.2 var(--font-ui);
+  color: var(--data-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.teams-cohort-mini i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2.5px;
+}
+
+.teams-cohort-mini i.is-steady {
+  background: var(--comp-1);
+}
+
+.teams-cohort-mini i.is-light {
+  background: var(--comp-3);
+}
+
+.teams-cohort-mini i.is-none {
+  background: var(--line);
+}
+
+/* daily mini bars: label gutter reserved below the plot zone */
+.teams-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 80px;
+  margin-bottom: 14px;
+}
+
+.teams-bars.evidence {
+  height: 64px;
+}
+
+.teams-bar {
+  flex: 1;
+  min-width: 0;
+  max-width: 64px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+}
+
+.teams-bar i {
+  display: block;
+  width: 100%;
+  max-height: calc(100% - 17px);
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+  opacity: 0.8;
+}
+
+.teams-bar:hover i {
+  opacity: 1;
+}
+
+.teams-bar em {
+  height: 14px;
+  margin-top: 3px;
+  overflow: visible;
+  font: 500 9px/14px var(--font-data);
+  font-style: normal;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.teams-team-body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr);
+  gap: 14px 28px;
+}
+
+.teams-tools h3,
+.teams-members h3 {
+  margin: 0 0 8px;
+  font: 650 13.5px/1.3 var(--font-ui);
+  color: var(--ink);
+}
+
+.teams-members-note {
+  margin: -4px 0 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* half-width cards must not inherit the global 860px table floor */
+.teams-tools table,
+.teams-members table {
+  min-width: 0;
+  width: 100%;
+}
+
+.teams-tools th,
+.teams-tools td,
+.teams-members th,
+.teams-members td {
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.teams-table-empty {
+  padding: 14px 10px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.teams-share-track {
+  display: inline-block;
+  vertical-align: middle;
+  width: 64px;
+  height: 5px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.teams-share-track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.teams-kind {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1.5px 8px;
+  border-radius: 999px;
+  background: var(--surface-tint);
+  font: 600 10.5px/1.5 var(--font-ui);
+  color: var(--data-secondary);
+  vertical-align: 1px;
+}
+
+.teams-kind.is-new,
+.teams-kind.is-rising {
+  color: var(--data-positive);
+}
+
+.teams-kind.is-paused,
+.teams-kind.is-falling {
+  color: var(--data-negative);
+}
+
+.teams-kind.is-absent {
+  color: var(--muted);
+}
+
+.teams-group > td {
+  padding: 5px 10px;
+  background: var(--paper);
+  font: 600 10.5px/1.6 var(--font-ui);
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.teams-member-row {
+  cursor: pointer;
+}
+
+.teams-member-row:hover > td {
+  background: var(--paper);
+}
+
+.teams-member-row.is-inactive > td {
+  color: var(--data-secondary);
+}
+
+.teams-evidence-row > td {
+  padding: 8px 12px 10px;
+  background: var(--paper);
+}
+
+.teams-evidence-meta {
+  margin: 6px 0 0;
+  font: 500 11px/1.4 var(--font-data);
+  color: var(--muted);
+}
+
+/* --- responsive --- */
+
+@media (max-width: 960px) {
+  .teams-story-grid,
+  .teams-daily-grid,
+  .teams-team-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .teams-compare-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .tc-bars {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ===================== Teams board polish pass v2 ===================== */
+
+/* story card as the lead: bigger headline, link on its own line */
+.teams-story-copy h2 {
+  font-size: 24px;
+  line-height: 1.3;
+}
+
+.teams-story-copy p {
+  max-width: 560px;
+  line-height: 1.75;
+}
+
+a.teams-story-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--accent-ink);
+  text-decoration: none;
+  border-bottom: 1.5px solid var(--accent);
+  padding-bottom: 2px;
+}
+
+a.teams-story-link:hover {
+  background: var(--accent-soft);
+}
+
+.teams-cohort-key .key-item b {
+  font-size: 18px;
+}
+
+/* compare: flat delta reads as ±0, keep it visually quiet */
+.tc-delta.is-flat {
+  opacity: 0.6;
+}
+
+/* member name is now a drill-down link to the profile page */
+a.teams-member-name {
+  font-weight: 600;
+  color: var(--data-primary);
+  text-decoration: none;
+  margin-right: 8px;
+  border-bottom: 1px dashed var(--line);
+}
+
+a.teams-member-name:hover {
+  color: var(--accent-ink);
+  border-bottom-color: var(--accent);
+}
+
+.teams-member-row.is-inactive a.teams-member-name {
+  color: var(--data-secondary);
+}
+
+/* combo usage reads as quiet chips instead of a run-on sentence */
+.teams-combos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.teams-combo-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--data-secondary);
+  background: var(--paper-2);
+}
+
+.teams-combo-chip b {
+  font-size: 11.5px;
+  color: var(--data-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* management panel: quieter chip actions + first-run steps */
+.teams-chip-action {
+  text-decoration: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.teams-chip-action:hover {
+  background: var(--surface-tint);
+  text-decoration: none;
+}
+
+.teams-manage-steps {
+  margin: -2px 0 10px;
+  font-size: 12px;
+  color: var(--data-secondary);
+  letter-spacing: 0.2px;
+}
+
+.teams-create-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--data-negative);
+}
+
+.teams-create-form {
+  align-items: flex-start;
+}
+
+
+
+/* ===================== Teams board usability pass v3 ===================== */
+
+/* manage members head: title + status filter + count + search on one line */
+.teams-manage-members-head {
+  flex-wrap: wrap;
+}
+
+.teams-manage-members-head #teams-member-search {
+  margin-left: auto;
+}
+
+.teams-manage-count {
+  font: 500 11.5px var(--font-data);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.teams-manage-status {
+  margin: -2px 0 10px;
+}
+
+/* two-step delete: armed state replaces the native confirm() dialog */
+.teams-chip-action.is-armed {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+/* jump target outline: which card did this compare row point at? */
+.teams-team.is-target {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* compare: the ±delta belongs to the people count, not the token column */
+.tc-line .tc-delta {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  font: 700 11.5px/1 var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* numeric columns align for column scanning (was left-aligned prose) */
+.teams-tools th.num,
+.teams-tools td.num,
+.teams-members th.num,
+.teams-members td.num {
+  text-align: right;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.teams-members td.num b {
+  font-weight: 650;
+  color: var(--data-primary);
+}
+
+/* row affordances: expandable rows carry a marker, member names read as links */
+.teams-member-row > td:first-child::before {
+  content: "▸";
+  display: inline-block;
+  width: 11px;
+  margin-right: 2px;
+  font-size: 9px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.teams-member-row[aria-expanded="true"] > td:first-child::before {
+  transform: rotate(90deg);
+}
+
+a.teams-member-name::after {
+  content: " ↗";
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* ===================== Teams manage people cloud (v4) ===================== */
+/* members as a chip cloud + batch assign bar; the per-row select table is gone */
+
+.teams-assign-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+.teams-assign-team-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.teams-assign-team {
+  padding: 6px 13px;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--paper-2);
+  font: 600 12px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-assign-team:hover:not(:disabled) {
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+}
+
+.teams-assign-team.is-remove {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--data-negative);
+}
+
+.teams-assign-team.is-remove:hover:not(:disabled) {
+  background: var(--paper-2);
+  border-color: var(--data-negative);
+}
+
+.teams-assign-team:disabled,
+.teams-assign-tool:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.teams-assign-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.teams-assign-count {
+  font: 500 11.5px var(--font-data);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.teams-assign-tool {
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-2);
+  color: var(--muted);
+  font: 600 11.5px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-assign-tool:hover:not(:disabled) {
+  border-color: var(--muted);
+  color: var(--ink);
+}
+
+/* the cloud scrolls internally so the assign bar stays in view */
+.teams-people-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: flex-start;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.teams-person {
+  padding: 4px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-2);
+  color: var(--ink);
+  font: 500 12px/1.5 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-person:hover {
+  border-color: var(--muted);
+}
+
+.teams-person.is-tagged::after {
+  content: "●";
+  margin-left: 5px;
+  font-size: 8px;
+  color: var(--accent);
+  vertical-align: 1px;
+}
+
+.teams-person.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent-ink);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* coverage line: untagged gap lives inside the story card's cohort column */
+.teams-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 3px 0 0;
+  padding-top: 9px;
+  border-top: 1px dashed var(--line);
+  font: 500 12px/1.5 var(--font-ui);
+  color: var(--muted);
+}
+
+.teams-coverage span {
+  font-variant-numeric: tabular-nums;
+}
+
+.teams-coverage-link {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--accent-ink);
+  background: none;
+  color: var(--accent-ink);
+  font: 600 12px/1.5 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-coverage-link:hover {
+  background: var(--accent-soft);
+}
+
+/* definitions tooltip: question mark in the toolbar, popover below it */
+.teams-defs-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--paper-2);
+  color: var(--muted);
+  font: 650 12px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.teams-defs-toggle:hover {
+  border-color: var(--muted);
+  color: var(--ink);
+}
+
+.teams-defs-toggle[aria-expanded="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper-2);
+}
+
+.teams-defs-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(400px, 88vw);
+  padding: 13px 16px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-2);
+  box-shadow: var(--card-shadow);
+}
+
+.teams-defs-pop h3 {
+  margin: 0 0 2px;
+  font: 650 10.5px/1.6 var(--font-ui);
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.teams-defs-pop p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}

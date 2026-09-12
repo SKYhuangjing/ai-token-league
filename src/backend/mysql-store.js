@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import mysql from "mysql2/promise";
-import { Store, normalizeSourceTop, normalizeSourceTrendDays } from "./store.js";
+import { Store, normalizeSourceTop, normalizeSourceTrendDays, normalizeTeamsAnalysisDays, trailingDays } from "./store.js";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { createPriceMap, normalizeModelName } from "../shared/pricing.js";
@@ -86,6 +86,17 @@ export class MySqlStore extends Store {
         await this.pool.query(stmt);
       }
     }
+    // 003 is idempotent for the table but the ALTER/INDEX statements are not;
+    // ensureMysqlSchema() applies the participants.teamId column and index
+    // conditionally right after this, so here we only create the teams table.
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS teams (
+        id VARCHAR(96) PRIMARY KEY,
+        name VARCHAR(128) NOT NULL,
+        createdAt VARCHAR(40) NOT NULL,
+        updatedAt VARCHAR(40) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
     await this.ensureMysqlSchema();
   }
 
@@ -149,6 +160,22 @@ export class MySqlStore extends Store {
     if (!bucketGranularityColumns.length) {
       await this.pool.query("ALTER TABLE usage_sync_buckets ADD COLUMN granularity VARCHAR(16) NOT NULL DEFAULT 'daily' AFTER providerId");
     }
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS teams (
+        id VARCHAR(96) PRIMARY KEY,
+        name VARCHAR(128) NOT NULL,
+        createdAt VARCHAR(40) NOT NULL,
+        updatedAt VARCHAR(40) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+    const [teamIdColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'participants' AND COLUMN_NAME = 'teamId'`
+    );
+    if (!teamIdColumns.length) {
+      await this.pool.query("ALTER TABLE participants ADD COLUMN teamId VARCHAR(96) NOT NULL DEFAULT '' AFTER lastSeenAt");
+    }
+    await ensureIndex(this.pool, "participants", "idx_participants_team", "CREATE INDEX idx_participants_team ON participants (teamId)");
     await ensureIndex(this.pool, "usage_daily", "idx_usage_device_day", "CREATE INDEX idx_usage_device_day ON usage_daily (deviceId, day)");
     await ensureIndex(this.pool, "usage_daily", "idx_usage_daily_scope", "CREATE INDEX idx_usage_daily_scope ON usage_daily (participantId, deviceId, day, providerId)");
     await ensureIndex(this.pool, "usage_hourly", "idx_hourly_scope", "CREATE INDEX idx_hourly_scope ON usage_hourly (participantId, deviceId, day, hour, providerId)");
@@ -158,13 +185,15 @@ export class MySqlStore extends Store {
     const [participants] = await this.pool.query("SELECT * FROM participants");
     const [devices] = await this.pool.query("SELECT * FROM devices");
     const [workdirs] = await this.pool.query("SELECT * FROM workdirs");
+    const [teams] = await this.pool.query("SELECT * FROM teams");
     const [modelPrices] = await this.pool.query("SELECT * FROM model_prices");
     const [modelPriceAliases] = await this.pool.query("SELECT * FROM model_price_aliases");
     const [modelPriceCache] = await this.pool.query("SELECT * FROM model_price_cache");
     const [modelPriceCacheMeta] = await this.pool.query("SELECT * FROM model_price_cache_meta WHERE source = 'openrouter'");
-    this.db.participants = Object.fromEntries(participants.map((row) => [row.id, normalizeRow(row)]));
+    this.db.participants = Object.fromEntries(participants.map((row) => [row.id, { ...normalizeRow(row), teamId: row.teamId || "" }]));
     this.db.devices = Object.fromEntries(devices.map((row) => [row.id, normalizeRow(row)]));
     this.db.workdirs = Object.fromEntries(workdirs.map((row) => [row.id, normalizeRow(row)]));
+    this.db.teams = this.mergeLocalTeamState(Object.fromEntries(teams.map((row) => [row.id, normalizeRow(row)])));
     this.db.usageDaily = {};
     this.db.uploadBatches = {};
     this.db.modelPrices = Object.fromEntries(modelPrices.map((row) => [row.model, priceFromRow(row)]));
@@ -185,6 +214,118 @@ export class MySqlStore extends Store {
       await this.syncIdentityTables();
       return result;
     });
+  }
+
+  async persistTeamRow(team) {
+    await this.pool.query(
+      `INSERT INTO teams (id, name, createdAt, updatedAt) VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE name = VALUES(name), updatedAt = VALUES(updatedAt)`,
+      [team.id, team.name, team.createdAt, team.updatedAt]
+    );
+  }
+
+  // The remote MySQL front end splits reads onto a lagging replica: a committed
+  // team INSERT can stay invisible to SELECT for seconds. Team reads therefore
+  // trust this process's memory (write-through), and load() — which wholesale
+  // replaces this.db after connection hiccups — merges back locally written
+  // state instead of clobbering it with stale replica rows.
+  markLocalTeamWrite(teamId) {
+    this.localTeamWrites ||= new Set();
+    this.localTeamDeletes ||= new Set();
+    this.localTeamWrites.add(teamId);
+    this.localTeamDeletes.delete(teamId);
+  }
+
+  markLocalTeamDelete(teamId) {
+    this.localTeamWrites ||= new Set();
+    this.localTeamDeletes ||= new Set();
+    this.localTeamDeletes.add(teamId);
+    this.localTeamWrites.delete(teamId);
+  }
+
+  markLocalTeamAssignment(participantId, teamId) {
+    this.localTeamAssignments ||= new Map();
+    this.localTeamAssignments.set(participantId, teamId);
+  }
+
+  mergeLocalTeamState(sqlTeams) {
+    const merged = { ...sqlTeams };
+    const previous = this.db.teams || {};
+    for (const id of this.localTeamWrites || []) {
+      if (previous[id]) merged[id] = previous[id];
+    }
+    for (const id of this.localTeamDeletes || []) delete merged[id];
+    const participants = this.db.participants || {};
+    for (const [participantId, teamId] of this.localTeamAssignments || []) {
+      if (participants[participantId]) participants[participantId].teamId = teamId;
+    }
+    return merged;
+  }
+
+  async createTeam(input) {
+    return this.withWriteLock(async () => {
+      const team = super.createTeam(input);
+      this.markLocalTeamWrite(team.id);
+      await this.persistTeamRow(team);
+      return team;
+    });
+  }
+
+  async renameTeam(teamId, input) {
+    return this.withWriteLock(async () => {
+      const team = super.renameTeam(teamId, input);
+      this.markLocalTeamWrite(teamId);
+      await this.persistTeamRow(team);
+      return team;
+    });
+  }
+
+  async deleteTeam(teamId) {
+    return this.withWriteLock(async () => {
+      const result = super.deleteTeam(teamId);
+      this.markLocalTeamDelete(teamId);
+      await withTransaction(this.pool, async (conn) => {
+        await conn.query("UPDATE participants SET teamId = '' WHERE teamId = ?", [teamId]);
+        await conn.query("DELETE FROM teams WHERE id = ?", [teamId]);
+      });
+      return result;
+    });
+  }
+
+  async setParticipantTeam(participantId, teamId) {
+    return this.withWriteLock(async () => {
+      const result = super.setParticipantTeam(participantId, teamId);
+      this.markLocalTeamAssignment(participantId, result.teamId);
+      await this.pool.query(
+        "UPDATE participants SET teamId = ?, updatedAt = ? WHERE id = ?",
+        [result.teamId, new Date().toISOString(), participantId]
+      );
+      return result;
+    });
+  }
+
+  async teamsAnalysis(args = {}) {
+    const windowDays = normalizeTeamsAnalysisDays(args.days);
+    const businessDay = this.currentBusinessDay();
+    const currentDays = trailingDays(windowDays, { businessDay });
+    const previousDays = trailingDays(windowDays, { businessDay: addDays(currentDays[0], -1) });
+    const unionDays = [...new Set([...currentDays, ...previousDays])];
+    // Column projection: the aggregation only needs six fields; SELECT * drags
+    // ~20 wide columns per row over the wire and dominates remote-DB latency.
+    const [rows] = await this.pool.query(
+      `SELECT participantId, day, toolCode, totalTokens, estimatedCostUsd, uploadedAt
+       FROM usage_daily WHERE day IN (${unionDays.map(() => "?").join(",")})`,
+      unionDays
+    );
+    const usageRows = rows.map((row) => ({
+      participantId: row.participantId,
+      day: toDayString(row.day),
+      toolCode: row.toolCode,
+      totalTokens: Number(row.totalTokens || 0),
+      estimatedCostUsd: row.estimatedCostUsd === null ? null : Number(row.estimatedCostUsd),
+      uploadedAt: row.uploadedAt || ""
+    }));
+    return this.withScopedUsageRows(usageRows, () => this.computeTeamsAnalysis({ days: windowDays }));
   }
 
   async upsertUsageBatch(input) {
@@ -2264,15 +2405,16 @@ async function replaceParticipants(conn, rows) {
   if (!rows.length) return;
   await conn.query(
     `INSERT INTO participants
-      (id, nickname, avatarColor, identityPublicKey, createdAt, updatedAt, lastSeenAt)
+      (id, nickname, avatarColor, identityPublicKey, createdAt, updatedAt, lastSeenAt, teamId)
      VALUES ?
      ON DUPLICATE KEY UPDATE
       nickname = VALUES(nickname),
       avatarColor = VALUES(avatarColor),
       identityPublicKey = VALUES(identityPublicKey),
       updatedAt = VALUES(updatedAt),
-      lastSeenAt = VALUES(lastSeenAt)`,
-    [rows.map((row) => [row.id, row.nickname, row.avatarColor, row.identityPublicKey, row.createdAt, row.updatedAt, row.lastSeenAt])]
+      lastSeenAt = VALUES(lastSeenAt),
+      teamId = VALUES(teamId)`,
+    [rows.map((row) => [row.id, row.nickname, row.avatarColor, row.identityPublicKey, row.createdAt, row.updatedAt, row.lastSeenAt, row.teamId || ""])]
   );
 }
 

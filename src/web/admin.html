@@ -52,6 +52,7 @@
         <button type="button" data-admin-tab="quality" data-i18n="admin.tab.quality">Quality</button>
         -->
         <button type="button" data-admin-tab="devices" data-i18n="admin.tab.devices">设备</button>
+        <button type="button" data-admin-tab="teams" data-i18n="admin.tab.teams">团队</button>
         <button type="button" data-admin-tab="analytics" data-i18n="admin.tab.analytics">分析</button>
         <button type="button" data-admin-tab="sources" data-i18n="admin.tab.sources">来源统计</button>
       </nav>
@@ -299,6 +300,10 @@
             <tbody id="devices-tbody"></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="board admin-panel admin-analytics-panel" data-admin-panel="teams">
+        <iframe data-src="/teams.html" class="admin-analytics-frame" id="teams-iframe" title="Team analysis" data-i18n-title="admin.tab.teams"></iframe>
       </section>
 
       <section class="board admin-panel admin-analytics-panel" data-admin-panel="analytics">

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title data-i18n="web.teams.title">团队分析</title>
+  <script>
+    (() => {
+    try {
+      const lang = localStorage.getItem("ai-token-league.language");
+      if (lang === "en" || lang === "zh-CN") document.documentElement.lang = lang;
+          document.documentElement.dataset.bootLang = document.documentElement.lang;
+    } catch (_) {}
+    })();
+  </script>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell public-shell teams-shell">
+    <section class="masthead public-masthead">
+      <div class="masthead-copy">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg></div>
+          <h1 data-i18n="web.teams.title">团队分析</h1>
+          <span class="pill" data-i18n="web.teams.adminBadge">管理台</span>
+        </div>
+      </div>
+      <div class="masthead-side">
+        <nav class="public-nav" aria-label="Admin">
+          <a href="/admin.html" class="nav-link" data-i18n="web.teams.backToAdmin">返回管理台</a>
+        </nav>
+        <div class="lang-switcher-container" id="lang-switcher-container">
+          <div class="lang-switcher" id="lang-switcher" role="group" aria-label="Language">
+            <button type="button" class="lang-opt" data-lang="zh-CN" aria-pressed="true">中文</button>
+            <button type="button" class="lang-opt" data-lang="en" aria-pressed="false">EN</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="an-toolbar teams-toolbar" aria-label="Filters">
+      <div class="period-pills" data-filter="teams-range">
+        <button type="button" data-value="7" class="active" data-i18n="web.teams.range7">近 7 天</button>
+        <button type="button" data-value="14" data-i18n="web.teams.range14">近 14 天</button>
+        <button type="button" data-value="30" data-i18n="web.teams.range30">近 30 天</button>
+      </div>
+      <div class="an-toolbar-actions">
+        <button type="button" id="teams-manage-toggle" class="teams-manage-toggle" aria-expanded="false" aria-controls="teams-manage">管理团队</button>
+        <span class="console-period-label" id="teams-range-label" aria-live="polite"></span>
+        <button type="button" id="teams-defs-toggle" class="teams-defs-toggle" aria-haspopup="true" aria-expanded="false" data-i18n-title="web.teams.defs.summary" title="统计口径">?</button>
+        <div id="teams-defs-pop" class="teams-defs-pop" role="note" hidden>
+          <h3 data-i18n="web.teams.defs.summary">统计口径</h3>
+          <p data-i18n="web.teams.defs.body1">有使用 = 周期内至少 1 条用量记录；持续使用 = 至少 3 天有记录；上期 = 紧邻的前一个等长窗口。按天去重，不同日期的人数不相加。</p>
+          <p data-i18n="web.teams.defs.body2">Token 反映工具使用量，不直接等于效率或产出；记录缺失取决于客户端同步，未记录不代表未使用。</p>
+        </div>
+      </div>
+    </section>
+
+    <div id="teams-loading" class="analytics-loading" role="status" aria-live="polite" data-i18n-aria-label="loading" hidden>
+      <div class="analytics-spinner" aria-hidden="true"></div>
+    </div>
+
+    <div id="teams-empty" class="card teams-empty" hidden></div>
+
+    <section id="teams-manage" class="teams-manage" hidden>
+      <div class="card teams-manage-card">
+        <div class="teams-manage-head">
+          <div class="card-head">
+            <span class="section-kicker" data-i18n="web.teams.manage.kicker">团队 · 管理</span>
+            <h2 data-i18n="web.teams.manage.title">团队与成员</h2>
+          </div>
+          <form id="teams-create-form" class="teams-create-form">
+            <input id="teams-create-name" maxlength="48" autocomplete="off" data-i18n-placeholder="web.teams.manage.namePlaceholder" placeholder="团队名称" />
+            <button type="submit" data-i18n="web.teams.manage.create">新建团队</button>
+            <p id="teams-create-error" class="teams-create-error" hidden></p>
+          </form>
+        </div>
+        <p class="teams-manage-steps" data-i18n="web.teams.manage.steps">① 新建团队 → ② 搜索成员并选择所属团队 → ③ 看板自动刷新</p>
+        <p id="teams-manage-status" role="alert" class="teams-create-error teams-manage-status" hidden></p>
+        <div id="teams-manage-list" class="teams-manage-list"></div>
+        <div class="teams-manage-members">
+          <div class="teams-manage-members-head">
+            <h3 data-i18n="web.teams.manage.membersTitle">成员分组</h3>
+            <div class="period-pills teams-manage-filter" id="teams-manage-filter" role="group" aria-label="Filter">
+              <button type="button" data-value="untagged" class="active" data-i18n="web.teams.manage.filterUntagged">未分组</button>
+              <button type="button" data-value="tagged" data-i18n="web.teams.manage.filterTagged">已分组</button>
+              <button type="button" data-value="all" data-i18n="web.teams.manage.filterAll">全部</button>
+            </div>
+            <span id="teams-manage-count" class="teams-manage-count" aria-live="polite"></span>
+            <input id="teams-member-search" type="search" autocomplete="off" data-i18n-placeholder="web.teams.manage.searchPlaceholder" placeholder="搜索成员" />
+          </div>
+          <div class="teams-assign-bar">
+            <div class="teams-assign-team-buttons" id="teams-assign-team-buttons"></div>
+            <div class="teams-assign-tools">
+              <span id="teams-assign-count" class="teams-assign-count" aria-live="polite"></span>
+              <button type="button" id="teams-select-all" class="teams-assign-tool" data-i18n="web.teams.manage.selectAll">全选</button>
+              <button type="button" id="teams-clear-selection" class="teams-assign-tool" data-i18n="web.teams.manage.clearSelection">清空</button>
+            </div>
+          </div>
+          <div id="teams-people-cloud" class="teams-people-cloud"></div>
+          <p class="teams-manage-note" data-i18n="web.teams.manage.note">分组只影响团队分析页，不改变榜单与个人页的数据。</p>
+        </div>
+      </div>
+    </section>
+
+    <div id="teams-board" class="teams-board" hidden>
+      <article class="card teams-story" id="teams-story"></article>
+
+      <div class="teams-daily-grid">
+        <article class="card teams-daily-card">
+          <div class="card-head">
+            <span class="section-kicker" data-i18n="web.teams.daily.kicker">节奏 · 人数</span>
+            <h2 data-i18n="web.teams.daily.activeTitle">每日活跃人数</h2>
+          </div>
+          <div id="teams-daily-active" class="teams-chart-frame"></div>
+          <p class="teams-chart-note"><span class="teams-line-key"><i class="is-current"></i><span data-i18n="web.teams.daily.current">本期</span></span><span class="teams-line-key"><i class="is-prev"></i><span data-i18n="web.teams.daily.previous">上期（按周期第几天对齐）</span></span></p>
+        </article>
+        <article class="card teams-daily-card">
+          <div class="card-head">
+            <span class="section-kicker" data-i18n="web.teams.daily.kickerTokens">节奏 · 用量</span>
+            <h2 data-i18n="web.teams.daily.tokensTitle">每日 Token 用量</h2>
+          </div>
+          <div id="teams-daily-tokens" class="teams-chart-frame"></div>
+          <p class="teams-chart-note" data-i18n="web.teams.daily.tokensNote">柱高按窗口内最高一天归一。</p>
+        </article>
+      </div>
+
+      <article class="card teams-compare" id="teams-compare"></article>
+      <div id="teams-teams" class="teams-stack"></div>
+    </div>
+  </main>
+  <script type="module" src="/teams.js"></script>
+</body>
+</html>

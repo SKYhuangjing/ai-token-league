@@ -150,16 +150,19 @@ document.querySelector(".usage-view-tabs").addEventListener("click", (event) => 
 });
 
 window.addEventListener("message", (event) => {
-  const iframe = document.querySelector("#analytics-iframe");
-  if (event.origin !== window.location.origin || event.source !== iframe?.contentWindow) return;
-  if (event.data?.type === "analytics-resize") {
-    const height = Number(event.data.height);
-    if (iframe && Number.isFinite(height) && height > 0) {
-      const nextHeight = Math.ceil(height);
-      const currentHeight = Number.parseFloat(iframe.style.height) || 0;
-      if (Math.abs(currentHeight - nextHeight) > 1) {
-        iframe.style.height = `${nextHeight}px`;
-      }
+  if (event.origin !== window.location.origin) return;
+  const iframeByType = {
+    "analytics-resize": document.querySelector("#analytics-iframe"),
+    "teams-resize": document.querySelector("#teams-iframe")
+  };
+  const iframe = iframeByType[event.data?.type];
+  if (!iframe || event.source !== iframe.contentWindow) return;
+  const height = Number(event.data.height);
+  if (Number.isFinite(height) && height > 0) {
+    const nextHeight = Math.ceil(height);
+    const currentHeight = Number.parseFloat(iframe.style.height) || 0;
+    if (Math.abs(currentHeight - nextHeight) > 1) {
+      iframe.style.height = `${nextHeight}px`;
     }
   }
 });
@@ -1383,11 +1386,11 @@ function switchAdminTab(tabId) {
       document.querySelector("#devices-status").textContent = error.message;
     });
   }
-  if (tabId === "analytics") {
-    const iframe = document.querySelector("#analytics-iframe");
+  if (tabId === "analytics" || tabId === "teams") {
+    const iframe = document.querySelector(tabId === "analytics" ? "#analytics-iframe" : "#teams-iframe");
     if (iframe && !iframe.dataset.loaded) {
-      setAdminPanelBusy("analytics", true);
-      iframe.addEventListener("load", () => setAdminPanelBusy("analytics", false), { once: true });
+      setAdminPanelBusy(tabId, true);
+      iframe.addEventListener("load", () => setAdminPanelBusy(tabId, false), { once: true });
       iframe.src = iframe.dataset.src;
       iframe.dataset.loaded = "true";
     }

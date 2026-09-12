@@ -223,6 +223,7 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | `scripts/patch-dmg-layout.sh` | Prepare generated macOS DMGs with the "已损坏修复" helper and Finder layout; normally called by release scripts. | `scripts/patch-dmg-layout.sh --dmg <path>` |
 | `scripts/generate-icons.js` | Regenerate desktop and web icon assets from `assets/app-icon-source.png`. | `npm run icons` |
 | `scripts/network-probe.mjs` | Print local network interfaces for LAN/server access diagnostics. | `node scripts/network-probe.mjs` |
+| `scripts/seed-team-demo.js` | Seed or purge demo participants tagged into admin teams (平台研发/业务研发) for the admin team-analysis board. Deterministic; identities cached under `data/team-demo-identities.json`. | `node scripts/seed-team-demo.js --env env.test [--remove]` |
 
 Raw `npm start` runs `src/backend/server.js` directly. Use it only when intentionally bypassing `scripts/start-server.sh`, for example inside focused test commands or when a wrapper would hide the behavior being debugged.
 
