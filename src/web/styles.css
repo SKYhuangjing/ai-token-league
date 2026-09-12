@@ -8955,22 +8955,26 @@ body.page-home::before {
 }
 
 .admin-shell [data-admin-panel="devices"] th:nth-child(1) {
-  width: 200px;
+  width: 300px;
 }
 
 .admin-shell [data-admin-panel="devices"] th:nth-child(2),
 .admin-shell [data-admin-panel="devices"] th:nth-child(3) {
-  width: 26%;
+  width: 20%;
 }
 
 .admin-shell [data-admin-panel="devices"] th:nth-child(4) {
   width: 110px;
 }
 
-.admin-shell [data-admin-panel="devices"] td:first-child {
+/* Flex lives on an inner wrapper, not the td: a flex td drops table-cell
+   layout, stops stretching to the row height, and its bottom border floats
+   above the other columns' separator whenever any cell wraps. */
+.admin-shell [data-admin-panel="devices"] .device-cell {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .admin-shell [data-admin-panel="devices"] .device-name {
@@ -8979,6 +8983,11 @@ body.page-home::before {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Platform + version share one line so device rows stay single-line. */
+.admin-shell [data-admin-panel="devices"] td:nth-child(2) .truncated-cell {
+  display: inline;
 }
 
 .admin-shell .device-version {

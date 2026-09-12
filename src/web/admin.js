@@ -564,7 +564,7 @@ function renderDevices(devices) {
     const platform = item.clientPlatform || item.os || "";
     const lanIp = devicePrimaryLanIp(item.lanIp);
     return `<tr${staleDays ? ' class="device-stale"' : ""}>
-    <td><span class="device-name" title="${escapeHtml(item.nickname)}"><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></span>${staleDays ? ` <span class="pill device-stale-pill">${t("admin.devices.staleDays", { days: staleDays })}</span>` : ""}</td>
+    <td><div class="device-cell"><span class="device-name" title="${escapeHtml(item.nickname)}"><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></span>${staleDays ? ` <span class="pill device-stale-pill">${t("admin.devices.staleDays", { days: staleDays })}</span>` : ""}</div></td>
     <td><span class="truncated-cell" title="${escapeHtml(platform ? `${devicePlatformLabel(platform)} (${platform})` : "-")}">${escapeHtml(devicePlatformLabel(platform))}</span> <span class="device-version">${escapeHtml(item.clientAppVersion || "-")}</span></td>
     <td><span class="truncated-cell" title="${escapeHtml(lanIp.full)}">${escapeHtml(lanIp.primary)}</span></td>
     <td>${escapeHtml(formatStamp(item.lastSeenAt).slice(0, 10))}</td>
