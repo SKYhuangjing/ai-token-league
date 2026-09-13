@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 import { Store } from "./store.js";
 import { MySqlStore } from "./mysql-store.js";
 import { verifyPayload, sha256Hex, newId } from "../shared/crypto.js";
@@ -193,11 +194,36 @@ function transformTrendResult(trend) {
 }
 
 function sendJson(res, status, body) {
-  res.writeHead(status, {
+  const payload = Buffer.from(API_PRETTY_JSON ? JSON.stringify(body, null, 2) : JSON.stringify(body));
+  const req = res.req;
+  const headers = {
     ...corsHeaders(),
-    "content-type": "application/json; charset=utf-8"
-  });
-  res.end(API_PRETTY_JSON ? JSON.stringify(body, null, 2) : JSON.stringify(body));
+    "content-type": "application/json; charset=utf-8",
+    Vary: "Accept-Encoding"
+  };
+  // GET ETag is derived from the current body, so a 304 can never serve
+  // stale data — repeat board views skip the transfer, not the freshness.
+  if (req && (req.method === "GET" || req.method === "HEAD") && status === 200 && payload.length > 0) {
+    const etag = `W/"${payload.length.toString(36)}-${sha256Hex(payload.toString("utf8")).slice(0, 16)}"`;
+    headers.ETag = etag;
+    headers["Cache-Control"] = "no-cache";
+    const clientETag = String(req.headers["if-none-match"] || "").replace(/^W\//, "").trim();
+    if (clientETag && clientETag === etag.replace(/^W\//, "")) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+  }
+  // Content negotiation: clients that cannot decompress (Rust reqwest without
+  // the gzip feature) never advertise Accept-Encoding and get identity.
+  if (req && payload.length >= 1024 && /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""))) {
+    headers["Content-Encoding"] = "gzip";
+    res.writeHead(status, headers);
+    zlib.gzip(payload, { level: 6 }, (error, compressed) => res.end(error ? payload : compressed));
+    return;
+  }
+  res.writeHead(status, headers);
+  res.end(payload);
 }
 
 function corsHeaders() {
@@ -1193,9 +1219,7 @@ function serveStatic(req, res) {
       res.end("not found");
       return;
     }
-    res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
-    fs.createReadStream(file).pipe(res);
-    return;
+    return sendStaticFile(req, res, file, "text/markdown");
   }
   const normalized = requested.startsWith("/web/") || requested.startsWith("/shared/")
     ? requested
@@ -1212,10 +1236,59 @@ function serveStatic(req, res) {
     ".html": "text/html",
     ".ico": "image/x-icon",
     ".js": "text/javascript",
-    ".png": "image/png"
+    ".json": "application/json",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2"
   }[ext] || "application/octet-stream";
-  res.writeHead(200, { "content-type": `${type}; charset=utf-8` });
-  fs.createReadStream(file).pipe(res);
+  return sendStaticFile(req, res, file, type);
+}
+
+const STATIC_GZIP_TYPES = new Set(["text/css", "text/html", "text/javascript", "application/json", "text/markdown", "image/svg+xml"]);
+const STATIC_GZIP_MIN_BYTES = 1024;
+const FONT_EXTENSIONS = new Set([".woff", ".woff2"]);
+
+// Asset filenames carry no content hash, so long max-age would serve stale
+// CSS/JS after a deploy. Revalidation (no-cache + ETag → 304) keeps deploys
+// instant while making repeat navigations zero-byte. Fonts are the exception:
+// replacing a font ships under a new filename.
+function staticCacheControl(file, type) {
+  if (FONT_EXTENSIONS.has(path.extname(file)) || type.startsWith("font/")) {
+    return "public, max-age=31536000, immutable";
+  }
+  return "no-cache";
+}
+
+function sendStaticFile(req, res, file, type) {
+  const stat = fs.statSync(file);
+  const etag = `W/"${stat.mtimeMs.toString(36)}-${stat.size.toString(36)}"`;
+  const cacheControl = staticCacheControl(file, type);
+  const contentType = type.startsWith("text/") || type === "application/json" || type === "image/svg+xml"
+    ? `${type}; charset=utf-8`
+    : type;
+  const clientETag = String(req.headers["if-none-match"] || "").replace(/^W\//, "").trim();
+  if (clientETag && clientETag === etag.replace(/^W\//, "")) {
+    res.writeHead(304, { ETag: etag, "Cache-Control": cacheControl, Vary: "Accept-Encoding" });
+    res.end();
+    return;
+  }
+  const headers = { "content-type": contentType, ETag: etag, "Cache-Control": cacheControl, Vary: "Accept-Encoding" };
+  const acceptsGzip = STATIC_GZIP_TYPES.has(type)
+    && stat.size >= STATIC_GZIP_MIN_BYTES
+    && /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""));
+  if (acceptsGzip) headers["Content-Encoding"] = "gzip";
+  res.writeHead(200, headers);
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+  const stream = fs.createReadStream(file);
+  // statSync and open can race a deploy-time file swap; an unhandled stream
+  // error would take down the process, so close the socket instead.
+  stream.on("error", () => res.destroy());
+  if (acceptsGzip) stream.pipe(zlib.createGzip()).pipe(res);
+  else stream.pipe(res);
 }
 
 export function createServer() {

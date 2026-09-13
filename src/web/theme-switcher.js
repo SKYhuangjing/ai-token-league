@@ -1,6 +1,9 @@
-// 实验用主题切换器:下拉选择配色方案(岚紫/暖橙/墨绿/绿茵),选择持久化在
-// localStorage,启动时把方案 token 写到 <html> 内联样式上(覆盖默认 :root),
-// 切换后刷新页面让 JS 图表色板重新读取。admin 与公开页共用。
+// 实验用主题切换器:下拉选择配色方案(岚紫/暖橙/墨绿/竞技绿),选择持久化在
+// localStorage,启动时把方案 token 写到 <html> 内联样式上(覆盖默认 :root)。
+// 切换时重置图表色板缓存并广播 atl:themechange,各页用已有 state 重渲染
+// 图表(不发 API、不刷新页面)。admin 与公开页共用。
+import { resetThemePalette } from "/shared/chart-helpers.js";
+
 const STORAGE_KEY = "ai-token-league.theme-scheme";
 
 const SCHEMES = {
@@ -154,7 +157,12 @@ function injectSwitcher() {
         if (currentThemeScheme() !== name) {
           localStorage.setItem(STORAGE_KEY, name);
           applyThemeScheme(name);
-          window.location.reload();
+          // Charts bake palette reads at render time behind a cache; drop the
+          // cache and let every listener re-render from its held state.
+          resetThemePalette();
+          window.dispatchEvent(new CustomEvent("atl:themechange", { detail: { scheme: name } }));
+          renderBtnLabel();
+          renderItems();
           return;
         }
         close();

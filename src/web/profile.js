@@ -1365,3 +1365,11 @@ document.querySelector("#profile-pick-another")?.addEventListener("click", async
   await loadRange();
   loadHeatmap();
 })();
+
+// No-reload theme switch: SVG charts baked their palette at render time.
+// Range/heatmap responses are server-cached, so this repaint is cheap.
+window.addEventListener("atl:themechange", () => {
+  if (state.notFound) return;
+  loadRange();
+  loadHeatmap();
+});

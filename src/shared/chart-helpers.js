@@ -105,11 +105,20 @@ function theme() {
 
 export const THEME_PALETTE = { get theme() { return theme(); } };
 
+// Theme switch without reload: the palette cache and every baked constant
+// must be re-derivable. resetThemePalette() drops the cache so the next
+// render re-reads the (already swapped) CSS custom properties.
+export function resetThemePalette() {
+  THEME_CACHE = null;
+}
+
+// Colors are getters (not literals) so a palette reset propagates to already
+// imported references without changing the consumer API.
 export const COMPOSITION_PARTS = [
-  { key: "inputTokens", labelKey: "common.input", color: theme().comp[0] },
-  { key: "outputTokens", labelKey: "common.output", color: theme().comp[1] },
-  { key: "cacheReadTokens", labelKey: "common.cacheRead", color: theme().comp[2] },
-  { key: "cacheWriteTokens", labelKey: "common.cacheWrite", color: theme().comp[3] }
+  { key: "inputTokens", labelKey: "common.input", get color() { return theme().comp[0]; } },
+  { key: "outputTokens", labelKey: "common.output", get color() { return theme().comp[1]; } },
+  { key: "cacheReadTokens", labelKey: "common.cacheRead", get color() { return theme().comp[2]; } },
+  { key: "cacheWriteTokens", labelKey: "common.cacheWrite", get color() { return theme().comp[3]; } }
 ];
 
 const AVATAR_WARM_COLORS = ["#cf6a42", "#8b7355", "#b4552f", "#9a8f7d", "#c2a05a", "#7a6a55"];
@@ -499,8 +508,10 @@ export function renderWeekdayRhythm(container, timeSeries = [], { tooltip = null
   });
 }
 
-const SHARE_TREND_PALETTE = theme().trend;
-const SHARE_TREND_OTHER_COLOR = theme().rankOther;
+// Lazy accessors: module-level `theme().trend` literals would freeze the
+// palette at import time and survive a no-reload theme switch.
+const SHARE_TREND_PALETTE = { get trend() { return theme().trend; } };
+const SHARE_TREND_OTHER_COLOR = { get value() { return theme().rankOther; } };
 
 // Adaptive viewBox height for card charts: measure the chart frame's real box
 // (grid rows stretch cards to the tallest sibling) so the drawing fills the
@@ -590,7 +601,7 @@ export function renderShareAreaStacked(svg, months = [], series = [], { tooltip 
     const lower = lowerLine(seriesIndex);
     const topPts = upper.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`);
     const bottomPts = lower.map((pct, index) => `${xAt(index).toFixed(1)},${yAt(pct).toFixed(1)}`).reverse();
-    const color = row.other ? SHARE_TREND_OTHER_COLOR : SHARE_TREND_PALETTE[seriesIndex % SHARE_TREND_PALETTE.length];
+    const color = row.other ? SHARE_TREND_OTHER_COLOR.value : SHARE_TREND_PALETTE.trend[seriesIndex % SHARE_TREND_PALETTE.trend.length];
     bandParts.push(`<path class="sa-band" d="M ${topPts.join(" L ")} L ${bottomPts.join(" L ")} Z" fill="${color}" fill-opacity="${row.other ? 0.55 : 0.8}" stroke="${color}" stroke-opacity="0.5" stroke-width="0.6"></path>`);
   });
   parts.push(`<clipPath id="${clipId}"><rect x="${padLeft}" y="${padTop}" width="${plotW}" height="${plotH}" rx="8" ry="8"></rect></clipPath>`);

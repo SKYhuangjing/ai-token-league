@@ -8615,6 +8615,85 @@ function testStoreEmptyDatabase() {
   console.log("  testStoreEmptyDatabase passed");
 }
 
+function testAggregateCacheDayWindowInvalidation() {
+  let businessDay = "2026-05-10";
+  const identity = generateIdentity();
+  const store = new Store(path.join(tmp, "db-aggregate-window-cache.json"), {
+    businessDayProvider: () => businessDay
+  });
+  const deviceId = newId("d");
+  store.registerDevice({
+    participantId: identity.participantId,
+    deviceId,
+    nickname: "window-cache-user",
+    identityPublicKey: identity.identityPublicKey,
+    os: "test",
+    appVersion: APP_VERSION
+  });
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: "2026-05-10T00:00:00.000Z",
+    items: [
+      makeSnapshotItem({ day: "2026-05-10", workdirHash: "win_d1", sourceFingerprint: "win_d1", totalTokens: 100, inputTokens: 100, outputTokens: 0 }),
+      makeSnapshotItem({ day: "2026-05-09", workdirHash: "win_d0", sourceFingerprint: "win_d0", totalTokens: 50, inputTokens: 50, outputTokens: 0 })
+    ]
+  });
+
+  // Canonical cache keys: range and period spellings of the same window must
+  // share one aggregate entry (identity proves a cache hit).
+  const monthByRange = store.analytics({ range: "this_month" });
+  const monthByPeriod = store.analytics({ period: "this_month" });
+  assert.equal(monthByRange, monthByPeriod, "range/period spellings should share one analytics cache entry");
+  const todayFirst = store.analytics({ period: "today" });
+  assert.equal(store.analytics({ period: "today" }), todayFirst, "repeat analytics call should hit the cache");
+
+  // A write that touches today must evict entries whose window covers today
+  // and serve the recomputed totals.
+  store.upsertUsageBatch({
+    participantId: identity.participantId,
+    deviceId,
+    clientGeneratedAt: "2026-05-10T01:00:00.000Z",
+    items: [makeSnapshotItem({ day: "2026-05-10", workdirHash: "win_d1b", sourceFingerprint: "win_d1b", totalTokens: 70, inputTokens: 70, outputTokens: 0 })]
+  });
+  const todaySecond = store.analytics({ period: "today" });
+  assert.notEqual(todaySecond, todayFirst, "today write must evict the today analytics cache");
+  assert.equal(todaySecond.summary.totalTokens, 170, "recomputed analytics must include the new upload");
+
+  // todayToleranceMs entries survive a today-only write under a bounded
+  // grace, and die outright once expired or when a history day is written.
+  const toleranceKey = "test|tolerance-entry";
+  store.writeCachedAggregate(toleranceKey, { marker: 1 }, { todayToleranceMs: 60_000 });
+  store.invalidateAggregateCacheForDays(new Set(["2026-05-10"]));
+  assert.equal(store.readCachedAggregate(toleranceKey)?.marker, 1, "today-only write should keep a tolerance entry for its grace window");
+  store.aggregateCache[toleranceKey].expiresAt = Date.now() - 1;
+  assert.equal(store.readCachedAggregate(toleranceKey), null, "expired tolerance entry must not serve");
+  store.writeCachedAggregate(toleranceKey, { marker: 2 }, { todayToleranceMs: 60_000 });
+  store.invalidateAggregateCacheForDays(new Set(["2026-05-09"]));
+  assert.equal(store.readCachedAggregate(toleranceKey), null, "history-day write must drop a tolerance entry outright");
+
+  // Team membership/name edits touch no usage day — they must still evict the
+  // teamsAnalysis cache explicitly, or the board keeps serving the pre-edit
+  // snapshot.
+  const team = store.createTeam({ name: "window-cache-team" });
+  store.setParticipantTeam(identity.participantId, team.id);
+  const analysisFirst = store.teamsAnalysis({ days: 7 });
+  assert.equal(store.teamsAnalysis({ days: 7 }), analysisFirst, "repeat teamsAnalysis should hit the cache");
+  store.renameTeam(team.id, { name: "renamed-team" });
+  const analysisSecond = store.teamsAnalysis({ days: 7 });
+  assert.notEqual(analysisSecond, analysisFirst, "team rename must evict the teamsAnalysis cache");
+  assert.equal(analysisSecond.teams[0].name, "renamed-team", "teamsAnalysis must reflect the rename immediately");
+
+  // Custom historical ranges are day-scoped: business-day rollover must
+  // re-key (and thus recompute) instead of serving yesterday's heatmap.
+  const customFirst = store.analytics({ range: "custom", startDay: "2026-05-01", endDay: "2026-05-08" });
+  assert.equal(store.analytics({ range: "custom", startDay: "2026-05-01", endDay: "2026-05-08" }), customFirst);
+  businessDay = "2026-05-11";
+  const customSecond = store.analytics({ range: "custom", startDay: "2026-05-01", endDay: "2026-05-08" });
+  assert.notEqual(customSecond, customFirst, "custom-range analytics must be day-scoped across business-day rollover");
+  console.log("  testAggregateCacheDayWindowInvalidation passed");
+}
+
 function testParticipantProfile() {
   const store = new Store(path.join(tmp, "db-participant-profile.json"));
   store.currentBusinessDay = () => "2026-08-27";
@@ -9605,5 +9684,8 @@ testBoardAnonymizerConsistency();
 // Participant profile
 testParticipantProfile();
 testParticipantHourlyRhythm();
+
+// Aggregate cache: canonical keys, day-window invalidation, tolerance, team edits
+testAggregateCacheDayWindowInvalidation();
 
 console.log("All tests passed");

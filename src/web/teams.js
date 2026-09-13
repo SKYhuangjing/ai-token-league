@@ -130,6 +130,10 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+window.addEventListener("atl:themechange", () => {
+  if (state.analysis) renderAll();
+});
+
 async function loadAll() {
   setLoading(true);
   emptyEl.hidden = true;

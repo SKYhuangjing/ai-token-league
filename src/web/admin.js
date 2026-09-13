@@ -1951,3 +1951,9 @@ refreshSourceFilterOptions();
 loadPricing().catch((error) => {
   if (error.message !== "Authentication required") pricingStatus.textContent = error.message;
 });
+
+// No-reload theme switch: usage panel charts (donut/spark) bake palette at
+// render; re-run the load — responses are server-cached so this is cheap.
+window.addEventListener("atl:themechange", () => {
+  loadUsage().catch(() => {});
+});

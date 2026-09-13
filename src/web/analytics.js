@@ -126,6 +126,15 @@ async function loadAnalytics() {
 
   state.data = await response.json();
 
+  renderAnalytics({ animate: true });
+
+  if (isEmbedded) loadEcoSection().catch((err) => console.error("Eco section failed:", err));
+}
+
+// Full render pass from state.data — reused by loadAnalytics and the no-reload
+// theme switch (atl:themechange) so palette changes repaint charts without
+// refetching or reloading the page.
+function renderAnalytics({ animate = false } = {}) {
   const dateRangeEl = document.querySelector("#period-date-range");
   if (dateRangeEl && state.data.from && state.data.to) {
     dateRangeEl.textContent = `${state.data.from} - ${state.data.to}`;
@@ -145,7 +154,7 @@ async function loadAnalytics() {
     trendMeta.textContent = formatPeriodCaption(state.period, periodMeta);
   }
 
-  renderKPIs();
+  renderKPIs({ animate });
   renderInsights();
   renderComposition();
   renderPareto();
@@ -160,8 +169,11 @@ async function loadAnalytics() {
   renderHourWeekdayCard();
   renderWorkdirCards();
   renderCompositionTrendCards();
-  if (isEmbedded) loadEcoSection().catch((err) => console.error("Eco section failed:", err));
 }
+
+window.addEventListener("atl:themechange", () => {
+  if (state.data) renderAnalytics();
+});
 
 function renderInsights() {
   renderAnalyticsInsights(document.querySelector("#analytics-insights"), state.data);
@@ -206,10 +218,10 @@ function renderTrendChart() {
   const svg = document.querySelector("#trend-chart");
   if (!svg) return;
   const tooltip = document.querySelector("#chart-tooltip");
-  const dailySeries = state.data.timeSeries || [];
+  const dailySeries = state.data?.timeSeries || [];
   const isAllPeriod = state.period === "all";
   const series = isAllPeriod ? aggregateTimeSeriesByWeek(dailySeries) : dailySeries;
-  const grain = isAllPeriod ? "week" : (state.data.timeGrain || "day");
+  const grain = isAllPeriod ? "week" : (state.data?.timeGrain || "day");
   // Render at the frame's real box so the chart fills the stretched card
   // without preserveAspectRatio="none" distorting text and dots.
   const frame = svg.closest(".chart-frame") || svg.parentElement;
@@ -223,11 +235,14 @@ function renderTrendChart() {
 
 // The trend card is stretched by the an-main grid, so its frame box changes
 // with the composition card and the viewport; re-render at the real size.
+// The observer fires an initial callback on the next frame — before the
+// analytics fetch resolves — so guard on data availability.
 if ("ResizeObserver" in window) {
   const trendFrame = document.querySelector("#trend-chart")?.closest(".chart-frame");
   let lastTrendBox = "";
   new ResizeObserver(() => {
     if (!trendFrame) return;
+    if (!state.data) return;
     const box = trendFrame.getBoundingClientRect();
     const key = `${Math.round(box.width)}x${Math.round(box.height)}`;
     if (key === lastTrendBox) return;
@@ -523,13 +538,38 @@ async function loadEcoSection() {
   section.hidden = false;
 }
 
-function renderKPIs() {
+// KPI count-up: numeric values roll from 0 on fresh data (loadAnalytics);
+// palette repaints (theme switch) render final values instantly.
+const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+function countUpText(el, target, format) {
+  if (!el) return;
+  const value = Number(target);
+  if (!Number.isFinite(value) || value <= 0 || prefersReducedMotion?.matches) {
+    el.textContent = format(value);
+    return;
+  }
+  const duration = 600;
+  const start = performance.now();
+  const step = (now) => {
+    const progress = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = format(value * eased);
+    if (progress < 1) requestAnimationFrame(step);
+    else el.textContent = format(value);
+  };
+  requestAnimationFrame(step);
+}
+
+function renderKPIs({ animate = false } = {}) {
   const summary = state.data.summary || {};
   const totalTokens = Number(summary.totalTokens || 0);
 
   // 1. Total Tokens
   const totalTokensEl = document.querySelector("#kpi-total-tokens");
-  if (totalTokensEl) totalTokensEl.textContent = localeTokenCompact(totalTokens);
+  if (totalTokensEl) {
+    if (animate) countUpText(totalTokensEl, totalTokens, localeTokenCompact);
+    else totalTokensEl.textContent = localeTokenCompact(totalTokens);
+  }
 
   // 2. Active Contributors
   const activeCountEl = document.querySelector("#kpi-active-count");
@@ -537,7 +577,10 @@ function renderKPIs() {
   const participants = state.data.participantRanking || [];
   const totalParticipants = state.data.participantCount || participants.length || 0;
   const activeDevs = participants.filter((p) => (p.totalTokens || 0) > 0).length || participants.length;
-  if (activeCountEl) activeCountEl.textContent = String(activeDevs);
+  if (activeCountEl) {
+    if (animate) countUpText(activeCountEl, activeDevs, (v) => String(Math.round(v)));
+    else activeCountEl.textContent = String(activeDevs);
+  }
   if (activeSubEl) {
     activeSubEl.textContent = totalParticipants > 0
       ? t("web.analytics.activeOfTotal", { pct: Math.round((activeDevs / totalParticipants) * 100), count: totalParticipants })

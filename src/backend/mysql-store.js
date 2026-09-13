@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import mysql from "mysql2/promise";
-import { Store, normalizeSourceTop, normalizeSourceTrendDays, normalizeTeamsAnalysisDays, trailingDays } from "./store.js";
+import { Store, canonicalAnalyticsArgs, normalizeSourceTop, normalizeSourceTrendDays, normalizeTeamsAnalysisDays, trailingDays } from "./store.js";
 import { newId, sha256Hex } from "../shared/crypto.js";
 import { dominantComposition, tokenCompositionSummary } from "../shared/composition.js";
 import { createPriceMap, normalizeModelName } from "../shared/pricing.js";
@@ -11,6 +11,12 @@ import { fetchOpenRouterModelPrices } from "./openrouter-pricing.js";
 
 const MIGRATION_PATH = path.resolve("migrations/001_init_mysql.sql");
 const MIGRATION_002_PATH = path.resolve("migrations/002_usage_hourly.sql");
+
+// Collector uploads land every ~15 minutes; without this tolerance the
+// trailing-365 heat aggregate would be rebuilt (two GROUP BYs over a year of
+// rows) on every upload epoch. 60s of bounded staleness for today-only
+// writes; history writes always drop the entry.
+const ANALYTICS_HEAT_TODAY_TOLERANCE_MS = 60 * 1000;
 
 export class MySqlStore extends Store {
   static async create(config = {}) {
@@ -307,6 +313,9 @@ export class MySqlStore extends Store {
   async teamsAnalysis(args = {}) {
     const windowDays = normalizeTeamsAnalysisDays(args.days);
     const businessDay = this.currentBusinessDay();
+    const cacheKey = `teamsAnalysis|${STORAGE_SCHEMA_VERSION}|${JSON.stringify({ days: windowDays, businessDay })}`;
+    const hit = this.readCachedAggregate(cacheKey);
+    if (hit) return hit;
     const currentDays = trailingDays(windowDays, { businessDay });
     const previousDays = trailingDays(windowDays, { businessDay: addDays(currentDays[0], -1) });
     const unionDays = [...new Set([...currentDays, ...previousDays])];
@@ -325,7 +334,9 @@ export class MySqlStore extends Store {
       estimatedCostUsd: row.estimatedCostUsd === null ? null : Number(row.estimatedCostUsd),
       uploadedAt: row.uploadedAt || ""
     }));
-    return this.withScopedUsageRows(usageRows, () => this.computeTeamsAnalysis({ days: windowDays }));
+    const result = await this.withScopedUsageRows(usageRows, () => this.computeTeamsAnalysis({ days: windowDays }));
+    this.writeCachedAggregate(cacheKey, result, { windowDays: new Set(unionDays) });
+    return result;
   }
 
   async upsertUsageBatch(input) {
@@ -380,12 +391,14 @@ export class MySqlStore extends Store {
   }
 
   resetUsageWorkingState() {
+    // Scratch state only. Cache invalidation happens in the super write
+    // methods (day-aware for usage upserts, nuclear for metadata writes) —
+    // nuking here would defeat the day-window invalidation on every upload.
     this.db.usageDaily = {};
     this.db.usageHourly = {};
     this.db.usageSyncBuckets = {};
     this.db.usageSyncBucketsHourly = {};
     this.db.uploadBatches = {};
-    this.invalidateAggregateCache();
   }
 
   async acquireMysqlWriteLock() {
@@ -669,6 +682,21 @@ export class MySqlStore extends Store {
   }
 
   async sourceLeaderboard(args = {}) {
+    // Two whole-table GROUP BYs per call; the JSON-store twin caches this, so
+    // mirror that here. dayScoped key: rollover naturally rebuilds.
+    const businessDay = this.currentBusinessDay();
+    const cacheKey = `sourceLeaderboard|${STORAGE_SCHEMA_VERSION}|${JSON.stringify({
+      period: args.period || "",
+      range: args.range || "",
+      startDay: args.startDay || "",
+      endDay: args.endDay || "",
+      source: args.source || "",
+      includeCost: Boolean(args.includeCost),
+      top: normalizeSourceTop(args.top),
+      businessDay
+    })}`;
+    const hit = this.readCachedAggregate(cacheKey);
+    if (hit) return hit;
     const { whereSql, params } = this.mysqlUsageScope(args, "u");
     const includeCost = Boolean(args.includeCost);
     const boundedTop = normalizeSourceTop(args.top);
@@ -750,10 +778,13 @@ export class MySqlStore extends Store {
         };
       })
       .sort((a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name));
-    return {
+    const result = {
       totalTokens: sources.reduce((sum, item) => sum + item.totalTokens, 0),
       sources
     };
+    const windowDays = mysqlDaysForQuery(args, { businessDay }) || null;
+    this.writeCachedAggregate(cacheKey, result, { windowDays: windowDays ? new Set(windowDays) : null });
+    return result;
   }
 
   async boardSummary() {
@@ -975,55 +1006,54 @@ export class MySqlStore extends Store {
   }
 
   async analytics(args = {}) {
-    if (args.period === "all" || args.range === "all") {
-      const hit = this.readAnalyticsAllCache(args);
+    // Canonicalize first: the analytics page sends period=this_month while the
+    // home page sends range=this_month — without a shared key shape the same
+    // aggregation recomputes per spelling and per route (board/admin).
+    const canonical = canonicalAnalyticsArgs(args);
+    const isAll = canonical.period === "all";
+    if (isAll) {
+      const hit = this.readAnalyticsAllCache(canonical);
       if (hit) return hit;
     }
 
     const businessDay = this.currentBusinessDay();
-    const cacheArgs = { ...args, businessDay };
-    const cacheKey = `analytics|${STORAGE_SCHEMA_VERSION}|heat365|${JSON.stringify(cacheArgs)}`;
-    if (!(args.period === "all" || args.range === "all") && this.aggregateCache?.[cacheKey]) {
-      return this.aggregateCache[cacheKey].value;
+    const cacheKey = `analytics|${STORAGE_SCHEMA_VERSION}|heat365|${JSON.stringify({ ...canonical, businessDay })}`;
+    if (!isAll) {
+      const hit = this.readCachedAggregate(cacheKey);
+      if (hit) return hit;
     }
 
     let periodDays;
-    if (args.period === "all" || args.range === "all") {
+    if (isAll) {
       const [allDayRows] = await this.pool.query("SELECT DISTINCT day FROM usage_daily ORDER BY day");
       periodDays = allDayRows.map(r => toDayString(r.day));
     } else {
-      periodDays = mysqlDaysForQuery(args, { businessDay }) || [];
+      periodDays = mysqlDaysForQuery(canonical, { businessDay }) || [];
     }
 
     const heatmapDays = mysqlTrailingDays(365, { businessDay });
-    const unionDays = [...new Set([...periodDays, ...heatmapDays])];
 
-    if (!unionDays.length) return Store.prototype.analytics.call(this, args);
-
-    let sql = `SELECT * FROM usage_daily WHERE day IN (${unionDays.map(() => "?").join(",")})`;
-    const params = [...unionDays];
-
-    if (args.participantId) {
-      sql += " AND participantId = ?";
-      params.push(args.participantId);
+    // The trailing-365 heatmap + monthly rollups are day-grained aggregates —
+    // served from a per-businessDay SQL aggregate instead of raw rows. Only
+    // the participant-scoped path still fetches the period∪heat union (its
+    // per-participant heatmap filter rides on row-level detail).
+    let heatmapAggregate = null;
+    let fetchDays = periodDays;
+    if (canonical.participantId) {
+      fetchDays = [...new Set([...periodDays, ...heatmapDays])];
+    } else {
+      heatmapAggregate = await this.analyticsHeatAggregate({ businessDay, heatmapDays });
     }
 
-    const [rows] = await this.pool.query(sql, params);
-    const usageRows = rows.map(usageFromRow);
+    if (!fetchDays.length) return Store.prototype.analytics.call(this, canonical);
+
+    const usageRows = await this.fetchUsageRowsForAnalytics(fetchDays, canonical.participantId);
 
     // Load hourly rows for today/yesterday to enable hourly trend chart
-    const isHourly = args.period === "today" || args.period === "yesterday";
+    const isHourly = canonical.period === "today" || canonical.period === "yesterday";
     let hourlyRows = [];
     if (isHourly && periodDays.length) {
-      const targetDay = periodDays[0];
-      let hSql = `SELECT * FROM usage_hourly WHERE day = ?`;
-      const hParams = [targetDay];
-      if (args.participantId) {
-        hSql += " AND participantId = ?";
-        hParams.push(args.participantId);
-      }
-      const [hRows] = await this.pool.query(hSql, hParams);
-      hourlyRows = hRows.map(usageFromRow);
+      hourlyRows = await this.fetchHourlyRowsForAnalytics(periodDays[0], canonical.participantId);
     }
 
     const result = await this.withScopedUsageRows(
@@ -1036,30 +1066,98 @@ export class MySqlStore extends Store {
             row
           ]));
           try {
-            return this.computeAnalytics(args);
+            return this.computeAnalytics(canonical, { heatmap: heatmapAggregate });
           } finally {
             this.db.usageHourly = previousHourly;
           }
         }
-        return this.computeAnalytics(args);
+        return this.computeAnalytics(canonical, { heatmap: heatmapAggregate });
       }
     );
     // The scoped in-memory usageHourly only carries today/yesterday rows, so
     // the community hour-of-day buckets computed inside computeAnalytics are
     // incomplete here — replace them with the real SQL aggregate.
-    if (!args.participantId) {
-      result.hourlyRhythm = await this.mysqlCommunityHourlyRhythm(args);
-      result.hourlyByWeekday = await this.mysqlCommunityHourlyWeekday(args);
+    if (!canonical.participantId) {
+      result.hourlyRhythm = await this.mysqlCommunityHourlyRhythm(canonical);
+      result.hourlyByWeekday = await this.mysqlCommunityHourlyWeekday(canonical);
     }
-    if (args.participantId && periodDays.length) {
-      result.rankStats = await this.mysqlAnalyticsRankStats(args.participantId, periodDays, { businessDay });
+    if (canonical.participantId && periodDays.length) {
+      result.rankStats = await this.mysqlAnalyticsRankStats(canonical.participantId, periodDays, { businessDay });
     }
-    if (args.period === "all" || args.range === "all") {
-      return this.writeAnalyticsAllCache(args, result);
+    if (isAll) {
+      return this.writeAnalyticsAllCache(canonical, result);
     }
-    this.aggregateCache ||= {};
-    this.aggregateCache[cacheKey] = { value: result };
+    this.writeCachedAggregate(cacheKey, result, {
+      windowDays: new Set([...(periodDays || []), ...heatmapDays])
+    });
     return result;
+  }
+
+  // Column projection: analytics consumes 16 of the ~27 usage_daily columns;
+  // SELECT * drags the rest (fingerprints, parser versions, batch metadata)
+  // over the wire on every uncached request.
+  async fetchUsageRowsForAnalytics(days, participantId = "") {
+    const placeholders = days.map(() => "?").join(",");
+    let sql = `SELECT usageKey, day, participantId, deviceId, toolCode, providerId, workdirHash, workdirDisplayName, model,
+                      inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens, estimatedCostUsd
+               FROM usage_daily WHERE day IN (${placeholders})`;
+    const params = [...days];
+    if (participantId) {
+      sql += " AND participantId = ?";
+      params.push(participantId);
+    }
+    const [rows] = await this.pool.query(sql, params);
+    return rows.map(usageFromRow);
+  }
+
+  async fetchHourlyRowsForAnalytics(targetDay, participantId = "") {
+    let sql = `SELECT usageKey, day, hour, participantId, deviceId, providerId, model, totalTokens, estimatedCostUsd
+               FROM usage_hourly WHERE day = ?`;
+    const params = [targetDay];
+    if (participantId) {
+      sql += " AND participantId = ?";
+      params.push(participantId);
+    }
+    const [rows] = await this.pool.query(sql, params);
+    return rows.map(usageFromRow);
+  }
+
+  // Trailing-365 heatmap (per-day totals) and monthly rollups (per month ×
+  // participant/model/provider/workdir totals) shared by every unscoped
+  // analytics request. Cached per businessDay; a write that only touches
+  // today keeps the entry alive under a short staleness tolerance instead of
+  // forcing a full 365-day rescan per upload epoch.
+  async analyticsHeatAggregate({ businessDay, heatmapDays }) {
+    const cacheKey = `analytics-heat365|${STORAGE_SCHEMA_VERSION}|${businessDay}`;
+    const hit = this.readCachedAggregate(cacheKey);
+    if (hit) return hit;
+    const placeholders = heatmapDays.map(() => "?").join(",");
+    const [dayRows] = await this.pool.query(
+      `SELECT day, SUM(totalTokens) AS totalTokens FROM usage_daily WHERE day IN (${placeholders}) GROUP BY day`,
+      heatmapDays
+    );
+    const [monthRows] = await this.pool.query(
+      `SELECT DATE_FORMAT(day, '%Y-%m') AS month, participantId, LOWER(TRIM(model)) AS model, providerId, workdirDisplayName, SUM(totalTokens) AS totalTokens
+       FROM usage_daily WHERE day IN (${placeholders})
+       GROUP BY DATE_FORMAT(day, '%Y-%m'), participantId, LOWER(TRIM(model)), providerId, workdirDisplayName`,
+      heatmapDays
+    );
+    const aggregate = {
+      byDay: dayRows.map((row) => ({ day: toDayString(row.day), totalTokens: Number(row.totalTokens || 0) })),
+      monthly: monthRows.map((row) => ({
+        month: String(row.month || ""),
+        participantId: row.participantId || "",
+        model: row.model || "",
+        providerId: row.providerId || "",
+        workdirDisplayName: row.workdirDisplayName || "",
+        totalTokens: Number(row.totalTokens || 0)
+      }))
+    };
+    this.writeCachedAggregate(cacheKey, aggregate, {
+      windowDays: new Set(heatmapDays),
+      todayToleranceMs: ANALYTICS_HEAT_TODAY_TOLERANCE_MS
+    });
+    return aggregate;
   }
 
   // Community twin of mysqlParticipantHourlyRhythm: 24 buckets over the

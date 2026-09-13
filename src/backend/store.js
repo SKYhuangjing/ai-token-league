@@ -397,7 +397,10 @@ export class Store {
       accepted,
       rejected
     };
-    this.invalidateAggregateCache();
+    // Uploads arrive as day-keyed batches; collector cadence (every ~15 min)
+    // makes a full cache nuke effectively permanent cold. Invalidate only the
+    // windows that actually overlap the written days.
+    this.invalidateAggregateCacheForDays(new Set((input.items || []).map((item) => item?.day).filter(Boolean)));
     this.save();
     return { accepted, rejected, batchId };
   }
@@ -548,7 +551,7 @@ export class Store {
       clientGeneratedAt: input.clientGeneratedAt || ""
     });
 
-    this.invalidateAggregateCache();
+    this.invalidateAggregateCacheForDays(new Set([snapshot.day].filter(Boolean)));
     this.save();
     return { accepted, rejected, incomingKeys: [...incomingKeys] };
   }
@@ -677,7 +680,7 @@ export class Store {
     // Derive daily aggregates from hourly for the affected day+provider
     this.deriveDailyFromHourly(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
 
-    this.invalidateAggregateCache();
+    this.invalidateAggregateCacheForDays(new Set([snapshot.day].filter(Boolean)));
     this.save();
     // accepted counts uploaded items per the snapshot protocol (rowCount);
     // merged written rows can be fewer when case-colliding variants collapse.
@@ -1713,15 +1716,23 @@ export class Store {
     };
   }
 
-  analytics({ period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = {}) {
-    const args = { period, range, startDay, endDay, participantId };
-    if (isAnalyticsAllPeriod(args)) {
-      return this.cachedAnalyticsAll(args, () => this.computeAnalytics(args));
+  analytics(args = {}) {
+    const canonical = canonicalAnalyticsArgs(args);
+    if (isAnalyticsAllPeriod(canonical)) {
+      return this.cachedAnalyticsAll(canonical, () => this.computeAnalytics(canonical));
     }
-    return this.cachedAggregate("analytics", args, () => this.computeAnalytics(args), { dayScoped: isDayScopedRange(args) });
+    return this.cachedAggregate("analytics", canonical, () => this.computeAnalytics(canonical), {
+      // Non-all analytics always reads the trailing-365 heatmap window, which
+      // slides with businessDay — custom ranges included, so they are all
+      // day-scoped (a custom key without businessDay would go permanently
+      // stale after day rollover).
+      dayScoped: !isAnalyticsAllPeriod(canonical),
+      windowDays: analyticsWindowDays(canonical, { businessDay: this.currentBusinessDay() })
+    });
   }
 
-  computeAnalytics({ period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = {}) {
+  computeAnalytics(args = {}, { heatmap = null } = {}) {
+    const { period = "", range = "this_month", startDay = "", endDay = "", participantId = "" } = args;
     const businessDay = this.currentBusinessDay();
     let days;
     if (period === "all") {
@@ -1863,22 +1874,32 @@ export class Store {
 
     const heatmapDays = trailingDays(365, { businessDay });
     const heatmapDaySet = new Set(heatmapDays);
-    const heatmapRows = Object.values(this.db.usageDaily).filter((item) => {
-      const matchesDay = heatmapDaySet.has(item.day);
-      const matchesParticipant = !participantId || item.participantId === participantId;
-      return matchesDay && matchesParticipant;
-    });
-
+    // heatmap injection (MySQL path): byDay feeds the per-day heatmap series,
+    // monthly feeds the trailing-year monthly rollups. Without injection the
+    // JSON store derives both from the full in-memory usage table.
+    let heatmapRows;
     const heatmapSeries = {};
     for (const day of heatmapDays) {
       heatmapSeries[day] = { day, totalTokens: 0 };
     }
-    for (const item of heatmapRows) {
-      if (heatmapSeries[item.day]) {
-        heatmapSeries[item.day].totalTokens += item.totalTokens || 0;
+    if (heatmap) {
+      heatmapRows = heatmap.monthly.map((item) => ({ day: `${item.month}-01`, ...item }));
+      for (const { day, totalTokens } of heatmap.byDay) {
+        if (heatmapSeries[day]) heatmapSeries[day].totalTokens += totalTokens || 0;
+      }
+    } else {
+      heatmapRows = Object.values(this.db.usageDaily).filter((item) => {
+        const matchesDay = heatmapDaySet.has(item.day);
+        const matchesParticipant = !participantId || item.participantId === participantId;
+        return matchesDay && matchesParticipant;
+      });
+      for (const item of heatmapRows) {
+        if (heatmapSeries[item.day]) {
+          heatmapSeries[item.day].totalTokens += item.totalTokens || 0;
+        }
       }
     }
-    const heatmap = Object.values(heatmapSeries).sort((a, b) => a.day.localeCompare(b.day));
+    const heatmapList = Object.values(heatmapSeries).sort((a, b) => a.day.localeCompare(b.day));
 
     const bounds = rangeBounds(days, rows);
     const result = {
@@ -1901,7 +1922,7 @@ export class Store {
       workdirs,
       timeSeries: hourlySeries || timeSeries,
       timeGrain: hourlySeries ? "hour" : "day",
-      heatmap
+      heatmap: heatmapList
     };
     if (!participantId) {
       // Trailing-year monthly rollups power the admin evolution cards
@@ -2160,21 +2181,61 @@ export class Store {
       }));
   }
 
-  cachedAggregate(name, args, compute, { dayScoped = false } = {}) {
+  cachedAggregate(name, args, compute, { dayScoped = false, windowDays = null, todayToleranceMs = 0 } = {}) {
     const cacheArgs = dayScoped ? { ...args, businessDay: this.currentBusinessDay() } : args;
     const key = `${name}|${STORAGE_SCHEMA_VERSION}|${JSON.stringify(cacheArgs)}`;
-    const cached = this.aggregateCache?.[key];
-    if (cached) return cached.value;
+    const cached = this.readCachedAggregate(key);
+    if (cached) return cached;
     const value = compute();
+    this.writeCachedAggregate(key, value, { name, args: cacheArgs, windowDays, todayToleranceMs });
+    return value;
+  }
+
+  readCachedAggregate(key) {
+    const cached = this.aggregateCache?.[key];
+    if (!cached) return null;
+    if (cached.expiresAt && cached.expiresAt <= Date.now()) {
+      delete this.aggregateCache[key];
+      return null;
+    }
+    return Object.hasOwn(cached, "value") ? cached.value : cached;
+  }
+
+  writeCachedAggregate(key, value, { name = "", args = null, windowDays = null, todayToleranceMs = 0 } = {}) {
     this.aggregateCache ||= {};
     this.aggregateCache[key] = {
       key,
-      name,
-      args: cacheArgs,
+      ...(name ? { name } : {}),
+      ...(args ? { args } : {}),
+      windowDays: windowDays instanceof Set ? windowDays : windowDays ? new Set(windowDays) : null,
+      todayToleranceMs,
       createdAt: new Date().toISOString(),
       value
     };
-    return value;
+  }
+
+  // Day-aware invalidation for usage uploads: entries whose day window does
+  // not intersect the written days survive. Entries without a window (or with
+  // an all-history window) are dropped, matching the previous nuke behavior,
+  // except todayToleranceMs entries get a bounded-staleness grace when the
+  // write only touches today — history writes always drop them.
+  invalidateAggregateCacheForDays(days) {
+    const affected = days instanceof Set ? days : new Set(days || []);
+    if (!affected.size) return;
+    const today = this.currentBusinessDay();
+    const onlyToday = [...affected].every((day) => day === today);
+    for (const [key, entry] of Object.entries(this.aggregateCache || {})) {
+      if (entry?.todayToleranceMs && onlyToday) {
+        const grace = Date.now() + entry.todayToleranceMs;
+        entry.expiresAt = entry.expiresAt ? Math.min(entry.expiresAt, grace) : grace;
+        continue;
+      }
+      const window = entry?.windowDays;
+      if (!window || [...affected].some((day) => window.has(day))) {
+        delete this.aggregateCache[key];
+      }
+    }
+    this.db.aggregateCache = {};
   }
 
   adminSourceStats({ range = "month", startDay = "", endDay = "", trendDays = SOURCE_STATS_DEFAULT_TREND_DAYS } = {}) {
@@ -2622,6 +2683,10 @@ export class Store {
     const now = new Date().toISOString();
     const team = { id: newId("team"), name, createdAt: now, updatedAt: now };
     this.db.teams[team.id] = team;
+    // teamsAnalysis caches by day windows; membership/name edits touch no
+    // usage day, so they must invalidate explicitly or the board serves the
+    // pre-edit snapshot until the next upload.
+    this.invalidateAggregateCache();
     this.save();
     return team;
   }
@@ -2631,6 +2696,7 @@ export class Store {
     if (!team) throw new Error("team not found");
     team.name = this.normalizeTeamName(input.name);
     team.updatedAt = new Date().toISOString();
+    this.invalidateAggregateCache();
     this.save();
     return team;
   }
@@ -2641,6 +2707,7 @@ export class Store {
     for (const participant of Object.values(this.db.participants || {})) {
       if (participant.teamId === teamId) participant.teamId = "";
     }
+    this.invalidateAggregateCache();
     this.save();
     return { deleted: true, id: teamId };
   }
@@ -2652,6 +2719,7 @@ export class Store {
     if (nextTeamId && !this.db.teams?.[nextTeamId]) throw new Error("team not found");
     participant.teamId = nextTeamId;
     participant.updatedAt = new Date().toISOString();
+    this.invalidateAggregateCache();
     this.save();
     return { participantId, teamId: nextTeamId };
   }
@@ -2678,7 +2746,11 @@ export class Store {
   }
 
   teamsAnalysis(args = {}) {
-    return this.computeTeamsAnalysis(args);
+    const days = normalizeTeamsAnalysisDays(args.days);
+    return this.cachedAggregate("teamsAnalysis", { days }, () => this.computeTeamsAnalysis({ days }), {
+      dayScoped: true,
+      windowDays: teamsAnalysisWindowDays(days, { businessDay: this.currentBusinessDay() })
+    });
   }
 
   computeTeamsAnalysis({ days } = {}) {
@@ -2692,8 +2764,28 @@ export class Store {
     const usage = Object.values(this.db.usageDaily || {});
     const knownTeams = this.db.teams || {};
 
+    // Single-pass indexes. statsFor/dayRollup/tool rollup used to filter the
+    // full usage table several times per member, which dominates runtime once
+    // usage history grows past a few months.
+    const rowsByParticipant = new Map();
+    const rowsByDay = new Map();
+    for (const row of usage) {
+      let byParticipant = rowsByParticipant.get(row.participantId);
+      if (!byParticipant) {
+        byParticipant = [];
+        rowsByParticipant.set(row.participantId, byParticipant);
+      }
+      byParticipant.push(row);
+      let byDay = rowsByDay.get(row.day);
+      if (!byDay) {
+        byDay = [];
+        rowsByDay.set(row.day, byDay);
+      }
+      byDay.push(row);
+    }
+
     const statsFor = (participantId) => {
-      const rows = usage.filter((row) => row.participantId === participantId);
+      const rows = rowsByParticipant.get(participantId) || [];
       const currentRows = rows.filter((row) => currentSet.has(row.day));
       const previousRows = rows.filter((row) => previousSet.has(row.day));
       const activeDays = new Set(currentRows.map((row) => row.day)).size;
@@ -2726,7 +2818,7 @@ export class Store {
     };
 
     const dayRollup = (dayList, daySet, participantIds) => dayList.map((day) => {
-      const rows = usage.filter((row) => row.day === day && daySet.has(row.day) && participantIds.has(row.participantId));
+      const rows = (rowsByDay.get(day) || []).filter((row) => daySet.has(row.day) && participantIds.has(row.participantId));
       return {
         day,
         tokens: rows.reduce((sum, row) => sum + Number(row.totalTokens || 0), 0),
@@ -2750,10 +2842,11 @@ export class Store {
           const label = member.tools.join(" + ");
           comboMap.set(label, (comboMap.get(label) || 0) + 1);
         }
+        const memberCurrentRows = (rowsByParticipant.get(member.participantId) || []).filter((row) => currentSet.has(row.day));
         for (const tool of member.tools) {
           const current = toolMap.get(tool) || { tool, users: 0, tokens: 0 };
           current.users += 1;
-          const rows = usage.filter((row) => row.participantId === member.participantId && currentSet.has(row.day) && row.toolCode === tool);
+          const rows = memberCurrentRows.filter((row) => row.toolCode === tool);
           current.tokens += rows.reduce((sum, row) => sum + Number(row.totalTokens || 0), 0);
           toolMap.set(tool, current);
         }
@@ -3216,8 +3309,65 @@ function isDayScopedRange({ period = "", range = "today", startDay = "", endDay 
   return true;
 }
 
+// Team analysis reads current+previous windows; both feed the cache's day
+// window so membership/uploads outside those windows keep the entry alive.
+function teamsAnalysisWindowDays(days, { businessDay }) {
+  const currentDays = trailingDays(days, { businessDay });
+  const previousDays = trailingDays(days, { businessDay: addDays(currentDays[0], -1) });
+  return new Set([...currentDays, ...previousDays]);
+}
+
 function isAnalyticsAllPeriod({ period = "", range = "" } = {}) {
   return period === "all" || range === "all";
+}
+
+// Analytics callers spell the same window two ways: the analytics page sends
+// period=this_month while the home page sends range=this_month (and admin uses
+// its own route). Without canonicalization each spelling is a separate cache
+// key, so the same 365-day aggregation recomputes per caller. Canonical form
+// collapses range labels that map 1:1 onto a period label onto the period
+// axis; ranges with no period equivalent (last30, last12_months, custom…)
+// keep the range axis. computeAnalytics resolves both axes to the same days,
+// so the canonical form is behavior-identical for every caller.
+const ANALYTICS_RANGE_TO_PERIOD = {
+  all: "all",
+  today: "today",
+  yesterday: "yesterday",
+  this_week: "this_week",
+  last_week: "last_week",
+  this_month: "this_month",
+  month: "this_month",
+  last_month: "last_month",
+  lastMonth: "last_month"
+};
+
+export function canonicalAnalyticsArgs({ period = "", range = "", startDay = "", endDay = "", participantId = "" } = {}) {
+  const normalizedPeriod = String(period || "").trim();
+  if (normalizedPeriod) {
+    return { period: normalizedPeriod, range: "", startDay: "", endDay: "", participantId };
+  }
+  const normalizedRange = String(range || "").trim();
+  const mapped = ANALYTICS_RANGE_TO_PERIOD[normalizedRange];
+  if (mapped) {
+    return { period: mapped, range: "", startDay: "", endDay: "", participantId };
+  }
+  return { period: "", range: normalizedRange || "this_month", startDay: startDay || "", endDay: endDay || "", participantId };
+}
+
+// Day window an analytics cache entry depends on: the period days plus the
+// trailing-365 heatmap/monthly window that computeAnalytics always reads.
+// Returns null for all-history (callers keep the conservative drop behavior).
+function analyticsWindowDays(args, { businessDay } = {}) {
+  const day = businessDay || localDay();
+  let days = null;
+  if (args.period === "all" || (!args.period && args.range === "all")) return null;
+  if (args.period) {
+    days = args.period === "all" ? null : daysForPeriod(args.period, { businessDay: day });
+  } else {
+    days = daysForDetailRange(args.range, { startDay: args.startDay, endDay: args.endDay, businessDay: day });
+  }
+  if (!days) return null;
+  return new Set([...days, ...trailingDays(365, { businessDay: day })]);
 }
 
 function sortedBreakdown(obj) {
