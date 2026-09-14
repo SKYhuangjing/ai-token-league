@@ -221,8 +221,8 @@ export function renderModelSegmentItems(item) {
     .join("");
 }
 
-export function renderModelSegments(item, { className, title }) {
-  return `<div class="${className}" title="${escapeHtml(title)}">${renderModelSegmentItems(item)}</div>`;
+export function renderModelSegments(item, { className }) {
+  return `<div class="${className}">${renderModelSegmentItems(item)}</div>`;
 }
 
 export function renderCost(item) {
@@ -294,10 +294,10 @@ export function renderConcentrationSidepanel(container, rankings = [], { localeT
     <div class="rank-mini">
       <div class="c-title">${escapeHtml(t("web.analytics.concentrationRankTitle"))}</div>
       ${metrics.topItems.map((item) => `
-        <a class="rank-mini-row" href="${item.displayId ? `/profile.html?id=${encodeURIComponent(item.displayId)}` : '#'}" title="${escapeHtml(item.name)} · ${formatTokens(item.totalTokens)}">
+        <a class="rank-mini-row" href="${item.displayId ? `/profile.html?id=${encodeURIComponent(item.displayId)}` : '#'}">
           <span class="n">#${item.rank}</span>
           <span class="nm">${escapeHtml(item.name)}</span>
-          <span class="tv" title="${escapeHtml(formatTokenRaw(item.totalTokens))}">${formatTokens(item.totalTokens)}</span>
+          <span class="tv">${formatTokens(item.totalTokens)}</span>
           <span class="pct">${item.pct}%</span>
           <div class="rank-mini-bar"><i style="width:${Math.max(8, Math.round((item.pct / topBar) * 100))}%"></i></div>
         </a>
@@ -872,7 +872,7 @@ export function renderCompareBars(container, rows = [], { localeTokenCompact = (
     const nativeTitle = tooltip ? "" : ` title="${escapeHtml(String(row.name))} · ${escapeHtml(prevLabel)} ${escapeHtml(localeTokenCompact(from))} → ${escapeHtml(currLabel)} ${escapeHtml(localeTokenCompact(to))}"`;
     return `<div class="cmp-row"${nativeTitle}>
       <div class="cmp-head">
-        <span class="cmp-name" title="${escapeHtml(String(row.name))}">${escapeHtml(String(row.name))}</span>
+        <span class="cmp-name">${escapeHtml(String(row.name))}</span>
         <span class="cmp-delta ${deltaClass}">${escapeHtml(deltaText)}</span>
       </div>
       ${bar(from, "prev")}
@@ -1328,7 +1328,7 @@ export function renderSourceDonutCard(container, items = [], { localeTokenCompac
     <div class="asd-legend">
       ${segments.map((segment) => `<div class="asd-row" data-name="${escapeHtml(segment.item.label || segment.item.name)}">
         <span class="swatch" style="background:${segment.color}"></span>
-        <span class="asd-name" title="${escapeHtml(segment.item.name)}">${escapeHtml(segment.item.label || segment.item.name)}</span>
+        <span class="asd-name">${escapeHtml(segment.item.label || segment.item.name)}</span>
         <strong class="asd-tokens">${escapeHtml(localeTokenCompact(segment.tokens))}</strong>
         <span class="asd-pct">${Math.round(segment.ratio * 100)}%</span>
       </div>`).join("")}
@@ -1540,9 +1540,7 @@ function appendHeatmapCell(grid, {
       const unit = t("unit.tokens") || "tokens";
       tooltip.innerHTML = `<strong>${dayStr}</strong><div class="tooltip-val">${localeTokenCompact(tokens)} <span class="tooltip-unit">${unit}</span></div>`;
       tooltip.style.opacity = "1";
-      const rect = cell.getBoundingClientRect();
-      tooltip.style.left = `${rect.left + window.scrollX - tooltip.offsetWidth / 2 + rect.width / 2}px`;
-      tooltip.style.top = `${rect.top + window.scrollY - tooltip.offsetHeight - 8}px`;
+      positionTooltip(tooltip, cell);
     });
     cell.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
   }
@@ -1600,7 +1598,7 @@ export function renderBarChart(container, items = [], { collapseAfter, collapseL
     if (!tooltip) row.title = `${item.name}: ${tokenLabel} (${ratioPctStr})`;
     row.innerHTML = `
       <div class="lbl">
-        <span class="usage-share-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
+        <span class="usage-share-name">${escapeHtml(item.name)}</span>
         <span class="usage-share-value">
           <strong>${tokenLabel}</strong>
           ${costHtml}

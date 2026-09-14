@@ -4,7 +4,8 @@ import { formatTokenCompact } from "/shared/display.js";
 import {
   escapeHtml, sourceName, formatTokenRaw, renderCost,
   renderTrendChart, renderBarChart, renderActivityHeatmap,
-  renderWeekdayRhythm, renderHourlyRhythm, computeHourlyRhythmStats, rankSeriesColor
+  renderWeekdayRhythm, renderHourlyRhythm, computeHourlyRhythmStats, rankSeriesColor,
+  positionTooltip
 } from "/shared/chart-helpers.js";
 import {
   initPublicNavProfile,
@@ -79,13 +80,7 @@ function showHintTooltip(el) {
   hintAnchor = el;
   tooltipEl.textContent = text;
   tooltipEl.style.opacity = "1";
-  const anchorRect = el.getBoundingClientRect();
-  const tipRect = tooltipEl.getBoundingClientRect();
-  const docWidth = document.documentElement.clientWidth;
-  let left = anchorRect.left + window.scrollX + anchorRect.width / 2 - tipRect.width / 2;
-  left = Math.max(window.scrollX + 8, Math.min(left, window.scrollX + docWidth - tipRect.width - 8));
-  tooltipEl.style.left = `${Math.round(left)}px`;
-  tooltipEl.style.top = `${Math.round(anchorRect.top + window.scrollY - tipRect.height - 10)}px`;
+  positionTooltip(tooltipEl, el);
 }
 
 document.addEventListener("mouseover", (event) => {
@@ -420,7 +415,7 @@ function renderBentoStats(profile) {
   const topProvider = profile.providers?.[0];
   const topProviderName = topProvider ? sourceName(topProvider.name) : "Codex";
 
-  // 三排拼版：跨列制造节奏，三行等高避免高低差
+  // 跨列拼版：宽屏三排 / 窄屏六排，行高随内容
   const cards = [
     {
       cls: "metric-peak bento-span-2",
@@ -798,15 +793,15 @@ function renderTrend(items, { from, to }) {
 
   if (sparkContainer) {
     sparkContainer.innerHTML = `
-      <div class="spark-pill" title="${rangePeak ? `${rangePeak.date} · ${formatTokenRaw(rangePeak.tokens)}` : ''}">
+      <div class="spark-pill">
         <span class="spark-label">${t("web.profile.rangePeak") || "Range Peak"}</span>
         <strong class="spark-val mono">${rangePeak ? localeTokenCompact(rangePeak.tokens) : '-'}</strong>
       </div>
-      <div class="spark-pill" title="${formatTokenRaw(rangeAvg)}">
+      <div class="spark-pill">
         <span class="spark-label">${t("web.profile.dailyAverage") || "Average"}</span>
         <strong class="spark-val mono">${localeTokenCompact(rangeAvg)}</strong>
       </div>
-      <div class="spark-pill" title="${formatTokenRaw(rangeSum)}">
+      <div class="spark-pill">
         <span class="spark-label">${t("web.profile.rangeTotal") || "Total"}</span>
         <strong class="spark-val mono">${localeTokenCompact(rangeSum)}</strong>
       </div>
@@ -927,13 +922,12 @@ function renderHourlyRhythmCard(hourly) {
   }
   if (statsEl) {
     const peakLabel = stats.peakHour >= 0 ? `${String(stats.peakHour).padStart(2, "0")}:00` : "-";
-    const peakTitle = stats.peakHour >= 0 ? `${peakLabel} · ${formatTokenRaw(items.find((item) => Number(item.hour) === stats.peakHour)?.totalTokens || 0)}` : "";
     statsEl.innerHTML = `
-      <div class="spark-pill" title="${escapeHtml(peakTitle)}">
+      <div class="spark-pill">
         <span class="spark-label">${t("web.profile.hourlyGoldenHour")}</span>
         <strong class="spark-val mono">${peakLabel} · ${(stats.peakShare * 100).toFixed(1)}%</strong>
       </div>
-      <div class="spark-pill" title="">
+      <div class="spark-pill">
         <span class="spark-label">${t("web.profile.hourlyNightShare")}</span>
         <strong class="spark-val mono">${(stats.nightShare * 100).toFixed(1)}%</strong>
       </div>
@@ -1017,7 +1011,7 @@ function renderSourcesBreakdown(detail) {
     const pct = total ? Math.round((tokens / total) * 100) : 0;
     const color = rankSeriesColor(sourceIndex);
     const name = sourceName(item.name);
-    return `<div class="source-stack-seg" style="width: ${Math.max(1, pct)}%; background: ${color};" title="${escapeHtml(name)}: ${escapeHtml(localeTokenCompact(tokens))} (${pct}%)"></div>`;
+    return `<div class="source-stack-seg" style="width: ${Math.max(1, pct)}%; background: ${color};"></div>`;
   }).join("");
 
   // 2. Provider eco-cards
@@ -1062,7 +1056,7 @@ function renderSourcesBreakdown(detail) {
     return `
       <div class="provider-eco-card${isFiltered ? " is-active-filter" : ""}" data-provider-id="${escapeHtml(item.name)}" role="button" tabindex="0" title="${escapeHtml(t("web.profile.filterWorkbenchHint"))}">
         <div class="provider-eco-head">
-          <div class="provider-eco-brand" title="${escapeHtml(item.name)}">
+          <div class="provider-eco-brand">
             <span class="provider-eco-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
             <strong class="provider-eco-name">${escapeHtml(name)}</strong>
           </div>
@@ -1070,7 +1064,7 @@ function renderSourcesBreakdown(detail) {
         </div>
         <div class="provider-eco-metrics">
           <div class="provider-eco-val-row">
-            <span class="provider-eco-tokens mono" title="${escapeHtml(formatTokenRaw(tokens))}">${localeTokenCompact(tokens)}</span>
+            <span class="provider-eco-tokens mono">${localeTokenCompact(tokens)}</span>
             <span class="provider-eco-pct mono">${pctLabel}</span>
           </div>
           ${state.showCost ? `<div class="provider-eco-cost">${renderCost(item)}</div>` : ""}
@@ -1080,7 +1074,7 @@ function renderSourcesBreakdown(detail) {
         </div>
         <div class="provider-eco-footer">
           <span class="provider-eco-tag mono">${t("web.profile.activeDaysCount", { days: daysCount })}</span>
-          ${topModel ? `<span class="provider-eco-tag mono" title="${escapeHtml(topModel)}">${escapeHtml(t("web.profile.primaryModel"))}: ${escapeHtml(topModel)}</span>` : ""}
+          ${topModel ? `<span class="provider-eco-tag mono">${escapeHtml(t("web.profile.primaryModel"))}: ${escapeHtml(topModel)}</span>` : ""}
         </div>
       </div>
     `;
@@ -1161,8 +1155,8 @@ function renderWeekdayAndSplit(detail) {
           <span class="split-tag">${escapeHtml(archetype)}</span>
         </div>
         <div class="split-track">
-          <div class="split-fill workday" style="width: ${workdayPct}%" title="${escapeHtml(workdayLabel)}: ${workdayPct}% (${localeTokenCompact(workdaySum)})"></div>
-          <div class="split-fill weekend" style="width: ${weekendPct}%" title="${escapeHtml(weekendLabel)}: ${weekendPct}% (${localeTokenCompact(weekendSum)})"></div>
+          <div class="split-fill workday" style="width: ${workdayPct}%"></div>
+          <div class="split-fill weekend" style="width: ${weekendPct}%"></div>
         </div>
         <div class="split-values">
           <span>${escapeHtml(workdayLabel)}: <strong class="mono">${workdayPct}%</strong> <small>(${localeTokenCompact(workdaySum)})</small></span>
@@ -1242,20 +1236,20 @@ function renderFilteredLogRows() {
     return `<tr>
       <td class="mono">${escapeHtml(row.day)}</td>
       <td>${escapeHtml(sourceName(row.providerId))}</td>
-      <td class="mono model-cell" title="${escapeHtml(row.model || "")}">${escapeHtml(row.model || "unknown")}</td>
+      <td class="mono model-cell">${escapeHtml(row.model || "unknown")}</td>
       <td class="tokens-col">
         <div class="row-token-wrap">
           <div class="row-token-value">
-            <span class="tokens-num mono" title="${escapeHtml(formatTokenRaw(row.totalTokens))}">${localeTokenCompact(row.totalTokens)}</span>
+            <span class="tokens-num mono">${localeTokenCompact(row.totalTokens)}</span>
             ${state.showCost ? `<span class="row-cost-badge mono">${renderCost(row)}</span>` : ""}
           </div>
           <div class="log-mini-meter"><div class="log-mini-fill" style="width: ${barPct}%"></div></div>
         </div>
       </td>
-      <td class="tokens mono" title="${escapeHtml(formatTokenRaw(row.inputTokens))}">${localeTokenCompact(row.inputTokens)}</td>
-      <td class="tokens mono" title="${escapeHtml(formatTokenRaw(row.outputTokens))}">${localeTokenCompact(row.outputTokens)}</td>
-      <td class="tokens mono" title="${escapeHtml(formatTokenRaw(cacheOf(row)))}">${localeTokenCompact(cacheOf(row))}</td>
-      <td class="tokens mono" title="${escapeHtml(formatTokenRaw(row.reasoningTokens))}">${localeTokenCompact(row.reasoningTokens)}</td>
+      <td class="tokens mono">${localeTokenCompact(row.inputTokens)}</td>
+      <td class="tokens mono">${localeTokenCompact(row.outputTokens)}</td>
+      <td class="tokens mono">${localeTokenCompact(cacheOf(row))}</td>
+      <td class="tokens mono">${localeTokenCompact(row.reasoningTokens)}</td>
     </tr>`;
   }).join("");
 }

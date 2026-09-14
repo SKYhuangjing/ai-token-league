@@ -3,6 +3,7 @@
 // 切换时重置图表色板缓存并广播 atl:themechange,各页用已有 state 重渲染
 // 图表(不发 API、不刷新页面)。admin 与公开页共用。
 import { resetThemePalette } from "/shared/chart-helpers.js";
+import { t } from "/shared/i18n.js";
 
 const STORAGE_KEY = "ai-token-league.theme-scheme";
 
@@ -107,6 +108,18 @@ const SCHEMES = {
 
 const ALL_TOKEN_KEYS = [...new Set(Object.values(SCHEMES).flatMap((s) => Object.keys(s.tokens)))];
 
+function escapeText(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function schemeLabelHtml(labelKey) {
+  return `<span data-i18n="${labelKey}">${escapeText(t(labelKey))}</span>`;
+}
+
 export function currentThemeScheme() {
   const name = localStorage.getItem(STORAGE_KEY);
   return SCHEMES[name] ? name : "orange";
@@ -134,7 +147,7 @@ function injectSwitcher() {
   btn.setAttribute("aria-expanded", "false");
   const renderBtnLabel = () => {
     const name = currentThemeScheme();
-    btn.innerHTML = `<span class="theme-switcher-dot" data-scheme="${name}"></span><span data-i18n="${SCHEMES[name].labelKey}">${SCHEMES[name].labelKey.split(".").pop()}</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    btn.innerHTML = `<span class="theme-switcher-dot" data-scheme="${name}"></span>${schemeLabelHtml(SCHEMES[name].labelKey)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   };
   renderBtnLabel();
 
@@ -152,7 +165,7 @@ function injectSwitcher() {
       item.setAttribute("role", "option");
       item.setAttribute("aria-selected", name === active ? "true" : "false");
       item.dataset.themeScheme = name;
-      item.innerHTML = `<span class="theme-switcher-dot" data-scheme="${name}"></span><span data-i18n="${scheme.labelKey}">${scheme.labelKey.split(".").pop()}</span>${name === active ? '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 5 9l4.5-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ""}`;
+      item.innerHTML = `<span class="theme-switcher-dot" data-scheme="${name}"></span>${schemeLabelHtml(scheme.labelKey)}${name === active ? '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 5 9l4.5-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ""}`;
       item.addEventListener("click", () => {
         if (currentThemeScheme() !== name) {
           localStorage.setItem(STORAGE_KEY, name);

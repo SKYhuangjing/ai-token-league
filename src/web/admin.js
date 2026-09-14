@@ -1,7 +1,7 @@
 import { tokenCompositionDetails } from "/shared/composition.js";
 import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
 import { formatTokenCompact } from "/shared/display.js";
-import { renderDonutChart, smoothLinePath, sourceName, rankSeriesColor } from "/shared/chart-helpers.js";
+import { renderDonutChart, smoothLinePath, sourceName, rankSeriesColor, positionTooltip } from "/shared/chart-helpers.js";
 
 initI18n();
 mountLangSwitcher("#lang-switcher-container", () => window.location.reload());
@@ -551,7 +551,11 @@ function devicePlatformLabel(platform) {
 function devicePrimaryLanIp(lanIp) {
   const list = String(lanIp || "").split(",").map((part) => part.trim()).filter(Boolean);
   const primary = list.find((ip) => !ip.startsWith("169.254.")) || list[0] || "";
-  return { primary: primary || "-", full: list.join(", ") || "-" };
+  return {
+    primary: primary || "-",
+    full: list.join(", ") || "-",
+    multiple: list.length > 1
+  };
 }
 
 function renderDevices(devices) {
@@ -567,9 +571,9 @@ function renderDevices(devices) {
     const platform = item.clientPlatform || item.os || "";
     const lanIp = devicePrimaryLanIp(item.lanIp);
     return `<tr${staleDays ? ' class="device-stale"' : ""}>
-    <td><div class="device-cell"><span class="device-name" title="${escapeHtml(item.nickname)}"><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></span>${staleDays ? ` <span class="pill device-stale-pill">${t("admin.devices.staleDays", { days: staleDays })}</span>` : ""}</div></td>
-    <td><span class="truncated-cell" title="${escapeHtml(platform ? `${devicePlatformLabel(platform)} (${platform})` : "-")}">${escapeHtml(devicePlatformLabel(platform))}</span> <span class="device-version">${escapeHtml(item.clientAppVersion || "-")}</span></td>
-    <td><span class="truncated-cell" title="${escapeHtml(lanIp.full)}">${escapeHtml(lanIp.primary)}</span></td>
+    <td><div class="device-cell"><span class="device-name"><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></span>${staleDays ? ` <span class="pill device-stale-pill">${t("admin.devices.staleDays", { days: staleDays })}</span>` : ""}</div></td>
+    <td><span class="truncated-cell">${escapeHtml(devicePlatformLabel(platform))}</span> <span class="device-version">${escapeHtml(item.clientAppVersion || "-")}</span></td>
+    <td><span class="truncated-cell"${lanIp.multiple ? ` data-tooltip="${escapeHtml(lanIp.full)}" tabindex="0"` : ""}>${escapeHtml(lanIp.primary)}</span></td>
     <td>${escapeHtml(formatStamp(item.lastSeenAt).slice(0, 10))}</td>
     <td>
       <div class="row-actions device-actions">
@@ -645,7 +649,7 @@ function renderPricing(data) {
   document.querySelector("#remote-pricing-status").innerHTML = renderRemotePricingStatus(data.remote || {});
   document.querySelector("#missing-prices").innerHTML = missing.length
     ? missing
-        .map((item, index) => `<article class="price-suggestion price-task price-alias-task" data-fill-price-model="${escapeHtml(item.model)}" title="${escapeHtml(renderProviderTitle(item.providers))}">
+        .map((item, index) => `<article class="price-suggestion price-task price-alias-task" data-fill-price-model="${escapeHtml(item.model)}">
           <span class="task-rank">#${index + 1}</span>
           <strong>${escapeHtml(item.model)}</strong>
           <span>${formatToken(item.totalTokens)} · ${formatPercent(ratio(item.totalTokens, missingTotal))}</span>
@@ -739,7 +743,7 @@ function renderPricingLibraryRow(type, item) {
   if (type === "aliases") {
     return `<article class="price-row price-library-row">
       <div class="price-row-copy">
-        <strong title="${escapeHtml(item.model)}">${escapeHtml(item.model)}</strong>
+        <strong>${escapeHtml(item.model)}</strong>
         <span class="price-alias-target">${t("admin.pricing.aliasUses", { target: escapeHtml(item.targetModel) })}</span>
       </div>
       <button type="button" data-delete-price-alias="${escapeHtml(item.model)}">${t("admin.pricing.delete")}</button>
@@ -750,7 +754,7 @@ function renderPricingLibraryRow(type, item) {
     : "";
   return `<article class="price-row price-library-row">
     <div class="price-row-copy">
-      <strong title="${escapeHtml(item.model)}">${escapeHtml(item.model)}</strong>
+      <strong>${escapeHtml(item.model)}</strong>
       <span>${t("admin.pricing.priceLine", { input: formatUsdPerMillion(item.inputCostPerMTok), output: formatUsdPerMillion(item.outputCostPerMTok), cacheRead: formatUsdPerMillion(item.cacheReadCostPerMTok) })}</span>
     </div>
     ${action}
@@ -981,10 +985,11 @@ function renderRanking(data) {
     .map((item) => {
       const key = rankingRowKey(item);
       const expanded = state.expandedRankingKey === key;
+      const tokenTip = deviceTokenTooltip(item);
       return `<tr>
       <td><span class="rank">#${item.rank}</span></td>
       <td><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></td>
-      <td class="tokens" title="${escapeHtml(deviceTokenTooltip(item))}">${formatToken(item.totalTokens)}</td>
+      <td class="tokens"${tokenTip ? ` data-tooltip="${escapeHtml(tokenTip)}" tabindex="0"` : ""}>${formatToken(item.totalTokens)}</td>
       <td class="cost-col" ${state.showCost ? "" : "hidden"}>${renderCostQuality(item)}</td>
       <td>${renderPrimarySlice(item.workdirs)}</td>
       <td>${renderPrimarySlice(item.models)}</td>
@@ -1020,7 +1025,7 @@ function render(items) {
       return `<tr>
         <td>${formatPeriod(item)}</td>
         <td><a class="link-button" href="${adminProfileUrl(item.participantId)}" target="_blank" rel="noopener">${escapeHtml(item.nickname)}</a></td>
-        <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
+        <td class="tokens">${formatToken(item.totalTokens)}</td>
         <td class="cost-col" ${state.showCost ? "" : "hidden"}>${renderCostQuality(item)}</td>
         <td>${renderPrimarySlice(item.workdirs)}</td>
         <td>${renderPrimarySlice(item.models)}</td>
@@ -1162,30 +1167,26 @@ function renderSourceStatsSummary(data, sources) {
     {
       label: t("admin.sources.totalTokens"),
       val: formatToken(totalTokens),
-      sub: formatTokenRaw(totalTokens),
-      title: formatTokenRaw(totalTokens)
+      sub: formatTokenRaw(totalTokens)
     },
     {
       label: t("admin.sources.sourceCount"),
       val: String(activeSources.length),
-      sub: t("admin.sources.sourceCountNote", { total: sources.length }),
-      title: `${activeSources.length} / ${sources.length}`
+      sub: t("admin.sources.sourceCountNote", { total: sources.length })
     },
     {
       label: t("admin.sources.topSource"),
       val: topSource ? sourceName(topSource.name) : "-",
-      sub: topSource ? `${t("admin.sources.table.ratio")} ${formatPercent(topSource.ratio)} · ${formatToken(topSource.totalTokens)}` : "-",
-      title: topSource ? `${sourceName(topSource.name)} (${formatTokenRaw(topSource.totalTokens)})` : ""
+      sub: topSource ? `${t("admin.sources.table.ratio")} ${formatPercent(topSource.ratio)} · ${formatToken(topSource.totalTokens)}` : "-"
     },
     {
       label: t("admin.sources.peakUsage"),
       val: peakDayTokens > 0 ? formatToken(peakDayTokens) : "-",
-      sub: peakDay ? `${peakDay} · ${t("admin.sources.table.peakDay")}` : "-",
-      title: peakDay ? `${peakDay}: ${formatTokenRaw(peakDayTokens)}` : ""
+      sub: peakDay ? `${peakDay} · ${t("admin.sources.table.peakDay")}` : "-"
     }
   ];
 
-  container.innerHTML = kpiCards.map((kpi) => `<article class="an-kpi"${kpi.title ? ` title="${escapeHtml(kpi.title)}"` : ""}>
+  container.innerHTML = kpiCards.map((kpi) => `<article class="an-kpi">
     <span class="lab">${escapeHtml(kpi.label)}</span>
     <strong class="val">${escapeHtml(kpi.val)}</strong>
     <span class="sub">${escapeHtml(kpi.sub)}</span>
@@ -1248,7 +1249,7 @@ function renderSourceTrendFacet(source, maxTokens, sourceIndex) {
   return `<article class="source-trend-row" data-source-trend="${escapeHtml(source.name)}" style="--src-color:${color}">
     <header>
       <span class="swatch" style="background:${color}"></span>
-      <strong title="${escapeHtml(source.name)}">${escapeHtml(sourceName(source.name))}</strong>
+      <strong>${escapeHtml(sourceName(source.name))}</strong>
       <small>${escapeHtml(peakLabel)}</small>
       <span class="source-trend-total">${formatToken(trendTotal)}</span>
     </header>
@@ -1261,44 +1262,79 @@ function renderSourceTrendFacet(source, maxTokens, sourceIndex) {
   </article>`;
 }
 
-let sourcesTooltip = null;
+let adminTooltip = null;
+let adminHintAnchor = null;
 
-function ensureSourcesTooltip() {
-  if (sourcesTooltip) return sourcesTooltip;
-  sourcesTooltip = document.createElement("div");
-  sourcesTooltip.className = "chart-tooltip";
-  document.body.appendChild(sourcesTooltip);
-  return sourcesTooltip;
+function ensureAdminTooltip() {
+  if (adminTooltip) return adminTooltip;
+  adminTooltip = document.createElement("div");
+  adminTooltip.className = "chart-tooltip";
+  document.body.appendChild(adminTooltip);
+  return adminTooltip;
 }
 
+function hideAdminHintTooltip() {
+  adminHintAnchor = null;
+  if (adminTooltip) adminTooltip.style.opacity = "0";
+}
+
+function showAdminHintTooltip(el) {
+  const text = el.getAttribute("data-tooltip");
+  if (!text) return;
+  const tooltip = ensureAdminTooltip();
+  adminHintAnchor = el;
+  tooltip.textContent = text;
+  tooltip.style.whiteSpace = "pre-line";
+  tooltip.style.textAlign = "left";
+  tooltip.style.opacity = "1";
+  positionTooltip(tooltip, el);
+}
+
+document.addEventListener("mouseover", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const el = event.target.closest("[data-tooltip]");
+  if (el && el !== adminHintAnchor) showAdminHintTooltip(el);
+});
+
+document.addEventListener("mouseout", (event) => {
+  if (!adminHintAnchor) return;
+  const next = event.relatedTarget instanceof Element ? event.relatedTarget.closest("[data-tooltip]") : null;
+  if (next !== adminHintAnchor) hideAdminHintTooltip();
+});
+
+document.addEventListener("focusin", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const el = event.target.closest("[data-tooltip]");
+  if (el && el !== adminHintAnchor) showAdminHintTooltip(el);
+});
+
+document.addEventListener("focusout", (event) => {
+  if (!adminHintAnchor) return;
+  const next = event.relatedTarget instanceof Element ? event.relatedTarget.closest("[data-tooltip]") : null;
+  if (next !== adminHintAnchor) hideAdminHintTooltip();
+});
+
+window.addEventListener("scroll", () => {
+  if (adminHintAnchor) hideAdminHintTooltip();
+}, { passive: true });
+
 function bindSourceTrendTooltips(container) {
-  const tooltip = ensureSourcesTooltip();
+  const tooltip = ensureAdminTooltip();
   container.querySelectorAll(".source-trend-dot").forEach((dot) => {
     dot.addEventListener("mouseenter", () => {
+      hideAdminHintTooltip();
       const row = dot.closest(".source-trend-row");
       const name = row?.dataset.sourceTrend ? sourceName(row.dataset.sourceTrend) : "";
-      tooltip.innerHTML = `<strong>${escapeHtml(name)}</strong><br>${escapeHtml(dot.dataset.day || "")}<br>${formatToken(Number(dot.dataset.tokens) || 0)} ${t("unit.tokens")}`;
+      tooltip.innerHTML = `<strong>${escapeHtml(name)} · ${escapeHtml(dot.dataset.day || "")}</strong><div class="tooltip-val">${formatToken(Number(dot.dataset.tokens) || 0)} <span class="tooltip-unit">${escapeHtml(t("unit.tokens"))}</span></div>`;
+      tooltip.style.whiteSpace = "nowrap";
+      tooltip.style.textAlign = "center";
       tooltip.style.opacity = "1";
-      positionSourcesTooltip(tooltip, dot);
+      positionTooltip(tooltip, dot);
     });
     dot.addEventListener("mouseleave", () => {
       tooltip.style.opacity = "0";
     });
   });
-}
-
-function positionSourcesTooltip(tooltip, anchor) {
-  const rect = anchor.getBoundingClientRect();
-  const tooltipWidth = tooltip.offsetWidth;
-  const tooltipHeight = tooltip.offsetHeight;
-  const viewportWidth = window.innerWidth;
-  let left = rect.left + window.scrollX - tooltipWidth / 2 + rect.width / 2;
-  let top = rect.top + window.scrollY - tooltipHeight - 8;
-  if (left < 8) left = 8;
-  if (left + tooltipWidth > viewportWidth - 8) left = viewportWidth - tooltipWidth - 8;
-  if (top < window.scrollY + 4) top = rect.bottom + window.scrollY + 8;
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
 }
 
 function renderSourceTable(sources) {
@@ -1311,19 +1347,18 @@ function renderSourceTable(sources) {
   tableBody.innerHTML = sources.map((item, sourceIndex) => {
     const label = escapeHtml(sourceName(item.name));
     const color = rankSeriesColor(sourceIndex);
-    const peakTitle = item.peakDay ? `${item.peakDay.day} · ${formatTokenRaw(item.peakDay.totalTokens)}` : "";
     return `<tr>
-      <td><span class="source-cell"><i class="swatch" style="background:${color}"></i><strong title="${escapeHtml(item.name)}">${label}</strong></span></td>
-      <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)}</td>
+      <td><span class="source-cell"><i class="swatch" style="background:${color}"></i><strong>${label}</strong></span></td>
+      <td class="tokens">${formatToken(item.totalTokens)}</td>
       <td>
-        <span class="share-cell" title="${escapeHtml(label)} ${formatPercent(item.ratio)}">
+        <span class="share-cell">
           <em>${formatPercent(item.ratio)}</em>
           <i class="share-track"><b style="width:${Math.min(100, Number(item.ratio || 0) * 100).toFixed(1)}%;background:${color}"></b></i>
         </span>
       </td>
       <td>${formatNumber(item.activeParticipants)}</td>
       <td>${item.peakDay
-        ? `<span title="${escapeHtml(peakTitle)}">${escapeHtml(item.peakDay.day)} · ${formatToken(item.peakDay.totalTokens)}</span>`
+        ? `<span>${escapeHtml(item.peakDay.day)} · ${formatToken(item.peakDay.totalTokens)}</span>`
         : `<span class="muted-cell">-</span>`}</td>
     </tr>`;
   }).join("");
@@ -1609,9 +1644,9 @@ function utcDateToDay(date) {
 function renderBars(items = []) {
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
   return items
-    .map((item) => `<div class="bar-row" title="${escapeHtml(chartItemTitle(item))}">
+    .map((item) => `<div class="bar-row">
       <span>${escapeHtml(item.name)}</span>
-      <strong title="${escapeHtml(chartItemTitle(item))}">${formatToken(item.totalTokens)}${state.showCost ? ` · ${renderCost(item)}` : ""}</strong>
+      <strong>${formatToken(item.totalTokens)}${state.showCost ? ` · ${renderCost(item)}` : ""}</strong>
       <i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%"></i>
     </div>`)
     .join("");
@@ -1640,7 +1675,7 @@ function renderCompositionBlock(item) {
   const rows = tokenCompositionDetails(item)
     .map((entry) => `<article class="summary-tile composition-tile">
       <span>${escapeHtml(compositionFieldLabel(entry.field))}</span>
-      <strong title="${formatTokenRaw(entry.tokens)}">${formatToken(entry.tokens)}</strong>
+      <strong>${formatToken(entry.tokens)}</strong>
       <small>${Math.round(entry.ratio * 100)}%</small>
       ${state.showCost ? `<small><span class="cost-amount">${escapeHtml(formatCost(costValueForField(item, entry.field)))}</span></small>` : ""}
     </article>`)
@@ -1694,10 +1729,10 @@ function renderQualityBoard(data) {
   document.querySelector("#quality-status").textContent = t("admin.quality.status", { from: data.from || "-", to: data.to || "-", rows: data.rows || 0 });
   document.querySelector("#quality-summary").innerHTML = [
     [t("admin.quality.rows"), String(data.rows || 0)],
-    [t("admin.quality.tokens"), formatToken(data.totalTokens || 0), formatTokenRaw(data.totalTokens || 0)],
+    [t("admin.quality.tokens"), formatToken(data.totalTokens || 0)],
     [t("admin.quality.composition"), ratioSummary(data.compositionRatios || {})],
     [t("admin.quality.missingPrice"), formatPercent(data.pricingCoverage?.missingTokenRatio || 0)]
-  ].map(([label, value, title]) => `<article class="summary-tile"${title ? ` title="${escapeHtml(title)}"` : ""}><span>${escapeHtml(label)}</span><strong class="${summaryValueClass(value)}">${value}</strong></article>`).join("");
+  ].map(([label, value]) => `<article class="summary-tile"><span>${escapeHtml(label)}</span><strong class="${summaryValueClass(value)}">${value}</strong></article>`).join("");
   document.querySelector("#quality-anomalies").innerHTML = (data.anomalies || []).length
     ? renderAnomalyGroups(data.anomalies, data.totalTokens || 1)
     : `<article class="empty-state">${t("admin.quality.noAnomaly")}</article>`;
@@ -1706,7 +1741,7 @@ function renderQualityBoard(data) {
     { name: t("admin.quality.missingPriceLabel"), totalTokens: data.pricingCoverage?.missingTokens || 0 }
   ]);
   document.querySelector("#quality-participants").innerHTML = (data.pricingCoverage?.participants || []).length
-    ? data.pricingCoverage.participants.slice(0, 8).map((item) => `<article class="bar-row" title="${escapeHtml(formatPercent(item.missingPriceRatio))}">
+    ? data.pricingCoverage.participants.slice(0, 8).map((item) => `<article class="bar-row">
       <span>${escapeHtml(item.nickname)}</span>
       <strong>${formatPercent(item.missingPriceRatio)} · ${formatToken(item.missingPriceTokens)}</strong>
       <i style="width:${Math.max(3, item.missingPriceRatio * 100)}%"></i>
@@ -1740,7 +1775,7 @@ function renderAnomalyGroups(anomalies, totalTokens) {
           <span>${t("admin.quality.ofRows", { shown: topRows.length, total: rows.length, tokens: formatToken(groupTokens(rows)) })}</span>
         </header>
         <div class="breakdown">
-          ${topRows.map((item) => `<article class="bar-row" title="${escapeHtml(item.compositionSummary)}">
+          ${topRows.map((item) => `<article class="bar-row">
             <span>${escapeHtml(item.day)} · ${escapeHtml(item.compositionSummary || "")}</span>
             <strong>${formatToken(item.totalTokens)}</strong>
             <i style="width:${Math.max(3, Math.min(100, (item.totalTokens / Math.max(totalTokens, 1)) * 100))}%"></i>
@@ -1827,7 +1862,7 @@ function renderCostQuality(item) {
 function renderPrimarySlice(items = []) {
   const [first, ...rest] = items;
   if (!first) return `<span class="muted-cell">-</span>`;
-  return `<span class="primary-slice" title="${escapeHtml(renderBreakdownText(items))}">
+  return `<span class="primary-slice">
     <strong>${escapeHtml(first.name)}</strong>
     <small>${formatToken(first.totalTokens)}${rest.length ? ` · +${rest.length}` : ""}</small>
   </span>`;
@@ -1873,7 +1908,7 @@ function formatTokenRaw(value) {
 
 function deviceTokenTooltip(item) {
   const devices = Array.isArray(item.devices) ? item.devices : [];
-  if (devices.length <= 1) return formatTokenRaw(item.totalTokens);
+  if (devices.length <= 1) return "";
   return [
     formatTokenRaw(item.totalTokens),
     ...devices.map((device) => t("admin.usage.deviceTokenTotal", {
@@ -1888,7 +1923,6 @@ function deviceLabel(device) {
   const platform = String(device?.clientPlatform || "").trim();
   return platform ? `${platform} · ${suffix}` : suffix;
 }
-
 
 function formatCost(value) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "-";
@@ -1921,11 +1955,6 @@ function formatPricePer100M(item) {
   if (!Number.isFinite(cost) || cost <= 0 || tokens <= 0) return "-";
   const price = (cost / tokens) * 100_000_000;
   return t("web.cost.pricePer100M", { value: price.toFixed(price >= 100 ? 0 : price >= 10 ? 1 : 2) });
-}
-
-function chartItemTitle(item) {
-  const cost = state.showCost ? ` · ${t("common.cost")} ${renderCost(item).replace(/<[^>]+>/g, "")}` : "";
-  return `${item.name || item.day || ""} · ${formatTokenRaw(item.totalTokens)}${cost}`;
 }
 
 function formatUsdPerMillion(value) {

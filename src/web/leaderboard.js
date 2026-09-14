@@ -175,7 +175,7 @@ function renderListView(items, communityTotal) {
             ${renderDisplayName(item.displayName)}
           </a>
         </td>
-        <td class="tokens" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</td>
+        <td class="tokens">${localeTokenCompact(item.totalTokens)}</td>
         <td class="contribution-cell">${formatContributionPercent(item.totalTokens, communityTotal)}</td>
         ${state.showCost ? `<td class="tokens" title="${escapeHtml(costTitle(item))}">${renderCost(item)}<small class="price-sub">${formatPricePer100M(item)}</small></td>` : ""}
         <td>${renderModels(item.models)}</td>
@@ -197,9 +197,9 @@ function renderTopThree(items, communityTotal) {
         <span class="medal-rank">#${item.rank}</span>
         <a class="link-button participant-link" href="${profileUrl(item.displayId)}">${renderDisplayName(item.displayName)}</a>
       </div>
-      <strong class="medal-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+      <strong class="medal-total">${localeTokenCompact(item.totalTokens)}</strong>
       ${renderLeaderboardValueMeta(item, communityTotal, "medal-meta")}
-      ${renderModelSegments(item, { className: "composition-strip", title: modelUsageTitle(item, localeTokenCompact) })}
+      ${renderModelSegments(item, { className: "composition-strip" })}
     </article>`)
     .join("");
   topThree.querySelectorAll(".medal-card[data-display-id]").forEach((el) => {
@@ -237,7 +237,7 @@ function renderMeterView(items, communityTotal) {
           </div>
         </div>
         <span class="meter-value${state.showCost ? " has-cost" : ""}">
-          <strong class="meter-total" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</strong>
+          <strong class="meter-total">${localeTokenCompact(item.totalTokens)}</strong>
           <span class="meter-share"><span>${t("web.leaderboard.contribution")}</span><b>${formatContributionPercent(item.totalTokens, communityTotal)}</b></span>
           ${state.showCost ? `<span class="meter-cost">${renderCost(item)}<small class="price-sub">${formatPricePer100M(item)}</small></span>` : ""}
         </span>
@@ -300,7 +300,7 @@ async function loadSourceFilterOptions() {
 
 function renderModels(items = []) {
   return items
-    .map((item) => `<span class="pill" title="${formatTokenRaw(item.totalTokens)}">${escapeHtml(item.name)} ${localeTokenCompact(item.totalTokens)}</span>`)
+    .map((item) => `<span class="pill">${escapeHtml(item.name)} ${localeTokenCompact(item.totalTokens)}</span>`)
     .join("");
 }
 
