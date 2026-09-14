@@ -591,7 +591,7 @@ function renderMembersPanel() {
   }
   const members = management.participants.filter((item) => item.teamId === team.id);
   const chips = members.map((item) =>
-    `<button type="button" class="teams-person is-tagged${state.selected.has(item.participantId) ? " is-selected" : ""}" data-person="${escapeHtml(item.participantId)}" title="${escapeHtml(item.nickname)}">${escapeHtml(item.nickname)}</button>`
+    `<button type="button" class="teams-person is-tagged${state.selected.has(item.participantId) ? " is-selected" : ""}" data-person="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</button>`
   ).join("") || `<p class="teams-manage-empty" data-i18n="web.teams.manage.noMembers"></p>`;
   host.innerHTML = `
     <div class="teams-members-panel" role="region" aria-label="${escapeHtml(team.name)}">
@@ -631,12 +631,10 @@ function renderManage() {
   updateDynamicTranslations(assignHost);
 
   const rows = filteredParticipants();
-  const teamNameById = new Map(management.teams.map((team) => [team.id, team.name]));
   const cloud = document.querySelector("#teams-people-cloud");
   cloud.innerHTML = rows.map((item) => {
     const selected = state.selected.has(item.participantId);
-    const title = item.teamId ? `${item.nickname} · ${teamNameById.get(item.teamId) || ""}` : item.nickname;
-    return `<button type="button" class="teams-person${selected ? " is-selected" : ""}${item.teamId ? " is-tagged" : ""}" data-person="${escapeHtml(item.participantId)}" title="${escapeHtml(title)}">${escapeHtml(item.nickname)}</button>`;
+    return `<button type="button" class="teams-person${selected ? " is-selected" : ""}${item.teamId ? " is-tagged" : ""}" data-person="${escapeHtml(item.participantId)}">${escapeHtml(item.nickname)}</button>`;
   }).join("") || `<p class="teams-manage-empty" data-i18n="web.teams.manage.noMatch"></p>`;
   updateDynamicTranslations(cloud);
 

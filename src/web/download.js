@@ -3,7 +3,7 @@ import "/theme-switcher.js";
 import { formatTokenCompact } from "/shared/display.js";
 import { parseLatestChangelog } from "/shared/changelog.js";
 import {
-  escapeHtml, escapeAttribute, sourceName, formatCost, formatTokenRaw,
+  escapeHtml, escapeAttribute, sourceName, formatCost,
   normalizeModelSegments, modelUsageTitle, renderModelSegmentItems,
   renderModelSegments, renderCost, renderTrendChart,
   renderBarChart, renderDonutChart, renderActivityHeatmap, renderParticipantTreemap
@@ -293,7 +293,7 @@ function renderLeaderboardPreview(items) {
       return `<article class="top-row"${displayIdAttr} data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
         <span class="n">#${item.rank}</span>
         <span class="nm">${escapeHtml(item.displayName)}</span>
-        <span class="tv" title="${formatTokenRaw(item.totalTokens)}">${localeTokenCompact(item.totalTokens)}</span>
+        <span class="tv">${localeTokenCompact(item.totalTokens)}</span>
         <div class="mini-bar"><i style="width:${pct}%"></i></div>
       </article>`;
     })
@@ -317,13 +317,13 @@ function renderSourceTop(sources = []) {
           const displayIdAttr = item.displayId ? ` data-display-id="${escapeHtml(item.displayId)}"` : "";
           return `<li${displayIdAttr} data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
             <span class="source-top-row-name">#${index + 1} · ${escapeHtml(item.displayName || "")}</span>
-            <b title="${escapeHtml(formatTokenRaw(item.totalTokens))}">${localeTokenCompact(item.totalTokens)}</b>
+            <b>${localeTokenCompact(item.totalTokens)}</b>
           </li>`;
         })
         .join("");
       return `<div class="source-top-block">
         <h3 class="source-top-name">${escapeHtml(sourceName(source.name))}</h3>
-        <strong class="source-top-total" title="${escapeHtml(formatTokenRaw(Number(source.totalTokens || 0)))}">${localeTokenCompact(Number(source.totalTokens || 0))}</strong>
+        <strong class="source-top-total">${localeTokenCompact(Number(source.totalTokens || 0))}</strong>
         <p class="source-top-sub">${escapeHtml(t("web.home.sourceTopParticipantCount", { count, plural: count === 1 ? "" : "s" }))}</p>
         <ol class="source-top-rows">${rows}</ol>
       </div>`;

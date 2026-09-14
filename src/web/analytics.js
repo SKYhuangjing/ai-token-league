@@ -286,7 +286,7 @@ function renderShareTrendLegend(container, series = []) {
       const color = row.other ? THEME_PALETTE.theme.rankOther : palette[index % palette.length];
       const swatch = row.other ? `background:${color};opacity:0.55` : `background:${color}`;
       const label = row.other ? t("web.analytics.otherShare") : row.name;
-      return `<span><i style="${swatch}"></i><span title="${escapeHtml(label)}">${escapeHtml(String(label))}</span></span>`;
+      return `<span><i style="${swatch}"></i><span>${escapeHtml(String(label))}</span></span>`;
     })
     .join("");
 }
@@ -462,7 +462,7 @@ function renderEcoCountRows(container, rows, { unit }) {
     const pct = Math.round((row.count / total) * 100);
     return `<div class="usage-share-row">
       <div class="lbl">
-        <span class="usage-share-name" title="${escapeHtml(String(row.name))}">${escapeHtml(String(row.name))}</span>
+        <span class="usage-share-name">${escapeHtml(String(row.name))}</span>
         <span class="usage-share-value"><strong>${row.count} ${escapeHtml(unit)}</strong><span>${pct}%</span></span>
       </div>
       <div class="usage-share-track"><i style="width:${pct}%"></i></div>

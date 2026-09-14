@@ -459,7 +459,7 @@ function renderHeatmap(heatmap) {
   const max = Math.max(...visible.map((item) => Number(item.totalTokens) || 0), 1);
   setHtml("heatmap", visible.map((item) => {
     const level = Math.max(0.35, ((Number(item.totalTokens) || 0) / max) * 5);
-    return `<i style="--level:${level.toFixed(2)}" title="${escapeHtml(seriesLabel(item))} · ${escapeHtml(token(item.totalTokens))}"></i>`;
+    return `<i style="--level:${level.toFixed(2)}"></i>`;
   }).join("") || '<span class="panel-meta">暂无活跃数据</span>');
 }
 
