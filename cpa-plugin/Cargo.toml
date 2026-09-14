@@ -1,0 +1,33 @@
+[package]
+name = "atl-share-cpa-plugin"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sky"]
+description = "AI Token League compute-sharing plugin for CLIProxyAPI (CPA)"
+
+# Deliberately NOT a member of the repo workspace: the root release profile
+# sets panic=abort, but this crate is a guest inside the CPA host process —
+# a panic must unwind into our catch_unwind boundary, never abort the host.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+base64 = "0.22"
+chrono = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "blocking"] }
+local-ip-address = "0.6"
+libc = "0.2"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+
+# We are a guest dylib: unwind on panic (see [workspace] note), keep size lean.
+[profile.release]
+panic = "unwind"
+lto = true
+opt-level = "s"
+strip = true

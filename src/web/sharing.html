@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="view-transition" content="same-origin" />
+  <title data-i18n="web.sharing.title">共享算力</title>
+  <script>
+    (() => {
+    try {
+      const lang = localStorage.getItem("ai-token-league.language");
+      if (lang === "en" || lang === "zh-CN") document.documentElement.lang = lang;
+          document.documentElement.dataset.bootLang = document.documentElement.lang;
+    } catch (_) {}
+    })();
+  </script>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preload" href="/fonts/Inter-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/IBMPlexMono-600.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell public-shell sharing-shell">
+    <section class="masthead public-masthead">
+      <div class="masthead-copy">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg></div>
+          <h1 data-i18n="web.sharing.title">共享算力</h1>
+          <span class="pill" data-i18n="web.sharing.badge">实验特性</span>
+        </div>
+        <p class="sharing-sub" data-i18n="web.sharing.subtitle">浏览在线分享节点。认领在桌面客户端完成——用你的联赛身份签名认领，拿到的 Key 与你的设备绑定。</p>
+      </div>
+      <div class="masthead-side">
+        <nav class="public-nav" aria-label="Site">
+          <a href="/" class="nav-link" data-i18n="web.nav.home">首页</a>
+          <a href="/leaderboard.html" class="nav-link" data-i18n="web.nav.leaderboard">排行榜</a>
+          <a href="/analytics.html" class="nav-link" data-i18n="web.nav.analytics">分析</a>
+            <a href="/profile.html" class="nav-link" data-i18n="web.nav.profile">个人</a>
+        </nav>
+        <div class="lang-switcher-container" id="lang-switcher-container">
+          <div class="lang-switcher" id="lang-switcher" role="group" aria-label="Language">
+            <button type="button" class="lang-opt" data-lang="zh-CN" aria-pressed="true">中文</button>
+            <button type="button" class="lang-opt" data-lang="en" aria-pressed="false">EN</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sharing-grid" id="sharing-grid" aria-live="polite"></section>
+  </main>
+  <script type="module" src="/sharing.js"></script>
+</body>
+</html>

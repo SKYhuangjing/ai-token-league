@@ -8585,6 +8585,8 @@ function testDesktopCspAllowsBrandLogoDataImages() {
   assert.ok(imgSrc, "desktop CSP must define img-src explicitly");
   assert.ok(imgSrc.split(/\s+/).includes("data:"), "desktop CSP img-src must allow data: brand logo images");
   assert.ok(imgSrc.split(/\s+/).includes("https:"), "desktop CSP img-src must allow https: brand logo sources");
+  const scriptSrc = csp.match(/(?:^|;)\s*script-src\s+([^;]+)/)?.[1] || "";
+  assert.ok(scriptSrc.split(/\s+/).includes("blob:"), "desktop CSP script-src must allow blob: plugin module imports");
 
   console.log("  testDesktopCspAllowsBrandLogoDataImages passed");
 }
@@ -9687,5 +9689,491 @@ testParticipantHourlyRhythm();
 
 // Aggregate cache: canonical keys, day-window invalidation, tolerance, team edits
 testAggregateCacheDayWindowInvalidation();
+
+// ===== Compute sharing — CPA plugin control plane (R23) =====
+
+import { createSharingCpa } from "../src/backend/sharing-cpa.js";
+import { createRemoteModules } from "../src/backend/remote-modules.js";
+import { claimToRow, createControlPlaneStore, diffListingRows, diffSharingRows, rowToClaim, rowToShare, shareToRow } from "../src/backend/control-plane-store.js";
+// Test identity registry: mirrors server.js's participant verification wiring
+// so the signed-claim path exercises the real canonicalJson + Ed25519 chain.
+function testIdentityGuard(participants) {
+  return async ({ kind, participantId, shareId, ts, signature }) => {
+    const participant = participants[participantId];
+    if (!participant) return { ok: false, reason: "participant_not_registered" };
+    const payload = { kind, participantId, ...(shareId ? { shareId } : {}), ts };
+    const verified = verifyPayload(participant.identity.identityPublicKey, payload, signature);
+    return verified ? { ok: true, participant } : { ok: false, reason: "invalid_signature" };
+  };
+}
+
+function signedRegisterBody(participant, { ts = Date.now(), api } = {}) {
+  const id = participant.identity || participant;
+  const pid = id.participantId;
+  return { participantId: pid, ts, signature: signPayload(id.identityPrivateKey, { kind: "share-register", participantId: pid, ts }), ...(api ? { api } : {}) };
+}
+
+function signedClaimBody(shareId, participant, { ts = Date.now(), participantId } = {}) {
+  const id = participant.identity || participant; // wrapped registry entry or raw identity
+  const pid = participantId || id.participantId;
+  return { shareId, participantId: pid, ts, signature: signPayload(id.identityPrivateKey, { kind: "share-claim", participantId: pid, shareId, ts }) };
+}
+
+function cpaFetch(base, p, { method = "GET", body, secret } = {}) {
+  const headers = { "content-type": "application/json" };
+  if (secret) headers["x-atl-share-secret"] = secret;
+  return fetch(base + p, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+async function withCpaServer(options, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atl-sharing-cpa-"));
+  const identity = generateIdentity();
+  const participants = { [identity.participantId]: { identity, nickname: "sky-dev", displayId: "dd_sky1", participantId: identity.participantId } };
+  const defaults = { verifyIdentity: testIdentityGuard(participants) };
+  const sharing = createSharingCpa({ dataDir: dir, ...defaults, ...options });
+  const server = http.createServer((req, res) => { sharing.handle(req, res); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await fn(base, dir, participants[identity.participantId]);
+  } finally {
+    sharing.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testSharingCpaRegisterHeartbeatClaim() {
+  await withCpaServer({}, async (base, dir, identity) => {
+    // unsigned / forged register is rejected (A.1 identity gate)
+    const unsignedReg = await cpaFetch(base, "/api/shares/register", { method: "POST", body: { title: "x", baseURL: "http://x:1" } });
+    assert.equal(unsignedReg.status, 401);
+    const strangerReg = await cpaFetch(base, "/api/shares/register", { method: "POST", body: { ...signedRegisterBody(generateIdentity()), title: "x", baseURL: "http://x:1" } });
+    assert.equal(strangerReg.status, 401);
+    assert.equal((await strangerReg.json()).error, "participant_not_registered");
+
+    // signed register: 注册即上线（联赛身份背书）
+    const reg = await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: { title: "Harry CPA", baseURL: "http://192.168.1.9:8317", models: ["glm-*"], policy: { budget: 5000, maxClaims: 2 }, ...signedRegisterBody(identity) },
+    });
+    assert.equal(reg.status, 200);
+    const regBody = await reg.json();
+    assert.ok(regBody.shareId.startsWith("shr_"));
+    assert.ok(String(regBody.shareSecret).length >= 32);
+    const secret = regBody.shareSecret;
+
+    // public list: online only after a plugin heartbeat, baseURL never leaks.
+    // CORS is required: the desktop webview fetches this cross-origin.
+    const listRes = await cpaFetch(base, "/api/shares");
+    assert.equal(listRes.headers.get("access-control-allow-origin"), "*");
+    const list1 = await listRes.json();
+    assert.equal(list1.shares.length, 1);
+    assert.equal(list1.shares[0].online, false);
+    assert.equal("baseURL" in list1.shares[0], false);
+    assert.equal(list1.shares[0].slotsLeft, 2);
+
+    // claim before heartbeat -> offline 409 (borrower must not get a dead key)
+    const early = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(regBody.shareId, identity) });
+    assert.equal(early.status, 409);
+
+    // unsigned / stale-signature claims are rejected (identity-bound claiming)
+    const unsigned = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { shareId: regBody.shareId } });
+    assert.equal(unsigned.status, 401);
+    const stale = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(regBody.shareId, identity, { ts: Date.now() - 11 * 60_000 }) });
+    assert.equal(stale.status, 401);
+    const stranger = generateIdentity();
+    const forged = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(regBody.shareId, stranger) });
+    assert.equal(forged.status, 401);
+    assert.equal((await forged.json()).error, "participant_not_registered");
+
+    // plugin heartbeat: pushes usage for a pre-existing key (orphan) and gets the contract
+    const hb1 = await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST",
+      secret,
+      body: { shareId: regBody.shareId, pluginVersion: "0.1.0", usage: [{ keyId: "csk_ghost", tokens: 10, requests: 1, failed: 0 }] },
+    });
+    assert.equal(hb1.status, 200);
+    const hb1Body = await hb1.json();
+    assert.equal(hb1Body.state, "active");
+    assert.ok(hb1Body.windowDay.match(/^\d{4}-\d{2}-\d{2}$/));
+    assert.equal(hb1Body.policy.budget, 5000);
+    assert.equal(hb1Body.policy.keyMaxTokens, 2500); // budget / maxClaims fair split
+    assert.deepEqual(hb1Body.keys, []);
+    assert.equal(hb1Body.orphaned, 1);
+
+    // wrong secret -> 401
+    const bad = await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: "x".repeat(40), body: {} });
+    assert.equal(bad.status, 401);
+
+    // claim now succeeds: signature verified, identity bound, baseURL + token revealed
+    const claim = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(regBody.shareId, identity) });
+    assert.equal(claim.status, 200);
+    const claimBody = await claim.json();
+    assert.ok(claimBody.token.startsWith("atl_sk_"));
+    assert.equal(claimBody.baseURL, "http://192.168.1.9:8317");
+    assert.equal(claimBody.keyMaxTokens, 2500);
+    assert.equal(claimBody.borrower, "sky-dev");
+    assert.equal(claimBody.displayId, "dd_sky1");
+
+    // next heartbeat delivers the minted key to the plugin
+    const hb2 = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: {} })).json();
+    assert.equal(hb2.keys.length, 1);
+    assert.equal(hb2.keys[0].token, claimBody.token);
+    assert.ok(hb2.keys[0].expiresAtMs > Date.now());
+
+    // usage settles on the claim and the window
+    const hb3 = await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST",
+      secret,
+      body: { usage: [{ keyId: claimBody.keyId, tokens: 1200, requests: 2, failed: 1 }] },
+    });
+    const hb3Body = await hb3.json();
+    assert.equal(hb3Body.settledByKey[claimBody.keyId], 1200);
+
+    // owner status: window usage + claim view + plugin online
+    const status = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    assert.equal(status.share.settledTokens, 1200);
+    assert.equal(status.share.plugin.online, true);
+    assert.equal(status.claims.length, 1);
+    assert.equal(status.claims[0].usedTokens, 1200);
+    assert.equal(status.claims[0].requests, 2);
+    assert.equal(status.claims[0].borrower, "sky-dev");
+    assert.equal(status.claims[0].displayId, "dd_sky1");
+
+    // budget exhaustion blocks new claims (4000 > 5000-1200 available? 3800 avail)
+    // burn the rest through usage
+    await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: { usage: [{ keyId: claimBody.keyId, tokens: 4000, requests: 5, failed: 0 }] } });
+    const claim2 = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(regBody.shareId, identity) });
+    assert.equal(claim2.status, 409);
+    assert.equal((await claim2.json()).error, "budget_exhausted");
+
+    // my-claims view by token
+    const mine = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claimBody.token] } })).json();
+    assert.equal(mine.claims.length, 1);
+    assert.equal(mine.claims[0].usedTokens, 5200);
+
+    // revoke own claim; next heartbeat no longer carries it
+    await cpaFetch(base, "/api/shares/claims/revoke", { method: "POST", body: { token: claimBody.token } });
+    const hb4 = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: {} })).json();
+    assert.deepEqual(hb4.keys, []);
+  });
+}
+
+async function testSharingCpaUnregisterAndAdmin() {
+  await withCpaServer({}, async (base, dir, identity) => {
+    const reg = await (await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: { title: "tmp", baseURL: "http://10.0.0.1:8317", policy: { budget: 10_000 }, ...signedRegisterBody(identity) },
+    })).json();
+    await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} });
+    const claim = await (await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(reg.shareId, identity) })).json();
+
+    // unregister cascades: stopped share hidden from public list, keys revoked
+    const un = await cpaFetch(base, "/api/shares/unregister", { method: "POST", secret: reg.shareSecret });
+    assert.equal(un.status, 200);
+    const list = await (await cpaFetch(base, "/api/shares")).json();
+    assert.equal(list.shares.length, 0);
+    const hb = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} })).json();
+    assert.equal(hb.state, "stopped");
+    assert.deepEqual(hb.keys, []);
+
+    // admin: views + revoke (same gate as the rest of /api/admin)
+    const adminShares = await (await cpaFetch(base, "/api/admin/shares")).json();
+    assert.equal(adminShares.shares.length, 1);
+    assert.equal(adminShares.shares[0].state, "stopped");
+    assert.equal(adminShares.shares[0].ownerNickname, "sky-dev");
+    assert.equal(adminShares.shares[0].ownerDisplayId, "dd_sky1");
+    const adminClaims = await (await cpaFetch(base, "/api/admin/shares/claims")).json();
+    assert.equal(adminClaims.claims.length, 1);
+    assert.ok(adminClaims.claims[0].token.startsWith("atl_sk_"));
+    assert.ok(adminClaims.claims[0].token.endsWith("…"));
+
+    // admin policy override (data management): applies live to the next heartbeat
+    const adminPolicy = await cpaFetch(base, "/api/admin/shares/policy", { method: "POST", body: { shareId: reg.shareId, policy: { budget: 9000, maxClaims: 3 } } });
+    assert.equal(adminPolicy.status, 200);
+    const hbAfterPolicy = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} })).json();
+    assert.equal(hbAfterPolicy.policy.budget, 9000);
+    // maxClaims rides the admin view (the plugin heartbeat policy never ships it)
+    const adminAfter = await (await cpaFetch(base, "/api/admin/shares")).json();
+    assert.equal(adminAfter.shares.find((x) => x.shareId === reg.shareId).budgetTokens, 9000);
+
+    // re-register with the same secret revives the share (identity persistence)
+    const re = await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      secret: reg.shareSecret,
+      body: { title: "tmp2", baseURL: "http://10.0.0.1:8317", policy: { budget: 10_000 }, ...signedRegisterBody(identity) },
+    });
+    const reBody = await re.json();
+    assert.equal(reBody.rebind, true);
+    assert.equal(reBody.shareId, reg.shareId);
+  });
+}
+
+async function testSharingCpaAdminGuardAndPolicy() {
+  await withCpaServer({}, async (base, dir, identity) => {
+    // Admin views follow the page gate: this helper has no extra lock.
+    const admin = await cpaFetch(base, "/api/admin/shares");
+    assert.equal(admin.status, 200);
+
+    // owner policy: budget applies live (next heartbeat response carries it)
+    const reg = await (await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: { title: "p", baseURL: "http://x:1", policy: { budget: 9000 }, ...signedRegisterBody(identity) },
+    })).json();
+    const upd = await cpaFetch(base, "/api/shares/owner/policy", { method: "POST", secret: reg.shareSecret, body: { policy: { budget: 7000 } } });
+    assert.equal(upd.status, 200);
+    let hb = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} })).json();
+    assert.equal(hb.policy.budget, 7000);
+    // unsigned claim stays rejected in this closed-admin instance too
+    const still = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { shareId: reg.shareId } });
+    assert.equal(still.status, 401);
+  });
+}
+
+await testSharingCpaRegisterHeartbeatClaim();
+await testSharingCpaUnregisterAndAdmin();
+await testSharingCpaAdminGuardAndPolicy();
+await testModuleListingOverlay();
+await testControlPlaneFollowsJsonStore();
+await testControlPlaneDiffRows();
+await testControlPlaneMysqlRoundTrip();
+
+async function testModuleListingOverlay() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atl-module-listing-"));
+  const pluginDir = path.join(dir, "plugins", "zhipu-plan");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, "index.js"), "export default { mount() {} };\n");
+  const catalog = {
+    version: 1,
+    catalog: [
+      { id: "zhipu-plan", version: "1.0.0", title: "智谱", desc: "old", type: "query", publishedAt: "2026-09-01T00:00:00.000Z" },
+      { id: "zhipu-plan", version: "1.1.0", title: "智谱", desc: "quota", type: "query", publishedAt: "2026-09-10T00:00:00.000Z" },
+      { id: "compute-sharing", version: "0.1.0", title: "共享", desc: "share", type: "serving", publishedAt: "2026-09-12T00:00:00.000Z" },
+    ],
+  };
+  const listingsPath = path.join(dir, "module-listings.json");
+  const modules = createRemoteModules({
+    listingsPath,
+    localDir: path.join(dir, "plugins"),
+    fetchCatalogText: async () => JSON.stringify(catalog),
+  });
+  const server = http.createServer((req, res) => { modules.handle(req, res); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const open = await (await fetch(`${base}/api/modules/remote/catalog`)).json();
+    assert.deepEqual(open.catalog.map((entry) => `${entry.id}@${entry.version}`), ["zhipu-plan@1.0.0", "zhipu-plan@1.1.0", "compute-sharing@0.1.0"]);
+
+    const admin = await (await fetch(`${base}/api/admin/modules`)).json();
+    assert.deepEqual(admin.modules.map((entry) => entry.id), ["zhipu-plan", "compute-sharing"]);
+    assert.equal(admin.modules.find((entry) => entry.id === "zhipu-plan").version, "1.1.0");
+    assert.equal(admin.modules.every((entry) => entry.listed), true);
+
+    const bad = await fetch(`${base}/api/admin/modules/listing`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "nope", listed: false }) });
+    assert.equal(bad.status, 404);
+    const invalid = await fetch(`${base}/api/admin/modules/listing`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.equal(invalid.status, 400);
+
+    const unlist = await fetch(`${base}/api/admin/modules/listing`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "zhipu-plan", listed: false }),
+    });
+    assert.equal(unlist.status, 200);
+    const hidden = await (await fetch(`${base}/api/modules/remote/catalog`)).json();
+    assert.deepEqual(hidden.catalog.map((entry) => entry.id), ["compute-sharing"]);
+    const file = await fetch(`${base}/api/modules/remote/file/zhipu-plan/1.1.0/index.js`);
+    assert.equal(file.status, 200);
+    assert.match(await file.text(), /mount/);
+
+    const reloaded = createRemoteModules({ listingsPath, fetchCatalogText: async () => JSON.stringify(catalog) });
+    const restarted = http.createServer((req, res) => { reloaded.handle(req, res); });
+    await new Promise((resolve) => restarted.listen(0, "127.0.0.1", resolve));
+    try {
+      const stillHidden = await (await fetch(`http://127.0.0.1:${restarted.address().port}/api/modules/remote/catalog`)).json();
+      assert.deepEqual(stillHidden.catalog.map((entry) => entry.id), ["compute-sharing"]);
+    } finally {
+      await new Promise((resolve) => restarted.close(resolve));
+    }
+
+    const relist = await fetch(`${base}/api/admin/modules/listing`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "zhipu-plan", listed: true }),
+    });
+    assert.equal(relist.status, 200);
+    const shown = await (await fetch(`${base}/api/modules/remote/catalog`)).json();
+    assert.equal(shown.catalog.filter((entry) => entry.id === "zhipu-plan").length, 2);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  console.log("  testModuleListingOverlay passed");
+}
+
+async function testControlPlaneFollowsJsonStore() {
+  const share = {
+    shareId: "shr_1",
+    shareSecret: "secret",
+    state: "active",
+    title: "node",
+    baseURL: "http://127.0.0.1:8317",
+    models: ["*"],
+    policy: { budget: 1000, maxClaims: 2 },
+    settled: { csk_1: 12 },
+    lifetimeSettled: 12,
+    claimsIssued: 1,
+    participantId: "p_1",
+    createdAt: 10,
+    updatedAt: 11,
+  };
+  const claim = {
+    keyId: "csk_1",
+    shareId: "shr_1",
+    token: "atl_sk_test",
+    borrower: "sky",
+    state: "valid",
+    usedTokens: 12,
+    createdAt: 10,
+    expiresAt: 20,
+  };
+  assert.equal(rowToShare(shareToRow(share)).policy.budget, 1000);
+  assert.equal(rowToClaim(claimToRow(claim)).usedTokens, 12);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atl-control-plane-"));
+  fs.writeFileSync(path.join(dir, "module-listings.json"), JSON.stringify({ version: 1, modules: { "zhipu-plan": { listed: false, updatedAt: "t" } } }));
+  fs.writeFileSync(path.join(dir, "sharing-cpa.json"), JSON.stringify({ version: 1, shares: { shr_1: share }, claims: { csk_1: claim } }));
+  const store = new Store(path.join(dir, "db.json"));
+  const plane = createControlPlaneStore(store);
+  await plane.migrateSidecars(dir);
+  assert.equal(fs.existsSync(path.join(dir, "module-listings.json")), false);
+  assert.equal(fs.existsSync(path.join(dir, "sharing-cpa.json")), false);
+  const listings = await plane.listings.load();
+  assert.equal(listings.modules["zhipu-plan"].listed, false);
+  const sharing = await plane.sharing.load();
+  assert.equal(sharing.shares.shr_1.baseURL, "http://127.0.0.1:8317");
+  assert.equal(sharing.claims.csk_1.token, "atl_sk_test");
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log("  testControlPlaneFollowsJsonStore passed");
+}
+
+async function testControlPlaneDiffRows() {
+  const share = {
+    shareId: "shr_1", shareSecret: "secret", state: "active", title: "node", baseURL: "http://127.0.0.1:8317",
+    models: ["*"], policy: { budget: 1000, maxClaims: 2 }, settled: { csk_1: 12 }, lifetimeSettled: 12,
+    claimsIssued: 1, participantId: "p_1", createdAt: 10, updatedAt: 11,
+  };
+  const claim = {
+    keyId: "csk_1", shareId: "shr_1", token: "atl_sk_test", borrower: "sky", state: "valid",
+    usedTokens: 12, createdAt: 10, expiresAt: 20,
+  };
+  const state = { shares: { shr_1: share }, claims: { csk_1: claim } };
+  // cold start: everything is an insert
+  const cold = diffSharingRows(null, state);
+  assert.equal(cold.upsertShares.length, 1);
+  assert.equal(cold.upsertClaims.length, 1);
+  assert.deepEqual(cold.deleteShareIds, []);
+  // unchanged state: no-op diff
+  const noop = diffSharingRows(cold.rows, state);
+  assert.equal(noop.upsertShares.length, 0);
+  assert.equal(noop.upsertClaims.length, 0);
+  assert.deepEqual(noop.deleteShareIds, []);
+  assert.deepEqual(noop.deleteClaimIds, []);
+  // a heartbeat that only moves updatedAt rewrites exactly one share row
+  const heartbeat = diffSharingRows(cold.rows, {
+    shares: { shr_1: { ...share, updatedAt: 99 } },
+    claims: { csk_1: claim },
+  });
+  assert.equal(heartbeat.upsertShares.length, 1);
+  assert.equal(heartbeat.upsertClaims.length, 0);
+  // usage settlement rewrites exactly one claim row
+  const settle = diffSharingRows(heartbeat.rows, {
+    shares: { shr_1: { ...share, updatedAt: 99 } },
+    claims: { csk_1: { ...claim, usedTokens: 30 } },
+  });
+  assert.equal(settle.upsertShares.length, 0);
+  assert.equal(settle.upsertClaims.length, 1);
+  assert.equal(settle.upsertClaims[0].usedTokens, 30);
+  // removal (unregister/prune) deletes the vanished ids
+  const removal = diffSharingRows(settle.rows, { shares: {}, claims: {} });
+  assert.deepEqual(removal.deleteShareIds, ["shr_1"]);
+  assert.deepEqual(removal.deleteClaimIds, ["csk_1"]);
+  assert.equal(removal.upsertShares.length, 0);
+
+  const listingsCold = diffListingRows(null, { "demo-mod": { listed: false, updatedAt: "t" } });
+  assert.equal(listingsCold.upserts.length, 1);
+  assert.equal(listingsCold.upserts[0].listed, false);
+  const listingsNoop = diffListingRows(listingsCold.rows, { "demo-mod": { listed: false, updatedAt: "t" } });
+  assert.equal(listingsNoop.upserts.length, 0);
+  const listingsToggle = diffListingRows(listingsCold.rows, { "demo-mod": { listed: true, updatedAt: "t2" } });
+  assert.equal(listingsToggle.upserts.length, 1);
+  assert.equal(listingsToggle.upserts[0].listed, true);
+  const listingsDrop = diffListingRows(listingsToggle.rows, {});
+  assert.deepEqual(listingsDrop.deletes, ["demo-mod"]);
+  console.log("  testControlPlaneDiffRows passed");
+}
+
+// Opt-in MySQL round-trip (migrations + row-level flush + reload). Skipped
+// unless ATL_TEST_MYSQL_HOST is set — point it at a dedicated empty test
+// database (MySqlStore.create runs the full migrations), never a live one.
+//   ATL_TEST_MYSQL_HOST=127.0.0.1 ATL_TEST_MYSQL_USER=root \
+//   ATL_TEST_MYSQL_PASSWORD=... ATL_TEST_MYSQL_DATABASE=atl_cp_test npm test
+async function testControlPlaneMysqlRoundTrip() {
+  if (!process.env.ATL_TEST_MYSQL_HOST) {
+    console.log("  testControlPlaneMysqlRoundTrip skipped (set ATL_TEST_MYSQL_* to enable)");
+    return;
+  }
+  const { MySqlStore } = await import("../src/backend/mysql-store.js");
+  const store = await MySqlStore.create({
+    host: process.env.ATL_TEST_MYSQL_HOST,
+    port: Number(process.env.ATL_TEST_MYSQL_PORT || 3306),
+    user: process.env.ATL_TEST_MYSQL_USER || "root",
+    password: process.env.ATL_TEST_MYSQL_PASSWORD || "",
+    database: process.env.ATL_TEST_MYSQL_DATABASE || "atl_control_plane_test",
+    writeLockName: "atl-cp-test:write",
+  });
+  try {
+    await store.pool.query("DELETE FROM sharing_claims");
+    await store.pool.query("DELETE FROM sharing_shares");
+    await store.pool.query("DELETE FROM module_listings");
+    const plane = createControlPlaneStore(store);
+    const share = {
+      shareId: "shr_t1", shareSecret: "secret", state: "active", title: "node", baseURL: "http://127.0.0.1:8317",
+      models: ["*"], policy: { budget: 1000, maxClaims: 2 }, settled: { csk_t1: 12 }, lifetimeSettled: 12,
+      claimsIssued: 1, participantId: "p_1", createdAt: 10, updatedAt: 11,
+    };
+    const claim = {
+      keyId: "csk_t1", shareId: "shr_t1", token: "atl_sk_test", borrower: "sky", state: "valid",
+      usedTokens: 12, createdAt: 10, expiresAt: 20,
+    };
+    await plane.sharing.save({ shares: { shr_t1: share }, claims: { csk_t1: claim } });
+    await plane.listings.save({ "demo-mod": { listed: false, updatedAt: "t" } });
+    // a fresh adapter over the same pool must see the flushed rows
+    const reloaded = await plane.sharing.load();
+    assert.equal(reloaded.shares.shr_t1.policy.budget, 1000);
+    assert.equal(reloaded.claims.csk_t1.token, "atl_sk_test");
+    const listings = await plane.listings.load();
+    assert.equal(listings.modules["demo-mod"].listed, false);
+    // row-level update path: one claim upsert, share untouched
+    await plane.sharing.save({ shares: { shr_t1: share }, claims: { csk_t1: { ...claim, usedTokens: 99 } } });
+    const after = await plane.sharing.load();
+    assert.equal(after.claims.csk_t1.usedTokens, 99);
+    // removal deletes rows
+    await plane.sharing.save({ shares: {}, claims: {} });
+    const emptied = await plane.sharing.load();
+    assert.equal(Object.keys(emptied.shares).length, 0);
+    assert.equal(Object.keys(emptied.claims).length, 0);
+  } finally {
+    await store.pool.query("DELETE FROM sharing_claims").catch(() => {});
+    await store.pool.query("DELETE FROM sharing_shares").catch(() => {});
+    await store.pool.query("DELETE FROM module_listings").catch(() => {});
+    await store.pool.end();
+  }
+  console.log("  testControlPlaneMysqlRoundTrip passed");
+}
 
 console.log("All tests passed");

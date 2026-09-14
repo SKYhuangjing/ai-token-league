@@ -15368,3 +15368,238 @@ a.teams-member-name:hover {
     animation: none;
   }
 }
+
+
+/* ===== Compute sharing (feat/compute-sharing) — borrower claim page ===== */
+
+.sharing-shell .sharing-sub {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 62ch;
+}
+
+.sharing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.sharing-empty {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 18px 2px;
+}
+
+.sharing-card.is-offline {
+  opacity: 0.55;
+}
+
+.sharing-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.sharing-card-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.sharing-models {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  word-break: break-all;
+}
+
+.sharing-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sharing-status i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sharing-status-on i { background: var(--green); }
+.sharing-status-off i { background: var(--red); }
+.sharing-status-paused i { background: var(--gold); }
+
+.sharing-kv {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 14px 0 0;
+}
+
+.sharing-kv .num {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sharing-bar {
+  height: 6px;
+  border-radius: 4px;
+  background: var(--line-soft);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.sharing-bar i {
+  display: block;
+  height: 100%;
+  background: var(--gold);
+  border-radius: 4px;
+}
+
+.sharing-exhausted {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--danger, #c0392b);
+}
+
+.sharing-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.sharing-slots {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.sharing-claim-btn {
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sharing-claim-btn:hover:not(:disabled) { filter: brightness(1.15); }
+
+.sharing-claim-btn:disabled {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* admin 共享页签状态点（与公开认领页同语义） */
+.sharing-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: 1px;
+  background: var(--muted);
+}
+
+.sharing-dot-on { background: var(--green); }
+.sharing-dot-off { background: var(--red); }
+.sharing-dot-paused { background: var(--gold); }
+
+.sharing-policy-panel {
+  position: relative;
+  z-index: 2;
+  margin: 14px 18px 4px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 14px;
+  background: var(--surface-tint);
+}
+
+.sharing-policy-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sharing-policy-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.sharing-policy-head .muted {
+  margin: 4px 0 0;
+}
+
+.sharing-policy-fields {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .sharing-policy-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.sharing-policy-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: var(--muted);
+  font: 600 12px/1.2 var(--font-ui);
+}
+
+.sharing-policy-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--control-radius);
+  background: #fffdf7;
+  color: var(--ink-deep);
+  font-family: var(--font-data);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+  cursor: text;
+}
+
+.sharing-policy-field input::placeholder {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.sharing-policy-field input:focus {
+  outline: none;
+  border-color: var(--jade);
+  box-shadow: 0 0 0 2px rgba(27, 94, 77, 0.15);
+}
+
+.sharing-admin-claims-head {
+  margin-top: 18px;
+}
+
+.sharing-admin-claims-head h3 {
+  margin: 0;
+  font-size: 14px;
+}

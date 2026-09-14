@@ -79,6 +79,8 @@ export class Store {
     this.db.usageHourly ||= {};
     this.db.usageSyncBucketsHourly ||= {};
     this.db.teams ||= {};
+    this.db.moduleListings ||= {};
+    this.db.sharingCpa ||= { version: 1, shares: {}, claims: {} };
     for (const participant of Object.values(this.db.participants || {})) participant.teamId ||= "";
     this.aggregateCache = {};
     this.analyticsAllCache = {};
@@ -96,6 +98,16 @@ export class Store {
     }
     this.db.aggregateCache = {};
     fs.writeFileSync(this.dbPath, `${JSON.stringify(this.db, null, 2)}\n`);
+  }
+
+  // Control-plane writes (plugin listings, sharing ledger) must not wipe the
+  // in-memory aggregate cache the way save() does.
+  saveDocuments() {
+    if (!this.persist) return;
+    const cache = this.db.aggregateCache;
+    this.db.aggregateCache = {};
+    fs.writeFileSync(this.dbPath, `${JSON.stringify(this.db, null, 2)}\n`);
+    this.db.aggregateCache = cache;
   }
 
   withDeferredSave(work) {

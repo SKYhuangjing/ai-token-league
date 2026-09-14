@@ -30,6 +30,7 @@
     "core:tray:allow-set-icon-as-template",
     "core:tray:allow-remove-by-id",
     "core:tray:allow-get-by-id",
+    "notification:default",
     "core:menu:default",
     "core:menu:allow-new",
     "core:menu:allow-append",

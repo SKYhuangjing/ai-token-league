@@ -1400,6 +1400,18 @@ function switchAdminTab(tabId) {
       if (sourcesStatus && error.message !== "Authentication required") sourcesStatus.textContent = error.message;
     });
   }
+  if (tabId === "sharing") {
+    loadSharing().catch((error) => {
+      const statusEl = document.querySelector("#sharing-admin-status");
+      if (statusEl) statusEl.textContent = sharingAdminErrorText(error);
+    });
+  }
+  if (tabId === "plugins") {
+    loadPlugins().catch((error) => {
+      const statusEl = document.querySelector("#plugins-admin-status");
+      if (statusEl) statusEl.textContent = pluginsAdminErrorText(error);
+    });
+  }
   if (tabId === "pricing") {
     loadPricing().catch((error) => {
       pricingStatus.textContent = error.message;
@@ -1956,4 +1968,267 @@ loadPricing().catch((error) => {
 // render; re-run the load — responses are server-cached so this is cheap.
 window.addEventListener("atl:themechange", () => {
   loadUsage().catch(() => {});
+});
+
+// ===== Compute sharing admin — CPA plugin control plane (R23) =====
+
+function sharingAdminErrorText(error) {
+  const code = String(error?.message || error || "").trim();
+  const key = `admin.sharing.error.${code}`;
+  const text = t(key);
+  return text === key ? code : text;
+}
+
+async function loadSharing() {
+  setAdminPanelBusy("sharing", true);
+  const statusEl = document.querySelector("#sharing-admin-status");
+  statusEl.textContent = t("admin.loading");
+  try {
+    const [sharesRes, claimsRes] = await Promise.all([
+      fetchAdmin("/api/admin/shares"),
+      fetchAdmin("/api/admin/shares/claims"),
+    ]);
+    const sharesData = await sharesRes.json();
+    const claimsData = await claimsRes.json();
+    if (!sharesRes.ok) throw new Error(sharesData.error || "failed to load shares");
+    if (!claimsRes.ok) throw new Error(claimsData.error || "failed to load claims");
+    renderSharingShares(sharesData.shares || []);
+    renderSharingClaims(claimsData.claims || []);
+    statusEl.textContent = t("admin.sharing.summary", { shares: sharesData.shares?.length || 0, claims: claimsData.claims?.length || 0 });
+  } finally {
+    setAdminPanelBusy("sharing", false);
+  }
+}
+
+function sharingStateView(share) {
+  if (share.state === "suspended") return { cls: "paused", label: t("admin.sharing.suspended") };
+  if (share.state === "stopped") return { cls: "off", label: t("admin.sharing.stopped") };
+  if (!share.online) return { cls: "off", label: t("admin.sharing.offline") };
+  return { cls: "on", label: t("admin.sharing.online") };
+}
+
+function renderSharingShares(shares) {
+  const tbody = document.querySelector("#sharing-admin-shares-tbody");
+  if (!shares.length) {
+    tbody.innerHTML = `<tr><td class="empty" colspan="6">${t("admin.sharing.empty")}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = shares.map((share) => {
+    const state = sharingStateView(share);
+    const resumeBtn = share.state === "suspended"
+      ? `<button type="button" class="link-button" data-sharing-resume="${escapeHtml(share.shareId)}">${t("admin.sharing.resume")}</button>`
+      : `<button type="button" class="danger-link" data-sharing-suspend="${escapeHtml(share.shareId)}" data-sharing-label="${escapeHtml(share.title || share.shareId)}">${t("admin.sharing.suspend")}</button>`;
+    return `<tr>
+      <td><div class="device-cell"><span class="device-name" title="${escapeHtml(share.shareId)}">${escapeHtml(share.title || share.shareId)}</span></div></td>
+      <td><span class="truncated-cell" title="${escapeHtml(share.baseURL || "-")}">${escapeHtml(share.baseURL || "-")}</span></td>
+      <td><span class="sharing-dot sharing-dot-${state.cls}"></span>${escapeHtml(state.label)}</td>
+      <td class="num">${share.claimsIssued || 0}</td>
+      <td class="num">${formatTokenCompact(share.settledTokens || 0, getCurrentLang())} / ${formatTokenCompact(share.budgetTokens || 0, getCurrentLang())}</td>
+      <td>
+        <div class="row-actions device-actions">
+          ${resumeBtn}
+          <button type="button" class="link-button" data-sharing-policy="${escapeHtml(share.shareId)}">${t("admin.sharing.policy")}</button>
+          <button type="button" class="danger-link" data-sharing-delete="${escapeHtml(share.shareId)}" data-sharing-label="${escapeHtml(share.title || share.shareId)}">${t("admin.sharing.delete")}</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join("");
+  tbody.querySelectorAll("[data-sharing-suspend]").forEach((button) => {
+    button.addEventListener("click", () => sharingAdminAction("suspend", { shareId: button.dataset.sharingSuspend }, button.dataset.sharingLabel, "admin.sharing.suspendConfirm", "admin.sharing.suspended"));
+  });
+  tbody.querySelectorAll("[data-sharing-resume]").forEach((button) => {
+    button.addEventListener("click", () => sharingAdminAction("resume", { shareId: button.dataset.sharingResume }, "", null, "admin.sharing.resumed"));
+  });
+  tbody.querySelectorAll("[data-sharing-delete]").forEach((button) => {
+    button.addEventListener("click", () => sharingAdminAction("delete", { shareId: button.dataset.sharingDelete }, button.dataset.sharingLabel, "admin.sharing.deleteConfirm", "admin.sharing.deleted"));
+  });
+  tbody.querySelectorAll("[data-sharing-policy]").forEach((button) => {
+    button.addEventListener("click", () => openSharingPolicyEditor(button.dataset.sharingPolicy));
+  });
+}
+
+function renderSharingClaims(claims) {
+  const tbody = document.querySelector("#sharing-admin-claims-tbody");
+  if (!claims.length) {
+    tbody.innerHTML = `<tr><td class="empty" colspan="7">${t("admin.sharing.claimsEmpty")}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = claims.map((claim) => `<tr>
+      <td class="num" title="${escapeHtml(claim.keyId)}">${escapeHtml(claim.keyId.slice(0, 11))}…</td>
+      <td><div class="device-cell"><span class="device-name">${escapeHtml(claim.borrower || "-")}</span>${claim.displayId ? `<a class="link-button" href="/profile.html?id=${encodeURIComponent(claim.displayId)}" target="_blank" rel="noopener">${escapeHtml(claim.displayId)}</a>` : ""}</div></td>
+      <td>${escapeHtml(claim.shareTitle || claim.shareId)}</td>
+      <td>${escapeHtml(claim.state === "valid" ? t("admin.sharing.valid") : claim.state === "revoked" ? t("admin.sharing.statusRevoked") : claim.state === "expired" ? t("admin.sharing.statusExpired") : claim.state)}</td>
+      <td class="num" title="${escapeHtml(`${claim.requests || 0} req / ${claim.failedRequests || 0} failed`)}">${formatTokenCompact(claim.usedTokens || 0, getCurrentLang())}</td>
+      <td class="num">${escapeHtml(formatStamp(claim.expiresAt).slice(0, 16))}</td>
+      <td>${claim.state === "valid" ? `<button type="button" class="danger-link" data-sharing-revoke="${escapeHtml(claim.keyId)}">${t("admin.sharing.revoke")}</button>` : ""}</td>
+    </tr>`).join("");
+  tbody.querySelectorAll("[data-sharing-revoke]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm(t("admin.sharing.revokeConfirm"))) return;
+      const statusEl = document.querySelector("#sharing-admin-status");
+      try {
+        const response = await fetchAdmin("/api/admin/shares/revoke", { method: "POST", body: JSON.stringify({ keyId: button.dataset.sharingRevoke }) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "revoke failed");
+        statusEl.textContent = t("admin.sharing.revoked", { keyId: button.dataset.sharingRevoke.slice(0, 11) });
+      } catch (error) {
+        statusEl.textContent = sharingAdminErrorText(error);
+      }
+      loadSharing().catch(() => {});
+    });
+  });
+}
+
+async function sharingAdminAction(action, body, label, confirmKey, doneKey) {
+  const statusEl = document.querySelector("#sharing-admin-status");
+  if (confirmKey && !window.confirm(t(confirmKey, { label: label || body.shareId }))) return;
+  try {
+    const response = await fetchAdmin(`/api/admin/shares/${action}`, { method: "POST", body: JSON.stringify(body) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `${action} failed`);
+    statusEl.textContent = t(doneKey, { label: label || body.shareId });
+  } catch (error) {
+    statusEl.textContent = sharingAdminErrorText(error);
+  }
+  loadSharing().catch(() => {});
+}
+
+document.getElementById("sharing-admin-refresh")?.addEventListener("click", () => {
+  loadSharing().catch((error) => {
+    const statusEl = document.querySelector("#sharing-admin-status");
+    if (statusEl) statusEl.textContent = sharingAdminErrorText(error);
+  });
+});
+
+// Share policy editor (R28 admin data management): one shared inline panel;
+// saves via POST /api/admin/shares/policy and applies live at the next
+// plugin heartbeat (budget/maxClaims cap claims, caps ride the keys payload).
+function openSharingPolicyEditor(shareId) {
+  const statusEl = document.querySelector("#sharing-admin-status");
+  const panel = document.querySelector("#sharing-policy-panel");
+  if (!panel) return;
+  panel.hidden = false;
+  panel.dataset.shareId = shareId;
+  panel.querySelector("#sharing-policy-id").textContent = shareId;
+  panel.querySelectorAll("input").forEach((input) => { input.value = ""; });
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  statusEl.textContent = t("admin.sharing.policyHint", { id: shareId.slice(0, 11) });
+}
+
+async function saveSharingPolicy() {
+  const panel = document.querySelector("#sharing-policy-panel");
+  const statusEl = document.querySelector("#sharing-admin-status");
+  const shareId = panel.dataset.shareId;
+  const policy = {};
+  for (const [key, inputId, min] of [["budget", "sharing-policy-budget", 1000], ["maxClaims", "sharing-policy-max-claims", 1], ["keyMaxTokens", "sharing-policy-key-max", 0], ["keyConcurrency", "sharing-policy-key-concurrency", 1], ["ttlHours", "sharing-policy-ttl", 1]]) {
+    const raw = document.getElementById(inputId)?.value;
+    if (raw === undefined || String(raw).trim() === "") continue;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < min) {
+      statusEl.textContent = t("admin.sharing.policyInvalid");
+      return;
+    }
+    policy[key] = Math.round(value);
+  }
+  if (!Object.keys(policy).length) {
+    statusEl.textContent = t("admin.sharing.policyEmpty");
+    return;
+  }
+  try {
+    const response = await fetchAdmin("/api/admin/shares/policy", { method: "POST", body: JSON.stringify({ shareId, policy }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "policy update failed");
+    panel.hidden = true;
+    statusEl.textContent = t("admin.sharing.policySaved", { id: shareId.slice(0, 11) });
+  } catch (error) {
+    statusEl.textContent = sharingAdminErrorText(error);
+  }
+  loadSharing().catch(() => {});
+}
+
+document.getElementById("sharing-policy-save")?.addEventListener("click", () => {
+  saveSharingPolicy().catch((error) => {
+    const statusEl = document.querySelector("#sharing-admin-status");
+    if (statusEl) statusEl.textContent = sharingAdminErrorText(error);
+  });
+});
+document.getElementById("sharing-policy-cancel")?.addEventListener("click", () => {
+  const panel = document.querySelector("#sharing-policy-panel");
+  if (panel) panel.hidden = true;
+});
+
+function pluginsAdminErrorText(error) {
+  const code = String(error?.message || error || "");
+  const key = `admin.plugins.error.${code}`;
+  const mapped = t(key);
+  return mapped === key ? code : mapped;
+}
+
+async function loadPlugins() {
+  const statusEl = document.querySelector("#plugins-admin-status");
+  setAdminPanelBusy("plugins", true);
+  try {
+    const response = await fetchAdmin("/api/admin/modules?refresh=1");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "failed to load modules");
+    renderPlugins(data.modules || []);
+    const listed = (data.modules || []).filter((item) => item.listed).length;
+    const unlisted = (data.modules || []).length - listed;
+    statusEl.textContent = `${t("admin.plugins.summary", { listed, unlisted })} · ${t("admin.plugins.hint")}`;
+  } finally {
+    setAdminPanelBusy("plugins", false);
+  }
+}
+
+function renderPlugins(modules) {
+  const tbody = document.querySelector("#plugins-admin-tbody");
+  if (!modules.length) {
+    tbody.innerHTML = `<tr><td class="empty" colspan="4">${t("admin.plugins.empty")}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = modules.map((item) => {
+    const label = item.title || item.id;
+    const action = item.listed
+      ? `<button type="button" class="danger-link" data-plugin-unlist="${escapeHtml(item.id)}" data-plugin-label="${escapeHtml(label)}">${t("admin.plugins.unlist")}</button>`
+      : `<button type="button" class="link-button" data-plugin-list="${escapeHtml(item.id)}" data-plugin-label="${escapeHtml(label)}">${t("admin.plugins.list")}</button>`;
+    const state = item.listed
+      ? `<span class="sharing-dot sharing-dot-on"></span>${escapeHtml(t("admin.plugins.listed"))}`
+      : `<span class="sharing-dot sharing-dot-off"></span>${escapeHtml(t("admin.plugins.unlisted"))}`;
+    return `<tr>
+      <td><div class="device-cell"><span class="device-name">${escapeHtml(label)}</span><span class="truncated-cell" title="${escapeHtml(item.desc || item.id)}">${escapeHtml(item.id)}</span></div></td>
+      <td class="num">${escapeHtml(item.version || "-")}</td>
+      <td>${state}</td>
+      <td>${action}</td>
+    </tr>`;
+  }).join("");
+  tbody.querySelectorAll("[data-plugin-unlist]").forEach((button) => {
+    button.addEventListener("click", () => setPluginListing(button.dataset.pluginUnlist, false, button.dataset.pluginLabel));
+  });
+  tbody.querySelectorAll("[data-plugin-list]").forEach((button) => {
+    button.addEventListener("click", () => setPluginListing(button.dataset.pluginList, true, button.dataset.pluginLabel));
+  });
+}
+
+async function setPluginListing(id, listed, label) {
+  const statusEl = document.querySelector("#plugins-admin-status");
+  try {
+    const response = await fetchAdmin("/api/admin/modules/listing", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, listed }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "listing update failed");
+    statusEl.textContent = t(listed ? "admin.plugins.listedDone" : "admin.plugins.unlistedDone", { label: label || id });
+  } catch (error) {
+    statusEl.textContent = pluginsAdminErrorText(error);
+  }
+  loadPlugins().catch(() => {});
+}
+
+document.getElementById("plugins-admin-refresh")?.addEventListener("click", () => {
+  loadPlugins().catch((error) => {
+    const statusEl = document.querySelector("#plugins-admin-status");
+    if (statusEl) statusEl.textContent = pluginsAdminErrorText(error);
+  });
 });

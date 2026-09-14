@@ -4163,3 +4163,222 @@ label {
 :root[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.18);
 }
+
+/* ── Modules screen: one plugin per tab, full width of the pane ── */
+.modules-plugin-tabs {
+  position: relative;
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.modules-plugin-tabs button.is-off:not(.active) {
+  opacity: 0.55;
+}
+
+.modules-plugin-tabs.is-reorderable button {
+  cursor: grab;
+}
+
+.modules-plugin-tabs.is-reordering {
+  cursor: grabbing;
+}
+
+.modules-plugin-tabs button.is-dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+.modules-plugin-caret {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ink);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.modules-plugin-stage {
+  min-width: 0;
+}
+
+.modules-installed-empty {
+  margin: 4px 0 0;
+}
+
+.modules-module-card {
+  background: var(--panel-bg-soft);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 20px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: var(--card-shadow);
+}
+
+.modules-module-card[hidden] {
+  display: none;
+}
+
+.modules-module-card-off {
+  opacity: 0.6;
+}
+
+.modules-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px 16px;
+}
+
+.modules-card-head .setting-icon {
+  flex: none;
+}
+
+.modules-card-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.modules-card-copy strong {
+  font-size: 18px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.modules-card-copy .muted {
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 6px;
+  max-width: 62ch;
+}
+
+.modules-card-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.modules-card-meta {
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.modules-card-meta .muted {
+  font-size: 11.5px;
+}
+
+.modules-disabled-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modules-disabled-list .row-card {
+  opacity: 0.65;
+}
+
+/* plugin screen tabs (R24): same segmented control as settings; grid parent
+   would stretch it full-width — shrink-wrap to content */
+.modules-tabs {
+  margin-bottom: 14px;
+  justify-self: start;
+}
+
+.modules-online-filter {
+  margin: 0 0 12px;
+}
+
+.segmented.modules-online-filter button {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* online catalog rows need breathing room between cards */
+.modules-online-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modules-module-detail > .module-inline-actions {
+  gap: 8px;
+}
+
+.modules-module-detail > .module-inline-actions .muted {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.modules-module-detail input {
+  font-size: 12.5px;
+  padding: 7px 10px;
+}
+
+.modules-module-detail[hidden] {
+  display: none;
+}
+
+/* ─── Modules: card toggle (switch, R19) ─── */
+
+.modules-card-toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modules-toggle-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* marker class for module-card action rows (renamed from sharing-inline-actions
+   when the sharing UI was stashed); keeps label+key+add on one wrapping line */
+.module-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.module-inline-actions.modules-card-meta {
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+
+/* ─── Modules: generic meter (zhipu window bars) ─── */
+
+.module-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--subtle-bg);
+  overflow: hidden;
+}
+
+.module-meter i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--green);
+  transition: width 0.3s ease;
+}
+
+.module-meter i[data-over="1"] {
+  background: var(--red);
+}

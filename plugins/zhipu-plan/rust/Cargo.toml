@@ -1,0 +1,15 @@
+[package]
+name = "atl-plugin-zhipu"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+name = "plugin_zhipu"
+path = "src/lib.rs"
+
+[dependencies]
+collector-core = { path = "../../../collector-core" }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }

@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod cli;
+mod plugins;
 mod sidecar;
 
 #[derive(Parser)]

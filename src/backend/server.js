@@ -22,6 +22,9 @@ import {
 } from "../shared/update.js";
 import { loadOrGenerateSalt, loadNames, BoardAnonymizer } from "./board-anonymizer.js";
 import { currentBusinessDay } from "./day-context.js";
+import { createRemoteModules } from "./remote-modules.js";
+import { createControlPlaneStore } from "./control-plane-store.js";
+import { createSharingCpa } from "./sharing-cpa.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -61,6 +64,38 @@ if (BOARD_SECURITY_LEVEL === "authenticated" && !BOARD_AUTH_USERNAME) {
 }
 
 const store = await createConfiguredStore();
+const controlPlaneDir = path.dirname(process.env.DB_PATH || path.resolve("data/db.json"));
+const controlPlane = createControlPlaneStore(store);
+await controlPlane.migrateSidecars(controlPlaneDir);
+
+// 可选模块分发（OSS 目录/包文件代理；60s 目录缓存，包文件 LRU）。
+// 上架状态跟 DB_TYPE：mysql 进 module_listings，json 进 JSON store。
+const remoteModules = createRemoteModules({ listings: controlPlane.listings });
+await remoteModules.init();
+
+// 算力共享控制面（CPA 插件版，R23）：注册/认领/用量账本；插件每 8s 心跳
+// 拉取 key 与策略。账本跟 DB_TYPE（mysql 表 / json store），不另写旁路文件。
+// 管理接口走和 /admin.html 同一道 Basic Auth：页面能打开就能管。认领（R28）绑定联赛设备身份：客户端
+// 用 identity 私钥对 {kind:"share-claim", participantId, shareId, ts} 签名，
+// 此处用与用量上传完全相同的 participant 公钥链验签。
+const sharingCpa = createSharingCpa({
+  initial: await controlPlane.sharing.load(),
+  persistState: (db) => controlPlane.sharing.save(db),
+  verifyIdentity: async ({ kind, participantId, shareId, ts, signature }) => {
+    const participant = store.getParticipant(participantId);
+    if (!participant) return { ok: false, reason: "participant_not_registered" };
+    const payload = { kind, participantId, ...(shareId ? { shareId } : {}), ts };
+    const verified = verifyPayload(participant.identityPublicKey, payload, signature);
+    if (!verified) return { ok: false, reason: "invalid_signature" };
+    // Admin identity column links to /profile.html?id=<displayId>. Under the
+    // anonymous board that id is the anonymizer's public id — the raw
+    // participantId must never leak into admin output.
+    const displayId = BOARD_SECURITY_LEVEL === "anonymous" && boardAnonymizer
+      ? boardAnonymizer.getPublicId(participantId)
+      : (participant.id || participantId);
+    return { ok: true, participant: { ...participant, displayId } };
+  },
+});
 
 export { store, PROFILE_WORK_WINDOW };
 
@@ -273,6 +308,12 @@ async function readBody(req) {
 
 async function handleApi(req, res) {
   if (req.url.startsWith("/api/admin/") && !checkBasicAuth(req, res)) return;
+  if (req.url.startsWith("/api/shares") || req.url.startsWith("/api/admin/shares")) {
+    return await sharingCpa.handle(req, res);
+  }
+  if (req.url.startsWith("/api/admin/modules") || req.url.startsWith("/api/modules/remote/")) {
+    return await remoteModules.handle(req, res);
+  }
   if (req.method === "GET" && req.url.startsWith("/api/board/summary")) {
     return sendJson(res, 200, withBusinessDay({
       ...(await store.boardSummary()),
@@ -1337,4 +1378,11 @@ if (process.argv.includes("--smoke")) {
   createServer().listen(PORT, HOST, () => {
     console.log(`AI Token League listening on http://${HOST}:${PORT}`);
   });
+  // Flush the debounced sharing control-plane persistence on shutdown.
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.on(signal, async () => {
+      try { await sharingCpa.close(); } catch { /* best effort */ }
+      process.exit(0);
+    });
+  }
 }

@@ -1,0 +1,13 @@
+{
+  "id": "zhipu-plan",
+  "version": "1.1.0",
+  "type": "query",
+  "title": "智谱套餐用量",
+  "desc": "查询 GLM Coding Plan 的 5 小时/每周窗口用量与重置时间；使用你在插件卡登记的自有智谱 Key。",
+  "entry": "index.js",
+  "permissions": [
+    "sidecar:zhipu-plan:usage",
+    "sidecar:modules:get",
+    "sidecar:modules:set"
+  ]
+}

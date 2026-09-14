@@ -45,15 +45,19 @@ test.describe('Settings', () => {
   });
 
   test('language switcher has multiple options', async ({ page }) => {
-    const switcher = page.locator('#lang-switcher-container select');
+    // the switcher is a segmented button group (中文/EN), not a <select>
+    const switcher = page.locator('#lang-switcher-container .lang-switcher');
     await expect(switcher).toBeVisible();
 
     // Should have at least 2 languages
-    const options = switcher.locator('option');
+    const options = switcher.locator('.lang-opt');
     expect(await options.count()).toBeGreaterThanOrEqual(2);
 
-    // Current value should match config
-    expect(await switcher.inputValue()).toBe('en');
+    // Exactly one option is active (boot may resolve language asynchronously,
+    // so only assert a single pressed option among the supported languages).
+    const active = switcher.locator('.lang-opt[aria-pressed="true"]');
+    expect(await active.count()).toBe(1);
+    expect(['en', 'zh-CN']).toContain(await active.getAttribute('data-lang'));
   });
 
   test('theme selector switches between light, dark, and system immediately', async ({ page }) => {

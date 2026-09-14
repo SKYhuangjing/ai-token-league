@@ -9,6 +9,7 @@ name = "atl-collector"
 path = "src/main.rs"
 
 [dependencies]
+atl-plugin-zhipu = { path = "../plugins/zhipu-plan/rust" }
 collector-core = { path = "../collector-core" }
 base64 = { workspace = true }
 serde = { workspace = true }

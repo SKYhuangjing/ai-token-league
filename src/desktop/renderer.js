@@ -3,6 +3,8 @@ import { addCostToUsageItem, aggregateCost, createPriceMap } from "../shared/pri
 import { formatTokenCompact, formatTokenRaw, formatUsd } from "../shared/display.js";
 import { dayToUtcDate, localDay, utcDateToDay } from "../shared/date.js";
 import { initI18n, setLang, t, getCurrentLang, createLangSwitcher, bindLangSwitcher, updatePageTranslations } from "../shared/i18n.js";
+import { MODULE_REGISTRY, normalizeModulesState, moduleEnabled, findModule, FIRST_PARTY_PLUGINS, INSTALLED_ORDER_ID, installedOrderFromState, sortModulesByOrder } from "../shared/modules.js";
+import { fetchModuleSource, loadInstalledModuleSource, importModuleFromSource, buildModuleContext, createGuardedInvoke } from "../shared/module-loader.js";
 
 import {
   escapeHtml as _escapeHtml, cssEscape as _cssEscape, clampHour as _clampHour,
@@ -34,7 +36,7 @@ import {
   reconcileHealthWithConfig as _reconcileHealthWithConfig,
   sortProviderHealth,
   providerStatusGroup as _providerStatusGroup,
-  sortProviderHealthByStatus
+  sortProviderHealthByStatus,
 } from "./renderer-helpers.js";
 
 import {
@@ -53,7 +55,7 @@ import {
 } from "./renderer-data.js";
 
 import {
-  formatToken as _formatToken, localeTokenCompact as _localeTokenCompact,
+  formatToken as _formatToken,
   visibleCompositionFields as _visibleCompositionFields,
   visibleCompositionEntries as _visibleCompositionEntries,
   renderCompositionTiles as _renderCompositionTiles,
@@ -890,6 +892,11 @@ function handlePrimaryNavigationClick(section) {
     if (!scanRunning) run(() => loadToday(true));
   }
   if (section === "sources") run(loadHealth);
+  if (section === "modules") {
+    run(async () => {
+      await refreshModulesPanel().catch(() => {});
+    });
+  }
 }
 
 function renderRailPageMeta(section) {
@@ -1541,15 +1548,15 @@ function pollUsageScan() {
     try {
       const status = await api.usageScanStatus();
       applyUsageScanStatus(status);
-      if (!status.running && !status.syncRunning) {
-        stopUsageScanPoll();
-        setScanState(false);
-        await refreshForegroundSyncStatus(status);
-        if (usageScanTerminalError(status)) return;
-        startForegroundSync(status);
-        showToast(t("desktop.rail.scanComplete"));
-        loadMyIdentity().catch((error) => console.error(error));
-      }
+          if (!status.running && !status.syncRunning) {
+            stopUsageScanPoll();
+            setScanState(false);
+            await refreshForegroundSyncStatus(status);
+            if (usageScanTerminalError(status)) return;
+            startForegroundSync(status);
+            showToast(t("desktop.rail.scanComplete"));
+            loadMyIdentity().catch((error) => console.error(error));
+          }
     } catch (error) {
       stopUsageScanPoll();
       setScanState(false);
@@ -4932,6 +4939,709 @@ if (langContainer) {
 // 应用当前语言翻译
 updatePageTranslations();
 
-boot().catch((error) => {
-  setStatusMessage(error.message);
+
+
+
+
+// ── Optional modules host (feat/compute-sharing R9) ──────────────────────────
+
+const modulesHost = { state: null, loaded: false, rendered: false, remoteMountDeferred: false, online: { loaded: false, noBase: false, failed: false, byId: {} } };
+// Active plugin-screen tab (R24): "installed" | "online".
+let modulesTab = "installed";
+// Which installed plugin owns the pane. Persists across refreshes so a
+// toggle or catalog reload doesn't jump back to the first card.
+let activePluginId = "";
+
+// Module enable control: the same switch component as the Sources screen
+// (native checkboxes read as unfinished next to the rest of the app).
+function moduleToggleHtml(mod, on) {
+  const title = mod.remote ? (mod.title || mod.id) : t(mod.titleKey);
+  const state = on ? "true" : "false";
+  return `<div class="modules-card-toggle">
+    <span class="modules-toggle-label">${on ? t("desktop.modules.enabled") : t("desktop.modules.disabled")}</span>
+    <button class="source-switch ${on ? "is-on" : "is-off"}" data-module-toggle="${escapeHtml(mod.id)}" type="button" role="switch" aria-checked="${state}" aria-pressed="${state}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"></button>
+  </div>`;
+}
+
+// Click handler for the switch; on failure the visual state reverts because
+// modulesHost.state still holds the old value.
+function bindModuleToggle(card, mod) {
+  card.querySelector("[data-module-toggle]")?.addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    const enabled = !moduleEnabled(modulesHost.state, mod.id);
+    run(async () => {
+      try {
+        await api.modulesSet({ id: mod.id, enabled });
+        modulesHost.state = normalizeModulesState({ ...modulesHost.state, [mod.id]: { ...modulesHost.state[mod.id], enabled } });
+        rerenderModules();
+      } catch (error) {
+        const on = moduleEnabled(modulesHost.state, mod.id);
+        button.classList.toggle("is-on", on);
+        button.classList.toggle("is-off", !on);
+        button.setAttribute("aria-checked", String(on));
+        button.setAttribute("aria-pressed", String(on));
+        document.getElementById("modules-status").textContent = String(error.message || error);
+      }
+    });
+  });
+}
+
+// Renders the module cards once. Rebuilding innerHTML afterwards would drop
+// the cloned detail listeners, so state changes go through
+// updateModuleCardStates() instead.
+function buildModuleCard(mod) {
+  const on = moduleEnabled(modulesHost.state, mod.id);
+  const card = document.createElement("div");
+  card.className = "modules-module-card" + (mod.type === "serving" ? " modules-module-card-serving" : "") + (on ? "" : " modules-module-card-off");
+  card.dataset.moduleCard = mod.id;
+  // Remote modules carry pre-translated catalog copy; built-ins use i18n keys.
+  const headCopy = mod.titleKey
+    ? `<strong>${t(mod.titleKey)}</strong><div class="muted">${t(mod.descKey)}</div>`
+    : `<strong>${escapeHtml(mod.title || mod.id)}</strong><div class="muted">${escapeHtml(mod.desc || "")}</div>`;
+  const meta = mod.remote
+    ? `<div class="module-inline-actions modules-card-meta">
+        <span class="muted mono">v${escapeHtml(mod.version || "?")}</span>
+        <button class="outline-button row-inline-action" data-remote-uninstall="${escapeHtml(mod.id)}" type="button">${t("desktop.modules.uninstall")}</button>
+      </div>`
+    : "";
+  card.innerHTML = `
+    <div class="modules-card-head">
+      <span class="setting-icon icon" style="--icon: url('./icons/puzzle.svg')" aria-hidden="true"></span>
+      <div class="modules-card-copy">
+        ${headCopy}
+      </div>
+      <div class="modules-card-aside">
+        ${moduleToggleHtml(mod, on)}
+        ${meta}
+      </div>
+    </div>
+    <div class="modules-module-detail" data-module-detail="${escapeHtml(mod.id)}"></div>`;
+  const detail = card.querySelector("[data-module-detail]");
+  if (mod.remote) {
+    detail.innerHTML = `<div data-remote-mount="${escapeHtml(mod.id)}"></div>`;
+    bindRemoteUninstall(card, mod);
+    const mountPoint = detail.querySelector(`[data-remote-mount="${cssEscape(mod.id)}"]`);
+    if (on && mountPoint) mountRemoteModuleInto(mountPoint, mod);
+  }
+  bindModuleToggle(card, mod);
+  return card;
+}
+
+// Shared uninstall control for installed remote plugins (version row).
+function bindRemoteUninstall(detail, mod) {
+  detail.querySelector(`[data-remote-uninstall="${cssEscape(mod.id)}"]`)?.addEventListener("click", () => {
+    run(async () => {
+      try {
+        const removed = await uninstallRemoteModule(mod.id);
+        rerenderModules();
+        if (!removed) document.getElementById("modules-status").textContent = t("desktop.modules.packageDeleteFail");
+      } catch (error) {
+        document.getElementById("modules-status").textContent = String(error.message || error);
+      }
+    });
+  });
+}
+
+async function readCachedModuleSource(id, version) {
+  if (typeof api.modulesPackageGet !== "function") return "";
+  const data = await api.modulesPackageGet({ id, version });
+  return data && typeof data.source === "string" ? data.source : "";
+}
+
+async function writeCachedModuleSource(id, version, source) {
+  if (typeof api.modulesPackagePut !== "function") return;
+  await api.modulesPackagePut({ id, version, source });
+}
+
+async function deleteCachedModulePackage(id) {
+  if (typeof api.modulesPackageDelete !== "function") return true;
+  try {
+    await api.modulesPackageDelete({ id });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Pin comes off first so a failed byte cleanup cannot leave the card
+// installed. The caller surfaces that cleanup failure instead of swallowing it.
+async function uninstallRemoteModule(id) {
+  await api.modulesSet({ id, enabled: false, installedVersion: null });
+  const removed = await deleteCachedModulePackage(id);
+  await refreshModulesState();
+  await dropInstalledOrderId(id);
+  return removed;
+}
+
+function rerenderModules() {
+  modulesHost.rendered = false;
+  const list = document.getElementById("modules-list");
+  if (list) list.innerHTML = "";
+  renderModuleCards();
+  updateModuleCardStates();
+}
+
+// ── Online modules (R17/R18): remote catalog → install/uninstall/mount ──────
+// Distribution path: the backend proxies public-read OSS objects
+// (/api/modules/remote/catalog + /api/modules/remote/file/:id/:version/:file),
+// so the bucket stays private and the client never needs OSS credentials.
+
+function remoteModulesBase() {
+  return (latestConfig?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+}
+
+// Accept both catalog shapes: { catalog: [...] } and a top-level array.
+function normalizeRemoteCatalog(data) {
+  const list = Array.isArray(data) ? data : (data && Array.isArray(data.catalog) ? data.catalog : []);
+  return list.filter((entry) => entry && typeof entry.id === "string" && entry.id);
+}
+
+async function refreshModulesState() {
+  const saved = await api.modulesGet();
+  modulesHost.state = normalizeModulesState(saved && saved.modules);
+}
+
+// Called by refreshModulesPanel before rendering; a failed catalog fetch only
+// degrades the online section, never the local module cards.
+async function refreshRemoteCatalog() {
+  const base = remoteModulesBase();
+  if (!base) {
+    modulesHost.online = { loaded: true, noBase: true, failed: false, byId: {} };
+    return;
+  }
+  const response = await fetch(`${base}/api/modules/remote/catalog`, { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error(`catalog HTTP ${response.status}`);
+  const entries = normalizeRemoteCatalog(await response.json());
+  modulesHost.online = { loaded: true, noBase: false, failed: false, byId: Object.fromEntries(entries.map((entry) => [entry.id, entry])) };
+}
+
+// Installed remote modules (registry ids stay built-in).
+function listRemoteInstalledModules() {
+  const byId = modulesHost.online.byId || {};
+  return Object.entries(modulesHost.state || {})
+    .filter(([id, entry]) => id && entry && entry.installedVersion && !findModule(id))
+    .map(([id, entry]) => {
+      // first-party metadata wins over the catalog copy so an offline
+      // catalog never degrades the card to a bare id
+      const meta = byId[id] || FIRST_PARTY_PLUGINS[id] || {};
+      return {
+        id,
+        remote: true,
+        version: entry.installedVersion,
+        enabled: moduleEnabled(modulesHost.state, id),
+        type: meta.type === "serving" ? "serving" : "query",
+        titleKey: meta.titleKey || null,
+        descKey: meta.descKey || null,
+        title: meta.title || id,
+        desc: meta.desc || "",
+      };
+    });
+}
+
+async function installRemoteModule(entry) {
+  const base = remoteModulesBase();
+  if (!base) throw new Error("no cloud api base");
+  // Download the immutable version before recording the install pin. The
+  // entry is not executed here (R27); mount reads the local copy, and only
+  // hits the network again when that version was never saved.
+  const source = await fetchModuleSource(`${base}/api/modules/remote/file/${encodeURIComponent(entry.id)}/${encodeURIComponent(entry.version)}/index.js`);
+  await writeCachedModuleSource(entry.id, entry.version, source);
+  await api.modulesSet({ id: entry.id, enabled: true, installedVersion: entry.version });
+  await refreshModulesState();
+  await rememberInstalledOrderId(entry.id);
+}
+
+function modulePackageUrl(mod) {
+  const base = remoteModulesBase();
+  if (!base) return "";
+  return `${base}/api/modules/remote/file/${encodeURIComponent(mod.id)}/${encodeURIComponent(mod.version)}/index.js`;
+}
+
+// Mount from the downloaded copy when this version is already on disk.
+// A cache miss still fetches once and saves the bytes, so an install that
+// predates local packages becomes offline-capable after one successful load.
+async function mountRemoteModuleInto(detailEl, mod) {
+  if (detailEl.dataset.mounting === "1") return;
+  detailEl.dataset.mounting = "1";
+  try {
+    const packageUrl = modulePackageUrl(mod);
+    const loaded = await loadInstalledModuleSource({
+      readCache: () => readCachedModuleSource(mod.id, mod.version),
+      fetchSource: packageUrl ? () => fetchModuleSource(packageUrl) : null,
+      writeCache: (source) => writeCachedModuleSource(mod.id, mod.version, source),
+    });
+    modulesHost.remoteMountDeferred = false;
+    const source = loaded.source;
+    const imported = await importModuleFromSource(source);
+    const def = imported && imported.default;
+    if (!def || typeof def.mount !== "function") throw new Error("module entry missing mount(el, ctx)");
+    const mountPoint = document.createElement("div");
+    detailEl.innerHTML = "";
+    detailEl.appendChild(mountPoint);
+    // apiBase is a generic platform capability: any remote plugin that needs
+    // backend HTTP (e.g. the share-borrow catalog/claim flow) reads the live
+    // API root through it instead of hardcoding URLs. invoke is guarded by
+    // the plugin's declared permissions (A.3): undeclared sidecar commands
+    // reject before reaching the channel. Offline catalog falls back to the
+    // first-party declarations shipped with the app.
+    const declaredPermissions = (modulesHost.online.byId && modulesHost.online.byId[mod.id] && modulesHost.online.byId[mod.id].permissions)
+      || (FIRST_PARTY_PLUGINS[mod.id] && FIRST_PARTY_PLUGINS[mod.id].permissions)
+      || [];
+    await def.mount(mountPoint, buildModuleContext({
+      t,
+      invoke: createGuardedInvoke(declaredPermissions, api.sidecarInvoke, mod.id),
+      escapeHtml,
+      apiBase: remoteModulesBase,
+    }));
+  } catch (error) {
+    if (error && error.code === "offline") {
+      detailEl.innerHTML = `<div class="muted">${escapeHtml(t("desktop.modules.remoteOffline"))}</div>`;
+      return;
+    }
+    if (!remoteModulesBase() && error && error.code === "not_cached") {
+      // Boot renders this pane in parallel with getConfig. A missing base
+      // here is usually "config not loaded yet", not "user has no cloud".
+      // A downloaded package does not take this path.
+      modulesHost.remoteMountDeferred = true;
+      detailEl.innerHTML = `<div class="muted">${escapeHtml(t("desktop.modules.onlineNoCloud"))}</div>`;
+      return;
+    }
+    detailEl.innerHTML = `<div class="muted">${escapeHtml(t("desktop.modules.remoteDetailFail", { error: String(error.message || error) }))}</div>`;
+  } finally {
+    delete detailEl.dataset.mounting;
+  }
+}
+
+function buildOnlineCatalogRow(entry) {
+  const builtIn = Boolean(findModule(entry.id));
+  const installedVersion = (!builtIn && modulesHost.state && modulesHost.state[entry.id] && modulesHost.state[entry.id].installedVersion) || null;
+  const actions = builtIn
+    ? `<span class="muted">${t("desktop.modules.builtIn")}</span>`
+    : `<span class="muted mono">v${escapeHtml(entry.version || "?")}</span>
+      <button class="outline-button" data-online-install="${escapeHtml(entry.id)}" type="button">${installedVersion ? t("desktop.modules.reinstall") : t("desktop.modules.install")}</button>
+      ${installedVersion ? `<button class="outline-button" data-online-uninstall="${escapeHtml(entry.id)}" type="button">${t("desktop.modules.uninstall")}</button>` : ""}`;
+  const row = document.createElement("div");
+  row.className = "row-card modules-disabled-row";
+  row.dataset.onlineModule = entry.id;
+  row.innerHTML = `
+    <span class="setting-icon icon" style="--icon: url('./icons/settings.svg')" aria-hidden="true"></span>
+    <div>
+      <strong>${escapeHtml(entry.title || entry.id)}</strong>
+      <div class="muted">${escapeHtml(entry.desc || "")}</div>
+    </div>
+    <div class="module-inline-actions">${actions}</div>`;
+  if (builtIn) return row;
+  row.querySelector(`[data-online-install="${cssEscape(entry.id)}"]`)?.addEventListener("click", (event) => {
+    const btn = event.currentTarget;
+    run(async () => {
+      btn.disabled = true;
+      btn.textContent = t("desktop.modules.installing");
+      try {
+        await installRemoteModule(entry);
+        activePluginId = entry.id;
+        modulesTab = "installed";
+        applyModulesTabVisibility();
+        document.getElementById("modules-status").textContent = t("desktop.modules.onlineInstallDone", { id: entry.id, version: entry.version });
+        rerenderModules();
+      } catch (error) {
+        btn.disabled = false;
+        btn.textContent = t("desktop.modules.install");
+        document.getElementById("modules-status").textContent = t("desktop.modules.onlineInstallFail", { error: String(error.message || error) });
+      }
+    });
+  });
+  row.querySelector(`[data-online-uninstall="${cssEscape(entry.id)}"]`)?.addEventListener("click", () => {
+    run(async () => {
+      try {
+        const removed = await uninstallRemoteModule(entry.id);
+        rerenderModules();
+        if (!removed) document.getElementById("modules-status").textContent = t("desktop.modules.packageDeleteFail");
+      } catch (error) {
+        document.getElementById("modules-status").textContent = String(error.message || error);
+      }
+    });
+  });
+  return row;
+}
+
+function moduleLabel(mod) {
+  return mod.titleKey ? t(mod.titleKey) : (mod.title || mod.id);
+}
+
+function installedModuleList() {
+  const mods = [...MODULE_REGISTRY, ...listRemoteInstalledModules()];
+  const all = sortModulesByOrder(mods, installedOrderFromState(modulesHost.state));
+  const enabled = all.filter((mod) => moduleEnabled(modulesHost.state, mod.id));
+  const disabled = all.filter((mod) => !moduleEnabled(modulesHost.state, mod.id));
+  return { enabled, disabled, all };
+}
+
+async function persistInstalledOrder(ids) {
+  await api.modulesSet({ id: INSTALLED_ORDER_ID, enabled: true, config: { ids } });
+  const prev = (modulesHost.state && modulesHost.state[INSTALLED_ORDER_ID]) || { enabled: true, config: {} };
+  modulesHost.state = normalizeModulesState({
+    ...modulesHost.state,
+    [INSTALLED_ORDER_ID]: { ...prev, enabled: true, config: { ...(prev.config || {}), ids } },
+  });
+}
+
+async function rememberInstalledOrderId(id) {
+  const saved = installedOrderFromState(modulesHost.state);
+  if (!saved.length || saved.includes(id)) return;
+  await persistInstalledOrder([...saved, id]);
+}
+
+async function dropInstalledOrderId(id) {
+  const saved = installedOrderFromState(modulesHost.state);
+  if (!saved.includes(id)) return;
+  await persistInstalledOrder(saved.filter((item) => item !== id));
+}
+
+function applyInstalledOrderToDom(ids) {
+  const tabs = document.getElementById("modules-plugin-tabs");
+  const stage = document.getElementById("modules-plugin-stage");
+  if (!tabs || !stage) return;
+  for (const id of ids) {
+    const tab = tabs.querySelector(`[data-plugin-tab="${cssEscape(id)}"]`);
+    const card = stage.querySelector(`[data-module-card="${cssEscape(id)}"]`);
+    if (tab) tabs.appendChild(tab);
+    if (card) stage.appendChild(card);
+  }
+}
+
+function clearPluginDropMarks() {
+  document.querySelector("#modules-plugin-caret")?.remove();
+  document.querySelectorAll("#modules-plugin-tabs button.is-dragging").forEach((button) => {
+    button.classList.remove("is-dragging");
+  });
+  document.getElementById("modules-plugin-tabs")?.classList.remove("is-reordering");
+}
+
+function pluginTabButtons(tabs, exceptId) {
+  return [...tabs.querySelectorAll("button[data-plugin-tab]")].filter((button) => button.dataset.pluginTab !== exceptId);
+}
+
+function insertionAt(tabs, dragId, clientX) {
+  const others = pluginTabButtons(tabs, dragId);
+  let index = others.length;
+  for (let i = 0; i < others.length; i += 1) {
+    const rect = others[i].getBoundingClientRect();
+    if (clientX < rect.left + rect.width / 2) {
+      index = i;
+      break;
+    }
+  }
+  const ids = others.map((button) => button.dataset.pluginTab);
+  ids.splice(index, 0, dragId);
+  return { ids, index, anchor: others[index] || null };
+}
+
+function showPluginCaret(tabs, slot, dragId) {
+  let caret = tabs.querySelector("#modules-plugin-caret");
+  if (!caret) {
+    caret = document.createElement("span");
+    caret.id = "modules-plugin-caret";
+    caret.className = "modules-plugin-caret";
+    caret.setAttribute("aria-hidden", "true");
+    tabs.appendChild(caret);
+  }
+  const tabsRect = tabs.getBoundingClientRect();
+  let edge;
+  if (slot.anchor) {
+    edge = slot.anchor.getBoundingClientRect().left;
+  } else {
+    const last = pluginTabButtons(tabs, dragId).at(-1);
+    edge = last ? last.getBoundingClientRect().right : tabsRect.left;
+  }
+  caret.style.transform = `translateX(${Math.max(0, edge - tabsRect.left + tabs.scrollLeft - 1)}px)`;
+}
+
+function bindInstalledTabReorder(tabs) {
+  const buttons = pluginTabButtons(tabs, "");
+  if (buttons.length < 2) return;
+  tabs.classList.add("is-reorderable");
+  const hint = t("desktop.modules.reorderHint");
+  for (const button of buttons) button.title = hint;
+
+  tabs.addEventListener("pointerdown", (event) => {
+    const button = event.target.closest("button[data-plugin-tab]");
+    if (!button || event.button !== 0) return;
+    const origin = pluginTabButtons(tabs, "").map((item) => item.dataset.pluginTab);
+    const session = {
+      id: button.dataset.pluginTab,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      origin,
+      preview: origin,
+    };
+
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== session.pointerId) return;
+      if (!session.moved && Math.hypot(moveEvent.clientX - session.startX, moveEvent.clientY - session.startY) < 6) return;
+      if (!session.moved) {
+        session.moved = true;
+        tabs.classList.add("is-reordering");
+        button.classList.add("is-dragging");
+        try { tabs.setPointerCapture(session.pointerId); } catch { /* the strip may already be scrolling */ }
+      }
+      const slot = insertionAt(tabs, session.id, moveEvent.clientX);
+      session.preview = slot.ids;
+      showPluginCaret(tabs, slot, session.id);
+    };
+
+    const finish = async (endEvent) => {
+      if (endEvent.pointerId !== session.pointerId) return;
+      tabs.removeEventListener("pointermove", onMove);
+      tabs.removeEventListener("pointerup", finish);
+      tabs.removeEventListener("pointercancel", finish);
+      const moved = session.moved;
+      const next = session.preview;
+      clearPluginDropMarks();
+      if (!moved) return;
+      button.dataset.suppressClick = "1";
+      if (endEvent.type === "pointercancel" || next.join("\0") === session.origin.join("\0")) return;
+      try {
+        await persistInstalledOrder(next);
+        applyInstalledOrderToDom(next);
+      } catch (error) {
+        applyInstalledOrderToDom(session.origin);
+        document.getElementById("modules-status").textContent = String(error.message || error);
+      }
+    };
+
+    tabs.addEventListener("pointermove", onMove);
+    tabs.addEventListener("pointerup", finish);
+    tabs.addEventListener("pointercancel", finish);
+  });
+}
+
+function ensureActivePlugin(mods) {
+  if (!mods.some((mod) => mod.id === activePluginId)) activePluginId = mods[0]?.id || "";
+}
+
+function applyPluginTabVisibility() {
+  document.querySelectorAll("#modules-plugin-tabs button[data-plugin-tab]").forEach((button) => {
+    const on = button.dataset.pluginTab === activePluginId;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-selected", String(on));
+  });
+  document.querySelectorAll("#modules-plugin-stage > [data-module-card]").forEach((card) => {
+    card.hidden = card.dataset.moduleCard !== activePluginId;
+  });
+}
+
+function buildDisabledPluginPane(mod) {
+  const row = document.createElement("div");
+  row.className = "modules-module-card modules-module-card-off";
+  row.dataset.moduleCard = mod.id;
+  const headCopy = mod.titleKey
+    ? `<strong>${t(mod.titleKey)}</strong><div class="muted">${t(mod.descKey)}</div>`
+    : `<strong>${escapeHtml(mod.title || mod.id)}</strong><div class="muted">${escapeHtml(mod.desc || "")}</div>`;
+  row.innerHTML = `
+    <div class="modules-card-head">
+      <span class="setting-icon icon" style="--icon: url('./icons/puzzle.svg')" aria-hidden="true"></span>
+      <div class="modules-card-copy">${headCopy}</div>
+      ${moduleToggleHtml(mod, false)}
+    </div>`;
+  bindModuleToggle(row, mod);
+  return row;
+}
+
+function updateModuleCardStates() {
+  const ids = [...MODULE_REGISTRY.map((m) => m.id), ...listRemoteInstalledModules().map((m) => m.id)];
+  for (const id of ids) {
+    const on = moduleEnabled(modulesHost.state, id);
+    const card = document.querySelector(`[data-module-card="${cssEscape(id)}"]`);
+    if (card) {
+      card.classList.toggle("modules-module-card-off", !on);
+      const toggle = card.querySelector("[data-module-toggle]");
+      if (toggle) {
+        toggle.classList.toggle("is-on", on);
+        toggle.classList.toggle("is-off", !on);
+        toggle.setAttribute("aria-checked", String(on));
+        toggle.setAttribute("aria-pressed", String(on));
+      }
+      const label = card.querySelector(".modules-toggle-label");
+      if (label) label.textContent = on ? t("desktop.modules.enabled") : t("desktop.modules.disabled");
+    }
+    const detail = document.querySelector(`[data-module-detail="${cssEscape(id)}"]`);
+    if (detail) detail.hidden = !on;
+  }
+}
+
+function renderModuleCards() {
+  const list = document.getElementById("modules-list");
+  if (!list) return;
+  if (modulesHost.rendered) { renderOnlinePane(); return; }
+  const { enabled, all } = installedModuleList();
+  ensureActivePlugin(all);
+  try {
+    list.innerHTML = "";
+    if (!all.length) {
+      list.innerHTML = `<p class="muted modules-installed-empty">${escapeHtml(t("desktop.modules.installedEmpty"))}</p>`;
+    } else {
+      const tabs = document.createElement("div");
+      tabs.className = "segmented modules-plugin-tabs";
+      tabs.id = "modules-plugin-tabs";
+      tabs.setAttribute("role", "tablist");
+      const stage = document.createElement("div");
+      stage.className = "modules-plugin-stage";
+      stage.id = "modules-plugin-stage";
+      const enabledIds = new Set(enabled.map((mod) => mod.id));
+      const canReorder = all.length > 1;
+      for (const mod of all) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.pluginTab = mod.id;
+        button.setAttribute("role", "tab");
+        button.textContent = moduleLabel(mod);
+        if (!moduleEnabled(modulesHost.state, mod.id)) button.classList.add("is-off");
+        button.addEventListener("click", () => {
+          if (button.dataset.suppressClick === "1") {
+            button.dataset.suppressClick = "";
+            return;
+          }
+          if (activePluginId === mod.id) return;
+          activePluginId = mod.id;
+          applyPluginTabVisibility();
+        });
+        tabs.appendChild(button);
+        stage.appendChild(enabledIds.has(mod.id) ? buildModuleCard(mod) : buildDisabledPluginPane(mod));
+      }
+      list.append(tabs, stage);
+      if (canReorder) bindInstalledTabReorder(tabs);
+      applyPluginTabVisibility();
+    }
+  } catch (error) {
+    // Build failed midway: drop the half-built list and clear the rendered
+    // flag so the next refresh retries instead of staying stuck forever.
+    modulesHost.rendered = false;
+    list.innerHTML = "";
+    throw error;
+  }
+  modulesHost.rendered = true;
+  renderOnlinePane();
+}
+
+// Online catalog lives in its own tab pane (R24 tabbed plugin screen); the
+// installed pane above never mixes catalog rows back in.
+// Default filter is uninstalled: the catalog is for discovering what you
+// don't have yet. Installed rows stay one click away.
+let onlineInstallFilter = "uninstalled";
+
+function onlineEntryInstalled(entry) {
+  if (!entry || !entry.id) return false;
+  if (findModule(entry.id)) return true;
+  const record = modulesHost.state && modulesHost.state[entry.id];
+  return Boolean(record && record.installedVersion);
+}
+
+function renderOnlinePane() {
+  const list = document.getElementById("modules-online-list");
+  const filter = document.getElementById("modules-online-filter");
+  if (!list) return;
+  const online = modulesHost.online;
+  const entries = Object.values(online.byId || {}).filter((entry) => entry && entry.id);
+  const catalogReady = Boolean(online.loaded && !online.noBase && !online.failed && entries.length);
+  if (filter) {
+    filter.hidden = !catalogReady;
+    filter.querySelectorAll("button[data-online-filter]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.onlineFilter === onlineInstallFilter);
+    });
+  }
+  const message = (key) => `<div class="muted">${escapeHtml(t(key))}</div>`;
+  if (!online.loaded) {
+    list.innerHTML = message("desktop.modules.onlineLoading");
+    return;
+  }
+  if (online.noBase) {
+    list.innerHTML = message("desktop.modules.onlineNoCloud");
+    return;
+  }
+  if (online.failed) {
+    list.innerHTML = message("desktop.modules.onlineUnavailable");
+    return;
+  }
+  if (!entries.length) {
+    list.innerHTML = message("desktop.modules.onlineEmpty");
+    return;
+  }
+  const wantInstalled = onlineInstallFilter === "installed";
+  const shown = entries.filter((entry) => onlineEntryInstalled(entry) === wantInstalled);
+  list.innerHTML = "";
+  if (!shown.length) {
+    list.innerHTML = message(wantInstalled
+      ? "desktop.modules.onlineFilterInstalledEmpty"
+      : "desktop.modules.onlineFilterUninstalledEmpty");
+    return;
+  }
+  for (const entry of shown) list.appendChild(buildOnlineCatalogRow(entry));
+}
+
+// Tab switcher for the plugin screen (R24): installed plugins vs online
+// catalog. Panes keep their DOM — only visibility flips.
+function applyModulesTabVisibility() {
+  const list = document.getElementById("modules-list");
+  const pane = document.getElementById("modules-online-pane");
+  if (list) list.hidden = modulesTab !== "installed";
+  if (pane) pane.hidden = modulesTab !== "online";
+  document.querySelectorAll("#modules-tabs button[data-modules-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.modulesTab === modulesTab);
+  });
+}
+
+
+async function refreshModulesPanel() {
+  const list = document.getElementById("modules-list");
+  if (!list) return;
+  // Cards mounted before config arrived stay stuck behind the rendered flag.
+  // Drop them once the cloud base exists so the next pass actually fetches.
+  if (modulesHost.remoteMountDeferred && remoteModulesBase()) {
+    modulesHost.remoteMountDeferred = false;
+    modulesHost.rendered = false;
+    list.innerHTML = "";
+  }
+  if (!modulesHost.loaded) {
+    try {
+      const saved = await api.modulesGet();
+      modulesHost.state = normalizeModulesState(saved && saved.modules);
+      modulesHost.loaded = true;
+    } catch (error) {
+      document.getElementById("modules-status").textContent = String(error.message || error);
+      return;
+    }
+  }
+  try { await refreshRemoteCatalog(); } catch { modulesHost.online = { loaded: true, noBase: false, failed: true, byId: {} }; /* 目录不可达不阻塞本地模块 */ }
+  renderModuleCards();
+  updateModuleCardStates();
+}
+
+// 启动应用（boot 内完成配置加载/语言/扫描）。模块屏必须等 getConfig 写入
+// latestConfig 后再挂载，否则在线插件会把“还没读到地址”误判成未配置云端，
+// 并且 rendered 标志会把这次失败钉死。
+boot()
+  .catch((error) => {
+    console.error("boot failed:", error);
+    setStatusMessage(String(error.message || error));
+  })
+  .finally(() => {
+    refreshModulesPanel().catch(() => {});
+  });
+applyModulesTabVisibility();
+$("#modules-tabs")?.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-modules-tab]");
+  if (!button) return;
+  modulesTab = button.dataset.modulesTab;
+  document.querySelectorAll("#modules-tabs button[data-modules-tab]").forEach((b) => b.classList.toggle("active", b === button));
+  applyModulesTabVisibility();
 });
+$("#modules-online-filter")?.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-online-filter]");
+  if (!button || button.dataset.onlineFilter === onlineInstallFilter) return;
+  onlineInstallFilter = button.dataset.onlineFilter;
+  renderOnlinePane();
+});
+
+// boot 完成后首次渲染模块屏（语言/配置已就绪）

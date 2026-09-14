@@ -39,6 +39,7 @@
             <button data-section="overview" class="active"><span class="nav-icon icon" style="--icon: url('./icons/layout-dashboard.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.overview">Overview</span></button>
             <button data-section="workdirs"><span class="nav-icon icon" style="--icon: url('./icons/folder-code.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.workdirs">Workdirs</span></button>
             <button data-section="sources"><span class="nav-icon icon" style="--icon: url('./icons/database.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.sources">Sources</span></button>
+            <button data-section="modules"><span class="nav-icon icon" style="--icon: url('./icons/puzzle.svg')" aria-hidden="true"></span><span data-i18n="desktop.nav.modules">Modules</span></button>
           </nav>
         </div>
         <div class="rail-bottom">
@@ -181,6 +182,30 @@
           </div>
           <div id="cursor-token-summary" hidden></div>
           <span id="sources-action-message" class="action-message" aria-live="polite"></span>
+        </section>
+
+        <section id="modules" class="screen">
+          <div class="topline">
+            <div>
+              <h3 data-i18n="desktop.nav.modules">Plugins</h3>
+              <p class="muted" data-i18n="desktop.modules.screenDesc">Install add-on capabilities on demand.</p>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="segmented modules-tabs" id="modules-tabs" role="tablist">
+              <button data-modules-tab="installed" class="active" data-i18n="desktop.modules.tabInstalled">My plugins</button>
+              <button data-modules-tab="online" data-i18n="desktop.modules.tabOnline">Online</button>
+            </div>
+            <div id="modules-list"></div>
+            <div id="modules-online-pane" hidden>
+              <div class="segmented modules-online-filter" id="modules-online-filter" role="tablist" hidden>
+                <button type="button" data-online-filter="uninstalled" class="active" data-i18n="desktop.modules.onlineFilterUninstalled">未安装</button>
+                <button type="button" data-online-filter="installed" data-i18n="desktop.modules.onlineFilterInstalled">已安装</button>
+              </div>
+              <div class="modules-online-list" id="modules-online-list"></div>
+            </div>
+            <span id="modules-status" class="action-message" aria-live="polite"></span>
+          </div>
         </section>
 
         <section id="settings" class="screen">

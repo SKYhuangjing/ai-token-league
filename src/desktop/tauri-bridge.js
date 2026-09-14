@@ -157,6 +157,17 @@
     onTrayRefreshFailed(callback) {
       listenAndTrack("tray:refresh-failed", callback);
     },
+
+    // ── Optional modules host (feat/compute-sharing R9) ──────────
+    modulesGet:       () => fwd("modules:get")(),
+    modulesSet:       (input) => fwd("modules:set")(input ?? {}),
+    modulesPackageGet: (input) => fwd("modules:package-get")(input ?? {}),
+    modulesPackagePut: (input) => fwd("modules:package-put")(input ?? {}),
+    modulesPackageDelete: (input) => fwd("modules:package-delete")(input ?? {}),
+
+    // ── Optional modules: generic sidecar access (R17) ──────────
+    // 远端模块经此调用 sidecar 命令（manifest.permissions 声明白名单，v1 文档约定）。
+    sidecarInvoke: (command, args) => invoke("forward_to_sidecar", { command, args: args ?? null }),
   };
 
   // Set platform from Tauri command (supplements the synchronous navigator-based default)

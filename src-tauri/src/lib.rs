@@ -9,6 +9,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -187,50 +188,42 @@ fn sidecar_timeout_for_command(command: &str) -> std::time::Duration {
 
 // ── Sidecar lifecycle ──────────────────────────────────────────────
 
-fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
+/// Resolve the bundled collector binary: resource dir (packaged) first,
+/// then workspace target/{debug,release} (dev).
+fn resolve_collector_path(app: &AppHandle) -> Result<String, String> {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
+    let resource_dir_path = app.path().resource_dir().unwrap_or_default();
+    let binary_name = if cfg!(target_os = "windows") {
+        "atl-collector.exe"
+    } else {
+        "atl-collector"
+    };
+    let from_resource = resource_dir_path.join(binary_name);
+    let from_debug = std::path::PathBuf::from(&cwd).join("target").join("debug").join(binary_name);
+    let from_release = std::path::PathBuf::from(&cwd).join("target").join("release").join(binary_name);
+    if from_resource.exists() {
+        Ok(from_resource.to_string_lossy().to_string())
+    } else if from_debug.exists() {
+        Ok(from_debug.to_string_lossy().to_string())
+    } else if from_release.exists() {
+        Ok(from_release.to_string_lossy().to_string())
+    } else {
+        Err(format!(
+            "atl-collector binary not found (tried {}, {}, {})",
+            from_resource.display(),
+            from_debug.display(),
+            from_release.display()
+        ))
+    }
+}
 
+fn spawn_sidecar(app: AppHandle) -> Result<SidecarState, String> {
     // Try resource dir first (packaged), then workspace target (dev)
     let resource_dir_path = app.path().resource_dir().unwrap_or_default();
 
-    let collector_path = {
-        let binary_name = if cfg!(target_os = "windows") {
-            "atl-collector.exe"
-        } else {
-            "atl-collector"
-        };
-
-        // Packaged: resource dir — use PathBuf::join to avoid mixed separators
-        // with the \\?\ prefix that Windows resource_dir() returns.
-        let from_resource = resource_dir_path.join(binary_name);
-        // Dev: workspace target/debug
-        let from_debug = std::path::PathBuf::from(&cwd)
-            .join("target")
-            .join("debug")
-            .join(binary_name);
-        // Dev: workspace target/release
-        let from_release = std::path::PathBuf::from(&cwd)
-            .join("target")
-            .join("release")
-            .join(binary_name);
-
-        if from_resource.exists() {
-            from_resource.to_string_lossy().to_string()
-        } else if from_debug.exists() {
-            from_debug.to_string_lossy().to_string()
-        } else if from_release.exists() {
-            from_release.to_string_lossy().to_string()
-        } else {
-            return Err(format!(
-                "atl-collector binary not found (tried {}, {}, {})",
-                from_resource.display(),
-                from_debug.display(),
-                from_release.display()
-            ));
-        }
-    };
+    let collector_path = resolve_collector_path(&app)?;
 
     let mut cmd = Command::new(&collector_path);
     cmd.arg("--sidecar")
@@ -365,7 +358,17 @@ async fn rebuild_tray_menu(app: &AppHandle) {
         Err(_) => return,
     };
 
-    let items = match menu_data.as_array() {
+    // R20/R22 shape: {alerts, items}; a bare array stays accepted for
+    // sidecars predating the module section.
+    let (alerts, items_value) = if menu_data.is_object() && menu_data.get("items").is_some() {
+        (
+            menu_data.get("alerts").cloned().unwrap_or(json!([])),
+            menu_data.get("items").cloned().unwrap_or(json!([])),
+        )
+    } else {
+        (json!([]), menu_data.clone())
+    };
+    let items = match items_value.as_array() {
         Some(a) => a,
         None => return,
     };
@@ -426,6 +429,23 @@ async fn rebuild_tray_menu(app: &AppHandle) {
     // Get tray and set menu
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_menu(Some(menu));
+    }
+
+    // Threshold alerts ride along with the menu payload (crossings are
+    // computed by the sidecar); delivered here so permission handling stays
+    // with the native notification plugin. A denied permission surfaces as
+    // an Err we swallow — the badge prefix + menu rows still carry the signal.
+    if let Some(list) = alerts.as_array() {
+        for alert in list {
+            let title = alert.get("title").and_then(|v| v.as_str()).unwrap_or("AI Token League");
+            let body = alert.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            let _ = app
+                .notification()
+                .builder()
+                .title(title)
+                .body(body)
+                .show();
+        }
     }
 }
 
@@ -733,8 +753,18 @@ async fn write_image_to_clipboard(app: AppHandle, base64_png: String) -> Result<
 
 #[tauri::command]
 async fn reveal_runtime_log_directory() -> Result<(), String> {
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let dir = home.join(".ai-token-league").join("log");
+    // Match the collector's app_dir(): ATL_HOME replaces the whole data
+    // directory, so sandboxed instances reveal their own log dir.
+    let dir = match std::env::var("ATL_HOME")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(home) => std::path::PathBuf::from(home).join("log"),
+        None => dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".ai-token-league")
+            .join("log"),
+    };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| e.to_string())
 }
@@ -1297,6 +1327,18 @@ fn start_local_backup_scheduler(app: AppHandle) {
     });
 }
 
+// Plugin tray driver (R26 standard): a 5-minute rebuild tick. Each plugin's
+// own TTL decides whether a tick actually hits its API, so the loop stays
+// cheap when plugins are off or calm and bounds alert staleness.
+fn start_tray_module_scheduler(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            rebuild_tray_menu_coalesced(&app).await;
+        }
+    });
+}
+
 fn chrono_ts() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -1458,6 +1500,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let state = spawn_sidecar(app.handle().clone())?;
             app.manage(state);
@@ -1469,6 +1512,7 @@ pub fn run() {
             setup_tray(app.handle())?;
             start_background_refresh(app.handle().clone(), background);
             start_local_backup_scheduler(app.handle().clone());
+            start_tray_module_scheduler(app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<SidecarState>();

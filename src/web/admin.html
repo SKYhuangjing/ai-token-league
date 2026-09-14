@@ -55,6 +55,8 @@
         <button type="button" data-admin-tab="teams" data-i18n="admin.tab.teams">团队</button>
         <button type="button" data-admin-tab="analytics" data-i18n="admin.tab.analytics">分析</button>
         <button type="button" data-admin-tab="sources" data-i18n="admin.tab.sources">来源统计</button>
+        <button type="button" data-admin-tab="sharing" data-i18n="admin.tab.sharing">共享</button>
+        <button type="button" data-admin-tab="plugins" data-i18n="admin.tab.plugins">插件</button>
       </nav>
 
       <section class="board admin-panel active" data-admin-panel="usage">
@@ -360,6 +362,111 @@
           </div>
           <div id="sources-trend" class="source-trend-grid"></div>
         </article>
+      </section>
+
+      <section class="board admin-panel" data-admin-panel="sharing">
+        <div class="board-header">
+          <div>
+            <h2 data-i18n="admin.sharing.title">算力共享</h2>
+            <p id="sharing-admin-status" aria-live="polite">Loading...</p>
+          </div>
+          <div class="row-actions">
+            <button type="button" class="link-button" id="sharing-admin-refresh" data-i18n="admin.sharing.refresh">刷新</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="admin.sharing.share">节点</th>
+                <th data-i18n="admin.sharing.baseURL">接入地址</th>
+                <th data-i18n="admin.sharing.state">状态</th>
+                <th data-i18n="admin.sharing.claimsIssued">累计认领</th>
+                <th data-i18n="admin.sharing.budget">预算（已结算/总额）</th>
+                <th data-i18n="admin.devices.action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="sharing-admin-shares-tbody"></tbody>
+          </table>
+        </div>
+        <div class="sharing-policy-panel" id="sharing-policy-panel" hidden>
+          <div class="sharing-policy-head">
+            <div>
+              <h3 data-i18n="admin.sharing.policy">编辑策略</h3>
+              <p class="muted"><span id="sharing-policy-id" class="mono"></span></p>
+            </div>
+            <div class="row-actions">
+              <button type="button" class="link-button" id="sharing-policy-save" data-i18n="admin.sharing.policySave">保存</button>
+              <button type="button" class="link-button" id="sharing-policy-cancel" data-i18n="admin.sharing.policyCancel">取消</button>
+            </div>
+          </div>
+          <div class="sharing-policy-fields">
+            <label class="sharing-policy-field">
+              <span data-i18n="admin.sharing.budgetTotal">预算总额</span>
+              <input id="sharing-policy-budget" type="text" inputmode="numeric" autocomplete="off" data-i18n-placeholder="admin.sharing.policyKeep" placeholder="不变" />
+            </label>
+            <label class="sharing-policy-field">
+              <span data-i18n="admin.sharing.maxClaims">认领上限</span>
+              <input id="sharing-policy-max-claims" type="text" inputmode="numeric" autocomplete="off" data-i18n-placeholder="admin.sharing.policyKeep" placeholder="不变" />
+            </label>
+            <label class="sharing-policy-field">
+              <span data-i18n="admin.sharing.keyMaxTokens">单 Key 上限</span>
+              <input id="sharing-policy-key-max" type="text" inputmode="numeric" autocomplete="off" data-i18n-placeholder="admin.sharing.policyKeep" placeholder="不变" />
+            </label>
+            <label class="sharing-policy-field">
+              <span data-i18n="admin.sharing.keyConcurrency">单 Key 并发</span>
+              <input id="sharing-policy-key-concurrency" type="text" inputmode="numeric" autocomplete="off" data-i18n-placeholder="admin.sharing.policyKeep" placeholder="不变" />
+            </label>
+            <label class="sharing-policy-field">
+              <span data-i18n="admin.sharing.ttlHours">有效期（小时）</span>
+              <input id="sharing-policy-ttl" type="text" inputmode="numeric" autocomplete="off" data-i18n-placeholder="admin.sharing.policyKeep" placeholder="不变" />
+            </label>
+          </div>
+        </div>
+        <div class="board-header sharing-admin-claims-head">
+          <h3 data-i18n="admin.sharing.claimsTitle">认领 Key</h3>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="admin.sharing.key">Key</th>
+                <th data-i18n="admin.sharing.borrower">使用者</th>
+                <th data-i18n="admin.sharing.share">节点</th>
+                <th data-i18n="admin.sharing.state">状态</th>
+                <th data-i18n="admin.sharing.used">已用</th>
+                <th data-i18n="admin.sharing.expires">有效期至</th>
+                <th data-i18n="admin.devices.action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="sharing-admin-claims-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="board admin-panel" data-admin-panel="plugins">
+        <div class="board-header">
+          <div>
+            <h2 data-i18n="admin.plugins.title">插件上架</h2>
+            <p id="plugins-admin-status" aria-live="polite" data-i18n="admin.loading">Loading...</p>
+          </div>
+          <div class="row-actions">
+            <button type="button" class="link-button" id="plugins-admin-refresh" data-i18n="admin.plugins.refresh">刷新</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="admin.plugins.plugin">插件</th>
+                <th data-i18n="admin.plugins.version">版本</th>
+                <th data-i18n="admin.plugins.state">状态</th>
+                <th data-i18n="admin.devices.action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="plugins-admin-tbody"></tbody>
+          </table>
+        </div>
       </section>
 
     </main>

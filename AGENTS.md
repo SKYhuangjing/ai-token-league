@@ -61,6 +61,7 @@ Reasoning tokens are diagnostic and cost-related fields, not part of the main ra
 src/backend/      Node.js backend, API, JSON/MySQL stores, OpenRouter pricing
 collector-core/   Rust collector core: config, providers, scan/sync, diagnostics
 atl-collector/    Rust CLI and Tauri sidecar binary
+cpa-plugin/       Standalone cdylib crate: compute-sharing plugin for CLIProxyAPI (atl-share)
 src/desktop/      Tauri desktop renderer and bridge
 src/shared/       Shared schema, pricing, crypto, dates, display helpers
 src/web/          Public and admin Web UI (index.html, admin.html, app.js, admin.js, styles.css)
@@ -218,6 +219,9 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | `scripts/check-release-version.js` | Local and CI release gate for tag/version/changelog/lockfile consistency before a `v*` tag is created or published. | `npm run release:check -- --tag v<version>` |
 | `scripts/build-preset.js` | Generate `assets/preset.json` from `PRESET_*` env values or an env file before packaging. | `npm run preset -- --env env.local` |
 | `scripts/publish-release.js` | Build release manifests and upload updater/installer artifacts to OSS; supports dry run, platform parts, and self-hosted finalize. | `node scripts/publish-release.js --env env.local --dry-run` |
+| `scripts/publish-module.js` | Publish a plugin payload (manifest + entry) to the OSS module catalog for online-plugin distribution. | `node scripts/publish-module.js --module-dir plugins/compute-sharing --env env.local` |
+| `scripts/publish-module.js` prune | Rewrite the OSS module catalog keeping only the listed `id@version` entries (retired plugin / stale version cleanup; versioned objects stay on OSS). | `node scripts/publish-module.js --prune-keep zhipu-plan@1.1.0,compute-sharing@0.1.0 --env env.local` |
+| `scripts/install-cpa-plugin.sh` | Build and install the compute-sharing `atl-share` cdylib into a local CLIProxyAPI plugin dir and print the CPA config snippet. | `scripts/install-cpa-plugin.sh --api https://atl.example.com` |
 | `scripts/prepare-github-release.js` | GitHub Actions helper: create or reuse one draft release, delete stale duplicate drafts, clear old assets, and output the canonical `release_id`. | Called by `.github/workflows/release.yml` |
 | `scripts/upload-github-release-asset.js` | GitHub Actions helper: upload a generated release asset such as `latest.json` by `release_id`, with optional clobber. | Called by `.github/workflows/release.yml` |
 | `scripts/patch-dmg-layout.sh` | Prepare generated macOS DMGs with the "已损坏修复" helper and Finder layout; normally called by release scripts. | `scripts/patch-dmg-layout.sh --dmg <path>` |
@@ -349,6 +353,16 @@ Backend JSON storage defaults to:
 data/db.json
 ```
 
+Control-plane data (compute-sharing ledger, module listings) follows `DB_TYPE`
+via `src/backend/control-plane-store.js`: `mysql` → dedicated tables
+(`sharing_shares`, `sharing_claims`, `module_listings`) written with the same
+named write lock (`MYSQL_WRITE_LOCK_NAME`) and row-level diff upserts as the
+main store; `json` → fields on `db.json` (`sharingCpa`, `moduleListings`). The
+legacy sidecar files (`data/sharing-cpa.json`, `data/module-listings.json`)
+are imported once on boot when the target store is empty, then retired to
+`*.migrated`. The opt-in MySQL round-trip test runs when `ATL_TEST_MYSQL_HOST`
+is set (point it at a dedicated empty test database).
+
 Collector local config defaults to:
 
 ```text
@@ -419,6 +433,10 @@ node scripts/build-preset.js --env env.local
 
 - If no `--env` is provided and no `PRESET_*` keys are in the environment, the preset is empty and the app falls back to runtime defaults — no error.
 - `env.local` is not included in the Tauri bundle (only `src/desktop/` and `src/shared/` are bundled), so secrets never ship.
+
+## Plugin Development
+
+The desktop plugin standard (manifest + `mount(el, ctx)` + OSS distribution), the sidecar plugin trait, and the CPA native plugin contract are documented in `doc/plugin-development.md` — capability boundaries and the v1 trust-model gaps are listed there.
 
 ## Operations Manual
 

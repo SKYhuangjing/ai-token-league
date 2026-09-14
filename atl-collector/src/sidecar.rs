@@ -5,6 +5,7 @@ use collector_core::scanner;
 use collector_core::sync::SyncOutcome;
 use collector_core::version;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Write};
@@ -118,14 +119,188 @@ pub struct ScanSyncStatus {
     pub snapshot: Option<serde_json::Value>,
 }
 
+fn package_arg(args: &serde_json::Value, key: &str) -> Result<String, String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+        .ok_or_else(|| format!("modules:package requires {key}"))
+}
+
 async fn handle_command(
     request: SidecarRequest,
     runtime: &mut SidecarRuntime,
 ) -> Result<serde_json::Value, String> {
-    let command = Command::from_str(&request.command)
-        .ok_or_else(|| format!("unknown command: {}", request.command))?;
+    let command = match Command::from_str(&request.command) {
+        Some(command) => command,
+        None => {
+            // Platform plugin standard (R26): "{plugin-id}:{sub}" routes to
+            // registered plugins — platform commands always resolve first,
+            // so a namespace can never shadow them. Plugin handles may do
+            // IO, so they run on a blocking thread.
+            let command = request.command.clone();
+            let args = request.args.clone();
+            let modules_state = collector_core::modules::load_modules_state();
+            return tokio::task::spawn_blocking(move || {
+                collector_core::plugin::route_plugin_command(
+                    crate::plugins::sidecar_plugins(),
+                    &command,
+                    &args,
+                    &modules_state,
+                )
+            })
+            .await
+            .map_err(|e| format!("plugin command thread failed: {}", e))?
+            .ok_or_else(|| format!("unknown command: {}", request.command))?
+        }
+    };
 
     match command {
+        Command::ModulesRemoteCatalog => {
+            let oss = collector_core::modules::oss_config_from_env();
+            tokio::task::spawn_blocking(move || collector_core::modules::fetch_remote_catalog(&oss))
+                .await
+                .map_err(|e| e.to_string())?
+                .map(|catalog| json!({ "catalog": catalog }))
+        }
+        Command::ModulesRemoteFile => {
+            let id = request.args.get("id").and_then(|v| v.as_str()).ok_or_else(|| "id required".to_string())?.to_string();
+            let version = request.args.get("version").and_then(|v| v.as_str()).ok_or_else(|| "version required".to_string())?.to_string();
+            let oss = collector_core::modules::oss_config_from_env();
+            let (id_task, version_task) = (id.clone(), version.clone());
+            tokio::task::spawn_blocking(move || collector_core::modules::fetch_remote_module_source(&oss, &id_task, &version_task))
+                .await
+                .map_err(|e| e.to_string())?
+                .map(|source| json!({ "id": id, "version": version, "source": source }))
+        }
+        Command::ModulesGet => Ok(collector_core::modules::load_modules_state()),
+        Command::ModulesSet => {
+            let id = request
+                .args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "modules:set requires id".to_string())?
+                .to_string();
+            collector_core::modules::set_module_state(&id, &request.args)
+        }
+        Command::ModulesPackageGet => {
+            let id = package_arg(&request.args, "id")?;
+            let version = package_arg(&request.args, "version")?;
+            let source = collector_core::modules::read_plugin_package(&id, &version)?;
+            Ok(json!({ "id": id, "version": version, "source": source }))
+        }
+        Command::ModulesPackagePut => {
+            let id = package_arg(&request.args, "id")?;
+            let version = package_arg(&request.args, "version")?;
+            let source = request
+                .args
+                .get("source")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "modules:package-put requires source".to_string())?;
+            collector_core::modules::write_plugin_package(&id, &version, source)?;
+            Ok(json!({ "ok": true, "id": id, "version": version, "bytes": source.len() }))
+        }
+        Command::ModulesPackageDelete => {
+            let id = package_arg(&request.args, "id")?;
+            let version = request.args.get("version").and_then(|v| v.as_str()).filter(|v| !v.is_empty());
+            collector_core::modules::delete_plugin_package(&id, version)?;
+            Ok(json!({ "ok": true, "id": id }))
+        }
+        Command::SharingClaimSign => {
+            // Identity-bound claiming (R28): sign {kind, participantId, shareId,
+            // ts} with the league identity key — the backend verifies against
+            // the same public key chain as usage uploads.
+            let share_id = request
+                .args
+                .get("shareId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "sharing:claim-sign requires shareId".to_string())?
+                .to_string();
+            let ts = request.args.get("ts").and_then(|v| v.as_i64()).unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0)
+            });
+            let cfg = config::load_config().ok_or("not initialized")?;
+            if cfg.participant_id.is_empty() || cfg.identity_private_key.is_empty() {
+                return Err("not initialized".into());
+            }
+            let payload = json!({
+                "kind": "share-claim",
+                "participantId": cfg.participant_id,
+                "shareId": share_id,
+                "ts": ts,
+            });
+            let signature = collector_core::crypto::sign_payload(&cfg.identity_private_key, &payload);
+            Ok(json!({ "participantId": cfg.participant_id, "ts": ts, "signature": signature }))
+        }
+        Command::SharingOwnerStatus | Command::SharingOwnerPolicy | Command::SharingOwnerUnregister => {
+            // Owner console commands (A.2): the share secret lives in the CPA
+            // plugin's identity file and NEVER crosses into the webview — the
+            // sidecar proxies the backend call. Blocking HTTP runs on its own
+            // thread (reqwest::blocking must not live in async context).
+            let args = request.args.clone();
+            let is_policy = matches!(command, Command::SharingOwnerPolicy);
+            let is_unregister = matches!(command, Command::SharingOwnerUnregister);
+            tokio::task::spawn_blocking(move || sharing_owner_call_blocking(&args, is_policy, is_unregister))
+                .await
+                .map_err(|e| format!("sharing owner thread failed: {}", e))?
+        }
+        Command::SharingBorrowGet => {
+            let claims: serde_json::Value = std::fs::read_to_string(
+                collector_core::config::app_dir().join("sharing-borrow.json"),
+            )
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(json!({ "claims": [] }));
+            Ok(claims)
+        }
+        Command::SharingBorrowSet => {
+            let claims = request
+                .args
+                .get("claims")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "sharing:borrow-set requires claims array".to_string())?;
+            let sanitized: Vec<serde_json::Value> = claims
+                .iter()
+                .filter_map(|c| {
+                    let key_id = c.get("keyId").and_then(|v| v.as_str())?;
+                    let token = c.get("token").and_then(|v| v.as_str())?;
+                    if key_id.is_empty() || token.is_empty() {
+                        return None;
+                    }
+                    let cap = |value: &str, max: usize| -> String {
+                        value.chars().take(max).collect()
+                    };
+                    Some(json!({
+                        "keyId": cap(key_id, 64),
+                        "token": cap(token, 200),
+                        "baseURL": cap(c.get("baseURL").and_then(|v| v.as_str()).unwrap_or(""), 200),
+                        "shareId": cap(c.get("shareId").and_then(|v| v.as_str()).unwrap_or(""), 64),
+                        "shareTitle": cap(c.get("shareTitle").and_then(|v| v.as_str()).unwrap_or(""), 60),
+                        "models": c.get("models").and_then(|v| v.as_array()).map(|list| {
+                            json!(list.iter().take(50).filter_map(|m| m.as_str().map(|s| cap(s, 20))).collect::<Vec<_>>())
+                        }).unwrap_or(json!([])),
+                        "expiresAt": c.get("expiresAt").and_then(|v| v.as_i64()).unwrap_or(0),
+                    }))
+                })
+                .take(50)
+                .collect();
+            let dir = collector_core::config::app_dir();
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            // tmp + rename: a crash mid-write must not truncate the claim list
+            // (the read path falls back to an empty list on a corrupt file)
+            let borrow_path = dir.join("sharing-borrow.json");
+            let tmp_path = dir.join("sharing-borrow.json.tmp");
+            std::fs::write(
+                &tmp_path,
+                serde_json::to_string_pretty(&json!({ "claims": sanitized })).unwrap_or_default(),
+            )
+            .map_err(|e| e.to_string())?;
+            std::fs::rename(&tmp_path, &borrow_path).map_err(|e| e.to_string())?;
+            Ok(json!({ "claims": sanitized }))
+        }
         Command::Ping => {
             Ok(serde_json::json!({"ok": true, "ts": chrono::Utc::now().timestamp_millis()}))
         }
@@ -375,7 +550,7 @@ async fn handle_command(
         }
         Command::TrayMenuData => {
             let cfg = config::load_config();
-            if let Some(c) = cfg.as_ref() {
+            let base = if let Some(c) = cfg.as_ref() {
                 let cached = read_usage_cache();
                 let items = cached
                     .as_ref()
@@ -389,16 +564,67 @@ async fn handle_command(
                 } else {
                     None
                 };
-                Ok(build_tray_menu_data(
-                    c,
-                    &items,
-                    scanned_at,
-                    runtime.tray_estimated_cost_usd,
-                    identity.as_ref(),
-                ))
+                build_tray_menu_data(c, &items, scanned_at, runtime.tray_estimated_cost_usd, identity.as_ref())
             } else {
-                Ok(build_tray_menu_data_without_config())
+                build_tray_menu_data_without_config()
+            };
+            let lang = cfg
+                .as_ref()
+                .map(|c| if c.language.trim().is_empty() { "zh-CN" } else { c.language.as_str() })
+                .unwrap_or("zh-CN");
+
+            // Plugin tray sections (platform plugin standard, R26): every
+            // registered plugin gates itself from the modules state, refreshes
+            // its own cache when due (on a blocking thread), and renders its
+            // localized rows + notification payloads. Sections insert above
+            // "quit" in registry order; alerts deliver even when a section is
+            // hidden. With no active plugin the response is the legacy shape.
+            let modules_state = collector_core::modules::load_modules_state();
+            let mut alerts_out: Vec<serde_json::Value> = Vec::new();
+            let mut items = match base {
+                serde_json::Value::Array(list) => list,
+                other => vec![other],
+            };
+            let now = now_millis();
+            for plugin in crate::plugins::sidecar_plugins() {
+                use collector_core::plugin::{PluginCtx, SidecarPlugin};
+                let gates = plugin.tray_gates(PluginCtx { modules_state: &modules_state });
+                let (section_on, alerts_on) = gates;
+                if !section_on && !alerts_on {
+                    continue;
+                }
+                if section_on && plugin.tray_due(now) {
+                    let state_snapshot = modules_state.clone();
+                    let plugin_ref: &'static dyn SidecarPlugin = &**plugin;
+                    let refresh = tokio::task::spawn_blocking(move || {
+                        plugin_ref.tray_refresh(PluginCtx { modules_state: &state_snapshot }, now)
+                    });
+                    // Bound the wait: a slow quota API must not stall the
+                    // menu (worst case a few minutes across keys). On timeout
+                    // the task keeps running detached and the NEXT rebuild
+                    // picks up the fresh cache (R27 review finding).
+                    match tokio::time::timeout(std::time::Duration::from_secs(10), refresh).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => return Err(format!("plugin tray refresh failed: {}", e)),
+                        Err(_) => {}
+                    }
+                }
+                if alerts_on {
+                    alerts_out.extend(plugin.tray_alerts(lang));
+                }
+                if section_on {
+                    let section_items = plugin.tray_items(lang);
+                    // keep plugin sections right above "quit"
+                    if let Some(pos) = items.iter().position(|it| it.get("action").and_then(|v| v.as_str()) == Some("quit")) {
+                        for (offset, item) in section_items.into_iter().enumerate() {
+                            items.insert(pos + offset, item);
+                        }
+                    } else {
+                        items.extend(section_items);
+                    }
+                }
             }
+            Ok(json!({ "alerts": alerts_out, "items": items }))
         }
         Command::TrayCostState => {
             runtime.tray_estimated_cost_usd = request
@@ -1729,6 +1955,57 @@ const TRAY_PROVIDER_NAMES: &[(&str, &str)] = &[
     ("kimi_local", "Kimi"),
     ("cursor_dashboard_usage", "Cursor"),
 ];
+
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+// ── Sharing owner console helpers (A.2) ─────────────────────────────────────
+
+fn sharing_owner_identity() -> Result<(String, String, String), String> {
+    let value: serde_json::Value = std::fs::read_to_string(
+        collector_core::config::app_dir().join("cpa-plugin/identity.json"),
+    )
+    .map_err(|_| "not_registered".to_string())?
+    .parse()
+    .map_err(|_| "not_registered".to_string())?;
+    let api = value.get("api").and_then(|v| v.as_str()).unwrap_or("").trim_end_matches('/').to_string();
+    let share_id = value.get("shareId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let secret = value.get("shareSecret").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if api.is_empty() || share_id.is_empty() || secret.is_empty() {
+        return Err("not_registered".into());
+    }
+    Ok((api, share_id, secret))
+}
+
+fn sharing_owner_call_blocking(args: &serde_json::Value, is_policy: bool, is_unregister: bool) -> Result<serde_json::Value, String> {
+    let (api, _share_id, secret) = sharing_owner_identity()?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut request = if is_unregister {
+        client.post(format!("{}/api/shares/unregister", api))
+    } else if is_policy {
+        client.post(format!("{}/api/shares/owner/policy", api)).json(&json!({
+            "policy": args.get("policy").cloned().unwrap_or(serde_json::Value::Null),
+        }))
+    } else {
+        client.get(format!("{}/api/shares/owner/status", api))
+    };
+    request = request.header("x-atl-share-secret", &secret);
+    let response = request.send().map_err(|e| format!("backend_unreachable:{}", e))?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("owner_http_{}:{}", status.as_u16(), body.get("error").and_then(|v| v.as_str()).unwrap_or("")));
+    }
+    Ok(body)
+}
 
 fn build_tray_menu_data_without_config() -> serde_json::Value {
     let lang = "zh-CN";

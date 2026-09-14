@@ -15,7 +15,7 @@ import {
   positiveInteger, normalizeTokenAggregate, normalizeBreakdownItems,
   normalizeUsageSummary, normalizeUsageTrend, normalizeUsageWorkdirs,
   normalizeUsageTotal, reconcileHealthWithConfig,
-  providerStatusGroup, sortProviderHealthByStatus
+  providerStatusGroup, sortProviderHealthByStatus,
 } from '../../src/desktop/renderer-helpers.js';
 
 // ── String / Number Utilities ──
@@ -884,3 +884,8 @@ describe('sortProviderHealthByStatus', () => {
     expect(sortProviderHealthByStatus([])).toEqual([]);
   });
 });
+
+// R19: zhipu window labels prefer the semantic unit mapping, then the API
+// `type` field (live weekly windows arrived with an unexpected unit number).
+// R20: webview card counts down to the reset; native menus show absolute
+// times because a static snapshot would freeze the countdown.

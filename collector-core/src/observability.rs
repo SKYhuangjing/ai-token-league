@@ -149,6 +149,16 @@ pub fn summarize_command_args(command: &str, args: &Value) -> Value {
             "hasAlias": args.get("alias").and_then(|v| v.as_str()).map(|v| !v.trim().is_empty()).unwrap_or(false)
         }),
         "runtime:log" => json!({}),
+        // Never persist the downloaded script in the runtime log.
+        "modules:package-put" => json!({
+            "id": args.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+            "version": args.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+            "bytes": args.get("source").and_then(|v| v.as_str()).map(|v| v.len()).unwrap_or(0)
+        }),
+        "modules:package-get" | "modules:package-delete" => json!({
+            "id": args.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+            "version": args.get("version").and_then(|v| v.as_str()).unwrap_or("")
+        }),
         _ => summarize_object_keys(args),
     }
 }
@@ -197,6 +207,9 @@ pub fn summarize_command_result(command: &str, result: &Result<Value, String>) -
             }),
             "providers:health" => json!({
                 "providerCount": value.as_array().map(|v| v.len()).unwrap_or(0)
+            }),
+            "modules:package-get" => json!({
+                "bytes": value.get("source").and_then(|v| v.as_str()).map(|v| v.len()).unwrap_or(0)
             }),
             _ => summarize_object_keys(value),
         },
