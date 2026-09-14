@@ -7,9 +7,11 @@
 //   GET  /api/admin/modules                             → full catalog + listed flag
 //   POST /api/admin/modules/listing                     → { id, listed }
 //
-// OSS objects are uploaded public-read by scripts/publish-module.js; the
-// backend proxies them so the bucket name stays private and CORS is uniform.
-// Responses are cached in-memory (60s) to soften OSS egress.
+// Objects are uploaded public-read by scripts/publish-module.js. The backend
+// proxies them so clients never need bucket credentials and CORS stays
+// uniform. Read URLs prefer RELEASE_PUBLIC_BASE_URL (same base release
+// artifacts already use); RELEASE_OSS_ENDPOINT/BUCKET/PREFIX remain a
+// fallback for hosts that only set the raw OSS parts.
 //
 // 上架/下架 follows DB_TYPE via the listings adapter (MySQL table or the JSON
 // store). Missing ids stay listed so a fresh publish remains visible until an
@@ -37,6 +39,29 @@ export function isModuleListed(listings, id) {
   return !record || record.listed !== false;
 }
 
+// relPath is always under the modules/ tree, e.g. "modules/catalog.json".
+// publicBaseUrl already includes the release prefix; OSS parts rebuild the
+// virtual-hosted URL with that prefix applied once.
+export function moduleObjectUrl(config, relPath) {
+  const rel = String(relPath || "").replace(/^\/+/, "");
+  if (!rel) return "";
+  const publicBaseUrl = String(config?.publicBaseUrl || "").replace(/\/+$/, "");
+  if (publicBaseUrl) return `${publicBaseUrl}/${rel}`;
+  const endpoint = String(config?.endpoint || "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const bucket = String(config?.bucket || "").trim();
+  if (!endpoint || !bucket) return "";
+  const prefix = String(config?.prefix || "").replace(/^\/+|\/+$/g, "");
+  const key = prefix ? `${prefix}/${rel}` : rel;
+  return `https://${bucket}.${endpoint}/${key}`;
+}
+
+export function formatModuleFetchError(error) {
+  const message = error && error.message ? String(error.message) : String(error || "unknown error");
+  const cause = error && error.cause;
+  const detail = cause && (cause.code || cause.message) ? ` (${cause.code || cause.message})` : "";
+  return `module object fetch failed: ${message}${detail}`;
+}
+
 function latestById(entries) {
   const map = new Map();
   for (const entry of entries) {
@@ -55,12 +80,12 @@ function latestById(entries) {
 }
 
 export function createRemoteModules(options = {}) {
-  const oss = {
-    endpoint: process.env.RELEASE_OSS_ENDPOINT || "",
-    bucket: process.env.RELEASE_OSS_BUCKET || "",
-    prefix: (process.env.RELEASE_OSS_PREFIX || "").replace(/\/+$/, ""),
+  const distribution = {
+    publicBaseUrl: options.publicBaseUrl ?? process.env.RELEASE_PUBLIC_BASE_URL ?? "",
+    endpoint: options.endpoint ?? process.env.RELEASE_OSS_ENDPOINT ?? "",
+    bucket: options.bucket ?? process.env.RELEASE_OSS_BUCKET ?? "",
+    prefix: String(options.prefix ?? process.env.RELEASE_OSS_PREFIX ?? "").replace(/\/+$/, ""),
   };
-  const ossEnabled = Boolean(oss.endpoint && oss.bucket);
   const localDir = options.localDir || process.env.ATL_LOCAL_MODULES_DIR || "";
   const listingsFile = options.listings ? "" : (options.listingsPath || path.join(process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : "data", "module-listings.json"));
   const catalogCache = { body: null, at: 0 };
@@ -87,14 +112,17 @@ export function createRemoteModules(options = {}) {
     listings = { version: 1, modules: loaded?.modules && typeof loaded.modules === "object" ? loaded.modules : {} };
   }
 
-  function ossUrl(key) {
-    return `https://${oss.bucket}.${oss.endpoint.replace(/^https?:\/\//, "")}/${key}`;
-  }
-
-  async function fetchOssObject(key) {
-    const response = await fetch(ossUrl(key), { signal: AbortSignal.timeout(10_000) });
+  async function fetchDistributedObject(relPath) {
+    const url = moduleObjectUrl(distribution, relPath);
+    if (!url) throw new Error("module distribution not configured (set RELEASE_PUBLIC_BASE_URL or RELEASE_OSS_ENDPOINT/BUCKET)");
+    let response;
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    } catch (error) {
+      throw new Error(formatModuleFetchError(error));
+    }
     if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`OSS ${key}: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`module object HTTP ${response.status}: ${relPath}`);
     return Buffer.from(await response.arrayBuffer());
   }
 
@@ -102,13 +130,12 @@ export function createRemoteModules(options = {}) {
     if (typeof options.fetchCatalogText === "function") {
       return options.fetchCatalogText({ force });
     }
-    const key = `${oss.prefix}/modules/catalog.json`;
     if (!force && catalogCache.body && Date.now() - catalogCache.at < CATALOG_TTL_MS) {
       return catalogCache.body;
     }
     let body;
     try {
-      body = (await fetchOssObject(key))?.toString("utf8") ?? "[]";
+      body = (await fetchDistributedObject("modules/catalog.json"))?.toString("utf8") ?? "[]";
     } catch (error) {
       if (catalogCache.body) return catalogCache.body; // stale fallback
       throw error;
@@ -164,11 +191,11 @@ export function createRemoteModules(options = {}) {
     }
     const local = readLocalPackageFile(id, file);
     if (local) return local;
-    const key = `${oss.prefix}/modules/${id}/${version}/${file}`;
+    const relPath = `modules/${id}/${version}/${file}`;
     const cacheKey = `${id}/${version}/${file}`;
     const hit = fileCache.get(cacheKey);
     if (hit && Date.now() - hit.at < 300_000) return hit.body;
-    const body = await fetchOssObject(key);
+    const body = await fetchDistributedObject(relPath);
     if (body == null) throw new Error("package file not found");
     fileCache.set(cacheKey, { body, contentType: "application/javascript; charset=utf-8", at: Date.now() });
     if (fileCache.size > FILE_CACHE_MAX) {
@@ -254,5 +281,5 @@ export function createRemoteModules(options = {}) {
     res.end(JSON.stringify(obj));
   }
 
-  return { handle, init };
+  return { handle, init, moduleObjectUrl: (relPath) => moduleObjectUrl(distribution, relPath) };
 }

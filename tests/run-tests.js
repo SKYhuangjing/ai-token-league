@@ -9693,7 +9693,7 @@ testAggregateCacheDayWindowInvalidation();
 // ===== Compute sharing — CPA plugin control plane (R23) =====
 
 import { createSharingCpa } from "../src/backend/sharing-cpa.js";
-import { createRemoteModules } from "../src/backend/remote-modules.js";
+import { createRemoteModules, formatModuleFetchError, moduleObjectUrl } from "../src/backend/remote-modules.js";
 import { claimToRow, createControlPlaneStore, diffListingRows, diffSharingRows, rowToClaim, rowToShare, shareToRow } from "../src/backend/control-plane-store.js";
 // Test identity registry: mirrors server.js's participant verification wiring
 // so the signed-claim path exercises the real canonicalJson + Ed25519 chain.
@@ -9937,10 +9937,73 @@ async function testSharingCpaAdminGuardAndPolicy() {
 await testSharingCpaRegisterHeartbeatClaim();
 await testSharingCpaUnregisterAndAdmin();
 await testSharingCpaAdminGuardAndPolicy();
+testModuleObjectUrlPrefersPublicBase();
 await testModuleListingOverlay();
+await testModuleDistributionUsesPublicBaseUrl();
 await testControlPlaneFollowsJsonStore();
 await testControlPlaneDiffRows();
 await testControlPlaneMysqlRoundTrip();
+
+function testModuleObjectUrlPrefersPublicBase() {
+  assert.equal(
+    moduleObjectUrl({ publicBaseUrl: "https://cdn.example/ai-token-league/" }, "modules/catalog.json"),
+    "https://cdn.example/ai-token-league/modules/catalog.json",
+  );
+  assert.equal(
+    moduleObjectUrl({ endpoint: "oss-cn-shanghai.aliyuncs.com", bucket: "1data-dev", prefix: "ai-token-league" }, "modules/zhipu-plan/1.1.0/index.js"),
+    "https://1data-dev.oss-cn-shanghai.aliyuncs.com/ai-token-league/modules/zhipu-plan/1.1.0/index.js",
+  );
+  assert.equal(moduleObjectUrl({}, "modules/catalog.json"), "");
+  assert.equal(
+    formatModuleFetchError(Object.assign(new Error("fetch failed"), { cause: { code: "ENOTFOUND" } })),
+    "module object fetch failed: fetch failed (ENOTFOUND)",
+  );
+  console.log("  testModuleObjectUrlPrefersPublicBase passed");
+}
+
+async function testModuleDistributionUsesPublicBaseUrl() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atl-module-public-base-"));
+  const catalogPath = path.join(dir, "modules", "catalog.json");
+  const filePath = path.join(dir, "modules", "zhipu-plan", "1.1.0", "index.js");
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(catalogPath, JSON.stringify({ version: 1, catalog: [{ id: "zhipu-plan", version: "1.1.0", title: "智谱" }] }));
+  fs.writeFileSync(filePath, "export default { mount() {} };\n");
+  const staticServer = http.createServer((req, res) => {
+    const file = path.join(dir, decodeURIComponent(new URL(req.url, "http://x").pathname));
+    if (!file.startsWith(dir) || !fs.existsSync(file)) {
+      res.writeHead(404);
+      res.end("missing");
+      return;
+    }
+    res.writeHead(200, { "content-type": file.endsWith(".js") ? "text/javascript" : "application/json" });
+    res.end(fs.readFileSync(file));
+  });
+  await new Promise((resolve) => staticServer.listen(0, "127.0.0.1", resolve));
+  const publicBaseUrl = `http://127.0.0.1:${staticServer.address().port}`;
+  const modules = createRemoteModules({
+    publicBaseUrl,
+    endpoint: "",
+    bucket: "",
+    prefix: "",
+    listingsPath: path.join(dir, "listings.json"),
+  });
+  assert.equal(modules.moduleObjectUrl("modules/catalog.json"), `${publicBaseUrl}/modules/catalog.json`);
+  const server = http.createServer((req, res) => { modules.handle(req, res); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const catalog = await (await fetch(`${base}/api/modules/remote/catalog`)).json();
+    assert.deepEqual(catalog.catalog.map((entry) => entry.id), ["zhipu-plan"]);
+    const file = await fetch(`${base}/api/modules/remote/file/zhipu-plan/1.1.0/index.js`);
+    assert.equal(file.status, 200);
+    assert.match(await file.text(), /mount/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => staticServer.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  console.log("  testModuleDistributionUsesPublicBaseUrl passed");
+}
 
 async function testModuleListingOverlay() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atl-module-listing-"));
