@@ -59,7 +59,7 @@ export default {
 
 可以额外具名导出纯函数供单元测试（参考 plugins/zhipu-plan/index.js 的 `renderResult/windowLabel`）。
 
-### 1.2 ctx 能力清单（平台给你的全部，共 4 项）
+### 1.2 ctx 能力清单（平台给你的全部，共 5 项）
 
 | 能力 | 签名 | 用途 |
 |---|---|---|
@@ -67,6 +67,7 @@ export default {
 | `ctx.invoke(command, args?)` | `(string, object?) => Promise<any>` | **sidecar 通道**。命令格式 `{插件id}:{子命令}`（自己插件的命令）或平台命令。见 §1.3 |
 | `ctx.escapeHtml(text)` | `(string) => string` | HTML 转义（& < > " '，属性安全）。**所有动态文本入模板前必须过它** |
 | `ctx.apiBase()` | `() => string` | 后端 API 根地址（活取，随用户配置变化，已去尾斜杠）。`fetch(\`${ctx.apiBase()}/api/...\`)` 走云端 HTTP |
+| `ctx.notify(text, opts?)` | `(string, { duration }?) => void` | App 全局 toast（与总览扫描提示同一表现层；纯文本、自动消失）。操作回执用它，错误建议留在卡片内常驻。旧宿主可能不提供——`ctx.notify ? ctx.notify(x) : 卡内状态行(x)` 兜底。无需权限声明 |
 
 ### 1.3 当前可用的 sidecar 命令
 
@@ -171,6 +172,7 @@ node scripts/publish-module.js --module-dir plugins/<your-plugin> --env env.loca
 - 读写**自己的** config（modules:get/set）
 - 调用已注册的 sidecar 命令（上表）
 - `fetch` 云端后端 API（ctx.apiBase）
+- 弹 App 全局 toast（ctx.notify，纯文本回执；无需权限声明）
 - 使用剪贴板（navigator.clipboard）、IntersectionObserver、setInterval 等标准 web API
 
 ### 插件不可以 / 平台不提供

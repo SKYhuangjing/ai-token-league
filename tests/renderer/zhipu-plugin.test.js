@@ -3,7 +3,7 @@
 // named exports so they stay unit-testable without a DOM or host stand-in.
 import { describe, it, expect } from 'vitest';
 import {
-  renderResult, windowLabel, resetCountdown, compactReset, maskApiKey, usageLevel, planTier,
+  renderResult, windowLabel, resetCountdown, compactReset, refreshedAgeLabel, maskApiKey, usageLevel, planTier,
 } from '../../plugins/zhipu-plan/index.js';
 
 const t = (key, params = {}) => {
@@ -113,6 +113,30 @@ describe('zhipu plugin card: resetCountdown', () => {
   it('returns null for past or invalid resets (absolute fallback)', () => {
     expect(resetCountdown(0, 1_000, t)).toBeNull();
     expect(resetCountdown(Number.NaN, 1_000, t)).toBeNull();
+  });
+});
+
+describe('zhipu plugin card: refreshedAgeLabel', () => {
+  const ageT = (key, params = {}) => ({
+    'desktop.modules.zhipu.refreshedJustNow': 'just now',
+    'desktop.modules.zhipu.refreshedMinutesAgo': `${params.m} min ago`,
+    'desktop.modules.zhipu.refreshedHoursAgo': `${params.h} h ${params.m} m ago`,
+    'desktop.modules.zhipu.refreshedDaysAgo': `${params.d} d ago`,
+  }[key]);
+  const now = 1_000_000_000_000;
+
+  it('formats the just-now, minutes, hours, and days bands', () => {
+    expect(refreshedAgeLabel(now - 30_000, now, ageT)).toBe('just now');
+    expect(refreshedAgeLabel(now - 5 * 60_000, now, ageT)).toBe('5 min ago');
+    expect(refreshedAgeLabel(now - 133 * 60_000, now, ageT)).toBe('2 h 13 m ago');
+    expect(refreshedAgeLabel(now - 3 * 1440 * 60_000, now, ageT)).toBe('3 d ago');
+  });
+
+  it('returns null for missing, invalid, or future stamps', () => {
+    expect(refreshedAgeLabel(null, now, ageT)).toBeNull();
+    expect(refreshedAgeLabel(0, now, ageT)).toBeNull();
+    expect(refreshedAgeLabel(Number.NaN, now, ageT)).toBeNull();
+    expect(refreshedAgeLabel(now + 60_000, now, ageT)).toBeNull();
   });
 });
 

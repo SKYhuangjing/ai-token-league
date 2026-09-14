@@ -68,10 +68,13 @@ export async function importModuleFromSource(source) {
   return import(url);
 }
 
-export function buildModuleContext({ t, invoke, escapeHtml, apiBase } = {}) {
+export function buildModuleContext({ t, invoke, escapeHtml, apiBase, notify } = {}) {
   // apiBase: () => string — live backend API root getter for plugins that
   // talk to cloud HTTP endpoints; absent in stripped hosts.
-  return { t, invoke, escapeHtml, apiBase };
+  // notify: (text, { duration }?) => void — the app-wide toast (same
+  // presentation as the overview scan hint). Presentation-only, plain text,
+  // no permission needed; it cannot touch data or the DOM outside the toast.
+  return { t, invoke, escapeHtml, apiBase, notify };
 }
 
 // Platform commands every plugin may call without declaring them, scoped to

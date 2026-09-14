@@ -51,6 +51,17 @@ const STYLE = `
 :root[data-theme="dark"] .zhipu-tier[data-tier="pro"] { color: #e6e2d8; background: rgba(196, 198, 206, 0.16); box-shadow: inset 0 0 0 1px rgba(220, 222, 228, 0.28); }
 :root[data-theme="dark"] .zhipu-tier[data-tier="max"] { color: #f6e3a4; background: rgba(244, 176, 0, 0.22); box-shadow: inset 0 0 0 1px rgba(244, 196, 80, 0.4); }
 .zhipu-reset, .zhipu-line .muted { font-size: 12.5px; line-height: 1; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); white-space: nowrap; }
+.zhipu-refreshed { margin-left: auto; animation: zhipu-fade 200ms ease; }
+.zhipu-refreshed .zhipu-reset { font-size: 12px; }
+.zhipu-refreshed[hidden] { display: none; }
+.zhipu-result-output { transition: opacity 140ms ease; }
+.zhipu-result-output.is-refreshing { opacity: 0.5; }
+#zhipu-refresh-btn.is-busy::before { content: ""; width: 11px; height: 11px; margin-right: 6px; border-radius: 50%; border: 1.5px solid currentColor; border-top-color: transparent; display: inline-block; vertical-align: -1px; animation: zhipu-spin 700ms linear infinite; }
+@keyframes zhipu-spin { to { transform: rotate(360deg); } }
+@keyframes zhipu-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .zhipu-refreshed, .zhipu-result-output { animation: none; transition: none; }
+}
 @media (max-width: 860px) {
   .zhipu-board { grid-template-columns: 1fr; }
   .zhipu-tools { border-left: 0; border-top: 1px solid var(--border-subtle); padding: 16px 0 0; }
@@ -112,6 +123,28 @@ export function compactReset(resetMs, nowMs) {
 }
 
 const CLOCK = `<svg class="zhipu-clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.7V8.15l2.15 1.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+// How long ago the data was fetched. Same bands as resetCountdown so the two
+// clock annotations read as one family (this one counts up from the fetch).
+export function refreshedAgeLabel(refreshedMs, nowMs, t) {
+  const diff = Number(nowMs) - Number(refreshedMs);
+  if (!Number.isFinite(diff) || refreshedMs <= 0 || diff < 0) return null;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return t("desktop.modules.zhipu.refreshedJustNow");
+  if (mins < 60) return t("desktop.modules.zhipu.refreshedMinutesAgo", { m: mins });
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return t("desktop.modules.zhipu.refreshedHoursAgo", { h: hours, m: mins % 60 });
+  return t("desktop.modules.zhipu.refreshedDaysAgo", { d: Math.floor(mins / 1440) });
+}
+
+// The four refreshed-age keys postdate some hosts; fall back to built-in
+// strings (language sniffed via an always-present key) instead of raw keys.
+const REFRESHED_FALLBACK = {
+  "desktop.modules.zhipu.refreshedJustNow": { zh: "刚刚", en: "just now" },
+  "desktop.modules.zhipu.refreshedMinutesAgo": { zh: "{m} 分钟前", en: "{m} min ago" },
+  "desktop.modules.zhipu.refreshedHoursAgo": { zh: "{h} 小时 {m} 分前", en: "{h} h {m} m ago" },
+  "desktop.modules.zhipu.refreshedDaysAgo": { zh: "{d} 天前", en: "{d} d ago" },
+};
 
 // Same bands as the menu-bar dot and cc-switch utilizationColor:
 // ok <70, warn 70–89, crit ≥90.
@@ -187,6 +220,7 @@ export function renderResult(data, t) {
 let usageData = null;
 let usageRunning = false;
 let tickTimer = null;
+let refreshedAt = null; // last real fetch time (ms), restored from config on mount
 
 export default {
   async mount(el, ctx) {
@@ -194,6 +228,16 @@ export default {
     const esc = ctx.escapeHtml;
     const t = ctx.t;
     let config = {}; // modules.json 的 zhipu-plan config（本卡生命周期内缓存）
+    const zhHost = String(t("desktop.modules.zhipu.window5h")).includes("小");
+    const ageT = (key, params) => {
+      const out = t(key, params);
+      if (out !== key) return out;
+      const template = REFRESHED_FALLBACK[key];
+      if (!template) return out;
+      let text = template[zhHost ? "zh" : "en"];
+      for (const [name, value] of Object.entries(params || {})) text = text.replace(`{${name}}`, String(value));
+      return text;
+    };
 
     const readConfig = async () => {
       const state = await ctx.invoke("modules:get", {});
@@ -226,6 +270,34 @@ export default {
       resultEl.innerHTML = usageData
         ? renderResult(usageData, t)
         : `<div class="muted">${esc(t("desktop.modules.zhipu.noKeys"))}</div>`;
+      updateRefreshedDom();
+    }
+
+    // "refreshed N min ago" — anchored left of the refresh button, same clock
+    // annotation family as the reset countdowns. Updated by the minute tick.
+    function updateRefreshedDom() {
+      const node = el.querySelector("#zhipu-refreshed");
+      if (!node) return;
+      // only meaningful while real usage data is on screen (no keys / error
+      // states carry no freshness story)
+      const label = refreshedAt && usageData && !usageData.error
+        ? refreshedAgeLabel(refreshedAt, Date.now(), ageT)
+        : null;
+      if (!label) {
+        node.hidden = true;
+        delete node.dataset.refreshedMs;
+        return;
+      }
+      node.hidden = false;
+      node.dataset.refreshedMs = String(refreshedAt);
+      const textEl = node.querySelector(".zhipu-reset");
+      if (textEl) textEl.textContent = label;
+    }
+
+    async function persistRefreshedAt(stamp) {
+      if (config.refreshedAt === stamp) return;
+      config.refreshedAt = stamp;
+      try { await ctx.invoke("modules:set", { id: "zhipu-plan", config: { refreshedAt: stamp } }); } catch { /* best effort */ }
     }
 
     function renderKeysList() {
@@ -245,7 +317,13 @@ export default {
       const resultEl = el.querySelector("#zhipu-result");
       if (!resultEl || usageRunning) return;
       usageRunning = true;
-      if (btn) btn.disabled = true;
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add("is-busy");
+      }
+      // stale-while-revalidate: a manual refresh keeps the previous ledger on
+      // screen (dimmed) instead of flashing the content away
+      if (force && usageData) resultEl.classList.add("is-refreshing");
       try {
         const keys = configKeys();
         if (!keys.length) {
@@ -253,20 +331,30 @@ export default {
           updateResultDom();
           return;
         }
-        if (force) resultEl.textContent = t("desktop.modules.zhipu.querying");
         usageData = await ctx.invoke("zhipu-plan:usage", { keys, force });
+        // fetchedAt = when the sidecar actually hit the quota API (a cache hit
+        // returns the original moment); hosts without it fall back to now.
+        const fetched = Number(usageData && usageData.fetchedAt);
+        refreshedAt = Number.isFinite(fetched) && fetched > 0 ? fetched : Date.now();
+        persistRefreshedAt(refreshedAt);
         updateResultDom();
       } catch (error) {
         usageData = { error: String(error.message || error) };
         updateResultDom();
       } finally {
         usageRunning = false;
-        if (btn) btn.disabled = false;
+        resultEl.classList.remove("is-refreshing");
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove("is-busy");
+        }
       }
     }
 
     // ── card skeleton ──
     const entry = await readConfig();
+    const persisted = Number(config.refreshedAt);
+    if (!refreshedAt && Number.isFinite(persisted) && persisted > 0) refreshedAt = persisted;
     const menubar = config.menubar !== false;
     const alerts = config.alerts !== false;
     const configToggle = (key, on, labelKey) => `
@@ -279,6 +367,7 @@ export default {
         <section class="zhipu-read">
           <div class="zhipu-ledger-head">
             <span class="zhipu-kicker">${esc(t("desktop.modules.zhipu.usageHeading"))}</span>
+            <span class="zhipu-time zhipu-refreshed" id="zhipu-refreshed" hidden>${CLOCK}<span class="zhipu-reset"></span></span>
             <button class="outline-button row-inline-action" id="zhipu-refresh-btn" type="button">${esc(t("desktop.modules.zhipu.refresh"))}</button>
           </div>
           <div id="zhipu-result" class="zhipu-result-output"></div>
@@ -295,7 +384,7 @@ export default {
               <input id="zhipu-key-label" placeholder="${esc(t("desktop.modules.zhipu.keyLabelPlaceholder"))}" autocomplete="off" />
               <div class="zhipu-add-key">
                 <input id="zhipu-key-input" class="mono" placeholder="${esc(t("desktop.modules.zhipu.apiKeyPlaceholder"))}" autocomplete="off" spellcheck="false" />
-                <button class="primary-pill row-inline-action" id="zhipu-key-add" type="button">${esc(t("desktop.modules.zhipu.addKey"))}</button>
+                <button class="outline-button row-inline-action" id="zhipu-key-add" type="button">${esc(t("desktop.modules.zhipu.addKey"))}</button>
               </div>
             </div>
           </div>
@@ -357,6 +446,12 @@ export default {
           const text = Number.isFinite(ms) ? compactReset(ms, Date.now()) : null;
           if (text) node.textContent = text;
           else if (node.dataset.resetAbs) node.textContent = node.dataset.resetAbs.slice(5, 16);
+        });
+        document.querySelectorAll("[data-refreshed-ms]").forEach((node) => {
+          const ms = Number(node.dataset.refreshedMs);
+          const text = Number.isFinite(ms) && ms > 0 ? refreshedAgeLabel(ms, Date.now(), ageT) : null;
+          const textEl = node.querySelector(".zhipu-reset");
+          if (textEl) textEl.textContent = text || "";
         });
         if (el.isConnected) refreshUsage({ force: false }).catch(() => {});
       }, 60_000);

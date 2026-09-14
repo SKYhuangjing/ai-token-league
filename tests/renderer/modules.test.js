@@ -4,7 +4,7 @@
 // remote catalog plugin, covered by its own specs).
 import { describe, it, expect } from 'vitest';
 import { MODULE_REGISTRY, findModule, normalizeModulesState, moduleEnabled, installedOrderFromState, sortModulesByOrder, moveInstalledOrder } from '../../src/shared/modules.js';
-import { invokeAllowed, createGuardedInvoke, PLATFORM_INVOKE_COMMANDS, loadInstalledModuleSource, isUnreachableModuleFetch } from '../../src/shared/module-loader.js';
+import { invokeAllowed, createGuardedInvoke, PLATFORM_INVOKE_COMMANDS, loadInstalledModuleSource, isUnreachableModuleFetch, buildModuleContext } from '../../src/shared/module-loader.js';
 
 describe('plugin registry', () => {
   it('ships no built-in plugins (pluggable model, R24)', () => {
@@ -69,6 +69,16 @@ describe('installed plugin order', () => {
     expect(moveInstalledOrder(['zhipu-plan', 'compute-sharing', 'other'], 'zhipu-plan', 'other', true))
       .toEqual(['compute-sharing', 'other', 'zhipu-plan']);
     expect(moveInstalledOrder(['zhipu-plan'], 'zhipu-plan', 'zhipu-plan', true)).toEqual(['zhipu-plan']);
+  });
+});
+
+describe('module context', () => {
+  it('passes the five platform capabilities through, notify included', () => {
+    const notify = () => {};
+    const ctx = buildModuleContext({ t: String, invoke: () => {}, escapeHtml: String, apiBase: () => 'https://x', notify });
+    expect(ctx.notify).toBe(notify);
+    expect(Object.keys(ctx).sort()).toEqual(['apiBase', 'escapeHtml', 'invoke', 'notify', 't']);
+    expect(buildModuleContext({}).notify).toBeUndefined();
   });
 });
 

@@ -93,6 +93,9 @@ export default {
       if (button) button.disabled = on;
     };
     const message = (text) => { els.status.textContent = text || ""; };
+    // Receipts ride the host toast (ctx.notify) with an in-card fallback for
+    // older hosts; errors keep the persistent in-card status line.
+    const notify = (text) => (ctx.notify ? ctx.notify(text, { duration: 4000 }) : message(text));
     const guard = async (fn) => {
       busy(true);
       try { await fn(); } catch (error) { message(String(error.message || error)); } finally { busy(false); }
@@ -186,13 +189,13 @@ export default {
         }
         if (!Object.keys(policy).length) throw new Error(t("desktop.sharing.owner.policyEmpty"));
         await ctx.invoke("sharing:owner-policy", { policy });
-        message(t("desktop.sharing.owner.policySaved"));
+        notify(t("desktop.sharing.owner.policySaved"));
         await refresh();
       }));
       els.ownerBody.querySelector('[data-cs="stop"]').addEventListener("click", () => guard(async () => {
         if (!window.confirm(t("desktop.sharing.owner.stopConfirm"))) return;
         await ctx.invoke("sharing:owner-unregister", {});
-        message(t("desktop.sharing.owner.stopped"));
+        notify(t("desktop.sharing.owner.stopped"));
         await refresh();
       }));
     }
@@ -305,7 +308,7 @@ export default {
     }
 
     async function claimShare(shareId) {
-      message(t("desktop.sharing.borrow.claiming"));
+      notify(t("desktop.sharing.borrow.claiming"));
       const ts = Date.now();
       const signed = await ctx.invoke("sharing:claim-sign", { shareId, ts });
       const data = await apiPost("/api/shares/claim", {
@@ -326,7 +329,7 @@ export default {
         expiresAt: data.expiresAt,
       };
       await ctx.invoke("sharing:borrow-set", { claims: [record, ...claims.filter((c) => c.keyId !== record.keyId)] });
-      message(t("desktop.sharing.borrow.claimed"));
+      notify(t("desktop.sharing.borrow.claimed"));
       await refresh({ forceShares: true });
     }
 
@@ -335,7 +338,7 @@ export default {
       const store = await ctx.invoke("sharing:borrow-get");
       const claims = (Array.isArray(store && store.claims) ? store.claims : []).filter((c) => c.keyId !== claim.keyId);
       await ctx.invoke("sharing:borrow-set", { claims });
-      message(t("desktop.sharing.borrow.revoked"));
+      notify(t("desktop.sharing.borrow.revoked"));
       await refresh({ forceShares: true });
     }
 

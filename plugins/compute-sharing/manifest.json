@@ -1,6 +1,6 @@
 {
   "id": "compute-sharing",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "query",
   "title": "算力共享",
   "desc": "双向：认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点（账本/策略/停止）。",

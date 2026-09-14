@@ -37,6 +37,7 @@ import {
   sortProviderHealth,
   providerStatusGroup as _providerStatusGroup,
   sortProviderHealthByStatus,
+  compareVersionStrings as _compareVersionStrings,
 } from "./renderer-helpers.js";
 
 import {
@@ -196,13 +197,20 @@ const usageQueryState = {
   lastRowCount: 0
 };
 
-function showToast(message) {
+function showToast(message, { duration = 1800 } = {}) {
   const toast = document.querySelector("#toast");
   if (!toast || !message) return;
   toast.textContent = message;
   toast.classList.add("show");
   window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+  showToast.timer = window.setTimeout(() => {
+    toast.classList.remove("show");
+    // clear after the fade so screen readers do not keep reading stale text
+    window.clearTimeout(showToast.clearTimer);
+    showToast.clearTimer = window.setTimeout(() => {
+      if (!toast.classList.contains("show")) toast.textContent = "";
+    }, 200);
+  }, duration);
 }
 
 let appConfirmResolver = null;
@@ -4980,7 +4988,7 @@ function bindModuleToggle(card, mod) {
         button.classList.toggle("is-off", !on);
         button.setAttribute("aria-checked", String(on));
         button.setAttribute("aria-pressed", String(on));
-        document.getElementById("modules-status").textContent = String(error.message || error);
+        modulesError(String(error.message || error));
       }
     });
   });
@@ -4998,9 +5006,12 @@ function buildModuleCard(mod) {
   const headCopy = mod.titleKey
     ? `<strong>${t(mod.titleKey)}</strong><div class="muted">${t(mod.descKey)}</div>`
     : `<strong>${escapeHtml(mod.title || mod.id)}</strong><div class="muted">${escapeHtml(mod.desc || "")}</div>`;
+  const latest = mod.remote ? (modulesHost.online.byId || {})[mod.id] : null;
+  const hasUpgrade = Boolean(latest && mod.version && _compareVersionStrings(mod.version, latest.version) < 0);
   const meta = mod.remote
     ? `<div class="module-inline-actions modules-card-meta">
         <span class="muted mono">v${escapeHtml(mod.version || "?")}</span>
+        ${hasUpgrade ? `<button class="primary-pill row-inline-action" data-remote-upgrade="${escapeHtml(mod.id)}" type="button">${escapeHtml(t("desktop.modules.upgradeTo", { version: latest.version }))}</button>` : ""}
         <button class="outline-button row-inline-action" data-remote-uninstall="${escapeHtml(mod.id)}" type="button">${t("desktop.modules.uninstall")}</button>
       </div>`
     : "";
@@ -5020,6 +5031,17 @@ function buildModuleCard(mod) {
   if (mod.remote) {
     detail.innerHTML = `<div data-remote-mount="${escapeHtml(mod.id)}"></div>`;
     bindRemoteUninstall(card, mod);
+    detail.querySelector(`[data-remote-upgrade="${cssEscape(mod.id)}"]`)?.addEventListener("click", () => {
+      run(async () => {
+        try {
+          await installRemoteModule(latest);
+          modulesNotice(t("desktop.modules.onlineInstallDone", { name: remoteEntryName(latest), version: latest.version }));
+          rerenderModules();
+        } catch (error) {
+          modulesError(String(error.message || error));
+        }
+      });
+    });
     const mountPoint = detail.querySelector(`[data-remote-mount="${cssEscape(mod.id)}"]`);
     if (on && mountPoint) mountRemoteModuleInto(mountPoint, mod);
   }
@@ -5034,9 +5056,11 @@ function bindRemoteUninstall(detail, mod) {
       try {
         const removed = await uninstallRemoteModule(mod.id);
         rerenderModules();
-        if (!removed) document.getElementById("modules-status").textContent = t("desktop.modules.packageDeleteFail");
+        modulesNotice(removed
+          ? t("desktop.modules.onlineUninstalled", { name: remoteEntryName(mod) })
+          : t("desktop.modules.packageDeleteFail"));
       } catch (error) {
-        document.getElementById("modules-status").textContent = String(error.message || error);
+        modulesError(String(error.message || error));
       }
     });
   });
@@ -5071,6 +5095,21 @@ async function uninstallRemoteModule(id) {
   await refreshModulesState();
   await dropInstalledOrderId(id);
   return removed;
+}
+
+// Operation receipts ride the app-wide toast (same presentation as the
+// overview scan hint); errors stay on the status line until the next action.
+function modulesNotice(text, { duration = 4000 } = {}) {
+  showToast(text, { duration });
+}
+
+// The modules status line only carries errors now (receipts ride the toast),
+// so it always renders in the danger tone.
+function modulesError(text) {
+  const el = document.getElementById("modules-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.dataset.tone = "error";
 }
 
 function rerenderModules() {
@@ -5192,6 +5231,7 @@ async function mountRemoteModuleInto(detailEl, mod) {
       invoke: createGuardedInvoke(declaredPermissions, api.sidecarInvoke, mod.id),
       escapeHtml,
       apiBase: remoteModulesBase,
+      notify: (text, opts) => showToast(String(text || ""), opts),
     }));
   } catch (error) {
     if (error && error.code === "offline") {
@@ -5212,13 +5252,27 @@ async function mountRemoteModuleInto(detailEl, mod) {
   }
 }
 
+// Display name for a catalog/installed module entry: localized titleKey
+// wins, then the plain catalog title, then the bare id.
+function remoteEntryName(entry) {
+  if (!entry) return "";
+  if (entry.titleKey) {
+    const localized = t(entry.titleKey);
+    if (localized && localized !== entry.titleKey) return localized;
+  }
+  return entry.title || entry.id || "";
+}
+
 function buildOnlineCatalogRow(entry) {
   const builtIn = Boolean(findModule(entry.id));
   const installedVersion = (!builtIn && modulesHost.state && modulesHost.state[entry.id] && modulesHost.state[entry.id].installedVersion) || null;
+  const installLabel = !installedVersion
+    ? t("desktop.modules.install")
+    : (_compareVersionStrings(installedVersion, entry.version) < 0 ? t("desktop.modules.update") : t("desktop.modules.reinstall"));
   const actions = builtIn
     ? `<span class="muted">${t("desktop.modules.builtIn")}</span>`
     : `<span class="muted mono">v${escapeHtml(entry.version || "?")}</span>
-      <button class="outline-button" data-online-install="${escapeHtml(entry.id)}" type="button">${installedVersion ? t("desktop.modules.reinstall") : t("desktop.modules.install")}</button>
+      <button class="${installLabel === t("desktop.modules.update") ? "primary-pill" : "outline-button"} row-inline-action" data-online-install="${escapeHtml(entry.id)}" type="button">${installLabel}</button>
       ${installedVersion ? `<button class="outline-button" data-online-uninstall="${escapeHtml(entry.id)}" type="button">${t("desktop.modules.uninstall")}</button>` : ""}`;
   const row = document.createElement("div");
   row.className = "row-card modules-disabled-row";
@@ -5241,12 +5295,12 @@ function buildOnlineCatalogRow(entry) {
         activePluginId = entry.id;
         modulesTab = "installed";
         applyModulesTabVisibility();
-        document.getElementById("modules-status").textContent = t("desktop.modules.onlineInstallDone", { id: entry.id, version: entry.version });
+        modulesNotice(t("desktop.modules.onlineInstallDone", { name: remoteEntryName(entry), version: entry.version }));
         rerenderModules();
       } catch (error) {
         btn.disabled = false;
         btn.textContent = t("desktop.modules.install");
-        document.getElementById("modules-status").textContent = t("desktop.modules.onlineInstallFail", { error: String(error.message || error) });
+        modulesError(t("desktop.modules.onlineInstallFail", { error: String(error.message || error) }));
       }
     });
   });
@@ -5255,9 +5309,11 @@ function buildOnlineCatalogRow(entry) {
       try {
         const removed = await uninstallRemoteModule(entry.id);
         rerenderModules();
-        if (!removed) document.getElementById("modules-status").textContent = t("desktop.modules.packageDeleteFail");
+        modulesNotice(removed
+          ? t("desktop.modules.onlineUninstalled", { name: remoteEntryName(entry) })
+          : t("desktop.modules.packageDeleteFail"));
       } catch (error) {
-        document.getElementById("modules-status").textContent = String(error.message || error);
+        modulesError(String(error.message || error));
       }
     });
   });
@@ -5407,7 +5463,7 @@ function bindInstalledTabReorder(tabs) {
         applyInstalledOrderToDom(next);
       } catch (error) {
         applyInstalledOrderToDom(session.origin);
-        document.getElementById("modules-status").textContent = String(error.message || error);
+        modulesError(String(error.message || error));
       }
     };
 
@@ -5609,7 +5665,7 @@ async function refreshModulesPanel() {
       modulesHost.state = normalizeModulesState(saved && saved.modules);
       modulesHost.loaded = true;
     } catch (error) {
-      document.getElementById("modules-status").textContent = String(error.message || error);
+      modulesError(String(error.message || error));
       return;
     }
   }

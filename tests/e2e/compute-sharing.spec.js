@@ -10,7 +10,7 @@ import { navigateTo } from './helpers.js';
 const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf-8');
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf-8');
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const CATALOG = {
   version: 1,
   catalog: [
@@ -109,7 +109,7 @@ installed.describe('Compute sharing (merged card, en)', () => {
     await expect(page.locator('[data-cs="mine"]')).toContainText('ANTHROPIC_BASE_URL=http://192.168.1.4:8317');
     const signs = await page.evaluate(() => window.__ATL_E2E_STATE__.borrowCalls.signs);
     expect(signs.at(-1)?.shareId).toBe('shr_e2e1');
-    await expect(page.locator('[data-cs="status"]')).toContainText('Claimed');
+    await expect(page.locator('#toast')).toContainText('Claimed');
   });
 
   installed('backend identity rejection surfaces a friendly error', async ({ page }) => {
@@ -125,12 +125,12 @@ installed.describe('Compute sharing (merged card, en)', () => {
     await page.locator('[data-cs-policy="budget"]').fill('2000000');
     await page.locator('[data-cs-policy="maxClaims"]').fill('8');
     await page.locator('[data-cs="savePolicy"]').click();
-    await expect(page.locator('[data-cs="status"]')).toContainText('Policy saved.', { timeout: 5_000 });
+    await expect(page.locator('#toast')).toContainText('Policy saved.', { timeout: 5_000 });
     const policy = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.policy.at(-1));
     expect(policy).toEqual({ budget: 2000000, maxClaims: 8 });
     page.once('dialog', (dialog) => dialog.accept());
     await page.locator('[data-cs="stop"]').click();
-    await expect(page.locator('[data-cs="status"]')).toContainText('Sharing stopped.', { timeout: 5_000 });
+    await expect(page.locator('#toast')).toContainText('Sharing stopped.', { timeout: 5_000 });
     // the owner section collapses entirely after unregister
     await expect(page.locator('[data-cs="owner"]')).toBeHidden({ timeout: 5_000 });
     expect(await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.unregistered)).toBe(true);

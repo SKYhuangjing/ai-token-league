@@ -120,7 +120,11 @@ pub fn usage_cached(args: &Value, alerts_on: bool) -> Value {
             }
         }
     }
-    let data = query_blocking(args);
+    // Stamp the fetch time once; the cached clone keeps it, so a later cache
+    // hit reports when the quota API was actually hit (data freshness for the
+    // card's "refreshed N min ago" display).
+    let mut data = query_blocking(args);
+    data["fetchedAt"] = serde_json::json!(now);
     ingest_query(&data, now, alerts_on, Some((fingerprint, data.clone())));
     data
 }
@@ -161,7 +165,8 @@ pub fn due_refresh(now_ms: i64) -> bool {
 
 /// Query + ingest for the tray-side refresh (no renderer involved).
 pub fn refresh_and_cache(args: &Value, now_ms: i64, alerts_on: bool) -> Value {
-    let data = query_blocking(args);
+    let mut data = query_blocking(args);
+    data["fetchedAt"] = serde_json::json!(now_ms);
     let fingerprint = args.get("keys").cloned().unwrap_or(Value::Null).to_string();
     ingest_query(&data, now_ms, alerts_on, Some((fingerprint, data.clone())));
     data

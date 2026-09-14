@@ -1,7 +1,7 @@
 // Tests for pure helper functions extracted from renderer.js
 import { describe, it, expect } from 'vitest';
 import {
-  escapeHtml, cssEscape, clampHour, formatNumber, formatHourLabel,
+  escapeHtml, cssEscape, clampHour, compareVersionStrings, formatNumber, formatHourLabel,
   formatTime, formatDateTime, formatBytes, formatDate, formatTrendPeriod,
   formatAxisLabel, formatDetailBreakdownPeriod,
   hasPositiveUsage, hasConfiguredApiBaseUrl, normalizeApiBaseUrl,
@@ -19,6 +19,20 @@ import {
 } from '../../src/desktop/renderer-helpers.js';
 
 // ── String / Number Utilities ──
+
+describe('compareVersionStrings', () => {
+  it('orders dot versions numerically per segment', () => {
+    expect(compareVersionStrings('1.9.3', '1.10.0')).toBeLessThan(0);
+    expect(compareVersionStrings('0.1.2', '0.1.1')).toBeGreaterThan(0);
+    expect(compareVersionStrings('1.1.2', '1.1.2')).toBe(0);
+  });
+
+  it('pads unequal segment counts and tolerates junk', () => {
+    expect(compareVersionStrings('1.1', '1.1.0')).toBe(0);
+    expect(compareVersionStrings('', undefined)).toBe(0);
+    expect(compareVersionStrings('2', '1.9.9')).toBeGreaterThan(0);
+  });
+});
 
 describe('escapeHtml', () => {
   it('escapes ampersand', () => {

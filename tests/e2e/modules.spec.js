@@ -9,7 +9,7 @@ const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), '
 // plugin entry through the distribution proxy route so the mounted code is
 // the shipped code. Source serving must precede goto (the modules screen
 // renders and mounts during boot).
-const ZHIPU_VERSION = '1.1.0';
+const ZHIPU_VERSION = '1.1.4';
 const zhipuSource = readFileSync(resolve(import.meta.dirname, '../../plugins/zhipu-plan/index.js'), 'utf-8');
 
 function scenarioTest(config) {
@@ -52,7 +52,7 @@ enabled.describe('Modules screen (enabled, en)', () => {
     await expect(page.locator('[data-module-card="compute-sharing"]')).toHaveCount(0);
     // pluggable lifecycle (R24): version + uninstall ride on the card
     const card = page.locator('[data-module-card="zhipu-plan"]');
-    await expect(card.locator('.module-inline-actions .mono').first()).toContainText('v1.1.0');
+    await expect(card.locator('.module-inline-actions .mono').first()).toContainText(`v${ZHIPU_VERSION}`);
     await expect(card.locator('[data-remote-uninstall="zhipu-plan"]')).toBeVisible();
   });
 
@@ -95,6 +95,9 @@ enabled.describe('Modules screen (enabled, en)', () => {
     await expect(page.locator('#zhipu-result')).toContainText('51%');
     await expect(page.locator('#zhipu-result')).toContainText('33%');
     await expect(page.locator('#zhipu-result .zhipu-reset').first()).toBeVisible();
+    // refresh age rides next to the refresh button, same clock family
+    await expect(page.locator('#zhipu-refreshed')).toBeVisible();
+    await expect(page.locator('#zhipu-refreshed')).toContainText('just now');
   });
 
   enabled('zhipu card: manual refresh forces, menu-bar/alerts toggles persist, key removal', async ({ page }) => {
@@ -140,6 +143,7 @@ zh.describe('Modules screen (zh-CN)', () => {
     await expect(page.locator('#zhipu-result')).toContainText('5 小时', { timeout: 5_000 });
     await expect(page.locator('#zhipu-result')).toContainText('每周');
     await expect(page.locator('#zhipu-result')).toContainText('33%');
+    await expect(page.locator('#zhipu-refreshed')).toContainText('刚刚');
   });
 });
 

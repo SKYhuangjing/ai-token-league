@@ -13,13 +13,13 @@ const catalog = {
   version: 1,
   catalog: [
     {
-      id: 'zhipu-plan', version: '1.1.0', type: 'query',
+      id: 'zhipu-plan', version: '1.1.4', type: 'query',
       title: '智谱套餐用量', desc: '查询 GLM Coding Plan 用量。',
       permissions: ['sidecar:zhipu-plan:usage'],
     },
     {
-      id: 'compute-sharing', version: '0.1.1', type: 'query',
-      title: '算力共享', desc: '认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点。',
+      id: 'compute-sharing', version: '0.1.2', type: 'query',
+      title: '算力共享', desc: '认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点。', titleKey: 'desktop.sharing.plugin.title',
       permissions: [
         'sidecar:sharing:claim-sign', 'sidecar:sharing:borrow-get', 'sidecar:sharing:borrow-set',
         'sidecar:sharing:owner-status', 'sidecar:sharing:owner-policy', 'sidecar:sharing:owner-unregister',
@@ -39,7 +39,7 @@ function scenarioTest(config) {
     page: async ({ page }, use) => {
       await page.route('**/api/modules/remote/catalog', (route) =>
         route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(catalog) }));
-      await page.route('**/api/modules/remote/file/compute-sharing/0.1.1/index.js', (route) =>
+      await page.route('**/api/modules/remote/file/compute-sharing/0.1.2/index.js', (route) =>
         route.fulfill({ status: 200, contentType: 'text/javascript', body: sharingSource }));
       await page.route('**/api/shares', (route) => route.fulfill({ json: { shares: [] } }));
       await page.addInitScript(`window.__ATL_E2E_CONFIG__ = ${JSON.stringify(config)};`);
@@ -104,14 +104,19 @@ online.describe('Online plugins tab', () => {
     await expect(card).toContainText('No claims yet.', { timeout: 5_000 });
     // persisted state records the installed version
     const state = await page.evaluate(() => window.__ATL_E2E_STATE__.modulesState.modules['compute-sharing']);
-    expect(state.installedVersion).toBe('0.1.1');
+    expect(state.installedVersion).toBe('0.1.2');
     expect(state.enabled).toBe(true);
+    // the install receipt is the app-wide toast: shows, then auto-hides
+    const toast = page.locator('#toast');
+    await expect(toast).toContainText('Installed Compute sharing', { timeout: 4_000 });
+    await expect(toast).not.toHaveClass(/show/, { timeout: 6_000 });
     // uninstall clears the card and the persisted record
     await page.locator('[data-remote-uninstall="compute-sharing"]').click();
     await expect(page.locator('[data-module-card="compute-sharing"]')).toHaveCount(0);
+    await expect(page.locator('#toast')).toContainText('Uninstalled Compute sharing', { timeout: 4_000 });
     const after = await page.evaluate(() => window.__ATL_E2E_STATE__.modulesState.modules['compute-sharing']);
     expect(after.installedVersion).toBeUndefined();
-    const leftover = await page.evaluate(() => window.__ATL_E2E_STATE__.pluginPackages['compute-sharing/0.1.1']);
+    const leftover = await page.evaluate(() => window.__ATL_E2E_STATE__.pluginPackages['compute-sharing/0.1.2']);
     expect(leftover).toBeUndefined();
   });
 
@@ -123,7 +128,7 @@ online.describe('Online plugins tab', () => {
     await page.locator('[data-online-install="compute-sharing"]').click();
     await expect(page.locator('[data-module-card="compute-sharing"]')).toBeVisible({ timeout: 5_000 });
     const packages = await page.evaluate(() => Object.keys(window.__ATL_E2E_STATE__.pluginPackages));
-    expect(packages).toEqual(['compute-sharing/0.1.1']);
+    expect(packages).toEqual(['compute-sharing/0.1.2']);
   });
 
   online('a plugin that was never downloaded says the cloud is unreachable', async ({ page }) => {
@@ -145,7 +150,7 @@ online.describe('Online plugins tab', () => {
     });
     await page.locator('[data-remote-uninstall="compute-sharing"]').click();
     await expect(page.locator('[data-module-card="compute-sharing"]')).toHaveCount(0);
-    await expect(page.locator('#modules-status')).toContainText('local plugin copy could not be removed');
+    await expect(page.locator('#toast')).toContainText('local plugin copy could not be removed');
   });
 
   online('a downloaded plugin remounts after the package URL is gone', async ({ page }) => {
@@ -154,13 +159,33 @@ online.describe('Online plugins tab', () => {
     await page.click('[data-modules-tab="installed"]');
     const card = page.locator('[data-module-card="compute-sharing"]');
     await expect(card).toContainText('No claims yet.', { timeout: 5_000 });
-    await page.route('**/api/modules/remote/file/compute-sharing/0.1.1/index.js', (route) => route.abort());
+    await page.route('**/api/modules/remote/file/compute-sharing/0.1.2/index.js', (route) => route.abort());
     await page.locator('[data-module-toggle="compute-sharing"]').click();
     await expect(card).not.toContainText('No claims yet.');
     await page.locator('[data-module-toggle="compute-sharing"]').click();
     await expect(card).toContainText('No claims yet.', { timeout: 5_000 });
     await expect(card).not.toContainText('Plugin failed to load');
   });
+});
+
+const upgrade = scenarioTest({
+  desktopAutoInitialized: false,
+  language: 'en',
+  apiBaseUrl: 'http://backend.test',
+  modules: { 'zhipu-plan': { enabled: true, config: {}, installedVersion: '1.0.0' } },
+});
+
+upgrade('an older installed version offers Update instead of Install', async ({ page }) => {
+  await openOnlineTab(page);
+  // default (uninstalled) filter: never-installed plugin offers Install
+  await expect(page.locator('[data-online-install="compute-sharing"]')).toHaveText('Install');
+  // installed-but-older plugin sits behind the installed filter and offers Update
+  await page.click('[data-online-filter="installed"]');
+  await expect(page.locator('[data-online-install="zhipu-plan"]')).toHaveText('Update');
+  // and the installed card itself carries a direct in-place upgrade control
+  await page.click('[data-modules-tab="installed"]');
+  const zhipuCard = page.locator('[data-module-card="zhipu-plan"]');
+  await expect(zhipuCard.locator('[data-remote-upgrade="zhipu-plan"]')).toHaveText('Upgrade v1.1.4');
 });
 
 const onlineZh = scenarioTest({

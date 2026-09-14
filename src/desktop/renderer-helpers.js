@@ -502,3 +502,18 @@ export function sortProviderHealthByStatus(health = []) {
     return String(a.providerId || "").localeCompare(String(b.providerId || ""));
   });
 }
+
+// Dot-separated numeric version compare ("1.10.0" > "1.9.3"; unequal segment
+// counts pad with zeros). Returns <0 / 0 / >0 like localeCompare.
+export function compareVersionStrings(a, b) {
+  const toParts = (value) => String(value || "").trim().split(".").map((piece) => Number(piece));
+  const left = toParts(a);
+  const right = toParts(b);
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const lv = Number.isFinite(left[index]) ? left[index] : 0;
+    const rv = Number.isFinite(right[index]) ? right[index] : 0;
+    if (lv !== rv) return lv - rv;
+  }
+  return 0;
+}

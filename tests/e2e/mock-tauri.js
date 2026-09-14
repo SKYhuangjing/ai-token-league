@@ -620,7 +620,7 @@
     // R24 pluggable model: zhipu-plan is no longer a built-in — the default
     // sandbox pre-installs it (installedVersion) so card specs exercise the
     // installed-plugin path.
-    window.__ATL_E2E_STATE__.modulesState = { version: 1, modules: modulesScenario || { "zhipu-plan": { enabled: true, config: {}, installedVersion: "1.1.0" } } };
+    window.__ATL_E2E_STATE__.modulesState = { version: 1, modules: modulesScenario || { "zhipu-plan": { enabled: true, config: {}, installedVersion: "1.1.4" } } };
     window.__ATL_E2E_STATE__.modulesSetCalls = [];
     window.__ATL_E2E_STATE__.pluginPackages = {};
     api.modulesPackageGet = (input) => {
@@ -752,6 +752,7 @@
       const resetWeek = Date.now() + 5 * 24 * 3600 * 1000;
       return Promise.resolve(clone({
         keyCount: 1,
+        fetchedAt: Date.now(),
         results: [{
           label: "GLM 5.3 -Harry", base: "https://open.bigmodel.cn", ok: true,
           quota: { tier: "pro", windows: [
