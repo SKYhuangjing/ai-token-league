@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose, Engine as _};
 use collector_core::config;
+use collector_core::local_usage_store::UsageFilters;
 use collector_core::protocol::{Command, SidecarRequest, SidecarResponse};
 use collector_core::scanner;
 use collector_core::sync::SyncOutcome;
@@ -262,29 +263,29 @@ async fn handle_command(
         }
         Command::UsageSummary => local_usage_query(|store| {
             let range = arg_str(&request.args, "range", "today");
-            store.summary(&range)
+            store.summary(&range, &UsageFilters::default())
         }),
         Command::UsageTrend => local_usage_query(|store| {
             let range = arg_str(&request.args, "range", "today");
             let grain = arg_str(&request.args, "grain", "day");
-            store.trend(&range, &grain)
+            store.trend(&range, &grain, &UsageFilters::default())
         }),
         Command::UsageWorkdirs => local_usage_query(|store| {
             let range = arg_str(&request.args, "range", "today");
             let limit = arg_i64(&request.args, "limit", 100);
-            store.workdirs(&range, limit)
+            store.workdirs(&range, limit, &UsageFilters::default())
         }),
         Command::UsageDetailPage => local_usage_query(|store| {
             let range = arg_str(&request.args, "range", "today");
             let page = arg_i64(&request.args, "page", 1).max(1);
             let page_size = arg_i64(&request.args, "pageSize", 100).clamp(1, 500);
-            store.detail_window(&range, (page - 1) * page_size, page_size)
+            store.detail_window(&range, (page - 1) * page_size, page_size, &UsageFilters::default())
         }),
         Command::UsageDetailWindow => local_usage_query(|store| {
             let range = arg_str(&request.args, "range", "today");
             let offset = arg_i64(&request.args, "offset", 0);
             let limit = arg_i64(&request.args, "limit", 100);
-            store.detail_window(&range, offset, limit)
+            store.detail_window(&range, offset, limit, &UsageFilters::default())
         }),
         Command::UsageSync => {
             let cfg = config::ensure_desktop_config();

@@ -1105,6 +1105,9 @@ pub fn update_config(input: serde_json::Value, current: &AppConfig, persist: boo
     if let Some(v) = input["showEstimatedCost"].as_bool() {
         config.show_estimated_cost = v;
     }
+    if let Some(v) = input["autoRefreshEnabled"].as_bool() {
+        config.auto_refresh_enabled = v;
+    }
     if let Some(v) = input["launchAtLogin"].as_bool() {
         config.launch_at_login = v;
     }

@@ -14,6 +14,7 @@
 
 use collector_core::config;
 use collector_core::local_usage_store::LocalUsageStore;
+use collector_core::local_usage_store::UsageFilters;
 use collector_core::scanner;
 use std::collections::HashMap;
 use std::fs;
@@ -471,16 +472,16 @@ fn scenario_scan_store_query_roundtrip() {
         .replace_usage_facts(&result.items, "integration-test")
         .unwrap();
 
-    let summary = store.summary("all").unwrap();
+    let summary = store.summary("all", &UsageFilters::default()).unwrap();
     assert!(summary["totals"]["totalTokens"].as_i64().unwrap_or(0) > 0);
 
-    let trend = store.trend("all", "day").unwrap();
+    let trend = store.trend("all", "day", &UsageFilters::default()).unwrap();
     assert!(!trend["items"].as_array().unwrap().is_empty());
 
-    let workdirs = store.workdirs("all", 10).unwrap();
+    let workdirs = store.workdirs("all", 10, &UsageFilters::default()).unwrap();
     assert!(!workdirs["items"].as_array().unwrap().is_empty());
 
-    let detail = store.detail_window("all", 0, 50).unwrap();
+    let detail = store.detail_window("all", 0, 50, &UsageFilters::default()).unwrap();
     assert!(detail["totalRows"].as_i64().unwrap_or(0) >= 2);
 
     let all = store.all_usage_items().unwrap();
@@ -681,18 +682,18 @@ fn scenario_multi_day_range_queries() {
 
     // Single day
     assert_eq!(
-        store.summary("2026-05-10..2026-05-10").unwrap()["totals"]["totalTokens"],
+        store.summary("2026-05-10..2026-05-10", &UsageFilters::default()).unwrap()["totals"]["totalTokens"],
         300
     );
 
     // All 3 days
     assert_eq!(
-        store.summary("2026-05-10..2026-05-12").unwrap()["totals"]["totalTokens"],
+        store.summary("2026-05-10..2026-05-12", &UsageFilters::default()).unwrap()["totals"]["totalTokens"],
         1000
     );
 
     // Trend by day
-    let trend = store.trend("2026-05-10..2026-05-12", "day").unwrap();
+    let trend = store.trend("2026-05-10..2026-05-12", "day", &UsageFilters::default()).unwrap();
     let day_items = trend["items"].as_array().unwrap();
     assert_eq!(day_items.len(), 3);
     assert_eq!(day_items[0]["totalTokens"], 300); // 2026-05-10: 100+200
@@ -700,7 +701,7 @@ fn scenario_multi_day_range_queries() {
     assert_eq!(day_items[2]["totalTokens"], 400); // 2026-05-12
 
     // Trend by hour (2026-05-10 has hours 9 and 10)
-    let hourly = store.trend("2026-05-10..2026-05-10", "hour").unwrap();
+    let hourly = store.trend("2026-05-10..2026-05-10", "hour", &UsageFilters::default()).unwrap();
     let hour_items = hourly["items"].as_array().unwrap();
     assert_eq!(hour_items.len(), 2);
     assert_eq!(hour_items[0]["totalTokens"], 100); // hour 9
@@ -709,7 +710,7 @@ fn scenario_multi_day_range_queries() {
     assert_eq!(hour_items[1]["hour"], 10);
 
     // Trend by week: 2026-05-10 (Sunday → week of May 4), 05-11/05-12 (Mon/Tue → week of May 11)
-    let weekly = store.trend("2026-05-10..2026-05-12", "week").unwrap();
+    let weekly = store.trend("2026-05-10..2026-05-12", "week", &UsageFilters::default()).unwrap();
     let week_items = weekly["items"].as_array().unwrap();
     assert_eq!(week_items.len(), 2);
     // Week 1: 2026-05-04..2026-05-10 — contains 05-10 (300 tokens)
@@ -722,7 +723,7 @@ fn scenario_multi_day_range_queries() {
     assert_eq!(week_items[1]["totalTokens"], 700);
 
     // "all" range
-    assert_eq!(store.summary("all").unwrap()["totals"]["totalTokens"], 1000);
+    assert_eq!(store.summary("all", &UsageFilters::default()).unwrap()["totals"]["totalTokens"], 1000);
 
     let _ = fs::remove_file(db_path);
 }

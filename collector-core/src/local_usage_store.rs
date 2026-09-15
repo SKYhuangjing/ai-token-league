@@ -26,6 +26,22 @@ impl LocalUsageStore {
         Ok(store)
     }
 
+    /// Read-only handle for query-only callers (CLI usage/status): must not
+    /// create the file or write schema/meta rows, so it never contends with
+    /// sidecar writes and leaves the file bytes untouched.
+    pub fn open_readonly_default() -> Result<Self, String> {
+        let path = config::local_usage_db_path();
+        if !path.exists() {
+            return Err(format!("not found: {}", path.display()));
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Self { conn })
+    }
+
     fn init(&self) -> Result<(), String> {
         self.conn
             .execute_batch(
@@ -215,16 +231,17 @@ impl LocalUsageStore {
     }
 
     pub fn has_usage_facts(&self) -> Result<bool, String> {
-        Ok(self.row_count(None, None)? > 0)
+        Ok(self.row_count(None, None, &UsageFilters::default())? > 0)
     }
 
-    pub fn summary(&self, range: &str) -> Result<Value, String> {
+    pub fn summary(&self, range: &str, filters: &UsageFilters) -> Result<Value, String> {
         let (from, to) = range_bounds(range);
-        let rows = self.group_breakdown("providerId", from.as_deref(), to.as_deref(), 5)?;
+        let rows =
+            self.group_breakdown("providerId", from.as_deref(), to.as_deref(), 5, filters)?;
         let workdirs =
-            self.group_breakdown("workdirDisplayName", from.as_deref(), to.as_deref(), 10)?;
-        let models = self.group_breakdown("model", from.as_deref(), to.as_deref(), 10)?;
-        let totals = self.totals(from.as_deref(), to.as_deref())?;
+            self.group_breakdown("workdirDisplayName", from.as_deref(), to.as_deref(), 10, filters)?;
+        let models = self.group_breakdown("model", from.as_deref(), to.as_deref(), 10, filters)?;
+        let totals = self.totals(from.as_deref(), to.as_deref(), filters)?;
         Ok(json!({
             "range": range,
             "from": from.unwrap_or_default(),
@@ -236,11 +253,15 @@ impl LocalUsageStore {
         }))
     }
 
-    pub fn workdirs(&self, range: &str, limit: i64) -> Result<Value, String> {
+    pub fn workdirs(
+        &self,
+        range: &str,
+        limit: i64,
+        filters: &UsageFilters,
+    ) -> Result<Value, String> {
         let (from, to) = range_bounds(range);
-        let mut params = bounds_params(from.as_deref(), to.as_deref());
+        let mut params = Vec::new();
         let limit = limit.clamp(1, 500);
-        params.push(limit.to_string());
         let sql = format!(
             "SELECT workdirHash, workdirDisplayName,
                     COUNT(*),
@@ -254,8 +275,14 @@ impl LocalUsageStore {
              GROUP BY workdirHash, workdirDisplayName
              ORDER BY COALESCE(SUM(totalTokens), 0) DESC
              LIMIT ?",
-            where_clause(from.as_deref(), to.as_deref())
+            {
+                let (clause, mut where_params) =
+                    combined_where(from.as_deref(), to.as_deref(), filters);
+                params.append(&mut where_params);
+                clause
+            }
         );
+        params.push(limit.to_string());
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(params.iter()), |row| {
@@ -283,7 +310,12 @@ impl LocalUsageStore {
         }))
     }
 
-    pub fn trend(&self, range: &str, grain: &str) -> Result<Value, String> {
+    pub fn trend(
+        &self,
+        range: &str,
+        grain: &str,
+        filters: &UsageFilters,
+    ) -> Result<Value, String> {
         let (from, to) = range_bounds(range);
         let sql = match grain {
             "hour" => {
@@ -299,7 +331,8 @@ impl LocalUsageStore {
                 "SELECT day AS bucket, day AS periodStart, day AS periodEnd, NULL AS hour, SUM(inputTokens), SUM(outputTokens), SUM(cacheReadTokens), SUM(cacheWriteTokens), SUM(reasoningTokens), SUM(totalTokens) FROM usage_fact"
             }
         };
-        let mut sql = format!("{} {}", sql, where_clause(from.as_deref(), to.as_deref()));
+        let (clause, params) = combined_where(from.as_deref(), to.as_deref(), filters);
+        let mut sql = format!("{} {}", sql, clause);
         sql.push_str(match grain {
             "hour" => " GROUP BY day, hour ORDER BY day, hour",
             "week" => " GROUP BY date(day, '-' || ((strftime('%w', day) + 6) % 7) || ' days') ORDER BY date(day, '-' || ((strftime('%w', day) + 6) % 7) || ' days')",
@@ -307,7 +340,6 @@ impl LocalUsageStore {
             _ => " GROUP BY day ORDER BY day",
         });
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let params = bounds_params(from.as_deref(), to.as_deref());
         let rows = stmt
             .query_map(rusqlite::params_from_iter(params.iter()), |row| {
                 Ok(json!({
@@ -336,18 +368,24 @@ impl LocalUsageStore {
         }))
     }
 
-    pub fn detail_window(&self, range: &str, offset: i64, limit: i64) -> Result<Value, String> {
+    pub fn detail_window(
+        &self,
+        range: &str,
+        offset: i64,
+        limit: i64,
+        filters: &UsageFilters,
+    ) -> Result<Value, String> {
         let (from, to) = range_bounds(range);
+        let (clause, mut params) = combined_where(from.as_deref(), to.as_deref(), filters);
         let mut sql = format!(
             "SELECT day, hour, toolCode, providerId, workdirHash, workdirDisplayName, model,
                     inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
                     reasoningTokens, totalTokens, sourceQuality, rawSourceRef, providerVersion,
                     parserVersion, sourceFingerprint
              FROM usage_fact {}",
-            where_clause(from.as_deref(), to.as_deref())
+            clause
         );
         sql.push_str(" ORDER BY day DESC, totalTokens DESC LIMIT ? OFFSET ?");
-        let mut params = bounds_params(from.as_deref(), to.as_deref());
         let limit = limit.clamp(1, 500);
         let offset = offset.max(0);
         params.push(limit.to_string());
@@ -362,7 +400,7 @@ impl LocalUsageStore {
         let items = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        let total_rows = self.row_count(from.as_deref(), to.as_deref())?;
+        let total_rows = self.row_count(from.as_deref(), to.as_deref(), filters)?;
         Ok(json!({
             "range": range,
             "from": from.unwrap_or_default(),
@@ -374,18 +412,24 @@ impl LocalUsageStore {
         }))
     }
 
-    fn totals(&self, from: Option<&str>, to: Option<&str>) -> Result<Value, String> {
+    fn totals(
+        &self,
+        from: Option<&str>,
+        to: Option<&str>,
+        filters: &UsageFilters,
+    ) -> Result<Value, String> {
+        let (clause, params) = combined_where(from, to, filters);
         let sql = format!(
             "SELECT COUNT(*), COALESCE(SUM(inputTokens), 0), COALESCE(SUM(outputTokens), 0),
                     COALESCE(SUM(cacheReadTokens), 0), COALESCE(SUM(cacheWriteTokens), 0),
                     COALESCE(SUM(reasoningTokens), 0), COALESCE(SUM(totalTokens), 0)
              FROM usage_fact {}",
-            where_clause(from, to)
+            clause
         );
         self.conn
             .query_row(
                 &sql,
-                rusqlite::params_from_iter(bounds_params(from, to).iter()),
+                rusqlite::params_from_iter(params.iter()),
                 |row| {
                     Ok(json!({
                         "rows": row.get::<_, i64>(0)?,
@@ -401,14 +445,62 @@ impl LocalUsageStore {
             .map_err(|e| e.to_string())
     }
 
-    fn row_count(&self, from: Option<&str>, to: Option<&str>) -> Result<i64, String> {
-        let sql = format!("SELECT COUNT(*) FROM usage_fact {}", where_clause(from, to));
+    fn row_count(
+        &self,
+        from: Option<&str>,
+        to: Option<&str>,
+        filters: &UsageFilters,
+    ) -> Result<i64, String> {
+        let (clause, params) = combined_where(from, to, filters);
+        let sql = format!("SELECT COUNT(*) FROM usage_fact {}", clause);
         self.conn
             .query_row(
                 &sql,
-                rusqlite::params_from_iter(bounds_params(from, to).iter()),
+                rusqlite::params_from_iter(params.iter()),
                 |row| row.get(0),
             )
+            .map_err(|e| e.to_string())
+    }
+
+    /// Per-model token splits (all five token fields, not just totals) for
+    /// cost estimation over a range.
+    pub fn model_breakdown(
+        &self,
+        range: &str,
+        filters: &UsageFilters,
+    ) -> Result<Vec<Value>, String> {
+        let (from, to) = range_bounds(range);
+        let (clause, params) = combined_where(from.as_deref(), to.as_deref(), filters);
+        let sql = format!(
+            "SELECT model,
+                    COUNT(*),
+                    COALESCE(SUM(inputTokens), 0),
+                    COALESCE(SUM(outputTokens), 0),
+                    COALESCE(SUM(cacheReadTokens), 0),
+                    COALESCE(SUM(cacheWriteTokens), 0),
+                    COALESCE(SUM(reasoningTokens), 0),
+                    COALESCE(SUM(totalTokens), 0)
+             FROM usage_fact {}
+             GROUP BY model
+             ORDER BY COALESCE(SUM(totalTokens), 0) DESC",
+            clause
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                Ok(json!({
+                    "model": row.get::<_, String>(0)?,
+                    "rows": row.get::<_, i64>(1)?,
+                    "inputTokens": row.get::<_, i64>(2)?,
+                    "outputTokens": row.get::<_, i64>(3)?,
+                    "cacheReadTokens": row.get::<_, i64>(4)?,
+                    "cacheWriteTokens": row.get::<_, i64>(5)?,
+                    "reasoningTokens": row.get::<_, i64>(6)?,
+                    "totalTokens": row.get::<_, i64>(7)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
     }
 
@@ -418,16 +510,17 @@ impl LocalUsageStore {
         from: Option<&str>,
         to: Option<&str>,
         limit: i64,
+        filters: &UsageFilters,
     ) -> Result<Vec<Value>, String> {
+        let (clause, mut params) = combined_where(from, to, filters);
         let sql = format!(
             "SELECT {field}, COALESCE(SUM(totalTokens), 0), COUNT(*)
              FROM usage_fact {}
              GROUP BY {field}
              ORDER BY COALESCE(SUM(totalTokens), 0) DESC
              LIMIT ?",
-            where_clause(from, to)
+            clause
         );
-        let mut params = bounds_params(from, to);
         params.push(limit.to_string());
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
@@ -537,12 +630,65 @@ fn range_bounds(range: &str) -> (Option<String>, Option<String>) {
     }
 }
 
-fn where_clause(from: Option<&str>, to: Option<&str>) -> &'static str {
+/// Column filters for usage queries. Values are case-insensitive substring
+/// matches (SQLite LIKE is ASCII-case-insensitive), applied on top of the
+/// day range.
+#[derive(Debug, Clone, Default)]
+pub struct UsageFilters {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub workdir: Option<String>,
+}
+
+impl UsageFilters {
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none() && self.model.is_none() && self.workdir.is_none()
+    }
+
+    fn conditions(&self) -> Vec<(&'static str, String)> {
+        let mut conditions = Vec::new();
+        if let Some(value) = self.provider.as_deref().filter(|v| !v.is_empty()) {
+            conditions.push(("providerId", like_param(value)));
+        }
+        if let Some(value) = self.model.as_deref().filter(|v| !v.is_empty()) {
+            conditions.push(("model", like_param(value)));
+        }
+        if let Some(value) = self.workdir.as_deref().filter(|v| !v.is_empty()) {
+            conditions.push(("workdirDisplayName", like_param(value)));
+        }
+        conditions
+    }
+}
+
+fn like_param(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{}%", escaped)
+}
+
+fn combined_where(
+    from: Option<&str>,
+    to: Option<&str>,
+    filters: &UsageFilters,
+) -> (String, Vec<String>) {
+    let mut conditions: Vec<String> = Vec::new();
+    let mut params = bounds_params(from, to);
     match (from, to) {
-        (Some(_), Some(_)) => "WHERE day BETWEEN ? AND ?",
-        (Some(_), None) => "WHERE day >= ?",
-        (None, Some(_)) => "WHERE day <= ?",
-        (None, None) => "",
+        (Some(_), Some(_)) => conditions.push("day BETWEEN ? AND ?".to_string()),
+        (Some(_), None) => conditions.push("day >= ?".to_string()),
+        (None, Some(_)) => conditions.push("day <= ?".to_string()),
+        (None, None) => {}
+    }
+    for (column, value) in filters.conditions() {
+        conditions.push(format!("{} LIKE ? ESCAPE '\\'", column));
+        params.push(value);
+    }
+    if conditions.is_empty() {
+        (String::new(), params)
+    } else {
+        (format!("WHERE {}", conditions.join(" AND ")), params)
     }
 }
 
@@ -602,6 +748,59 @@ mod tests {
     }
 
     #[test]
+    fn usage_filters_narrow_queries_and_escape_wildcards() {
+        let (mut store, path) = temp_db();
+        let day = crate::date::local_day();
+        let items = vec![
+            make_item(&day, 1, "codex", "codex_local", "gpt-5", 1000),
+            make_item(&day, 2, "claude", "claude_code_local", "claude-opus", 2000),
+            make_item(&day, 3, "zcode", "zcode_local", "glm-5.3", 4000),
+        ];
+        store.replace_usage_facts(&items, "now").unwrap();
+
+        let by_provider = UsageFilters {
+            provider: Some("codex".to_string()),
+            ..Default::default()
+        };
+        let summary = store.summary("all", &by_provider).unwrap();
+        assert_eq!(summary["totals"]["totalTokens"], json!(1000));
+
+        // case-insensitive model filter narrows totals and detail rows
+        let by_model = UsageFilters {
+            model: Some("GLM".to_string()),
+            ..Default::default()
+        };
+        let summary = store.summary("all", &by_model).unwrap();
+        assert_eq!(summary["totals"]["totalTokens"], json!(4000));
+        let detail = store.detail_window("all", 0, 10, &by_model).unwrap();
+        assert_eq!(detail["totalRows"], json!(1));
+
+        // workdir display-name filter
+        let by_workdir = UsageFilters {
+            workdir: Some("proj_claude".to_string()),
+            ..Default::default()
+        };
+        let summary = store.summary("all", &by_workdir).unwrap();
+        assert_eq!(summary["totals"]["totalTokens"], json!(2000));
+
+        // a literal % in the filter must not act as a wildcard
+        let percent = UsageFilters {
+            provider: Some("%".to_string()),
+            ..Default::default()
+        };
+        let summary = store.summary("all", &percent).unwrap();
+        assert_eq!(summary["totals"]["rows"], json!(0));
+
+        // model_breakdown returns full token splits per model
+        let models = store.model_breakdown("all", &UsageFilters::default()).unwrap();
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0]["model"], json!("glm-5.3"));
+        assert_eq!(models[0]["inputTokens"], json!(2000));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn local_usage_store_roundtrips_cache_and_facts() {
         let (mut store, path) = temp_db();
         let item = json!({
@@ -644,10 +843,10 @@ mod tests {
         assert_eq!(store.take_cached_source("fp2").unwrap().len(), 1);
         store.replace_usage_facts(&[item], "now").unwrap();
         assert_eq!(
-            store.summary("today").unwrap()["totals"]["totalTokens"],
+            store.summary("today", &UsageFilters::default()).unwrap()["totals"]["totalTokens"],
             150
         );
-        assert_eq!(store.detail_window("today", 0, 10).unwrap()["totalRows"], 1);
+        assert_eq!(store.detail_window("today", 0, 10, &UsageFilters::default()).unwrap()["totalRows"], 1);
         let _ = std::fs::remove_file(path);
     }
 
@@ -673,7 +872,7 @@ mod tests {
             )
             .unwrap();
 
-        let summary = store.summary("today").unwrap();
+        let summary = store.summary("today", &UsageFilters::default()).unwrap();
         assert_eq!(summary["totals"]["totalTokens"], 350);
         assert_eq!(summary["totals"]["rows"], 3);
 
@@ -700,7 +899,7 @@ mod tests {
             )
             .unwrap();
 
-        let trend = store.trend("2026-05-10..2026-05-11", "day").unwrap();
+        let trend = store.trend("2026-05-10..2026-05-11", "day", &UsageFilters::default()).unwrap();
         let items = trend["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["totalTokens"], 150); // 2026-05-10
@@ -721,7 +920,7 @@ mod tests {
             )
             .unwrap();
 
-        let trend = store.trend("2026-05-10..2026-05-10", "hour").unwrap();
+        let trend = store.trend("2026-05-10..2026-05-10", "hour", &UsageFilters::default()).unwrap();
         let items = trend["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert!(items[0]["bucket"].as_str().unwrap().contains("T10"));
@@ -743,7 +942,7 @@ mod tests {
             )
             .unwrap();
 
-        let trend = store.trend("2026-05-01..2026-06-30", "month").unwrap();
+        let trend = store.trend("2026-05-01..2026-06-30", "month", &UsageFilters::default()).unwrap();
         let items = trend["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["totalTokens"], 300); // 2026-05
@@ -767,7 +966,7 @@ mod tests {
             )
             .unwrap();
 
-        let trend = store.trend("2026-05-18..2026-05-31", "week").unwrap();
+        let trend = store.trend("2026-05-18..2026-05-31", "week", &UsageFilters::default()).unwrap();
         let items = trend["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         // First week bucket: 2026-05-18 (Monday) — aggregates May 18 + May 19
@@ -795,7 +994,7 @@ mod tests {
             )
             .unwrap();
 
-        let w = store.workdirs("today", 10).unwrap();
+        let w = store.workdirs("today", 10, &UsageFilters::default()).unwrap();
         let items = w["items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["totalTokens"], 300);
@@ -811,12 +1010,12 @@ mod tests {
             .collect();
         store.replace_usage_facts(&items, "now").unwrap();
 
-        let page1 = store.detail_window("today", 0, 5).unwrap();
+        let page1 = store.detail_window("today", 0, 5, &UsageFilters::default()).unwrap();
         assert_eq!(page1["totalRows"], 15);
         assert_eq!(page1["items"].as_array().unwrap().len(), 5);
         assert_eq!(page1["offset"], 0);
 
-        let page2 = store.detail_window("today", 5, 5).unwrap();
+        let page2 = store.detail_window("today", 5, 5, &UsageFilters::default()).unwrap();
         assert_eq!(page2["offset"], 5);
         assert_ne!(
             page1["items"].as_array().unwrap()[0],
@@ -836,10 +1035,10 @@ mod tests {
             )
             .unwrap();
 
-        let result = store.detail_window("today", 0, 0).unwrap();
+        let result = store.detail_window("today", 0, 0, &UsageFilters::default()).unwrap();
         assert_eq!(result["limit"], 1, "limit 0 should be clamped to 1");
 
-        let result = store.detail_window("today", 0, 999).unwrap();
+        let result = store.detail_window("today", 0, 999, &UsageFilters::default()).unwrap();
         assert_eq!(result["limit"], 500, "limit > 500 should be clamped to 500");
         let _ = std::fs::remove_file(path);
     }
@@ -848,20 +1047,20 @@ mod tests {
     fn empty_database_queries() {
         let (store, path) = temp_db();
 
-        let summary = store.summary("today").unwrap();
+        let summary = store.summary("today", &UsageFilters::default()).unwrap();
         assert_eq!(summary["totals"]["rows"], 0);
         assert_eq!(summary["totals"]["totalTokens"], 0);
         assert!(summary["providers"].as_array().unwrap().is_empty());
 
         assert!(!store.has_usage_facts().unwrap());
 
-        let w = store.workdirs("today", 10).unwrap();
+        let w = store.workdirs("today", 10, &UsageFilters::default()).unwrap();
         assert!(w["items"].as_array().unwrap().is_empty());
 
-        let trend = store.trend("today", "day").unwrap();
+        let trend = store.trend("today", "day", &UsageFilters::default()).unwrap();
         assert!(trend["items"].as_array().unwrap().is_empty());
 
-        let detail = store.detail_window("today", 0, 10).unwrap();
+        let detail = store.detail_window("today", 0, 10, &UsageFilters::default()).unwrap();
         assert_eq!(detail["totalRows"], 0);
 
         let all = store.all_usage_items().unwrap();

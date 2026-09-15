@@ -1,0 +1,155 @@
+# CLI 终端使用手册
+
+`atl-collector` 的终端入口，面向无图形界面场景：在终端查看已采集的统计数据、设置 ATL、执行扫描与同步。所有命令输出仅英文（CLI 不走 i18n），人读格式紧凑、`--json` 输出机器可读。
+
+设计原则：
+
+- **与桌面 App 同一份数据和配置**：查询读 `~/.ai-token-league` 下的本地 usage 数据库，`config set` 走桌面设置页同一个 `update_config` 入口，两边随时互换，无第二真相源。
+- **零新运行时**：采集、查询、设置都在既有 Rust 二进制内，不要求 Node/Python。
+- **隐私边界不变**：终端命令只读本地统计与配置，不上传任何内容；身份私钥与 Cursor token 在读取时脱敏。
+
+## 获取与运行
+
+开发机（需要 Rust 工具链）：
+
+```bash
+npm run collector -- --help        # 等价 cargo run -p atl-collector --
+cargo build -p atl-collector       # 产物 target/debug/atl-collector
+```
+
+桌面用户：二进制随 App 分发（App 包内 sidecar）。目前需手动指向该路径运行，一键"安装命令行工具到 PATH"在后续版本提供。本文统一用 `atl-collector` 指代命令。
+
+## 快速开始（无界面机器）
+
+```bash
+atl-collector init --nickname sky --api http://your-server:8787
+atl-collector scan                 # 扫描并写入本地 usage 数据库
+atl-collector usage                # 查看近 7 天统计
+atl-collector sync                 # 同步到服务器
+```
+
+定时执行（cron 示例，工作日白天每 30 分钟一轮）：
+
+```text
+*/30 8-22 * * *  atl-collector scan && atl-collector sync >> ~/.ai-token-league/cron.log 2>&1
+```
+
+测试隔离：设 `ATL_HOME=/path/to/dir` 可把配置与数据重定向到沙箱目录，不影响真实数据。
+
+## 命令参考
+
+### status / scan / sync
+
+```bash
+atl-collector status [--json]
+atl-collector scan [--full] [--json]
+atl-collector sync [--full-resync] [--json]
+```
+
+- `status`：身份、API 地址、最近同步状态、本地数据量。
+- `scan`：扫描全部已启用来源并**写入本地 usage 数据库**；该库同时充当增量扫描缓存，重复执行只重读变化过的来源。`--full` 清空来源缓存全量重扫。**任一 provider 报错时拒绝落库**（避免抹掉失败来源的历史数据），并列出失败项与修复提示。
+- `sync`：扫描（同上，成功时落库）后上传到服务器。来源有错误时拒绝同步；`--full-resync` 清空同步清单做全量对账上传。
+
+### usage
+
+```bash
+atl-collector usage [--range today|7d|30d|all|A..B]
+                    [--view summary|trend|workdirs|detail]
+                    [--grain day|week|month|hour]
+                    [--limit N] [--offset N]
+                    [--provider P] [--model M] [--workdir W]
+                    [--cost] [--json]
+```
+
+- `--range` 默认 `7d`；`A..B` 为 `YYYY-MM-DD..YYYY-MM-DD`，两端可留空（如 `..2026-09-01`）。**非法 range/日期格式直接报错**，不会静默降级为"今天"。
+- 查询以**只读方式**打开本地库：不会创建或改动任何文件，可与桌面 App 同时使用。
+- `--provider/--model/--workdir` 为大小写不敏感的子串过滤器，作用于所有视图（如 `--provider codex`、`--model glm-5.3`、`--workdir control`），可组合。
+- `--cost`（仅 summary 视图）：用服务器公开的 `/api/model-prices` 价格对本地数据估算费用，输出总价与每模型费用（`≈$xx.xx`）；价格缺失的模型计入 `unpricedModels`，`costQuality` 标记 exact/estimated/unknown。价格数据始终来自服务器，不在本地复制价格表。
+- `--view summary`（默认）：总量、token 构成、按来源/模型/项目目录 Top 榜。
+- `--view trend`：按 `--grain` 粒度的时间趋势（终端带 ASCII 条形）。
+- `--view workdirs`：项目目录明细（`--limit` 默认 20，上限 500）。
+- `--view detail`：原始行明细（按日聚合前的小时粒度事实行）。
+
+token 口径与产品一致：`totalTokens = input + output + cacheRead + cacheWrite`（reasoning 仅诊断展示，不计入总量）。
+
+### config
+
+```bash
+atl-collector config list            # 全量设置 JSON，私钥已脱敏
+atl-collector config get <key>       # 单值；标量直接输出，便于脚本取值
+atl-collector config set <key> <value>
+```
+
+`set` 按键的类型解析布尔/数字，非法值直接报错；写入口与桌面设置页相同，归一化规则一致（如 `theme DARK` 存为 `dark`、`refreshIntervalMinutes 0` 钳到 1），回显的是**生效后**的值；枚举值（如 `theme purple`）会报错并列出合法取值，不会静默落到默认。
+
+可写键：
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `nickname` | 字符串 | 昵称 |
+| `apiBaseUrl` | 字符串 | 服务器地址；变更会自动重置同步状态 |
+| `language` | 字符串 | `zh-CN` / `en`（桌面 UI 语言） |
+| `theme` | 字符串 | `light` / `dark` / `system` |
+| `showEstimatedCost` | 布尔 | 界面是否显示估算成本 |
+| `refreshIntervalMinutes` | 数字 | 桌面自动刷新间隔（最小 1） |
+| `autoRefreshEnabled` | 布尔 | 桌面自动刷新开关 |
+| `launchAtLogin` / `hideDockIcon` | 布尔 | 桌面启动行为（macOS） |
+| `runtimeLogRetentionDays` | 数字 | 运行日志保留天数（1-30） |
+| `providerEnabled.<providerId>` | 布尔 | 启用/停用某来源，如 `providerEnabled.cursor_dashboard_usage false` |
+| `localBackup.enabled` / `.directory` / `.retentionCount` | 混合 | 本地备份（保留天数 1-30） |
+| `shareCardOrientation`、`showShareCloudUrl`、`showSharePolaroidFrame`、`showShareAnonymousName` | 混合 | 分享卡样式 |
+
+只读键（`get` 可查）：`participantId`、`deviceId`、`identityPublicKey`、`providerRoots`、`workdirAliases`、`providerIgnoredAutoSources` 等。`identityPrivateKey` 一律返回 `(hidden — use export-identity)`；导出身份请用 `export-identity`（输出含私钥，自行妥善保管）。
+
+### top / rank（服务器侧榜单）
+
+```bash
+atl-collector top [--range today|yesterday|7d|30d|all|A..B] [--limit N] [--json]
+atl-collector rank [--range ...] [--json]
+```
+
+- `top`：拉取服务器排行榜前 N（默认 10），显示名次、昵称/匿名名、总 token。
+- `rank`：定位"我"的名次并显示前后邻居与差距。匿名榜单模式下自动通过 `my-identity` 接口换算 publicId，公开模式下直接按 participantId 匹配。需要已配置 `apiBaseUrl` 且设备已向该服务器同步过数据。
+- 两者均为对公开 board API 的只读透传，排名与统计逻辑全部在服务器侧。
+
+### roots
+
+```bash
+atl-collector roots list
+atl-collector roots add <providerId> <path>
+atl-collector roots remove <providerId> <path>
+```
+
+为指定来源追加/移除额外扫描根目录（自动发现的目录之外的手动补充）。
+
+### 身份与对账（既有命令）
+
+`init`、`health`、`register`、`export-identity`、`import-identity`、`reconcile --full` 用法不变，见 `--help`。
+
+## 数据与文件位置
+
+| 文件 | 用途 |
+| --- | --- |
+| `~/.ai-token-league/config.json` | 配置与身份 |
+| `~/.ai-token-league/usage-local.sqlite3` | 本地 usage 数据库（`usage` 命令只读、`scan` 写入，与桌面 UI 共用） |
+| `~/.ai-token-league/usage-cache.json` | 最近一次扫描快照（sidecar 新鲜度判断用） |
+| `~/.ai-token-league/upload-queue.json` | 上传重试队列 |
+
+## 退出码表
+
+脚本可按退出码区分错误类别，无需解析 stderr 文本：
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 成功 |
+| 1 | 一般运行错误（扫描不完整、参数值非法等） |
+| 2 | 命令行参数错误（clap 约定） |
+| 10 | 未初始化（先运行 `init`） |
+| 11 | 本地 usage 数据库为空（先运行 `scan`） |
+| 12 | 网络/服务器错误（top/rank/sync/价格拉取失败） |
+
+## 已知边界
+
+- 服务器侧数据目前覆盖榜单 top 与我的名次；个人主页趋势等更完整的远端视图暂无终端命令（后续同样走公开 API 透传）。
+- 插件管理暂无终端命令（插件安装/升级仍在桌面端）。
+- 未提供 MCP 接口（产品决策：先做好 CLI 本身；`claude mcp add` 等注册方式未来可基于同一二进制扩展 `mcp` 子命令）。

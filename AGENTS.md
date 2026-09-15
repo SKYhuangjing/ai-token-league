@@ -107,6 +107,13 @@ npm run collector -- sync
 
 Run `npm run collector -- --help` for all subcommands (health, register, export-identity, import-identity, etc.).
 
+Headless terminal surface (same local store and config the desktop app uses):
+
+- `status` / `scan` / `sync` accept `--json`; `scan` persists results into the local usage database and refuses to persist when a provider errors.
+- `usage --range today|7d|30d|all|A..B --view summary|trend|workdirs|detail [--grain day|week|month|hour] [--limit N]` queries collected data.
+- `config list|get|set` reads and writes the same settings keys as the desktop settings page (`providerEnabled.<id>` toggles sources); secrets are redacted on read-back.
+- `roots add|remove|list` manages extra provider scan roots.
+
 Desktop:
 
 ```bash
