@@ -461,6 +461,14 @@ const translations = {
     // 桌面端 - 设置页面
     "desktop.settings.identity": "身份",
     "desktop.settings.displayBehavior": "显示与行为",
+    "desktop.settings.cli.title": "终端命令行（CLI）",
+    "desktop.settings.cli.setupTitle": "在终端里使用 ATL",
+    "desktop.settings.cli.setupDesc": "复制提示词，让你和 AI 能在终端中使用 AI token 采集器",
+    "desktop.settings.cli.copy": "复制提示词",
+    "desktop.settings.cli.copied": "提示词已复制，发给你的 AI 助手即可",
+    "desktop.settings.cli.prompt.darwin": "请帮我在终端里安装并验证 AI Token League 的命令行工具 atl：\n- 二进制在 App 包内：/Applications/AI Token League.app/Contents/Resources/atl-collector\n- 完整使用手册（先读它）：/Applications/AI Token League.app/Contents/Resources/docs/cli.md\n- 用软链接方式安装（不要复制文件），这样 App 升级后命令会自动更新\n- 装好后运行 atl status 验证；其余能力通过 atl --help 和手册自行探索\n- 任何一步失败，把原始报错贴给我，并给出修复建议",
+    "desktop.settings.cli.prompt.windows": "请帮我在终端里（PowerShell）安装并验证 AI Token League 的命令行工具：\n- 二进制在安装目录：默认 %LOCALAPPDATA%\\AI Token League\\atl-collector.exe，找不到就从开始菜单快捷方式定位安装目录\n- 完整使用手册（先读它）：<安装目录>\\docs\\cli.md\n- 只写用户级 PATH，或在 PowerShell profile 里加一个引用原文件路径的函数（不要复制 exe，App 升级后命令要能自动更新）\n- 装好后运行 atl-collector status 验证；其余能力通过 atl-collector --help 和手册自行探索\n- 任何一步失败，把原始报错贴给我，并给出修复建议",
+    "desktop.settings.cli.prompt.linux": "请帮我在终端里安装并验证 AI Token League 的命令行工具：\n- 先定位安装目录（AppImage 挂载点或安装路径）中的 atl-collector 二进制\n- 完整使用手册（先读它）：同一目录下的 docs/cli.md\n- 软链接到 ~/.local/bin（不要复制文件，App 升级后命令要能自动更新），并确保该目录在 PATH 中\n- 装好后运行 atl status 验证；其余能力通过 atl --help 和手册自行探索\n- 任何一步失败，把原始报错贴给我，并给出修复建议",
 
     // 桌面端 - 来源扫描
     "desktop.sources.scan": "扫描",
@@ -2065,6 +2073,14 @@ const translations = {
     // Desktop - Settings page
     "desktop.settings.identity": "Identity",
     "desktop.settings.displayBehavior": "Display & behavior",
+    "desktop.settings.cli.title": "Terminal (CLI)",
+    "desktop.settings.cli.setupTitle": "Use ATL from the terminal",
+    "desktop.settings.cli.setupDesc": "Copy the prompt so both you and your AI can use AI Token League from the terminal.",
+    "desktop.settings.cli.copy": "Copy prompt",
+    "desktop.settings.cli.copied": "Prompt copied — send it to your AI assistant",
+    "desktop.settings.cli.prompt.darwin": "Please install and verify the AI Token League CLI tool atl in my terminal:\n- Binary lives inside the app bundle: /Applications/AI Token League.app/Contents/Resources/atl-collector\n- Full manual (read it first): /Applications/AI Token League.app/Contents/Resources/docs/cli.md\n- Install via symlink (do not copy the file) so the command follows app updates automatically\n- Verify with atl status once installed; explore the rest via atl --help and the manual\n- If any step fails, show me the raw error and suggest a fix",
+    "desktop.settings.cli.prompt.windows": "Please install and verify the AI Token League CLI tool in my terminal (PowerShell):\n- Binary lives in the install directory: default %LOCALAPPDATA%\\AI Token League\\atl-collector.exe; locate the install directory from the Start-menu shortcut if not found\n- Full manual (read it first): <install directory>\\docs\\cli.md\n- Only touch the user PATH, or add a PowerShell profile function referencing the original file path (do not copy the exe — the command must follow app updates automatically)\n- Verify with atl-collector status once installed; explore the rest via atl-collector --help and the manual\n- If any step fails, show me the raw error and suggest a fix",
+    "desktop.settings.cli.prompt.linux": "Please install and verify the AI Token League CLI tool in my terminal:\n- Locate the atl-collector binary in the install directory (AppImage mount point or install path)\n- Full manual (read it first): docs/cli.md in the same directory\n- Symlink it into ~/.local/bin (do not copy the file so the command follows app updates) and make sure that directory is on PATH\n- Verify with atl status once installed; explore the rest via atl --help and the manual\n- If any step fails, show me the raw error and suggest a fix",
 
     // Desktop - Sources scan
     "desktop.sources.scan": "Scan",

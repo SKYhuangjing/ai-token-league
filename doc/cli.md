@@ -17,7 +17,13 @@ npm run collector -- --help        # 等价 cargo run -p atl-collector --
 cargo build -p atl-collector       # 产物 target/debug/atl-collector
 ```
 
-桌面用户：二进制随 App 分发（App 包内 sidecar）。目前需手动指向该路径运行，一键"安装命令行工具到 PATH"在后续版本提供。本文统一用 `atl-collector` 指代命令。
+桌面用户：本手册随安装包分发（macOS 在 `AI Token League.app/Contents/Resources/docs/cli.md`，Windows 在安装目录 `docs\cli.md`）。**推荐入口**：桌面 App 设置页 →「终端命令行（CLI）」→ 复制提示词发给你的 AI 助手，它会按当前系统的路径把命令装好。macOS/Linux 用软链接（App 升级后命令自动跟随），链接名约定为 `atl`——装好后 `atl` 与 `atl-collector` 等价，本文统一用 `atl-collector` 指代：
+
+```bash
+ln -sfn "/Applications/AI Token League.app/Contents/Resources/atl-collector" ~/.local/bin/atl
+```
+
+（`~/.local/bin` 需在 PATH 中、无需 sudo；写 `/usr/local/bin` 则需要 sudo，二选一。Windows 无需软链接：把安装目录加入用户 PATH 后命令名为 `atl-collector`。）装好后可用 `atl-collector --version` 确认版本。
 
 ## 快速开始（无界面机器）
 
@@ -64,7 +70,7 @@ atl-collector usage [--range today|7d|30d|all|A..B]
 - `--range` 默认 `7d`；`A..B` 为 `YYYY-MM-DD..YYYY-MM-DD`，两端可留空（如 `..2026-09-01`）。**非法 range/日期格式直接报错**，不会静默降级为"今天"。
 - 查询以**只读方式**打开本地库：不会创建或改动任何文件，可与桌面 App 同时使用。
 - `--provider/--model/--workdir` 为大小写不敏感的子串过滤器，作用于所有视图（如 `--provider codex`、`--model glm-5.3`、`--workdir control`），可组合。
-- `--cost`（仅 summary 视图）：用服务器公开的 `/api/model-prices` 价格对本地数据估算费用，输出总价与每模型费用（`≈$xx.xx`）；价格缺失的模型计入 `unpricedModels`，`costQuality` 标记 exact/estimated/unknown。价格数据始终来自服务器，不在本地复制价格表。
+- `--cost`（仅 summary 视图）：用服务器公开的 `/api/model-prices` 价格对本地数据估算费用，输出总价与每模型费用（`≈$xx.xx`）；价格缺失的模型计入 `unpricedModels`，`costQuality` 标记 exact/estimated/unknown。价格数据始终来自服务器，不在本地复制价格表。`--json` 输出中对应 `cost` 块（`estimatedCostUsd`/`costQuality`/`unpricedTokens`/`unpricedModels`/`pricingSource`）。`apiBaseUrl` 未配置时提示配置命令并退出（码 1）；服务器不可达时按网络错误退出（码 12），不影响不带 `--cost` 的本地查询。
 - `--view summary`（默认）：总量、token 构成、按来源/模型/项目目录 Top 榜。
 - `--view trend`：按 `--grain` 粒度的时间趋势（终端带 ASCII 条形）。
 - `--view workdirs`：项目目录明细（`--limit` 默认 20，上限 500）。
@@ -110,7 +116,7 @@ atl-collector rank [--range ...] [--json]
 
 - `top`：拉取服务器排行榜前 N（默认 10），显示名次、昵称/匿名名、总 token。
 - `rank`：定位"我"的名次并显示前后邻居与差距。匿名榜单模式下自动通过 `my-identity` 接口换算 publicId，公开模式下直接按 participantId 匹配。需要已配置 `apiBaseUrl` 且设备已向该服务器同步过数据。
-- 两者均为对公开 board API 的只读透传，排名与统计逻辑全部在服务器侧。
+- 两者均为对公开 board API 的只读透传，排名与统计逻辑全部在服务器侧。未初始化时退出码 10，服务器不可达时退出码 12。
 
 ### roots
 
@@ -131,6 +137,7 @@ atl-collector roots remove <providerId> <path>
 | 文件 | 用途 |
 | --- | --- |
 | `~/.ai-token-league/config.json` | 配置与身份 |
+| `~/.ai-token-league/config.json.bak` | 配置写入时的自动备份 |
 | `~/.ai-token-league/usage-local.sqlite3` | 本地 usage 数据库（`usage` 命令只读、`scan` 写入，与桌面 UI 共用） |
 | `~/.ai-token-league/usage-cache.json` | 最近一次扫描快照（sidecar 新鲜度判断用） |
 | `~/.ai-token-league/upload-queue.json` | 上传重试队列 |
@@ -142,8 +149,8 @@ atl-collector roots remove <providerId> <path>
 | 退出码 | 含义 |
 | --- | --- |
 | 0 | 成功 |
-| 1 | 一般运行错误（扫描不完整、参数值非法等） |
-| 2 | 命令行参数错误（clap 约定） |
+| 1 | 一般运行错误（扫描不完整、参数**取值**非法如 `--range bogus`、`theme purple` 等） |
+| 2 | 命令行**格式**错误：未知选项/子命令、缺失参数（clap 约定） |
 | 10 | 未初始化（先运行 `init`） |
 | 11 | 本地 usage 数据库为空（先运行 `scan`） |
 | 12 | 网络/服务器错误（top/rank/sync/价格拉取失败） |

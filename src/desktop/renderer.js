@@ -4947,6 +4947,35 @@ if (langContainer) {
 // 应用当前语言翻译
 updatePageTranslations();
 
+// ── Terminal CLI setup prompt (settings) ────────────────────────────────────
+// The prompt text is meant for the user's AI assistant, so it is never shown
+// in the page — clicking the copy button puts it straight on the clipboard.
+// It follows the UI language and the host platform; the language switcher
+// reloads the page, so resolving it on click is enough.
+(function initCliPromptSection() {
+  const copyBtn = document.getElementById("copy-cli-prompt");
+  if (!copyBtn) return;
+  const platformKey = api.platform === "windows" ? "windows" : api.platform === "linux" ? "linux" : "darwin";
+  copyBtn.addEventListener("click", async () => {
+    const text = t(`desktop.settings.cli.prompt.${platformKey}`);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.setAttribute("readonly", "");
+      helper.style.position = "fixed";
+      helper.style.opacity = "0";
+      document.body.appendChild(helper);
+      helper.select();
+      document.execCommand("copy");
+      helper.remove();
+    }
+    showToast(t("desktop.settings.cli.copied"));
+  });
+})();
+
 
 
 

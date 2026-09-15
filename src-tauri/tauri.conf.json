@@ -46,7 +46,8 @@
     "resources": {
       "binaries/": "",
       "icons/tray-iconTemplate.png": "icons/tray-iconTemplate.png",
-      "../assets/preset.json": "assets/preset.json"
+      "../assets/preset.json": "assets/preset.json",
+      "../doc/cli.md": "docs/cli.md"
     },
     "macOS": {
       "infoPlist": "Info.plist"
