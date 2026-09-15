@@ -9692,7 +9692,7 @@ testAggregateCacheDayWindowInvalidation();
 
 // ===== Compute sharing — CPA plugin control plane (R23) =====
 
-import { createSharingCpa } from "../src/backend/sharing-cpa.js";
+import { createSharingCpa, parseHHMM, clampLanes, laneWindowOf, scheduleStateAt, weekStartTs, tzLabelOf, minutesOfDayAt } from "../src/backend/sharing-cpa.js";
 import { createRemoteModules, formatModuleFetchError, moduleObjectUrl } from "../src/backend/remote-modules.js";
 import { claimToRow, createControlPlaneStore, diffListingRows, diffSharingRows, rowToClaim, rowToShare, shareToRow } from "../src/backend/control-plane-store.js";
 // Test identity registry: mirrors server.js's participant verification wiring
@@ -9733,7 +9733,7 @@ async function withCpaServer(options, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atl-sharing-cpa-"));
   const identity = generateIdentity();
   const participants = { [identity.participantId]: { identity, nickname: "sky-dev", displayId: "dd_sky1", participantId: identity.participantId } };
-  const defaults = { verifyIdentity: testIdentityGuard(participants) };
+  const defaults = { verifyIdentity: testIdentityGuard(participants), claimRatePerMinute: 60 };
   const sharing = createSharingCpa({ dataDir: dir, ...defaults, ...options });
   const server = http.createServer((req, res) => { sharing.handle(req, res); });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -9910,6 +9910,201 @@ async function testSharingCpaUnregisterAndAdmin() {
     const reBody = await re.json();
     assert.equal(reBody.rebind, true);
     assert.equal(reBody.shareId, reg.shareId);
+
+    // the rebind genuinely revives the share (state back to active, listed again)
+    const hbRevived = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} })).json();
+    assert.equal(hbRevived.state, "active");
+    const listRevived = await (await cpaFetch(base, "/api/shares")).json();
+    assert.equal(listRevived.shares.length, 1);
+
+    // owner resume endpoint (in-card 重新开启): stopped -> active; a wrong
+    // secret is 404; an admin suspension is NOT liftable by the owner
+    await cpaFetch(base, "/api/shares/unregister", { method: "POST", secret: reg.shareSecret });
+    const resumeBad = await cpaFetch(base, "/api/shares/owner/resume", { method: "POST", secret: "x".repeat(40) });
+    assert.equal(resumeBad.status, 404);
+    const resume = await cpaFetch(base, "/api/shares/owner/resume", { method: "POST", secret: reg.shareSecret });
+    assert.equal(resume.status, 200);
+    assert.equal((await resume.json()).state, "active");
+    const hbResumed = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} })).json();
+    assert.equal(hbResumed.state, "active");
+    // resume is idempotent on an already-active share
+    assert.equal((await cpaFetch(base, "/api/shares/owner/resume", { method: "POST", secret: reg.shareSecret })).status, 200);
+
+    await cpaFetch(base, "/api/admin/shares/suspend", { method: "POST", body: { shareId: reg.shareId } });
+    const resumeSuspended = await cpaFetch(base, "/api/shares/owner/resume", { method: "POST", secret: reg.shareSecret });
+    assert.equal(resumeSuspended.status, 409);
+    assert.equal((await resumeSuspended.json()).error, "share_suspended");
+  });
+}
+
+// Deterministic local-time schedule helpers: windows are built relative to
+// the current wall clock with 30-minute margins so minute rolls can't flip
+// an assertion mid-test.
+function hhmmOf(minutesOver) {
+  const m = ((new Date().getHours() * 60 + new Date().getMinutes() + minutesOver) % 1440 + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+async function testSharingCpaLanes() {
+  await withCpaServer({}, async (base, dir, identity) => {
+    // open lane covers now (now-30m .. now+30m); closed lane opens in 30-60m
+    const openWindow = { start: hhmmOf(-30), end: hhmmOf(30) };
+    const closedWindow = { start: hhmmOf(30), end: hhmmOf(60) };
+    const reg = await (await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: {
+        title: "lanes", baseURL: "http://10.0.0.9:8317",
+        lanes: [
+          { id: "gemini-week", title: "Gemini 周额度", models: ["gemini-*"], budget: { tokens: 5_000 }, period: "week", schedule: { windows: [openWindow] }, maxClaims: 2 },
+          { id: "glm-offpeak", title: "智谱避峰", models: ["glm-5.3-flash"], budget: { tokens: 1_000 }, period: "hour5", schedule: { windows: [closedWindow] }, maxClaims: 1 },
+          { id: "peaky", title: "倍率车道", models: ["x-*"], budget: { tokens: 10_000 }, period: "hour5", schedule: { windows: [openWindow] }, peak: { windows: [openWindow], multiplier: 3 } },
+        ],
+        ...signedRegisterBody(identity),
+      },
+    })).json();
+    const secret = reg.shareSecret;
+
+    // heartbeat distributes the lane contract: window keys, schedules as
+    // minute marks, and keys (none yet) — legacy fields stay intact
+    const hb1 = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: {} })).json();
+    assert.equal(hb1.lanes.length, 3);
+    const weekLane = hb1.lanes.find((l) => l.id === "gemini-week");
+    assert.match(weekLane.windowKey, /^week:/);
+    assert.equal(weekLane.windowEndMs - weekLane.windowStartMs, 7 * 86_400_000);
+    assert.equal(weekLane.scheduleWindows.length, 1);
+    // the plugin's model gate consumes this field — it must ride every sync
+    assert.deepEqual(weekLane.models, ["gemini-*"]);
+    assert.equal(hb1.keys.length, 0);
+
+    // claim without laneId on a multi-lane share -> 409 + lane menu
+    const noLane = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(reg.shareId, identity) });
+    assert.equal(noLane.status, 409);
+    const noLaneBody = await noLane.json();
+    assert.equal(noLaneBody.error, "lane_required");
+    assert.deepEqual(noLaneBody.lanes.map((l) => l.id), ["gemini-week", "glm-offpeak", "peaky"]);
+
+    // closed lane -> 409 lane_closed with a bounded retry hint
+    const closed = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { laneId: "glm-offpeak", ...signedClaimBody(reg.shareId, identity) } });
+    assert.equal(closed.status, 409);
+    const closedBody = await closed.json();
+    assert.equal(closedBody.error, "lane_closed");
+    assert.ok(closedBody.retryAfterMs > 0 && closedBody.retryAfterMs <= 60 * 60_000);
+
+    // open lane claims succeed; the key rides the lane id
+    const claim = await (await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { laneId: "gemini-week", ...signedClaimBody(reg.shareId, identity) } })).json();
+    assert.equal(claim.laneId, "gemini-week");
+    assert.equal(claim.laneTitle, "Gemini 周额度");
+    assert.deepEqual(claim.models, ["gemini-*"]);
+    const hb2 = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: {} })).json();
+    assert.equal(hb2.keys.length, 1);
+    assert.equal(hb2.keys[0].laneId, "gemini-week");
+
+    // per-lane slots: maxClaims 2 admits a second claim, the third 409s
+    const claim2 = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { laneId: "gemini-week", ...signedClaimBody(reg.shareId, identity) } });
+    assert.equal(claim2.status, 200);
+    const claim3 = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { laneId: "gemini-week", ...signedClaimBody(reg.shareId, identity) } });
+    assert.equal(claim3.status, 409);
+    assert.equal((await claim3.json()).error, "no_claim_slots");
+
+    // usage settles into the lane window; the peak lane multiplies x3
+    const peakClaim = await (await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { laneId: "peaky", ...signedClaimBody(reg.shareId, identity) } })).json();
+    await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST", secret,
+      body: { usage: [
+        { keyId: claim.keyId, tokens: 1_200, requests: 1, failed: 0 },
+        { keyId: peakClaim.keyId, tokens: 1_000, requests: 1, failed: 0 },
+      ] },
+    });
+    const status = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    const geminiStatus = status.share.lanes.find((l) => l.id === "gemini-week");
+    const peakStatus = status.share.lanes.find((l) => l.id === "peaky");
+    assert.equal(geminiStatus.settledTokens, 1_200);
+    assert.equal(peakStatus.settledTokens, 3_000); // 1000 x peakMultiplier 3
+    assert.ok(geminiStatus.open === true);
+
+    // lane exhaustion: glm lane budget 1000, settle through its (closed)
+    // schedule does not block settling — burn it via the peak lane instead
+    await cpaFetch(base, "/api/shares/owner/policy", {
+      method: "POST", secret,
+      body: { lanes: [
+        { id: "gemini-week", title: "Gemini 周额度", models: ["gemini-*"], budget: { tokens: 1_000 }, period: "week", schedule: { windows: [openWindow] }, maxClaims: 2 },
+        { id: "peaky", title: "倍率车道", models: ["x-*"], budget: { tokens: 100_000 }, period: "hour5", schedule: { windows: [openWindow] } },
+      ] },
+    });
+    const exhausted = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { laneId: "gemini-week", ...signedClaimBody(reg.shareId, identity) } });
+    assert.equal(exhausted.status, 409);
+    const exhaustedBody = await exhausted.json();
+    assert.equal(exhaustedBody.error, "lane_exhausted"); // explicit lanes -> lane error code
+    assert.ok(exhaustedBody.retryAfterMs > 0);
+
+    // deleting a lane cascades the same revocation and clears its ledger:
+    // a same-id recreation must start from a clean window (review P1-1)
+    await cpaFetch(base, "/api/shares/owner/policy", {
+      method: "POST", secret,
+      body: { lanes: [
+        { id: "peaky", title: "倍率车道", models: ["x-*"], budget: { tokens: 100_000 }, period: "hour5", schedule: { windows: [openWindow] } },
+      ] },
+    });
+    const afterDelete = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    assert.ok(afterDelete.claims.filter((c) => c.laneId === "gemini-week").every((c) => c.state !== "valid"));
+    // recreate gemini-week: settled restarts at zero for the current window
+    await cpaFetch(base, "/api/shares/owner/policy", {
+      method: "POST", secret,
+      body: { lanes: [
+        { id: "gemini-week", title: "Gemini 周额度", models: ["gemini-*"], budget: { tokens: 5_000 }, period: "week", schedule: { windows: [openWindow] }, maxClaims: 2 },
+        { id: "peaky", title: "倍率车道", models: ["x-*"], budget: { tokens: 100_000 }, period: "hour5", schedule: { windows: [openWindow] } },
+      ] },
+    });
+    const recreated = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    assert.equal(recreated.share.lanes.find((l) => l.id === "gemini-week").settledTokens, 0);
+
+    // suspending a lane revokes its claims and blocks new ones
+    await cpaFetch(base, "/api/shares/owner/policy", {
+      method: "POST", secret,
+      body: { lanes: [
+        { id: "gemini-week", title: "Gemini 周额度", models: ["gemini-*"], budget: { tokens: 5_000 }, period: "week", schedule: { windows: [openWindow] }, maxClaims: 2, state: "suspended" },
+        { id: "peaky", title: "倍率车道", models: ["x-*"], budget: { tokens: 100_000 }, period: "hour5", schedule: { windows: [openWindow] } },
+      ] },
+    });
+    const suspendedClaim = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { laneId: "gemini-week", ...signedClaimBody(reg.shareId, identity) } });
+    assert.equal(suspendedClaim.status, 409);
+    assert.equal((await suspendedClaim.json()).error, "lane_suspended");
+    const statusSuspended = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    assert.ok(statusSuspended.claims.filter((c) => c.laneId === "gemini-week").every((c) => c.state !== "valid"));
+
+    // wall signal accumulates and surfaces on owner status (advisory only)
+    await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: { wallSignals: { ownerFailed: 2 } } });
+    const wallStatus = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    assert.equal(wallStatus.share.wallSignal.ownerFailed, 2);
+
+    // directory exposes per-lane status for borrowers
+    const list = await (await cpaFetch(base, "/api/shares")).json();
+    const listed = list.shares.find((s) => s.shareId === reg.shareId);
+    assert.equal(listed.lanes.length, 2);
+    assert.ok(listed.lanes.every((l) => typeof l.open === "boolean" && typeof l.slotsLeft === "number"));
+  });
+}
+
+async function testSharingCpaLanesLegacyCompat() {
+  await withCpaServer({}, async (base, dir, identity) => {
+    // a flat-policy share (no lanes) migrates lazily to one implicit lane
+    const reg = await (await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: { title: "legacy", baseURL: "http://x:1", policy: { budget: 5_000, maxClaims: 1 }, ...signedRegisterBody(identity) },
+    })).json();
+    const hb = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} })).json();
+    assert.equal(hb.lanes.length, 1);
+    assert.equal(hb.lanes[0].id, "default");
+    assert.equal(hb.lanes[0].period, "day");
+    assert.equal(hb.lanes[0].budgetTokens, 5_000);
+    assert.deepEqual(hb.lanes[0].scheduleWindows, []);
+    // claim without laneId keeps working; legacy budget error code preserved
+    const claim = await (await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(reg.shareId, identity) })).json();
+    assert.equal(claim.laneId, "default");
+    await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: { usage: [{ keyId: claim.keyId, tokens: 5_000, requests: 1, failed: 0 }] } });
+    const burned = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(reg.shareId, identity) });
+    assert.equal(burned.status, 409);
+    assert.equal((await burned.json()).error, "budget_exhausted");
   });
 }
 
@@ -9937,6 +10132,91 @@ async function testSharingCpaAdminGuardAndPolicy() {
 await testSharingCpaRegisterHeartbeatClaim();
 await testSharingCpaUnregisterAndAdmin();
 await testSharingCpaAdminGuardAndPolicy();
+await testSharingCpaLanes();
+await testSharingCpaLanesLegacyCompat();
+await testSharingLaneUnits();
+
+function testSharingLaneUnits() {
+  // HH:MM parsing: seconds tolerated, bounds enforced, garbage rejected
+  assert.equal(parseHHMM("22:45"), 22 * 60 + 45);
+  assert.equal(parseHHMM("00:00"), 0);
+  assert.equal(parseHHMM("24:00"), 1440); // end-of-day convention: 22:00-24:00 = until midnight
+  assert.equal(parseHHMM("12:60"), null);
+  assert.equal(parseHHMM("25:00"), null);
+  assert.equal(parseHHMM(""), null);
+
+  // weekStartTs anchors to Monday 00:00 local regardless of the weekday
+  const monday = new Date(2026, 8, 14, 15, 30).getTime(); // Monday
+  const sunday = new Date(2026, 8, 20, 1, 0).getTime();   // same week Sunday
+  const nextMonday = new Date(2026, 8, 21, 0, 0).getTime();
+  assert.equal(weekStartTs(monday), new Date(2026, 8, 14).getTime());
+  assert.equal(weekStartTs(sunday), new Date(2026, 8, 14).getTime());
+  assert.equal(weekStartTs(nextMonday), nextMonday);
+
+  // laneWindowOf: hour5 grid alignment; week span is exactly 7 days
+  const weekLane = { period: "week" };
+  const weekWindow = laneWindowOf(weekLane, monday);
+  assert.equal(weekWindow.endMs - weekWindow.startMs, 7 * 86_400_000);
+  assert.equal(weekWindow.key, "week:2026-09-14");
+  const h5Lane = { period: "hour5" };
+  const t = 1_789_000_000_123;
+  const h5Window = laneWindowOf(h5Lane, t);
+  assert.equal(h5Window.startMs % (5 * 3_600_000), 0);
+  assert.equal(h5Window.endMs - h5Window.startMs, 5 * 3_600_000);
+  assert.equal(h5Window.key, `h5:${h5Window.startMs}`);
+
+  // cross-midnight schedule truth table (22:00-14:00 offpeak lane)
+  const [offpeak] = clampLanes([{
+    id: "glm-offpeak", title: "offpeak", period: "hour5", budget: { tokens: 2000 },
+    schedule: { windows: [{ start: "22:00", end: "14:00" }] },
+  }]);
+  const at = (h, m) => new Date(2026, 8, 14, h, m).getTime();
+  assert.equal(scheduleStateAt(offpeak, at(2, 0)).open, true);   // early morning inside
+  assert.equal(scheduleStateAt(offpeak, at(12, 59)).open, true); // just before close
+  assert.equal(scheduleStateAt(offpeak, at(14, 0)).open, false); // boundary exclusive
+  assert.equal(scheduleStateAt(offpeak, at(21, 59)).open, false);
+  assert.equal(scheduleStateAt(offpeak, at(22, 0)).open, true);  // boundary inclusive
+  // closed -> next change lands on the 22:00 opening
+  const closed = scheduleStateAt(offpeak, at(15, 0));
+  assert.equal(closed.open, false);
+  assert.equal(new Date(closed.nextChangeMs).getHours(), 22);
+  // no schedule windows = always open
+  const [always] = clampLanes([{ id: "free", title: "f", period: "day", budget: { tokens: 1000 } }]);
+  assert.equal(scheduleStateAt(always, at(3, 0)).open, true);
+
+  // ── owner-timezone anchoring (B10): windows and day/week keys follow the
+  // plugin-reported owner tz, not the server's local clock ──────────────────
+  // 07:00Z: owner(UTC-5) sees 02:00 — inside 22:00-14:00; server(+8) sees
+  // 15:00 — outside. The owner view must win because gates run there.
+  const tsUtc = Date.UTC(2026, 8, 15, 7, 0);
+  assert.equal(scheduleStateAt(offpeak, tsUtc, -300).open, true);
+  assert.equal(scheduleStateAt(offpeak, tsUtc, 480).open, false);
+  assert.equal(minutesOfDayAt(tsUtc, -300), 2 * 60);
+  // day window key/Starts anchor to owner midnight (UTC-5 → 05:00Z)
+  const dayWin = laneWindowOf({ period: "day" }, tsUtc, -300);
+  assert.equal(dayWin.startMs, Date.UTC(2026, 8, 15, 5, 0));
+  assert.equal(dayWin.endMs - dayWin.startMs, 86_400_000);
+  assert.equal(dayWin.key, "day:2026-09-15");
+  // week start anchors to owner-tz Monday
+  const weekWin = laneWindowOf({ period: "week" }, Date.UTC(2026, 8, 16, 3, 0), -300);
+  assert.equal(weekWin.startMs, Date.UTC(2026, 8, 14, 5, 0));
+  // tz labels render half-hour offsets correctly
+  assert.equal(tzLabelOf(480), "UTC+8");
+  assert.equal(tzLabelOf(-300), "UTC-5");
+  assert.equal(tzLabelOf(330), "UTC+5:30");
+
+  // clampLanes: dedupe duplicate ids, normalize slug, drop broken windows
+  const lanes = clampLanes([
+    { id: "G", title: "G", budget: { tokens: 5000 }, schedule: { windows: [{ start: "9:00", end: "12:00" }, { start: "bad", end: "10:00" }, { start: "10:00", end: "10:00" }] } },
+    { title: "G" },
+  ]);
+  assert.equal(lanes.length, 2);
+  assert.equal(lanes[0].id, "g");
+  assert.equal(lanes[0].scheduleWindows.length, 1);
+  assert.equal(lanes[0].scheduleWindows[0].startM, 9 * 60);
+  assert.equal(lanes[1].id, "g-2");
+  console.log("  testSharingLaneUnits passed");
+}
 testModuleObjectUrlPrefersPublicBase();
 await testModuleListingOverlay();
 await testModuleDistributionUsesPublicBaseUrl();
@@ -10208,9 +10488,14 @@ async function testControlPlaneMysqlRoundTrip() {
       shareId: "shr_t1", shareSecret: "secret", state: "active", title: "node", baseURL: "http://127.0.0.1:8317",
       models: ["*"], policy: { budget: 1000, maxClaims: 2 }, settled: { csk_t1: 12 }, lifetimeSettled: 12,
       claimsIssued: 1, participantId: "p_1", createdAt: 10, updatedAt: 11,
+      // lanes fields must survive the MySQL round trip (they were silently
+      // dropped before the lanesJson/laneId columns existed)
+      lanes: [{ id: "gemini-week", title: "G", models: ["gemini-*"], budgetTokens: 5000, period: "week", scheduleWindows: [{ startM: 1320, endM: 840 }], maxClaims: 2, peakWindows: [], peakMultiplier: 1, state: "active" }],
+      laneSettled: { "gemini-week": { windowKey: "week:2026-09-14", tokens: 77, byKey: { csk_t1: 77 } } },
+      wallSignal: { at: 12, ownerFailed: 3 },
     };
     const claim = {
-      keyId: "csk_t1", shareId: "shr_t1", token: "atl_sk_test", borrower: "sky", state: "valid",
+      keyId: "csk_t1", shareId: "shr_t1", laneId: "gemini-week", token: "atl_sk_test", borrower: "sky", state: "valid",
       usedTokens: 12, createdAt: 10, expiresAt: 20,
     };
     await plane.sharing.save({ shares: { shr_t1: share }, claims: { csk_t1: claim } });
@@ -10219,6 +10504,12 @@ async function testControlPlaneMysqlRoundTrip() {
     const reloaded = await plane.sharing.load();
     assert.equal(reloaded.shares.shr_t1.policy.budget, 1000);
     assert.equal(reloaded.claims.csk_t1.token, "atl_sk_test");
+    // lanes round trip: config, ledger, wall signal, and claim lane binding
+    assert.equal(reloaded.shares.shr_t1.lanes[0].id, "gemini-week");
+    assert.equal(reloaded.shares.shr_t1.lanes[0].scheduleWindows[0].startM, 1320);
+    assert.equal(reloaded.shares.shr_t1.laneSettled["gemini-week"].tokens, 77);
+    assert.equal(reloaded.shares.shr_t1.wallSignal.ownerFailed, 3);
+    assert.equal(reloaded.claims.csk_t1.laneId, "gemini-week");
     const listings = await plane.listings.load();
     assert.equal(listings.modules["demo-mod"].listed, false);
     // row-level update path: one claim upsert, share untouched

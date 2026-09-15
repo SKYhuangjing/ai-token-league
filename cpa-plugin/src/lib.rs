@@ -83,6 +83,9 @@ pub(crate) struct Runtime {
     inflight_requests: HashMap<String, String>,
     /// Accumulated usage deltas not yet acknowledged by the backend.
     pub(crate) pending_usage: Vec<UsageDelta>,
+    /// Owner-side failed requests observed since the last heartbeat (the
+    /// wall signal: advisory input for the owner card, not auto-actioned).
+    pub(crate) owner_failures: u64,
 }
 
 impl Runtime {
@@ -93,6 +96,7 @@ impl Runtime {
             scopes: HashMap::new(),
             inflight_requests: HashMap::new(),
             pending_usage: Vec::new(),
+            owner_failures: 0,
         }
     }
 }
@@ -231,23 +235,77 @@ fn b64(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
 }
 
-fn budget_exceeded_response(reason: &str, detail: &str) -> Value {
-    let body = json!({
+fn budget_exceeded_response(reason: &str, detail: &str, retry_after_secs: u64) -> Value {
+    let mut body = json!({
         "error": {
             "type": "atl_budget_exceeded",
             "message": format!("compute-sharing limit reached: {} ({})", reason, detail),
         }
-    })
-    .to_string();
+    });
+    if retry_after_secs > 0 {
+        body["error"]["retryAfterSecs"] = json!(retry_after_secs);
+    }
+    let body = body.to_string();
+    let mut headers = json!({ "content-type": ["application/json"], "x-atl-share": [reason] });
+    if retry_after_secs > 0 {
+        headers["retry-after"] = json!([retry_after_secs.to_string()]);
+    }
     json!({
         "Terminate": true,
         "StatusCode": 429,
-        "ResponseHeaders": { "content-type": ["application/json"], "x-atl-share": [reason] },
+        "ResponseHeaders": headers,
         "ResponseBody": b64(body.as_bytes()),
     })
 }
 
+/// Minute-of-day in the owner's local timezone (schedule windows are local).
+fn local_minute_of_day() -> u32 {
+    use chrono::{Local, Timelike};
+    let now = Local::now();
+    now.hour() * 60 + now.minute()
+}
+
+/// Owner tz offset, minutes east of UTC (DST-aware). Reported per heartbeat;
+/// the backend anchors schedule/day/week windows to it so the directory and
+/// these gates (which run on the owner machine) never disagree.
+pub(crate) fn tz_offset_minutes() -> i64 {
+    use chrono::{Local, Offset};
+    (Local::now().offset().fix().local_minus_utc() / 60) as i64
+}
+
+/// Debug facility (file-gated, off unless the flag file exists): append the
+/// raw intercept payload to <data_dir>/intercept-dump.jsonl, capped at 20
+/// entries — used to answer "does the intercept ABI carry the request model?"
+/// without touching the CPA host.
+fn dump_intercept_payload(req: &Value) {
+    use std::io::Write;
+    let flag = data_dir().join("DUMP_INTERCEPT");
+    if !flag.exists() {
+        return;
+    }
+    let path = data_dir().join("intercept-dump.jsonl");
+    let mut line = req.to_string();
+    // truncate at a UTF-8 char boundary — String::truncate mid-codepoint panics
+    let cap = 64 * 1024;
+    if line.len() > cap {
+        let mut end = cap;
+        while end > 0 && !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
+    }
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        .and_then(|mut file| writeln!(file, "{}", line));
+    // hard cap: keep the file bounded even if the flag lingers
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 1024 * 1024 {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 fn handle_intercept_before(req: &Value) -> Value {
+    dump_intercept_payload(req);
     let request_id = req.get("RequestID").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let scope = req
         .get("Metadata")
@@ -257,6 +315,16 @@ fn handle_intercept_before(req: &Value) -> Value {
         .to_string();
     let key_id = with_runtime(|rt| rt.scopes.get(&scope).cloned()).flatten();
     let Some(key_id) = key_id else { return json!({}) };
+    let now = now_ms();
+    let minute = local_minute_of_day();
+    // CPA 7.2.147+ carries the requested model on the intercept payload
+    // (probed live: "Model" + Metadata.requested_model). Older hosts omit
+    // it — the gate then degrades to advisory model scoping.
+    let requested_model = req
+        .get("Model")
+        .and_then(|v| v.as_str())
+        .or_else(|| req.get("Metadata").and_then(|m| m.get("requested_model")).and_then(|v| v.as_str()))
+        .map(String::from);
     let gate = with_runtime(|rt| {
         roll_window(&mut rt.ledger, &rt.sync.window_day.clone());
         let key_cap = rt
@@ -270,7 +338,7 @@ fn handle_intercept_before(req: &Value) -> Value {
         // gets no complete event to release its slot, and comparing the
         // pre-reservation count means `key_concurrency` admits exactly that
         // many in-flight requests.
-        let gate = core_state::gate_request(&rt.ledger, &rt.sync, &key_id, key_cap);
+        let gate = core_state::gate_request(&rt.ledger, &rt.sync, &key_id, key_cap, now, minute, requested_model.as_deref());
         if matches!(gate, Gate::Pass) && !request_id.is_empty() {
             rt.inflight_requests.insert(request_id.clone(), key_id.clone());
             *rt.ledger.inflight_by_key.entry(key_id.clone()).or_insert(0) += 1;
@@ -295,10 +363,13 @@ fn handle_intercept_before(req: &Value) -> Value {
     });
     match gate {
         Some(Gate::Pass) => json!({}),
-        Some(Gate::TerminateBudget(reason)) => budget_exceeded_response("window_budget", &reason),
-        Some(Gate::TerminateKeyCap) => budget_exceeded_response("key_cap", "per-key token cap reached"),
+        Some(Gate::TerminateBudget(reason)) => budget_exceeded_response("window_budget", &reason, 0),
+        Some(Gate::TerminateKeyCap) => budget_exceeded_response("key_cap", "per-key token cap reached", 0),
         Some(Gate::TerminateConcurrency) => {
-            budget_exceeded_response("key_concurrency", "too many concurrent requests for this key")
+            budget_exceeded_response("key_concurrency", "too many concurrent requests for this key", 0)
+        }
+        Some(Gate::TerminateLane { reason, retry_after_secs }) => {
+            budget_exceeded_response(&reason, &format!("sharing lane {}", reason), retry_after_secs)
         }
         None => json!({}),
     }
@@ -321,20 +392,33 @@ fn handle_complete(req: &Value) -> Value {
 
 /// usage.handle: settle by Principal (`atl:<keyId>`). APIKey carries the
 /// Principal verbatim (validated in R22); TotalTokens is the CPA-native total.
+/// Non-atl principals are the owner's own traffic: failures feed the wall
+/// signal (advisory quota-pressure input for the owner card).
 fn handle_usage(req: &Value) -> Value {
     let principal = req.get("APIKey").and_then(|v| v.as_str()).unwrap_or("");
+    let failed = req.get("Failed").and_then(|v| v.as_bool()).unwrap_or(false);
     let Some(key_id) = principal.strip_prefix("atl:") else {
+        if failed {
+            with_runtime(|rt| rt.owner_failures += 1);
+        }
         return json!({});
     };
     let key_id = key_id.to_string();
     let detail = req.get("Detail").cloned().unwrap_or(Value::Null);
     let tokens = detail.get("TotalTokens").and_then(|v| v.as_i64()).unwrap_or(0).max(0) as u64;
-    let failed = req.get("Failed").and_then(|v| v.as_bool()).unwrap_or(false);
+    let now = now_ms();
+    let minute = local_minute_of_day();
     with_runtime(|rt| {
         roll_window(&mut rt.ledger, &rt.sync.window_day.clone());
         let mut delta = core_state::apply_usage(&mut rt.ledger.settled_by_key, &key_id, tokens);
         if failed {
             delta.failed = 1;
+        }
+        // Lane settlement (peak multiplier applies at the event minute)
+        if let Some(entry) = rt.sync.keys.iter().find(|k| k.key_id == key_id) {
+            if let Some(lane) = rt.sync.lanes.iter().find(|l| l.id == entry.lane_id) {
+                core_state::settle_lane_usage(lane, &mut rt.ledger.lane_settled, tokens, now, minute);
+            }
         }
         merge_delta(&mut rt.pending_usage, delta);
     });
@@ -471,6 +555,7 @@ mod tests {
                 token: "atl_sk_test".into(),
                 key_max_tokens: 0,
                 expires_at_ms: 0,
+                lane_id: "default".into(),
             }],
             ..Default::default()
         };

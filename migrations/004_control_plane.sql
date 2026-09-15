@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS sharing_shares (
   modelsJson TEXT NOT NULL,
   policyJson TEXT NOT NULL,
   settledJson TEXT NOT NULL,
+  lanesJson TEXT NULL,
+  laneSettledJson TEXT NULL,
+  wallSignalJson TEXT NULL,
   lifetimeSettled BIGINT NOT NULL DEFAULT 0,
   claimsIssued INT NOT NULL DEFAULT 0,
   participantId VARCHAR(96) NOT NULL DEFAULT '',
@@ -30,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sharing_shares (
 CREATE TABLE IF NOT EXISTS sharing_claims (
   keyId VARCHAR(96) PRIMARY KEY,
   shareId VARCHAR(96) NOT NULL,
+  laneId VARCHAR(96) NOT NULL DEFAULT '',
   shareTitle VARCHAR(80) NOT NULL DEFAULT '',
   token VARCHAR(128) NOT NULL,
   borrower VARCHAR(80) NOT NULL DEFAULT '',
@@ -44,3 +48,11 @@ CREATE TABLE IF NOT EXISTS sharing_claims (
   lastUsedAt BIGINT NOT NULL DEFAULT 0,
   INDEX idx_sharing_claims_share (shareId)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- lanes upgrade for existing installs (the runtime applies these automatically
+-- via ensureMysqlSchema() when DB_TYPE=mysql):
+-- ALTER TABLE sharing_shares
+--   ADD COLUMN lanesJson TEXT NULL AFTER settledJson,
+--   ADD COLUMN laneSettledJson TEXT NULL AFTER lanesJson,
+--   ADD COLUMN wallSignalJson TEXT NULL AFTER laneSettledJson;
+-- ALTER TABLE sharing_claims ADD COLUMN laneId VARCHAR(96) NOT NULL DEFAULT '' AFTER shareId;

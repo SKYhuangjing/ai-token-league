@@ -9,7 +9,7 @@
 //
 // Contract (see doc/compute-sharing-handoff.md R23):
 //   owner  x-atl-share-secret: POST /api/shares/register|heartbeat|unregister,
-//                              POST /api/shares/owner/policy, GET  /api/shares/owner/status
+//                              POST /api/shares/owner/policy|resume, GET  /api/shares/owner/status
 //   public:                    GET  /api/shares, POST /api/shares/claim,
 //                              POST /api/shares/claims/revoke, POST /api/shares/claims/mine
 //   admin (basic auth):        GET  /api/admin/shares[+/claims],
@@ -68,7 +68,221 @@ function clampPolicy(input = {}) {
   return policy;
 }
 
-export function createSharingCpa({ dataDir, initial, persistState, verifyIdentity } = {}) {
+// ── Sharing lanes (compute-sharing-lanes-design.md) ─────────────────────────
+// A share slices into lanes; each lane binds a budget period (day | week |
+// hour5 rolling grid), a local-time schedule, and its own claim slots. Claim
+// keys carry their lane id — the CPA plugin gates on key→lane because the
+// intercept ABI has no request model field.
+
+const LANE_PERIODS = new Set(["day", "week", "hour5"]);
+const MAX_LANES = 8;
+const HOUR5_MS = 5 * 60 * 60 * 1000;
+
+const clampInt = (v, fallback, min, max) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+};
+
+// "22:00" | "22:00:30" -> minutes-of-day (seconds truncated); null if invalid
+function parseHHMM(text) {
+  const m = String(text || "").trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 24 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// schedule/peak windows: [{start,end}] HH:MM local (end may wrap past
+// midnight). Stored normalized items ({startM,endM} minute marks) pass
+// through so effectiveLanes re-clamps persisted lanes idempotently.
+function clampWindows(input, max = 4) {
+  const out = [];
+  for (const raw of Array.isArray(input) ? input.slice(0, max) : []) {
+    if (!raw || typeof raw !== "object") continue;
+    if (Number.isFinite(raw.startM) && Number.isFinite(raw.endM) && raw.startM !== raw.endM) {
+      out.push({ startM: Math.round(raw.startM), endM: Math.round(raw.endM) });
+      continue;
+    }
+    const start = parseHHMM(raw.start);
+    const end = parseHHMM(raw.end);
+    if (start === null || end === null || start === end) continue;
+    out.push({ startM: start, endM: end });
+  }
+  return out;
+}
+
+function laneSlug(text, index) {
+  const slug = String(text || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+  return slug || `lane-${index + 1}`;
+}
+
+function clampLane(raw, index, existing = []) {
+  const id = laneSlug(raw && (raw.id || raw.title), index);
+  // Accept both the wire shape (budget/schedule/peak nests) and the stored
+  // normalized shape (budgetTokens/scheduleWindows/...) so effectiveLanes can
+  // re-clamp persisted lanes idempotently.
+  const scheduleInput = (raw && raw.schedule && raw.schedule.windows) || (raw && raw.scheduleWindows) || [];
+  const peakInput = (raw && raw.peak && raw.peak.windows) || (raw && raw.peakWindows) || [];
+  const budgetInput = raw && raw.budget ? raw.budget.tokens : raw && raw.budgetTokens;
+  const lane = {
+    id: existing.includes(id) ? `${id}-${index + 1}` : id,
+    title: String((raw && raw.title) || id).slice(0, 40),
+    models: Array.isArray(raw && raw.models) && raw.models.length
+      ? raw.models.map((m) => String(m).slice(0, 80)).slice(0, 10)
+      : ["*"],
+    budgetTokens: clampInt(budgetInput, DEFAULT_POLICY.budget, 1_000, 1_000_000_000_000),
+    period: LANE_PERIODS.has(raw && raw.period) ? raw.period : "day",
+    scheduleWindows: clampWindows(scheduleInput),
+    maxClaims: clampInt(raw && raw.maxClaims, DEFAULT_POLICY.maxClaims, 1, 200),
+    peakWindows: clampWindows(peakInput),
+    peakMultiplier: clampInt(raw && raw.peak && raw.peak.multiplier, raw && raw.peakMultiplier, 1, 10),
+    state: (raw && raw.state) === "suspended" ? "suspended" : "active",
+  };
+  return lane;
+}
+
+function clampLanes(input) {
+  if (!Array.isArray(input) || !input.length) return null;
+  const ids = [];
+  const lanes = [];
+  for (const raw of input.slice(0, MAX_LANES)) {
+    const lane = clampLane(raw, lanes.length, ids);
+    ids.push(lane.id);
+    lanes.push(lane);
+  }
+  return lanes;
+}
+
+// Legacy flat policies migrate lazily into one implicit default lane; the
+// stored share is never rewritten, so old clients and old data stay intact.
+function effectiveLanes(share) {
+  if (Array.isArray(share.lanes) && share.lanes.length) {
+    return share.lanes.map((lane) => clampLane(lane, 0, []));
+  }
+  return [{
+    id: "default",
+    title: share.title || "default",
+    models: share.models && share.models.length ? share.models : ["*"],
+    budgetTokens: share.policy.budget,
+    period: "day",
+    scheduleWindows: [],
+    maxClaims: share.policy.maxClaims,
+    peakWindows: [],
+    peakMultiplier: 1,
+    state: "active",
+  }];
+}
+
+function weekStartTs(ts, offsetMinutes = serverOffsetMinutes()) {
+  // Monday 00:00 in the anchor timezone (owner tz when reported by the
+  // plugin; server-local fallback keeps legacy semantics).
+  const shifted = ts + offsetMinutes * 60_000;
+  const dayStartUtc = Math.floor(shifted / 86_400_000) * 86_400_000;
+  const start = dayStartUtc - offsetMinutes * 60_000;
+  const d = new Date(start + offsetMinutes * 60_000);
+  const dow = (d.getUTCDay() + 6) % 7; // Monday = 0 in the anchor tz
+  return start - dow * 86_400_000;
+}
+
+const serverOffsetMinutes = () => -new Date().getTimezoneOffset();
+
+function laneWindowOf(lane, ts = now(), offsetMinutes = serverOffsetMinutes()) {
+  if (lane.period === "week") {
+    const start = weekStartTs(ts, offsetMinutes);
+    return { key: `week:${anchorDayString(start, offsetMinutes)}`, startMs: start, endMs: start + 7 * 86_400_000 };
+  }
+  if (lane.period === "hour5") {
+    const start = Math.floor(ts / HOUR5_MS) * HOUR5_MS;
+    return { key: `h5:${start}`, startMs: start, endMs: start + HOUR5_MS };
+  }
+  const shifted = ts + offsetMinutes * 60_000;
+  const dayStartUtc = Math.floor(shifted / 86_400_000) * 86_400_000;
+  const start = dayStartUtc - offsetMinutes * 60_000;
+  return { key: `day:${anchorDayString(start, offsetMinutes)}`, startMs: start, endMs: start + 86_400_000 };
+}
+
+// YYYY-MM-DD of an epoch ms rendered in the anchor timezone (UTC getters on
+// the shifted instant).
+function anchorDayString(ts, offsetMinutes) {
+  const d = new Date(ts + offsetMinutes * 60_000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+function minutesOfDayAt(ts, offsetMinutes) {
+  const shifted = ts + offsetMinutes * 60_000;
+  return Math.floor((shifted % 86_400_000) / 60_000);
+}
+
+function tzLabelOf(offsetMinutes) {
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const abs = Math.abs(offsetMinutes);
+  const hours = Math.floor(abs / 60);
+  const minutes = abs % 60;
+  return `UTC${sign}${hours}${minutes ? `:${String(minutes).padStart(2, "0")}` : ""}`;
+}
+
+const inWindow = (m, w) => (w.startM < w.endM
+  ? m >= w.startM && m < w.endM
+  : m >= w.startM || m < w.endM); // wraps midnight
+
+function scheduleStateAt(lane, ts, offsetMinutes = serverOffsetMinutes()) {
+  if (!lane.scheduleWindows.length) return { open: true, nextChangeMs: 0 };
+  const m = minutesOfDayAt(ts, offsetMinutes);
+  const open = lane.scheduleWindows.some((w) => inWindow(m, w));
+  // next boundary: scan forward minute by minute (≤1440 iterations, called on
+  // claim/directory paths only — the hot request path lives in the plugin)
+  for (let i = 1; i <= 1440; i += 1) {
+    const mm = (m + i) % 1440;
+    const nowOpen = lane.scheduleWindows.some((w) => inWindow(mm, w));
+    if (nowOpen !== open) return { open, nextChangeMs: ts + i * 60_000 };
+  }
+  return { open, nextChangeMs: 0 };
+}
+
+function peakActiveAt(lane, ts, offsetMinutes = serverOffsetMinutes()) {
+  if (!lane.peakWindows.length || lane.peakMultiplier <= 1) return false;
+  const m = minutesOfDayAt(ts, offsetMinutes);
+  return lane.peakWindows.some((w) => inWindow(m, w));
+}
+
+function laneLedgerOf(share, laneId) {
+  share.laneSettled = share.laneSettled || {};
+  return share.laneSettled[laneId] || { windowKey: "", tokens: 0, byKey: {} };
+}
+
+// Roll the lane window and settle tokens (peak multiplier applied when the
+// usage event falls inside a peak window). Returns the applied delta.
+// Owner-machine tz (minutes east of UTC), reported by the CPA plugin each
+// heartbeat. Gates execute on the owner machine, so the owner tz is the
+// authoritative anchor for schedule/day/week windows; the server-local
+// fallback keeps legacy (plugin-not-reporting / between-heartbeat) behavior.
+function tzOf(share) {
+  const value = Number(share && share.tzOffsetMinutes);
+  if (!Number.isFinite(value)) return serverOffsetMinutes();
+  return Math.max(-840, Math.min(840, Math.round(value)));
+}
+
+function settleLaneUsage(share, lane, keyId, tokens, ts = now()) {
+  const window = laneWindowOf(lane, ts, tzOf(share));
+  const ledger = laneLedgerOf(share, lane.id);
+  if (ledger.windowKey !== window.key) {
+    ledger.windowKey = window.key;
+    ledger.tokens = 0;
+    ledger.byKey = {};
+  }
+  const applied = peakActiveAt(lane, ts, tzOf(share))
+    ? Math.max(1, Math.round(tokens * lane.peakMultiplier))
+    : tokens;
+  ledger.tokens += applied;
+  ledger.byKey[keyId] = (ledger.byKey[keyId] || 0) + applied;
+  share.laneSettled[lane.id] = ledger;
+  return applied;
+}
+
+export function createSharingCpa({ dataDir, initial, persistState, verifyIdentity, claimRatePerMinute } = {}) {
   const file = dataDir ? path.join(dataDir, "sharing-cpa.json") : "";
   let db = initial && typeof initial === "object"
     ? { version: 1, shares: initial.shares || {}, claims: initial.claims || {} }
@@ -134,10 +348,74 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     }
   }
 
+  const laneSlotsLeft = (shareId, laneId, maxClaims) =>
+    Math.max(0, maxClaims - activeClaimsOf(shareId).filter((c) => (c.laneId || "default") === laneId).length);
+
+  // Public/directory view of a lane: no secrets, no byKey detail. Schedule
+  // and peak ride along so the owner card can edit and borrowers can see
+  // when the lane opens (transparency over obscurity).
+  const hhmmOf = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  function lanePublicView(share, lane, ts = now()) {
+    const tz = tzOf(share);
+    const window = laneWindowOf(lane, ts, tz);
+    const ledger = laneLedgerOf(share, lane.id);
+    const settled = ledger.windowKey === window.key ? ledger.tokens : 0;
+    const schedule = scheduleStateAt(lane, ts, tz);
+    const closed = lane.state !== "active" || !schedule.open;
+    return {
+      id: lane.id,
+      title: lane.title,
+      models: lane.models,
+      period: lane.period,
+      budgetTokens: lane.budgetTokens,
+      settledTokens: settled,
+      availableTokens: Math.max(0, lane.budgetTokens - settled),
+      exhausted: lane.state === "active" && schedule.open && settled >= lane.budgetTokens,
+      state: lane.state,
+      open: lane.state === "active" && schedule.open,
+      retryAfterMs: closed ? Math.max(0, schedule.nextChangeMs - ts) : 0,
+      slotsLeft: laneSlotsLeft(share.shareId, lane.id, lane.maxClaims),
+      maxClaims: lane.maxClaims,
+      windowEndsAtMs: window.endMs,
+      // Borrower-facing anchor label ("UTC+8"): schedule times are owner-tz
+      // because that is where the gates execute.
+      tzLabel: tzLabelOf(tz),
+      schedule: lane.scheduleWindows.map((w) => ({ start: hhmmOf(w.startM), end: hhmmOf(w.endM) })),
+      peak: {
+        windows: lane.peakWindows.map((w) => ({ start: hhmmOf(w.startM), end: hhmmOf(w.endM) })),
+        multiplier: lane.peakMultiplier,
+      },
+    };
+  }
+
+  // Sync view for the CPA plugin: schedule/peak ride as minute-of-day marks
+  // so the plugin gates locally without duplicating timezone math.
+  function laneSyncView(share, lane, ts = now()) {
+    const tz = tzOf(share);
+    const window = laneWindowOf(lane, ts, tz);
+    const ledger = laneLedgerOf(share, lane.id);
+    const settled = ledger.windowKey === window.key ? ledger.tokens : 0;
+    return {
+      id: lane.id,
+      state: lane.state,
+      models: lane.models,
+      budgetTokens: lane.budgetTokens,
+      period: lane.period,
+      windowKey: window.key,
+      windowStartMs: window.startMs,
+      windowEndMs: window.endMs,
+      settledTokens: settled,
+      scheduleWindows: lane.scheduleWindows.map((w) => ({ startM: w.startM, endM: w.endM })),
+      peakWindows: lane.peakWindows.map((w) => ({ startM: w.startM, endM: w.endM })),
+      peakMultiplier: lane.peakMultiplier,
+    };
+  }
+
   function publicShareView(share) {
     const online = now() - (share.lastHeartbeatAt || 0) < HEARTBEAT_ONLINE_MS;
     const settled = windowSettled(share);
     const available = Math.max(0, share.policy.budget - settled);
+    const ts = now();
     return {
       shareId: share.shareId,
       title: share.title,
@@ -150,6 +428,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       availableTokens: available,
       exhausted: share.state === "active" && available <= 0,
       updatedAt: share.lastHeartbeatAt || share.updatedAt || 0,
+      lanes: effectiveLanes(share).map((lane) => lanePublicView(share, lane, ts)),
     };
   }
 
@@ -157,6 +436,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     const view = {
       keyId: claim.keyId,
       shareId: claim.shareId,
+      laneId: claim.laneId || "default",
       shareTitle: claim.shareTitle,
       borrower: claim.borrower,
       participantId: claim.participantId || "",
@@ -182,6 +462,19 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
   function heartbeatResponse(share) {
     const windowDay = rollShareWindow(share);
     pruneExpiredClaims();
+    const ts = now();
+    const lanes = effectiveLanes(share);
+    // Legacy settledByKey stays a flat keyId→tokens map (merged across lane
+    // ledgers' current windows) so pre-lane plugins keep working unchanged.
+    const settledByKey = {};
+    for (const lane of lanes) {
+      const window = laneWindowOf(lane, ts, tzOf(share));
+      const ledger = laneLedgerOf(share, lane.id);
+      if (ledger.windowKey !== window.key) continue;
+      for (const [keyId, tokens] of Object.entries(ledger.byKey || {})) {
+        settledByKey[keyId] = (settledByKey[keyId] || 0) + tokens;
+      }
+    }
     return {
       state: share.state,
       windowDay,
@@ -196,8 +489,10 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         token: c.token,
         keyMaxTokens: share.policy.keyMaxTokens,
         expiresAtMs: c.expiresAt,
+        laneId: c.laneId || "default",
       })),
-      settledByKey: share.settled || {},
+      settledByKey,
+      lanes: lanes.map((lane) => laneSyncView(share, lane, ts)),
     };
   }
 
@@ -256,7 +551,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       return true;
     }
     entry.hits += 1;
-    return entry.hits <= CLAIM_RATE_PER_MINUTE;
+    return entry.hits <= (claimRatePerMinute || CLAIM_RATE_PER_MINUTE);
   }
 
   // ── handlers ─────────────────────────────────────────────────────────────
@@ -296,6 +591,11 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         claimsIssued: 0,
       };
       db.shares[share.shareId] = share;
+    } else if (share.state === "stopped") {
+      // Owner-initiated stop is reversible: a signed register with the same
+      // secret is an explicit intent to share again. Admin suspension
+      // ("suspended") is NOT overridden here.
+      share.state = "active";
     }
     share.title = String(body.title || "CPA share").slice(0, 60) || "CPA share";
     share.baseURL = String(body.baseURL || "").trim().slice(0, 200);
@@ -303,6 +603,8 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       ? body.models.map((m) => String(m).slice(0, 80)).slice(0, 50)
       : ["*"];
     share.policy = clampPolicy({ ...share.policy, ...(body.policy || {}) });
+    const lanes = clampLanes(body.lanes);
+    if (lanes) share.lanes = lanes;
     share.updatedAt = now();
     share.participantId = String(body.participantId);
     share.ownerDisplayId = String(owner.displayId || "");
@@ -324,6 +626,10 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     }
     share.lastHeartbeatAt = now();
     share.lastPluginVersion = String(body.pluginVersion || "");
+    const reportedTz = Number(body.tzOffsetMinutes);
+    if (Number.isFinite(reportedTz)) {
+      share.tzOffsetMinutes = Math.max(-840, Math.min(840, Math.round(reportedTz)));
+    }
     // The plugin re-detects its public endpoint every heartbeat; a changed
     // LAN IP or CPA port updates the share so borrowers never claim keys
     // pointing at a dead endpoint (B2, review R28b).
@@ -337,6 +643,8 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
 
     let applied = 0;
     let orphaned = 0;
+    const lanes = effectiveLanes(share);
+    const ts = now();
     for (const delta of Array.isArray(body.usage) ? body.usage : []) {
       const keyId = String(delta.keyId || "");
       const tokens = Math.max(0, Number(delta.tokens) || 0);
@@ -350,10 +658,22 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       claim.usedTokens = (claim.usedTokens || 0) + tokens;
       claim.requests = (claim.requests || 0) + requests;
       claim.failedRequests = (claim.failedRequests || 0) + failed;
-      claim.lastUsedAt = now();
+      claim.lastUsedAt = ts;
       share.settled[keyId] = (share.settled[keyId] || 0) + tokens;
       share.lifetimeSettled = (share.lifetimeSettled || 0) + tokens;
+      const laneId = claim.laneId || "default";
+      const lane = lanes.find((l) => l.id === laneId);
+      if (lane) settleLaneUsage(share, lane, keyId, tokens, ts);
       applied += 1;
+    }
+    // Wall signal (advisory): owner-side failures observed by the plugin. No
+    // automatic action — the owner card surfaces it as a one-click lane pause.
+    const wallFailed = Math.max(0, Number(body.wallSignals && body.wallSignals.ownerFailed) || 0);
+    if (wallFailed > 0) {
+      share.wallSignal = {
+        at: ts,
+        ownerFailed: (share.wallSignal && share.wallSignal.ownerFailed || 0) + wallFailed,
+      };
     }
     pruneExpiredClaims();
     persist();
@@ -395,9 +715,45 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         lifetimeSettled: share.lifetimeSettled || 0,
         claimsIssued: share.claimsIssued || 0,
         windowDay: share.windowDay,
+        wallSignal: share.wallSignal || null,
       },
       claims,
     });
+  }
+
+  // Replace/patch the lane set. A lane flipped away from "active" suspends:
+  // its valid claims are revoked (same cascade semantics as share suspend).
+  // A lane REMOVED from the set cascades the same way — the card's delete
+  // dialog promises "revoke its claim keys" — and its settled ledger is
+  // dropped so a same-id recreation starts from a clean window. Applying a
+  // lanes update also clears the wall signal: the owner just acted on it.
+  function applyLanesUpdate(share, input) {
+    const lanes = clampLanes(input);
+    if (!lanes) return { ok: false, error: "invalid_lanes" };
+    const ts = now();
+    const keptIds = new Set(lanes.map((lane) => lane.id));
+    for (const lane of lanes) {
+      if (lane.state === "active") continue;
+      for (const claim of Object.values(db.claims)) {
+        if (claim.shareId === share.shareId && (claim.laneId || "default") === lane.id && claim.state === "valid") {
+          claim.state = "revoked";
+        }
+      }
+    }
+    for (const claim of Object.values(db.claims)) {
+      if (claim.shareId === share.shareId && claim.state === "valid" && !keptIds.has(claim.laneId || "default")) {
+        claim.state = "revoked";
+      }
+    }
+    if (share.laneSettled) {
+      for (const laneId of Object.keys(share.laneSettled)) {
+        if (!keptIds.has(laneId)) delete share.laneSettled[laneId];
+      }
+    }
+    share.wallSignal = null;
+    share.lanes = lanes;
+    share.updatedAt = ts;
+    return { ok: true };
   }
 
   async function handleOwnerPolicy(req, res, body) {
@@ -406,10 +762,34 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       sendJson(res, 404, { error: "share_not_found" });
       return;
     }
+    if (Array.isArray(body.lanes)) {
+      const result = applyLanesUpdate(share, body.lanes);
+      if (!result.ok) {
+        sendJson(res, 400, { error: result.error });
+        return;
+      }
+    }
     share.policy = clampPolicy({ ...share.policy, ...(body.policy || body) });
     share.updatedAt = now();
     persist();
-    sendJson(res, 200, { policy: share.policy });
+    sendJson(res, 200, { policy: share.policy, lanes: effectiveLanes(share).map((lane) => lanePublicView(share, lane)) });
+  }
+
+  async function handleOwnerResume(req, res) {
+    const share = findShareBySecret(req.headers["x-atl-share-secret"]);
+    if (!share) {
+      sendJson(res, 404, { error: "share_not_found" });
+      return;
+    }
+    if (share.state === "suspended") {
+      // Admin-controlled state: the owner cannot lift a suspension.
+      sendJson(res, 409, { error: "share_suspended" });
+      return;
+    }
+    share.state = "active";
+    share.updatedAt = now();
+    persist();
+    sendJson(res, 200, { shareId: share.shareId, state: share.state });
   }
 
   async function handleListShares(req, res) {
@@ -458,18 +838,52 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       sendJson(res, 409, { error: "share_offline", message: "share plugin is not heartbeating" });
       return;
     }
-    if (windowSettled(share) >= share.policy.budget) {
-      sendJson(res, 409, { error: "budget_exhausted" });
+    // Lane resolution (lanes design): a claim targets one lane. Omitting
+    // laneId is only valid on single-lane (legacy) shares.
+    const nowTs = now();
+    const lanes = effectiveLanes(share);
+    const laneOptions = lanes.map((l) => ({ id: l.id, title: l.title, models: l.models, period: l.period }));
+    let lane = null;
+    if (body.laneId) {
+      lane = lanes.find((l) => l.id === String(body.laneId)) || null;
+      if (!lane) {
+        sendJson(res, 404, { error: "lane_not_found", lanes: laneOptions });
+        return;
+      }
+    } else if (lanes.length === 1) {
+      lane = lanes[0];
+    } else {
+      sendJson(res, 409, { error: "lane_required", lanes: laneOptions });
       return;
     }
-    if (activeClaimsOf(share.shareId).length >= share.policy.maxClaims) {
-      sendJson(res, 409, { error: "no_claim_slots" });
+    if (lane.state !== "active") {
+      sendJson(res, 409, { error: "lane_suspended", laneId: lane.id });
+      return;
+    }
+    const schedule = scheduleStateAt(lane, nowTs, tzOf(share));
+    if (!schedule.open) {
+      sendJson(res, 409, { error: "lane_closed", laneId: lane.id, retryAfterMs: Math.max(0, schedule.nextChangeMs - nowTs) });
+      return;
+    }
+    const window = laneWindowOf(lane, nowTs, tzOf(share));
+    const ledger = laneLedgerOf(share, lane.id);
+    const laneSettled = ledger.windowKey === window.key ? ledger.tokens : 0;
+    // Legacy single-lane shares keep the historical error code so old
+    // borrower cards still map it to a friendly message.
+    const exhaustedError = (share.lanes && share.lanes.length) ? "lane_exhausted" : "budget_exhausted";
+    if (laneSettled >= lane.budgetTokens) {
+      sendJson(res, 409, { error: exhaustedError, laneId: lane.id, retryAfterMs: Math.max(0, window.endMs - nowTs) });
+      return;
+    }
+    if (laneSlotsLeft(share.shareId, lane.id, lane.maxClaims) <= 0) {
+      sendJson(res, 409, { error: "no_claim_slots", laneId: lane.id });
       return;
     }
     const participant = identity.participant || {};
     const claim = {
       keyId: randomId("csk_", 8),
       shareId: share.shareId,
+      laneId: lane.id,
       shareTitle: share.title,
       token: mintToken(),
       borrower: String(participant.nickname || participant.displayId || participant.participantId || body.participantId).slice(0, 40),
@@ -489,10 +903,15 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       keyId: claim.keyId,
       token: claim.token,
       baseURL: share.baseURL,
-      models: share.models,
+      laneId: lane.id,
+      laneTitle: lane.title,
+      models: lane.models,
+      period: lane.period,
+      tzLabel: tzLabelOf(tzOf(share)),
+      laneBudgetTokens: lane.budgetTokens,
       expiresAt: claim.expiresAt,
       shareTitle: share.title,
-      keyMaxTokens: share.policy.keyMaxTokens,
+      keyMaxTokens: Math.min(share.policy.keyMaxTokens, lane.budgetTokens),
       borrower: claim.borrower,
       displayId: claim.displayId,
     });
@@ -583,6 +1002,13 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         sendJson(res, 404, { error: "share_not_found" });
         return;
       }
+      if (Array.isArray(body.lanes)) {
+        const result = applyLanesUpdate(share, body.lanes);
+        if (!result.ok) {
+          sendJson(res, 400, { error: result.error });
+          return;
+        }
+      }
       share.policy = clampPolicy({ ...share.policy, ...(body.policy || {}) });
       share.updatedAt = now();
       persist();
@@ -617,6 +1043,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       if (p === "/api/shares/unregister" && req.method === "POST") return void await handleUnregister(req, res);
       if (p === "/api/shares/owner/status" && req.method === "GET") return void await handleOwnerStatus(req, res, url);
       if (p === "/api/shares/owner/policy" && req.method === "POST") return void await handleOwnerPolicy(req, res, await readBody(req));
+      if (p === "/api/shares/owner/resume" && req.method === "POST") return void await handleOwnerResume(req, res);
       if (p === "/api/shares" && req.method === "GET") return void await handleListShares(req, res);
       if (p === "/api/shares/claim" && req.method === "POST") return void await handleClaim(req, res, await readBody(req));
       if (p === "/api/shares/claims/revoke" && req.method === "POST") return void await handleRevokeClaim(req, res, await readBody(req));
@@ -641,3 +1068,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     },
   };
 }
+
+// Pure lane helpers exported for unit tests (window arithmetic, schedule
+// truth tables, lane clamping) — see tests/run-tests.js testSharingLaneUnits.
+export { clampLanes, clampLane, clampWindows, parseHHMM, effectiveLanes, laneWindowOf, scheduleStateAt, settleLaneUsage, peakActiveAt, weekStartTs, tzLabelOf, minutesOfDayAt };

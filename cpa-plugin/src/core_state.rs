@@ -20,6 +20,43 @@ pub struct KeyEntry {
     pub token: String,
     pub key_max_tokens: u64,
     pub expires_at_ms: i64,
+    /// Lane binding (lanes design): the claim's lane — gates resolve
+    /// key→lane because the intercept ABI carries no request model.
+    pub lane_id: String,
+}
+
+/// Local-time window as minute-of-day marks; end may wrap past midnight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowMark {
+    pub start_m: u32,
+    pub end_m: u32,
+}
+
+/// One sharing lane: budget period + schedule + peak multiplier, synced from
+/// the backend heartbeat. All fields degrade deny-safe (unknown/missing =>
+/// closed or unbudgeted-but-scheduled).
+#[derive(Clone, Debug, Default)]
+pub struct LaneEntry {
+    pub id: String,
+    pub state: String,
+    /// Model scope (exact ids + `*` wildcards); empty = every model.
+    pub models: Vec<String>,
+    pub budget_tokens: u64,
+    pub period: String, // day | week | hour5
+    pub window_key: String,
+    pub window_end_ms: i64,
+    /// Baseline settled tokens for window_key (backend-authoritative).
+    pub settled_tokens: u64,
+    pub schedule_windows: Vec<WindowMark>,
+    pub peak_windows: Vec<WindowMark>,
+    pub peak_multiplier: u64,
+}
+
+/// Local per-lane accumulation since the last heartbeat ack.
+#[derive(Clone, Debug, Default)]
+pub struct LaneLedger {
+    pub window_key: String,
+    pub settled: u64,
 }
 
 /// Snapshot of the authoritative backend state, replaced wholesale by each
@@ -32,6 +69,8 @@ pub struct SyncState {
     pub budget: u64,
     pub key_concurrency: u32,
     pub keys: Vec<KeyEntry>,
+    /// Empty = pre-lanes backend: the legacy flat-budget gate applies.
+    pub lanes: Vec<LaneEntry>,
     /// ms of the last successful heartbeat; 0 = never synced.
     pub last_sync_ms: i64,
     pub configured: bool,
@@ -58,6 +97,8 @@ pub struct Ledger {
     pub window_day: String,
     pub settled_by_key: HashMap<String, u64>,
     pub inflight_by_key: HashMap<String, u32>,
+    /// Per-lane accumulation since the last heartbeat ack (lanes design).
+    pub lane_settled: HashMap<String, LaneLedger>,
 }
 
 /// All reasons a temp key stops being authenticated. Every branch except the
@@ -89,15 +130,191 @@ pub enum Gate {
     TerminateBudget(String),
     TerminateKeyCap,
     TerminateConcurrency,
+    /// Lane-scope denial (schedule closed / budget exhausted / lane suspended
+    /// or unknown) with a client-friendly retry hint in seconds.
+    TerminateLane { reason: String, retry_after_secs: u64 },
+}
+
+const HOUR5_MS: i64 = 5 * 3_600_000;
+
+pub fn minute_in_windows(minute: u32, windows: &[WindowMark]) -> bool {
+    windows.iter().any(|w| {
+        if w.start_m == w.end_m {
+            return false;
+        }
+        if w.start_m < w.end_m {
+            minute >= w.start_m && minute < w.end_m
+        } else {
+            minute >= w.start_m || minute < w.end_m // wraps midnight
+        }
+    })
+}
+
+/// Minutes until the next open/close flip (≤1440); 0 when windows are empty.
+pub fn minutes_until_flip(minute: u32, windows: &[WindowMark]) -> u32 {
+    for step in 1..=1440u32 {
+        let m = (minute + step) % 1440;
+        if minute_in_windows(m, windows) != minute_in_windows(minute, windows) {
+            return step;
+        }
+    }
+    0
+}
+
+fn hour5_grid(now_ms: i64) -> (String, i64, i64) {
+    let start = now_ms.div_euclid(HOUR5_MS) * HOUR5_MS;
+    (format!("h5:{}", start), start, start + HOUR5_MS)
+}
+
+/// The lane's effective window at now_ms. hour5 windows self-roll on a
+/// tz-free grid; day/week windows follow the backend heartbeat (8s ticks, so
+/// boundary lag is bounded by the 600s staleness rule that denies anyway).
+pub fn effective_lane_window(lane: &LaneEntry, now_ms: i64) -> (String, i64) {
+    if lane.period == "hour5" {
+        let (key, _, end) = hour5_grid(now_ms);
+        (key, end)
+    } else {
+        (lane.window_key.clone(), lane.window_end_ms)
+    }
+}
+
+/// Lane settled total the gate should compare against the budget: the local
+/// ledger when it tracks the effective window, else a fresh window (0).
+pub fn lane_settled_now(
+    lane: &LaneEntry,
+    local: &HashMap<String, LaneLedger>,
+    now_ms: i64,
+) -> u64 {
+    let (key, _) = effective_lane_window(lane, now_ms);
+    match local.get(&lane.id) {
+        Some(entry) if entry.window_key == key => entry.settled,
+        Some(_) => 0,
+        None => {
+            // No local accumulation yet: trust the backend baseline when it
+            // still describes the effective window.
+            let (lane_key, _) = effective_lane_window(lane, now_ms);
+            if lane.window_key == lane_key {
+                lane.settled_tokens
+            } else {
+                0
+            }
+        }
+    }
+}
+
+/// Settle one usage event into its lane ledger (peak multiplier applies when
+/// the event minute falls inside a peak window). Returns the applied delta.
+pub fn settle_lane_usage(
+    lane: &LaneEntry,
+    local: &mut HashMap<String, LaneLedger>,
+    tokens: u64,
+    now_ms: i64,
+    minute: u32,
+) -> u64 {
+    let (key, _) = effective_lane_window(lane, now_ms);
+    let entry = local.entry(lane.id.clone()).or_insert_with(|| LaneLedger {
+        window_key: key.clone(),
+        settled: 0,
+    });
+    if entry.window_key != key {
+        entry.window_key = key;
+        entry.settled = 0;
+    }
+    let multiplier = if lane.peak_multiplier > 1 && minute_in_windows(minute, &lane.peak_windows) {
+        lane.peak_multiplier
+    } else {
+        1
+    };
+    let applied = tokens.saturating_mul(multiplier);
+    entry.settled = entry.settled.saturating_add(applied);
+    applied
+}
+
+/// Lane model scoping: patterns support exact ids and `*` wildcards
+/// (prefix / suffix / infix), mirroring CPA's excluded-models semantics.
+/// A lane with ["*"] (or an empty list) serves every model.
+pub fn model_matches_lane(models: &[String], model: &str) -> bool {
+    if models.is_empty() || models.iter().any(|m| m == "*") {
+        return true;
+    }
+    models.iter().any(|pattern| {
+        let stars = pattern.matches('*').count();
+        if stars == 0 {
+            pattern == model
+        } else if stars == 1 {
+            let (head, tail) = pattern.split_once('*').unwrap();
+            model.starts_with(head) && model.ends_with(tail) && model.len() >= head.len() + tail.len()
+        } else {
+            // multi-star: match head/tail and every middle chunk in order
+            let mut rest = model;
+            let mut parts = pattern.split('*').collect::<Vec<_>>();
+            let tail = parts.pop().unwrap_or("");
+            let head = parts.remove(0);
+            if !rest.starts_with(head) || !rest.ends_with(tail) {
+                return false;
+            }
+            rest = &rest[head.len()..rest.len() - tail.len()];
+            for chunk in parts {
+                match rest.find(chunk) {
+                    Some(at) => rest = &rest[at + chunk.len()..],
+                    None => return false,
+                }
+            }
+            true
+        }
+    })
 }
 
 /// Interceptor gate for a temp-key request. This is defense in depth: the
 /// authoritative exhaustion denial lives in `decide_auth` (fail-closed); this
 /// layer stops in-flight budget burn early with a clean 429.
-pub fn gate_request(ledger: &Ledger, sync: &SyncState, key_id: &str, key_max_tokens: u64) -> Gate {
+///
+/// Lane resolution: the key's lane binding selects the lane gate (model
+/// scope + schedule + lane window budget). An empty sync.lanes list keeps the
+/// legacy flat gate. `requested_model` = None (older CPA hosts without the
+/// field) degrades to advisory scoping — schedule/budget gates still apply.
+pub fn gate_request(
+    ledger: &Ledger,
+    sync: &SyncState,
+    key_id: &str,
+    key_max_tokens: u64,
+    now_ms: i64,
+    minute: u32,
+    requested_model: Option<&str>,
+) -> Gate {
+    if let Some(entry) = sync.keys.iter().find(|k| k.key_id == key_id) {
+        if !sync.lanes.is_empty() {
+            let Some(lane) = sync.lanes.iter().find(|l| l.id == entry.lane_id) else {
+                return Gate::TerminateLane { reason: "lane_removed".into(), retry_after_secs: 0 };
+            };
+            if lane.state != "active" {
+                return Gate::TerminateLane { reason: "lane_suspended".into(), retry_after_secs: 0 };
+            }
+            if let Some(model) = requested_model {
+                if !lane.models.is_empty()
+                    && !lane.models.iter().any(|m| m == "*")
+                    && !model_matches_lane(&lane.models, model)
+                {
+                    return Gate::TerminateLane { reason: "model_not_in_lane".into(), retry_after_secs: 0 };
+                }
+            }
+            if !lane.schedule_windows.is_empty() && !minute_in_windows(minute, &lane.schedule_windows) {
+                let retry = minutes_until_flip(minute, &lane.schedule_windows) as u64;
+                return Gate::TerminateLane { reason: "lane_closed".into(), retry_after_secs: retry * 60 };
+            }
+            if lane.budget_tokens > 0 {
+                let settled = lane_settled_now(lane, &ledger.lane_settled, now_ms);
+                if settled >= lane.budget_tokens {
+                    let (_, end) = effective_lane_window(lane, now_ms);
+                    let retry = ((end - now_ms).max(0) / 1000) as u64;
+                    return Gate::TerminateLane { reason: "lane_exhausted".into(), retry_after_secs: retry };
+                }
+            }
+        }
+    }
     let settled = ledger.settled_by_key.get(key_id).copied().unwrap_or(0);
     let window_settled: u64 = ledger.settled_by_key.values().sum();
-    if sync.budget > 0 && window_settled >= sync.budget {
+    if sync.budget > 0 && sync.lanes.is_empty() && window_settled >= sync.budget {
         return Gate::TerminateBudget(format!("{} >= {}", window_settled, sync.budget));
     }
     if key_max_tokens > 0 && settled >= key_max_tokens {
@@ -150,6 +367,23 @@ pub fn restore_settled(ledger: &mut Ledger, window_day: &str, settled_by_key: &H
     }
 }
 
+/// Heartbeat restore: backend lanes reinitialize the local ledgers. The
+/// backend settled value already includes everything acked (pending deltas
+/// were drained into the just-sent heartbeat), so replace wholesale.
+/// Known bounded window: usage settled between drain and the response
+/// arriving is absent from both sides for one RTT (≤4s timeout) — the local
+/// gate may admit up to that much past the budget until the next restore
+/// converges. Same model as the legacy settled_by_key mirror.
+pub fn restore_lane_settled(ledger: &mut Ledger, lanes: &[LaneEntry]) {
+    ledger.lane_settled.retain(|id, _| lanes.iter().any(|l| l.id == *id));
+    for lane in lanes {
+        ledger.lane_settled.insert(
+            lane.id.clone(),
+            LaneLedger { window_key: lane.window_key.clone(), settled: lane.settled_tokens },
+        );
+    }
+}
+
 /// Merge a delta into an ack-backlog list (keyed merge, no duplicates).
 pub fn merge_delta(list: &mut Vec<UsageDelta>, delta: UsageDelta) {
     if let Some(existing) = list.iter_mut().find(|d| d.key_id == delta.key_id) {
@@ -172,6 +406,7 @@ mod tests {
             budget: 1_000_000,
             key_concurrency: 2,
             keys: vec![key],
+            lanes: Vec::new(),
             last_sync_ms: 1_000_000,
             configured: true,
         }
@@ -183,7 +418,12 @@ mod tests {
             token: format!("{}abc", TOKEN_PREFIX),
             key_max_tokens: 500,
             expires_at_ms: 2_000_000,
+            lane_id: "default".into(),
         }
+    }
+
+    fn gate(ledger: &Ledger, sync: &SyncState, key_id: &str, cap: u64) -> Gate {
+        gate_request(ledger, sync, key_id, cap, 1_100_000, 12 * 60, None)
     }
 
     #[test]
@@ -213,20 +453,151 @@ mod tests {
         let sync = sync_with(key());
         let mut ledger = Ledger { window_day: "2026-09-13".into(), ..Default::default() };
 
-        assert!(matches!(gate_request(&ledger, &sync, "csk_1", 500), Gate::Pass));
+        assert!(matches!(gate(&ledger, &sync, "csk_1", 500), Gate::Pass));
 
         // per-key cap
         ledger.settled_by_key.insert("csk_1".into(), 500);
-        assert!(matches!(gate_request(&ledger, &sync, "csk_1", 500), Gate::TerminateKeyCap));
+        assert!(matches!(gate(&ledger, &sync, "csk_1", 500), Gate::TerminateKeyCap));
 
-        // window budget (other keys burn the pool)
+        // window budget (other keys burn the pool) — legacy flat mode only
         ledger.settled_by_key.insert("csk_other".into(), 1_000_000);
-        assert!(matches!(gate_request(&ledger, &sync, "csk_1", 9_999_999), Gate::TerminateBudget(_)));
+        assert!(matches!(gate(&ledger, &sync, "csk_1", 9_999_999), Gate::TerminateBudget(_)));
 
         // concurrency
         let mut ledger = Ledger { window_day: "2026-09-13".into(), ..Default::default() };
         ledger.inflight_by_key.insert("csk_1".into(), 2);
-        assert!(matches!(gate_request(&ledger, &sync, "csk_1", 9_999_999), Gate::TerminateConcurrency));
+        assert!(matches!(gate(&ledger, &sync, "csk_1", 9_999_999), Gate::TerminateConcurrency));
+    }
+
+    fn lane(id: &str) -> LaneEntry {
+        LaneEntry {
+            id: id.into(),
+            state: "active".into(),
+            budget_tokens: 1_000,
+            period: "hour5".into(),
+            window_key: format!("h5:{}", 1_000_000),
+            window_end_ms: 1_000_000 + HOUR5_MS,
+            models: Vec::new(),
+            settled_tokens: 0,
+            schedule_windows: vec![],
+            peak_windows: vec![],
+            peak_multiplier: 1,
+        }
+    }
+
+    fn sync_lanes(lanes: Vec<LaneEntry>) -> SyncState {
+        SyncState { lanes, ..sync_with(key()) }
+    }
+
+    #[test]
+    fn lane_gate_enforces_model_scope_and_degrades_without_model() {
+        let mut gemini_lane = lane("default");
+        gemini_lane.models = vec!["gemini-*".into()];
+        let sync = sync_lanes(vec![gemini_lane]);
+        let pass = |model: Option<&str>| {
+            gate_request(&Ledger::default(), &sync, "csk_1", 9_999_999, 1_100_000, 12 * 60, model)
+        };
+        // exact family match passes; other families denied (hard isolation)
+        assert!(matches!(pass(Some("gemini-3.8-flash-high")), Gate::Pass));
+        assert!(matches!(
+            pass(Some("glm-5.3-flash")),
+            Gate::TerminateLane { reason, .. } if reason == "model_not_in_lane"
+        ));
+        // older CPA hosts without the model field degrade to advisory scoping
+        assert!(matches!(pass(None), Gate::Pass));
+        // wildcard semantics: multi-star, suffix, exact
+        assert!(model_matches_lane(&["gemini-*".to_string()], "gemini-3.8-flash-high"));
+        assert!(!model_matches_lane(&["gemini-*".to_string()], "gpt-5.6"));
+        assert!(model_matches_lane(&["*-flash".to_string()], "glm-5.3-flash"));
+        assert!(model_matches_lane(&["glm-5.3".to_string()], "glm-5.3"));
+        assert!(model_matches_lane(&["g*high".to_string()], "gemini-3.8-flash-high"));
+        assert!(!model_matches_lane(&["g*high".to_string()], "gemini-3.8-flash-low"));
+        assert!(model_matches_lane(&["*".to_string()], "anything"));
+        assert!(model_matches_lane(&[], "anything"));
+    }
+
+    #[test]
+    fn lane_gate_denies_safe_on_removed_and_suspended_lanes() {
+        // key's lane not in the synced lane list -> deny (backend withdrew it)
+        let unknown = sync_lanes(vec![lane("other")]);
+        assert!(matches!(
+            gate(&Ledger::default(), &unknown, "csk_1", 100),
+            Gate::TerminateLane { reason, retry_after_secs: 0 } if reason == "lane_removed"
+        ));
+        // suspended lane -> deny without retry hint
+        let mut suspended = lane("default");
+        suspended.state = "suspended".into();
+        assert!(matches!(
+            gate(&Ledger::default(), &sync_lanes(vec![suspended]), "csk_1", 100),
+            Gate::TerminateLane { reason, .. } if reason == "lane_suspended"
+        ));
+    }
+
+    #[test]
+    fn lane_gate_enforces_schedule_with_retry_hint() {
+        let mut offpeak = lane("default");
+        offpeak.schedule_windows = vec![WindowMark { start_m: 22 * 60, end_m: 14 * 60 }];
+        let sync = sync_lanes(vec![offpeak]);
+        // 22:00-14:00 wraps midnight: noon sits inside the 00:00-14:00 half
+        assert!(matches!(
+            gate_request(&Ledger::default(), &sync, "csk_1", 9_999_999, 1_100_000, 12 * 60, None),
+            Gate::Pass
+        ));
+        assert!(matches!(
+            gate_request(&Ledger::default(), &sync, "csk_1", 9_999_999, 1_100_000, 23 * 60, None),
+            Gate::Pass
+        ));
+        // 15:00 is outside; the lane reopens at 22:00 => 420 minutes
+        assert!(matches!(
+            gate_request(&Ledger::default(), &sync, "csk_1", 9_999_999, 1_100_000, 15 * 60, None),
+            Gate::TerminateLane { reason, retry_after_secs } if reason == "lane_closed" && retry_after_secs == 420 * 60
+        ));
+    }
+
+    #[test]
+    fn lane_gate_enforces_lane_budget_and_hour5_self_roll() {
+        let sync = sync_lanes(vec![lane("default")]);
+        let mut ledger = Ledger::default();
+        // no local accumulation -> backend baseline 0 -> pass
+        assert!(matches!(gate(&ledger, &sync, "csk_1", 9_999_999), Gate::Pass));
+        // local burn past the lane budget -> terminate with retry until the
+        // grid window end (now 1_100_000 sits in the [0, HOUR5_MS) grid cell)
+        let applied = settle_lane_usage(&lane("default"), &mut ledger.lane_settled, 900, 1_100_000, 0);
+        assert_eq!(applied, 900);
+        let applied2 = settle_lane_usage(&lane("default"), &mut ledger.lane_settled, 200, 1_100_000, 0);
+        assert_eq!(applied2, 200);
+        let grid_end = HOUR5_MS;
+        assert!(matches!(
+            gate(&ledger, &sync, "csk_1", 9_999_999),
+            Gate::TerminateLane { reason, retry_after_secs } if reason == "lane_exhausted"
+                && retry_after_secs == ((grid_end - 1_100_000) / 1000) as u64
+        ));
+        // past the grid window the lane self-rolls: settled resets, gate reopens
+        let after = HOUR5_MS + 1;
+        assert!(matches!(
+            gate_request(&ledger, &sync, "csk_1", 9_999_999, after, 0, None),
+            Gate::Pass
+        ));
+    }
+
+    #[test]
+    fn lane_peak_multiplier_settles_at_rate() {
+        let mut peaky = lane("default");
+        peaky.peak_multiplier = 3;
+        peaky.peak_windows = vec![WindowMark { start_m: 15 * 60, end_m: 21 * 60 }];
+        let mut ledger = Ledger::default();
+        // 16:00 inside peak: x3; 22:00 outside: x1
+        assert_eq!(settle_lane_usage(&peaky, &mut ledger.lane_settled, 100, 1_100_000, 16 * 60), 300);
+        assert_eq!(settle_lane_usage(&peaky, &mut ledger.lane_settled, 100, 1_100_000, 22 * 60), 100);
+        assert_eq!(ledger.lane_settled.get("default").unwrap().settled, 400);
+        // restore from backend replaces wholesale (acks included everything)
+        let mut from_backend = lane("default");
+        from_backend.settled_tokens = 1_234;
+        restore_lane_settled(&mut ledger, &[from_backend]);
+        assert_eq!(ledger.lane_settled.get("default").unwrap().settled, 1_234);
+        // lanes that disappear from the sync are dropped from the local map
+        restore_lane_settled(&mut ledger, &[lane("other")]);
+        assert!(ledger.lane_settled.get("default").is_none());
     }
 
     #[test]

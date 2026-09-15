@@ -665,33 +665,81 @@
       if (command === "modules:get") return Promise.resolve(clone(window.__ATL_E2E_STATE__.modulesState));
       if (command === "modules:set") return api.modulesSet(args || {});
       // the remote compute-sharing plugin rides the same channel (R28b)
-      if (command === "sharing:claim-sign") {
+      if (command === "compute-sharing:claim-sign") {
         window.__ATL_E2E_STATE__.borrowCalls.signs.push(clone(args || {}));
         if (cfg.claimSignError) return Promise.reject(new Error(cfg.claimSignError));
         return Promise.resolve({ participantId: "p_e2e_borrower", ts: (args && args.ts) || Date.now(), signature: "e2e-sig" });
       }
-      if (command === "sharing:borrow-get") return Promise.resolve(clone(window.__ATL_E2E_STATE__.borrowStore));
+      if (command === "compute-sharing:borrow-get") return Promise.resolve(clone(window.__ATL_E2E_STATE__.borrowStore));
       // owner console commands (A.2): scenario-driven sample or not_registered
-      if (command === "sharing:owner-status") {
+      if (command === "compute-sharing:owner-status") {
         window.__ATL_E2E_STATE__.ownerCalls.status = (window.__ATL_E2E_STATE__.ownerCalls.status || 0) + 1;
         if (cfg.ownerNotRegistered || !window.__ATL_E2E_STATE__.ownerShare) return Promise.reject(new Error("not_registered"));
         return Promise.resolve(clone(window.__ATL_E2E_STATE__.ownerShare));
       }
-      if (command === "sharing:owner-policy") {
+      if (command === "compute-sharing:owner-policy") {
         window.__ATL_E2E_STATE__.ownerCalls.policy.push(clone((args || {}).policy || {}));
-        return Promise.resolve({ policy: { ...(window.__ATL_E2E_STATE__.ownerShare?.share?.policy || {}), ...((args || {}).policy || {}) } });
+        if (Array.isArray(args && args.lanes)) window.__ATL_E2E_STATE__.ownerCalls.lanes.push(clone(args.lanes));
+        // mirror POST /api/shares/owner/policy: lanes replace wholesale and a
+        // suspended lane revokes its claims (sharing-cpa.js applyLanesUpdate).
+        // Storage keeps the VIEW shape the backend serves on owner-status
+        // (wire nests budget/schedule/peak are normalized back) — storing raw
+        // wire lanes would fork the card/backend contract.
+        if (Array.isArray(args && args.lanes) && window.__ATL_E2E_STATE__.ownerShare?.share) {
+          const prev = window.__ATL_E2E_STATE__.ownerShare.share.lanes || [];
+          window.__ATL_E2E_STATE__.ownerShare.share.lanes = args.lanes.map((wire) => {
+            const before = prev.find((l) => l.id === wire.id) || {};
+            return {
+              ...before,
+              id: wire.id,
+              title: wire.title,
+              models: wire.models || ["*"],
+              period: wire.period || "day",
+              budgetTokens: (wire.budget && wire.budget.tokens) || 0,
+              maxClaims: wire.maxClaims || 2,
+              state: wire.state || "active",
+              schedule: (wire.schedule && wire.schedule.windows) || [],
+              peak: { windows: (wire.peak && wire.peak.windows) || [], multiplier: (wire.peak && wire.peak.multiplier) || 1 },
+            };
+          });
+          const keptIds = new Set(args.lanes.map((l) => l.id));
+          for (const claim of window.__ATL_E2E_STATE__.ownerShare.claims || []) {
+            const suspended = args.lanes.some((l) => l.id === (claim.laneId || "default") && l.state !== "active");
+            const removed = claim.state === "valid" && !keptIds.has(claim.laneId || "default");
+            if (suspended || removed) claim.state = "revoked";
+          }
+        }
+        return Promise.resolve({
+          policy: { ...(window.__ATL_E2E_STATE__.ownerShare?.share?.policy || {}), ...((args || {}).policy || {}) },
+          lanes: clone(window.__ATL_E2E_STATE__.ownerShare?.share?.lanes || []),
+        });
       }
-      if (command === "sharing:owner-unregister") {
+      if (command === "compute-sharing:owner-unregister") {
         window.__ATL_E2E_STATE__.ownerCalls.unregistered = true;
         // mirror the real backend (sharing-cpa.js handleUnregister): the share
         // record stays and answers owner-status with state "stopped" — the
-        // card must collapse on that state, not on a vanished record
+        // card renders the stopped row with a resume action on that state
         if (window.__ATL_E2E_STATE__.ownerShare && window.__ATL_E2E_STATE__.ownerShare.share) {
           window.__ATL_E2E_STATE__.ownerShare.share.state = 'stopped';
         }
         return Promise.resolve({ unregistered: true });
       }
-      if (command === "sharing:borrow-set") {
+      if (command === "compute-sharing:owner-resume") {
+        window.__ATL_E2E_STATE__.ownerCalls.resumed = true;
+        // mirror POST /api/shares/owner/resume: stopped -> active
+        if (window.__ATL_E2E_STATE__.ownerShare && window.__ATL_E2E_STATE__.ownerShare.share) {
+          window.__ATL_E2E_STATE__.ownerShare.share.state = 'active';
+        }
+        return Promise.resolve({ shareId: window.__ATL_E2E_STATE__.ownerShare?.share?.shareId, state: 'active' });
+      }
+      if (command === "compute-sharing:owner-suggest") {
+        // mirror the sidecar suggest payload: zhipu live windows + own CPA usage
+        return Promise.resolve({
+          zhipu: { keyCount: 1, results: [{ label: 'GLM 5.3 -Harry', ok: true, quota: { tier: 'pro', windows: [{ pct: 40, window: 'five_hour' }] } }] },
+          cpaWeekly: { antigravity: 1300000000, codex: 0 },
+        });
+      }
+      if (command === "compute-sharing:borrow-set") {
         window.__ATL_E2E_STATE__.borrowCalls.sets += 1;
         window.__ATL_E2E_STATE__.borrowStore = { claims: clone(Array.isArray(args && args.claims) ? args.claims : []) };
         return Promise.resolve(clone(window.__ATL_E2E_STATE__.borrowStore));
@@ -703,7 +751,7 @@
     // Identity-bound compute borrowing (R28b): state backing the generic
     // sidecar commands above; seeded from cfg.borrowClaims for card specs.
     window.__ATL_E2E_STATE__.borrowCalls = { signs: [], sets: 0 };
-    window.__ATL_E2E_STATE__.ownerCalls = { policy: [], status: 0, unregistered: false };
+    window.__ATL_E2E_STATE__.ownerCalls = { policy: [], lanes: [], status: 0, unregistered: false, resumed: false };
     window.__ATL_E2E_STATE__.ownerShare = cfg.ownerNotRegistered ? null : {
       share: {
         shareId: 'shr_owner1', title: 'Sky-Macbook CPA', models: ['*'], online: true, state: 'active',
@@ -711,10 +759,30 @@
         baseURL: 'http://192.168.1.4:8317', lifetimeSettled: 5600, claimsIssued: 3,
         plugin: { online: true, version: '0.1.0', lastHeartbeatAt: Date.now() },
         policy: { budget: 1000000, keyMaxTokens: 200000, keyConcurrency: 3, ttlHours: 168 },
+        wallSignal: { at: Date.now(), ownerFailed: 3 },
+        lanes: [
+          {
+            id: 'gemini-week', title: 'Gemini weekly', models: ['gemini-*'], period: 'week',
+            budgetTokens: 150000000, settledTokens: 30000000, availableTokens: 120000000,
+            exhausted: false, state: 'active', open: true, retryAfterMs: 0, slotsLeft: 2, maxClaims: 3,
+            schedule: [{ start: '22:00', end: '14:00' }], peak: { windows: [], multiplier: 1 },
+          },
+          {
+            id: 'glm-offpeak', title: 'GLM off-peak', models: ['glm-5.3-flash'], period: 'hour5',
+            budgetTokens: 20000000, settledTokens: 20000000, availableTokens: 0,
+            exhausted: true, state: 'active', open: true, retryAfterMs: 0, slotsLeft: 1, maxClaims: 2,
+            schedule: [{ start: '22:00', end: '12:00' }], peak: { windows: [], multiplier: 1 },
+          },
+        ],
       },
       claims: [
-        { keyId: 'csk_own1', borrower: 'sky-dev', displayId: 'dd_sky1', shareId: 'shr_owner1', state: 'valid', usedTokens: 1200, requests: 3, expiresAt: Date.now() + 86400000 },
-        { keyId: 'csk_own2', borrower: 'alice', displayId: '', shareId: 'shr_owner1', state: 'revoked', usedTokens: 4400, requests: 9, expiresAt: Date.now() - 1000 },
+        { keyId: 'csk_own1', borrower: 'sky-dev', displayId: 'dd_sky1', shareId: 'shr_owner1', laneId: 'gemini-week', state: 'valid', usedTokens: 1200, requests: 3, expiresAt: Date.now() + 86400000 },
+        { keyId: 'csk_own2', borrower: 'alice', displayId: '', shareId: 'shr_owner1', laneId: 'gemini-week', state: 'revoked', usedTokens: 4400, requests: 9, expiresAt: Date.now() - 1000 },
+        { keyId: 'csk_h1', borrower: 'bob', shareId: 'shr_owner1', laneId: 'gemini-week', state: 'revoked', usedTokens: 10, requests: 1, expiresAt: Date.now() - 2000 },
+        { keyId: 'csk_h2', borrower: 'carol', shareId: 'shr_owner1', laneId: 'glm-offpeak', state: 'expired', usedTokens: 20, requests: 1, expiresAt: Date.now() - 3000 },
+        { keyId: 'csk_h3', borrower: 'dave', shareId: 'shr_owner1', laneId: 'default', state: 'revoked', usedTokens: 30, requests: 1, expiresAt: Date.now() - 4000 },
+        { keyId: 'csk_h4', borrower: 'erin', shareId: 'shr_owner1', laneId: 'default', state: 'revoked', usedTokens: 40, requests: 1, expiresAt: Date.now() - 5000 },
+        { keyId: 'csk_h5', borrower: 'frank', shareId: 'shr_owner1', laneId: 'default', state: 'revoked', usedTokens: 50, requests: 1, expiresAt: Date.now() - 6000 },
       ],
     };
     window.__ATL_E2E_STATE__.borrowStore = { claims: clone((cfg.borrowClaims || []).map((c) => ({ ...c, token: c.token || "atl_sk_e2e_" + c.keyId }))) };

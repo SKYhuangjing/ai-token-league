@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 atl-plugin-zhipu = { path = "../plugins/zhipu-plan/rust" }
+atl-plugin-sharing = { path = "../plugins/compute-sharing/rust" }
 collector-core = { path = "../collector-core" }
 base64 = { workspace = true }
 serde = { workspace = true }

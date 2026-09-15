@@ -1,18 +1,20 @@
 {
   "id": "compute-sharing",
-  "version": "0.1.2",
+  "version": "0.5.1",
   "type": "query",
   "title": "算力共享",
-  "desc": "双向：认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点（账本/策略/停止）。",
+  "desc": "双向：认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点（账本/策略/停止/重新开启）。",
   "titleKey": "desktop.sharing.plugin.title",
   "descKey": "desktop.sharing.plugin.desc",
   "entry": "index.js",
   "permissions": [
-    "sidecar:sharing:claim-sign",
-    "sidecar:sharing:borrow-get",
-    "sidecar:sharing:borrow-set",
-    "sidecar:sharing:owner-status",
-    "sidecar:sharing:owner-policy",
-    "sidecar:sharing:owner-unregister"
+    "sidecar:compute-sharing:claim-sign",
+    "sidecar:compute-sharing:borrow-get",
+    "sidecar:compute-sharing:borrow-set",
+    "sidecar:compute-sharing:owner-status",
+    "sidecar:compute-sharing:owner-policy",
+    "sidecar:compute-sharing:owner-resume",
+    "sidecar:compute-sharing:owner-suggest",
+    "sidecar:compute-sharing:owner-unregister"
   ]
 }

@@ -50,6 +50,11 @@ export function shareToRow(share) {
     modelsJson: JSON.stringify(share.models || []),
     policyJson: JSON.stringify(share.policy || {}),
     settledJson: JSON.stringify(share.settled || {}),
+    // lanes-design fields: absent → null → parseJson keeps them undefined so
+    // effectiveLanes falls back to the implicit default lane (old rows)
+    lanesJson: JSON.stringify(share.lanes ?? null),
+    laneSettledJson: JSON.stringify(share.laneSettled ?? null),
+    wallSignalJson: JSON.stringify(share.wallSignal ?? null),
     lifetimeSettled: Number(share.lifetimeSettled) || 0,
     claimsIssued: Number(share.claimsIssued) || 0,
     participantId: share.participantId || "",
@@ -64,7 +69,7 @@ export function shareToRow(share) {
 }
 
 export function rowToShare(row) {
-  return {
+  const share = {
     shareId: row.shareId,
     shareSecret: row.shareSecret,
     state: row.state,
@@ -84,12 +89,20 @@ export function rowToShare(row) {
     createdAt: Number(row.createdAt) || 0,
     updatedAt: Number(row.updatedAt) || 0,
   };
+  const lanes = parseJson(row.lanesJson, null);
+  if (Array.isArray(lanes) && lanes.length) share.lanes = lanes;
+  const laneSettled = parseJson(row.laneSettledJson, null);
+  if (laneSettled && typeof laneSettled === "object") share.laneSettled = laneSettled;
+  const wallSignal = parseJson(row.wallSignalJson, null);
+  if (wallSignal && typeof wallSignal === "object") share.wallSignal = wallSignal;
+  return share;
 }
 
 export function claimToRow(claim) {
   return {
     keyId: claim.keyId,
     shareId: claim.shareId,
+    laneId: claim.laneId || "",
     shareTitle: claim.shareTitle || "",
     token: claim.token,
     borrower: claim.borrower || "",
@@ -109,6 +122,7 @@ export function rowToClaim(row) {
   return {
     keyId: row.keyId,
     shareId: row.shareId,
+    laneId: row.laneId || "",
     shareTitle: row.shareTitle || "",
     token: row.token,
     borrower: row.borrower || "",
@@ -177,11 +191,12 @@ function createJsonControlPlane(store) {
 
 const SHARE_COLUMNS = [
   "shareId", "shareSecret", "state", "title", "baseURL", "modelsJson", "policyJson", "settledJson",
+  "lanesJson", "laneSettledJson", "wallSignalJson",
   "lifetimeSettled", "claimsIssued", "participantId", "ownerDisplayId", "ownerNickname",
   "windowDay", "lastHeartbeatAt", "lastPluginVersion", "createdAt", "updatedAt",
 ];
 const CLAIM_COLUMNS = [
-  "keyId", "shareId", "shareTitle", "token", "borrower", "participantId", "displayId", "state",
+  "keyId", "shareId", "laneId", "shareTitle", "token", "borrower", "participantId", "displayId", "state",
   "usedTokens", "requests", "failedRequests", "createdAt", "expiresAt", "lastUsedAt",
 ];
 

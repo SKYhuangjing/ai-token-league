@@ -434,3 +434,15 @@ node demo/compute-sharing/mock-upstream/server.js
 - **测试**：`testControlPlaneMysqlRoundTrip` **opt-in**（`ATL_TEST_MYSQL_HOST` 指向专用空测试库才跑：建表迁移+行级 flush+reload+单行更新+删除）；真机验证=一次性库全断言通过后 DROP。坑：**全量套件不能在 DB_TYPE=mysql 下跑**（API 端点测试用临时 JSON 库，注入环境变量的方式会错配——失败点在写入落地前，已核实真库零污染）；该 MySQL 是 **5.7**（无 performance_schema.global_status，计数走 SHOW GLOBAL STATUS LIKE）。
 - **真机证据**：8787 重启后 share online；12s 窗口 **Com_delete=0**（旧实现每 flush 必发 2 条全表 DELETE）+ 心跳 8s 照常推进 = 行级写实证。
 - **文档/清理**：AGENTS.md Storage 节补 DB_TYPE 控制面语义；data/ 旧网关遗迹（compute-sharing.json+签名缓存）归档进 archive runtime-data/。
+
+### R41（2026-09-14 晚，停止分享死胡同修复——owner 端内可恢复）
+- **用户现场**：本地 CPA atl-share 已注册运行，但在桌面算力共享卡点了「停止分享」后分享从目录消失且端内无任何恢复入口（实测 share `state=stopped`、插件仍心跳 online、claims 全 revoked）。
+- **根因（三层叠加成死胡同）**：①插件卡对 `state==="stopped"` 整区隐藏（R31 P1-4 的折叠语义）——停止后控制台连同所有按钮一起消失；②CPA 插件 `ensure_identity` 见 identity.json 即短路，永不重发 register；③`handleRegister` rebind 分支不恢复 state——同 secret 重注册也救不活（旧测试注释写着 "revives" 但从未断言 state，实现与意图分叉）。
+- **修复**：
+  1. 云端新增 `POST /api/shares/owner/resume`（secret 认证）：stopped→active、幂等；**admin suspend 拒 409 `share_suspended`**（owner 不能自解管理员封禁）；rebind 分支补 stopped→active（suspended 不动）。
+  2. sidecar 新命令 `sharing:owner-resume`（OwnerCallKind 枚举收敛三分支）；protocol/modules 守门/manifest permissions 同步。
+  3. 插件卡 stopped 态不再折叠：渲染紧凑行（标题+已停止+累计借出+**primary-pill「重新开启分享」**，符合 primary-pill=唯一推荐动作专属）；停止确认文案改「可随时在本卡重新开启」；compute-sharing **0.1.3**。
+- **语义澄清（非 bug 的部分）**：unregister 不卸载 CPA 插件是设计——插件由 CPA 配置加载，心跳继续（云端借此知道节点活着），心跳响应 state=stopped → 插件 fail-closed 拒服务，云端权威不变。
+- **测试**：run-tests 补 rebind 复活断言（心跳 active+目录重现）+ resume 全路径（错 secret 404 / stopped→active / 幂等 / suspended 409）；e2e 停止用例改为「停止→已停止行→重新开启→控制台恢复」全流程（mock 补 owner-resume 契约）。门禁：npm test ✓ / test:ui 579 ✓ / e2e 115 ✓ / cargo（collector-core+atl-collector）✓。
+- **现场恢复**：用户 share `shr_1aae6eb…`（Sky-Macbook CPA）经 admin resume 拉回 active，目录重现（5 名额/预算满）；已发认领 Key 停止时已吊销，借用方需重新认领（停止语义固有）。
+- **待办**：OSS 目录 compute-sharing 现 0.1.2，0.1.3 需 publish-module + `--prune-keep zhipu-plan@1.1.4,compute-sharing@0.1.3`；端内生效需新版 sidecar/App 发布。

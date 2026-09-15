@@ -310,6 +310,7 @@ dependencies = [
 name = "atl-collector"
 version = "0.7.15"
 dependencies = [
+ "atl-plugin-sharing",
  "atl-plugin-zhipu",
  "base64 0.22.1",
  "chrono",
@@ -320,6 +321,17 @@ dependencies = [
  "serde_json",
  "tokio",
  "urlencoding",
+]
+
+[[package]]
+name = "atl-plugin-sharing"
+version = "0.7.15"
+dependencies = [
+ "atl-plugin-zhipu",
+ "collector-core",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde_json",
 ]
 
 [[package]]

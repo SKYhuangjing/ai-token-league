@@ -12,6 +12,7 @@ pub fn sidecar_plugins() -> &'static [Box<dyn SidecarPlugin>] {
     PLUGINS.get_or_init(|| {
         vec![
             Box::new(plugin_zhipu::ZhipuPlugin),
+            Box::new(plugin_sharing::SharingPlugin),
             // next first-party plugin registers here
         ]
     })

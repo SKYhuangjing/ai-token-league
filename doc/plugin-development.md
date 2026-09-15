@@ -78,21 +78,22 @@ export default {
 | `modules:get` | `{}` | `{ version, modules: { <id>: { enabled, config, installedVersion } } }` | 只返回**你自己的**安装态记录（宿主过滤，看不到其他插件的 config） |
 | `modules:set` | `{ id, enabled?, config?, installedVersion? }` | 更新后的完整 state | 只写**你自己的**条目（`id` 由宿主强制为本插件 id；config 任意 JSON，浅合并语义） |
 
-**共享 owner 命令（`sharing:owner-*`，为分享者控制台提供；sidecar 读 CPA 插件的 identity.json 代发，share secret 不进 webview）**：
+**共享特权命令（`compute-sharing:*`，由 first-party 插件 crate `atl-plugin-sharing` 提供（R46：sidecar/protocol 零业务字面量，组合根一行注册）；share secret 与身份私钥只在该 crate 与本地文件之间流动，不进 webview）**：
 
 | 命令 | 入参 | 返回 |
 |---|---|---|
-| `sharing:owner-status` | `{}` | `{ share, claims }` —— 本机分享节点账本/认领明细；未注册 reject `not_registered` |
-| `sharing:owner-policy` | `{ policy }` | 更新后的 policy（留空字段不变更，下次插件心跳生效） |
-| `sharing:owner-unregister` | `{}` | 停止分享 + 级联撤销全部认领 Key（恢复走云端 admin resume） |
+| `compute-sharing:owner-status` | `{}` | `{ share, claims }` —— 本机分享节点账本/认领明细；未注册 reject `not_registered` |
+| `compute-sharing:owner-policy` | `{ policy }` | 更新后的 policy（留空字段不变更，下次插件心跳生效） |
+| `compute-sharing:owner-unregister` | `{}` | 停止分享 + 级联撤销全部认领 Key（记录保留，state=stopped） |
+| `compute-sharing:owner-resume` | `{}` | `{ shareId, state:"active" }` —— 重新开启已停止的分享（admin suspend 的节点 reject `409 share_suspended`；恢复后下一次插件心跳恢复服务） |
 
 **共享借用命令（`sharing:*`，为算力借用提供）**：
 
 | 命令 | 入参 | 返回 |
 |---|---|---|
-| `sharing:claim-sign` | `{ shareId, ts? }` | `{ participantId, ts, signature }` —— 用本机联赛身份私钥对 `{kind:"share-claim", participantId, shareId, ts}` 签名（私钥永不出 sidecar） |
-| `sharing:borrow-get` | `{}` | `{ claims: [...] }` —— 本机持久化的认领记录（app 数据目录 sharing-borrow.json） |
-| `sharing:borrow-set` | `{ claims: [...] }` | 清洗后的存储结果（白名单字段、≤50 条、字段限长） |
+| `compute-sharing:claim-sign` | `{ shareId, ts? }` | `{ participantId, ts, signature }` —— 用本机联赛身份私钥对 `{kind:"share-claim", participantId, shareId, ts}` 签名（私钥永不出 sidecar） |
+| `compute-sharing:borrow-get` | `{}` | `{ claims: [...] }` —— 本机持久化的认领记录（app 数据目录 sharing-borrow.json） |
+| `compute-sharing:borrow-set` | `{ claims: [...] }` | 清洗后的存储结果（白名单字段、≤50 条、字段限长） |
 
 **其他插件暴露的命令（经其 manifest.permissions 声明）**：`zhipu-plan:usage`（智谱配额查询，带 60s 缓存）。
 

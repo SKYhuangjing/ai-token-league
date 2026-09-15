@@ -1,0 +1,18 @@
+[package]
+name = "atl-plugin-sharing"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+name = "plugin_sharing"
+path = "src/lib.rs"
+
+[dependencies]
+collector-core = { path = "../../../collector-core" }
+# crate-level reuse: the suggest command reads live zhipu quota windows
+# through the zhipu plugin's own (60s-cached) query, not a duplicated fetcher
+atl-plugin-zhipu = { path = "../../zhipu-plan/rust" }
+serde_json = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+rusqlite = { workspace = true }

@@ -1,9 +1,10 @@
-// 算力共享插件（compute-sharing）——完全可插拔远端插件（R29b：借用与控制台合并）。
+// 算力共享插件（compute-sharing 0.2.0 车道版）。
 // 一张卡两个区：
-//   「我的分享」 owner 控制台（账本/借用者/策略/停止）——未注册时整区隐藏，
-//               纯借用者不受打扰；share secret 经 sidecar 代发，不进 webview。
-//   「算力借用」 在线节点目录 + 实名签名认领 + 我的认领（env 配置/撤销）。
-// 平台能力经 ctx（t / invoke(守门) / escapeHtml / apiBase）。
+//   「我的分享」 owner 控制台：车道（订阅切片：预算周期+开放时段+模型范围+名额）、
+//               高级策略、停止/重新开启——未注册时整区隐藏；share secret 经 sidecar 代发。
+//   「算力借用」 在线节点车道目录 + 实名签名按车道认领 + 我的认领。
+// 车道绑定认领 Key（CPA 拦截点无 model 字段的 ABI 约束下按 key→lane 硬执行时段/预算）。
+// 平台能力经 ctx（t / invoke(守门) / escapeHtml / apiBase / notify）。
 
 const STYLE = `
 .cs-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 6px; }
@@ -24,13 +25,26 @@ const STYLE = `
 .cs-dot-off { background: var(--muted, #999); opacity: 0.6; }
 .cs-fields { display: flex; gap: 8px; flex-wrap: wrap; }
 .cs-fields label { display: inline-flex; flex-direction: column; gap: 2px; font-size: 12px; }
-.cs-fields input { width: 110px; }
+.cs-fields input, .cs-fields select { width: 110px; }
+.cs-fields label.grow { flex: 1 1 240px; }
+.cs-fields label.grow input { width: 100%; }
 .cs-muted { color: var(--muted, #888); font-size: 12.5px; line-height: 1.4; }
 .cs-state { color: var(--red, #c0392b); font-weight: 600; }
 .cs-status { min-height: 16px; font-size: 12.5px; }
 .cs-board { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr); gap: 8px 32px; align-items: start; }
 .cs-board .cs-section { margin-top: 0; }
 @media (max-width: 860px) { .cs-board { grid-template-columns: 1fr; } .cs-board .cs-section { margin-top: 10px; } }
+.cs-lane { display: grid; gap: 4px; padding: 7px 10px; border: 1px dashed var(--border-subtle, #e3e3e0); border-radius: 10px; margin-bottom: 6px; }
+.cs-lane .cs-kv { align-items: baseline; }
+.cs-tabs-row { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+.cs-tabs-row .cs-grow { flex: 1; }
+/* tab 外观复用宿主 .segmented 分段控件（含深色主题）；这里只收窄到卡片内尺寸，
+   参数与宿主紧凑变体 .segmented.modules-online-filter 一致 */
+.cs-tabs { flex: 0 1 auto; }
+.cs-tabs button { padding: 5px 12px; font-size: 12px; font-weight: 650; }
+.cs-lane-tag { font-size: 11px; color: var(--muted, #888); border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 999px; padding: 1px 8px; }
+.cs-wall { display: flex; gap: 8px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--gold, #c90); border-radius: 10px; margin-bottom: 6px; font-size: 12.5px; }
+.cs-templates { display: flex; gap: 6px; flex-wrap: wrap; }
 `;
 
 function compact(value) {
@@ -44,6 +58,26 @@ function compact(value) {
   }
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 }
+
+function fmtDateTime(ms) {
+  const zh = (document.documentElement.lang || "").startsWith("zh");
+  return new Date(ms).toLocaleString(zh ? "zh-CN" : "en-US");
+}
+
+function clockText(ms) {
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Owner lane templates (P1 presets): one click fills the edit form; every
+// number stays adjustable before saving.
+const LANE_TEMPLATES = [
+  { key: "gemini", models: "gemini-*", period: "week", budget: 150_000_000, schedule: { start: "22:00", end: "14:00" }, maxClaims: 3 },
+  { key: "glm", models: "glm-5.3-flash", period: "hour5", budget: 20_000_000, schedule: { start: "22:00", end: "12:00" }, maxClaims: 2 },
+  { key: "allDay", models: "*", period: "day", budget: 50_000_000, schedule: null, maxClaims: 2 },
+  { key: "blank", models: "*", period: "day", budget: 10_000_000, schedule: null, maxClaims: 1 },
+];
 
 export default {
   async mount(el, ctx) {
@@ -59,16 +93,20 @@ export default {
     }
 
     el.innerHTML = `
+      <div class="cs-tabs-row">
+        <div class="cs-tabs segmented" data-cs="tabs" hidden>
+          <button class="cs-tab" type="button" data-cs-tab="owner">${esc(t("desktop.sharing.tab.owner"))}</button>
+          <button class="cs-tab" type="button" data-cs-tab="borrow">${esc(t("desktop.sharing.tab.borrow"))}</button>
+        </div>
+        <span class="cs-grow"></span>
+        <button class="outline-button" type="button" data-cs="refresh">${esc(t("desktop.sharing.borrow.refresh"))}</button>
+      </div>
       <div data-cs="owner" hidden>
-        <div class="cs-head"><div class="modules-section-title">${esc(t("desktop.sharing.owner.title"))}</div></div>
         <div data-cs="owner-body" aria-live="polite"></div>
       </div>
-      <div class="cs-board">
+      <div class="cs-board" data-cs="board" hidden>
         <section>
-          <div class="cs-head">
-            <div class="modules-section-title">${esc(t("desktop.sharing.borrow.section"))}</div>
-            <button class="outline-button" type="button" data-cs="refresh">${esc(t("desktop.sharing.borrow.refresh"))}</button>
-          </div>
+          <div class="modules-section-title" style="margin:2px 0 6px">${esc(t("desktop.sharing.borrow.section"))}</div>
           <div data-cs="directory" aria-live="polite"></div>
         </section>
         <section>
@@ -81,6 +119,8 @@ export default {
       <span class="cs-status action-message" data-cs="status" aria-live="polite"></span>`;
 
     const els = {
+      tabs: el.querySelector('[data-cs="tabs"]'),
+      board: el.querySelector('[data-cs="board"]'),
       owner: el.querySelector('[data-cs="owner"]'),
       ownerBody: el.querySelector('[data-cs="owner-body"]'),
       directory: el.querySelector('[data-cs="directory"]'),
@@ -115,61 +155,235 @@ export default {
         const errorKey = {
           share_offline: "web.sharing.offline",
           budget_exhausted: "web.sharing.exhausted",
+          lane_exhausted: "desktop.sharing.borrow.laneExhausted",
+          lane_closed: "desktop.sharing.borrow.laneClosed",
+          lane_suspended: "desktop.sharing.borrow.laneSuspended",
+          lane_required: "desktop.sharing.borrow.laneRequired",
+          lane_not_found: "desktop.sharing.borrow.laneRequired",
           no_claim_slots: "web.sharing.claimFull",
           rate_limited: "desktop.sharing.borrow.rateLimited",
           identity_required: "desktop.sharing.borrow.identityFailed",
           participant_not_registered: "desktop.sharing.borrow.identityFailed",
           invalid_signature: "desktop.sharing.borrow.identityFailed",
         }[data.error];
-        throw new Error(errorKey ? t(errorKey) : (data.error || `HTTP ${response.status}`));
+        const detail = data.retryAfterMs
+          ? t("desktop.sharing.borrow.retryAt", { time: clockText(Date.now() + data.retryAfterMs) })
+          : "";
+        throw new Error(errorKey ? (detail ? `${t(errorKey)} · ${detail}` : t(errorKey)) : (data.error || `HTTP ${response.status}`));
       }
       return data;
     }
 
     // ── 我的分享（owner 控制台；未注册整区隐藏） ─────────────────────────
+    // Share-level knobs kept after lanes moved budget/maxClaims into lanes.
     const ownerFieldDefs = [
-      ["budget", "desktop.sharing.owner.f.budget"],
-      ["maxClaims", "desktop.sharing.owner.f.maxClaims"],
       ["keyMaxTokens", "desktop.sharing.owner.f.keyMax"],
       ["keyConcurrency", "desktop.sharing.owner.f.keyConc"],
       ["ttlHours", "desktop.sharing.owner.f.ttl"],
     ];
 
+    const periodLabel = (period) => t(period === "week" ? "desktop.sharing.lane.period.week"
+      : period === "hour5" ? "desktop.sharing.lane.period.hour5" : "desktop.sharing.lane.period.day");
+    const scheduleText = (lane) => (lane.schedule && lane.schedule.length
+      ? lane.schedule.map((w) => `${w.start}–${w.end}`).join(", ")
+      : t("desktop.sharing.lane.scheduleAllDay"));
+
+    // lane edit state: null = closed; {isNew, index, draft fields}
+    let laneEditor = null;
+    let showAllClaims = false;
+    // Tab categorization: owners get 我的分享/算力借用; pure borrowers keep a
+    // single-column card (no tab bar). Selection survives refreshes.
+    let activeTab = "owner";
+    // "pending" until the first owner-status settles — the tab bar's
+    // data-owner attribute is the test/UX contract that removes the
+    // board-temporarily-visible race for pure borrowers
+    let ownerSettled = false;
+    const hasOwnerConsole = () => Boolean(lastOwnerData && lastOwnerData.share && lastOwnerData.share.shareId);
+    function applyTabs() {
+      const hasOwner = hasOwnerConsole();
+      els.tabs.dataset.owner = ownerSettled ? (hasOwner ? "yes" : "no") : "pending";
+      els.tabs.hidden = !hasOwner;
+      els.owner.hidden = !hasOwner || activeTab !== "owner";
+      els.board.hidden = hasOwner && activeTab !== "borrow";
+      for (const button of els.tabs.querySelectorAll("[data-cs-tab]")) {
+        button.classList.toggle("active", button.dataset.csTab === (hasOwner ? activeTab : "borrow"));
+      }
+    }
+    for (const button of Array.from(el.querySelectorAll("[data-cs-tab]"))) {
+      button.addEventListener("click", () => {
+        activeTab = button.dataset.csTab;
+        applyTabs();
+      });
+    }
+
+    // Peak multiplier chip + owner-tz label: borrowers must see the billing
+    // rule and whose clock the schedule follows (review B12 / B10).
+    const laneTags = (lane) => {
+      const tags = [];
+      if (lane.peak && lane.peak.multiplier > 1 && lane.peak.windows && lane.peak.windows.length) {
+        const wins = lane.peak.windows.map((w) => `${w.start}–${w.end}`).join(", ");
+        tags.push(`<span class="cs-lane-tag">${esc(t("desktop.sharing.lane.peakTag", { n: String(lane.peak.multiplier) }))} ${esc(wins)}</span>`);
+      }
+      if (lane.tzLabel) tags.push(`<span class="cs-lane-tag">${esc(lane.tzLabel)}</span>`);
+      return tags.join(" ");
+    };
+
+    function laneDot(lane) {
+      if (lane.state === "suspended") return "paused";
+      if (!lane.open) return "off";
+      if (lane.exhausted) return "paused";
+      return "on";
+    }
+    const laneStatusText = (lane) => {
+      if (lane.state === "suspended") return `<span class="cs-state">${esc(t("desktop.sharing.lane.paused"))}</span>`;
+      if (!lane.open) return `${esc(t("desktop.sharing.lane.closedUntil"))} · ${esc(clockText(Date.now() + (lane.retryAfterMs || 0)))}`;
+      if (lane.exhausted) return `<span class="cs-state">${esc(t("desktop.sharing.lane.exhausted"))}</span> ${esc(t("desktop.sharing.lane.resetAt", { time: clockText(lane.windowEndsAtMs || Date.now()) }))}`;
+      return esc(t("web.sharing.online"));
+    };
+
+    // claim.state i18n map (review B1: no bare enums on a zh card)
+    const claimStateText = (state) => ({
+      valid: t("desktop.sharing.owner.claimValid"),
+      revoked: t("desktop.sharing.borrow.stateRevoked"),
+      expired: t("desktop.sharing.borrow.stateExpired"),
+    }[state] || state);
+
+    function renderLaneRow(lane, index) {
+      const total = lane.budgetTokens || 0;
+      const used = lane.settledTokens || 0;
+      const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0;
+      return `
+        <div class="cs-lane" data-cs-lane="${esc(lane.id)}">
+          <div class="cs-kv">
+            <span><span class="cs-dot cs-dot-${laneDot(lane)}"></span> <strong>${esc(lane.title)}</strong>
+              <span class="cs-lane-tag">${esc(lane.models.join(", "))}</span></span>
+            <span>${laneStatusText(lane)}</span>
+          </div>
+          <div class="cs-kv"><span class="cs-muted">${esc(periodLabel(lane.period))} · ${esc(scheduleText(lane))} ${laneTags(lane)}</span>
+            <span class="num">${esc(compact(used))} / ${esc(compact(total))}</span></div>
+          <div class="cs-meter"><i style="width:${pct}%"></i></div>
+          <div class="cs-actions">
+            <span class="cs-muted">${esc(t("desktop.sharing.lane.slots"))}: ${esc(String(lane.slotsLeft))}/${esc(String(lane.maxClaims))}</span>
+            <span class="cs-grow"></span>
+            <button class="outline-button" type="button" data-cs-lane-edit="${index}">${esc(t("desktop.sharing.lane.edit"))}</button>
+            <button class="outline-button" type="button" data-cs-lane-toggle="${index}">${esc(t(lane.state === "suspended" ? "desktop.sharing.lane.resumeLane" : "desktop.sharing.lane.pause"))}</button>
+          </div>
+        </div>`;
+    }
+
+    function renderLaneEditor(lanes) {
+      const editing = laneEditor;
+      if (!editing) return "";
+      const draft = editing.draft;
+      return `
+        <div class="cs-row" data-cs="lane-form">
+          <div class="cs-muted">${esc(t(editing.isNew ? "desktop.sharing.lane.addTitle" : "desktop.sharing.lane.editTitle"))}</div>
+          <div class="cs-fields">
+            <label class="grow">${esc(t("desktop.sharing.lane.f.title"))}<input data-cs-f="title" type="text" value="${esc(draft.title)}" /></label>
+            <label class="grow">${esc(t("desktop.sharing.lane.f.models"))}<input data-cs-f="models" type="text" placeholder="*" value="${esc(draft.models)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.period"))}<select data-cs-f="period">
+              ${["day", "week", "hour5"].map((p) => `<option value="${p}"${draft.period === p ? " selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}
+            </select></label>
+            <label>${esc(t("desktop.sharing.lane.f.budget"))}<input data-cs-f="budget" type="number" step="1000" min="1000" value="${esc(String(draft.budget))}" /><span class="cs-muted" data-cs="budgetHint">${esc(t("desktop.sharing.lane.budgetHint", { text: compact(draft.budget) }))}</span></label>
+            <label>${esc(t("desktop.sharing.lane.f.maxClaims"))}<input data-cs-f="maxClaims" type="number" step="1" min="1" value="${esc(String(draft.maxClaims))}" /></label>
+          </div>
+          <div class="cs-fields">
+            <label>${esc(t("desktop.sharing.lane.f.winStart"))}<input data-cs-f="winStart" type="time" value="${esc(draft.winStart)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.winEnd"))}<input data-cs-f="winEnd" type="time" value="${esc(draft.winEnd)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.peakStart"))}<input data-cs-f="peakStart" type="time" value="${esc(draft.peakStart)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.peakEnd"))}<input data-cs-f="peakEnd" type="time" value="${esc(draft.peakEnd)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.peakMultiplier"))}<input data-cs-f="peakMultiplier" type="number" step="1" min="1" max="10" value="${esc(String(draft.peakMultiplier))}" /></label>
+          </div>
+          <div class="cs-muted">${esc(t("desktop.sharing.lane.formHint"))}</div>
+          ${editing.multiWindow ? `<div class="cs-state">${esc(t("desktop.sharing.lane.multiWindowHint"))}</div>` : ""}
+          <div class="cs-actions">
+            <span class="cs-grow"></span>
+            <button class="outline-button" type="button" data-cs="laneCancel">${esc(t("desktop.sharing.lane.cancel"))}</button>
+            ${editing.isNew ? "" : `<button class="outline-button" type="button" data-cs="laneDelete">${esc(t("desktop.sharing.lane.delete"))}</button>`}
+            <button class="primary-pill" type="button" data-cs="laneSave">${esc(t("desktop.sharing.lane.save"))}</button>
+          </div>
+        </div>`;
+    }
+
+    // owner lanes come from owner-status share.lanes (full lane views)
+    // Editing a different lane/template must not inherit the old form's
+    // unsaved values: those handlers raise skipFormReadback for one render.
+    let skipFormReadback = false;
     function renderOwner(data) {
       const share = (data && data.share) || {};
       const claims = (data && data.claims) || [];
-      // not registered yet, or stopped via 停止分享 (the backend keeps the
-      // record with state "stopped" and keeps answering owner-status) —
-      // either way the console collapses to the borrower-only card
-      if (!share.shareId || share.state === "stopped") {
-        els.owner.hidden = true;
+      // Preserve in-progress editor input across refresh re-renders: the DOM
+      // still holds the live values at this point (review A1 fix).
+      if (laneEditor && !skipFormReadback) {
+        const live = readLaneForm();
+        if (live) Object.assign(laneEditor.draft, live);
+      }
+      skipFormReadback = false;
+      applyTabs();
+      if (!share.shareId) {
         els.ownerBody.innerHTML = "";
         return;
       }
-      els.owner.hidden = false;
-      const total = share.budgetTokens || 0;
-      const used = share.settledTokens || 0;
-      const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0;
-      const stateLabel = share.state === "active"
-        ? t("web.sharing.online")
-        : share.state === "suspended" ? t("web.sharing.paused") : t("web.sharing.offline");
-      const rows = claims.map((c) => `
-        <div class="cs-kv">
-          <span>${esc(c.borrower || c.keyId)}${c.displayId ? ` <span class="cs-muted">${esc(c.displayId)}</span>` : ""} · <span class="num">${esc(String(c.keyId).slice(0, 11))}…</span></span>
-          <span class="num">${esc(compact(c.usedTokens))} · ${esc(c.state)}</span>
-        </div>`).join("");
+      if (share.state === "stopped") {
+        els.ownerBody.innerHTML = `
+          <div class="cs-row">
+            <div class="cs-kv"><strong>${esc(share.title || share.shareId)}</strong>
+              <span class="cs-state">${esc(t("desktop.sharing.owner.stoppedState"))}</span></div>
+            <div class="cs-muted">${esc(t("desktop.sharing.owner.stoppedHint"))}</div>
+            <div class="cs-actions">
+              <span class="cs-muted">${esc(t("desktop.sharing.owner.lifetime"))}: ${esc(compact(share.lifetimeSettled))}</span>
+              <span class="cs-grow"></span>
+              <button class="primary-pill" type="button" data-cs="resume">${esc(t("desktop.sharing.owner.resume"))}</button>
+            </div>
+          </div>`;
+        els.ownerBody.querySelector('[data-cs="resume"]').addEventListener("click", () => guard(async () => {
+          await ctx.invoke("compute-sharing:owner-resume", {});
+          notify(t("desktop.sharing.owner.resumed"));
+          await refresh();
+        }));
+        return;
+      }
+      const lanes = share.lanes || [];
+      const wall = share.wallSignal;
+      const wallBanner = wall && wall.ownerFailed
+        ? `<div class="cs-wall"><span>⚠️</span><span>${esc(t("desktop.sharing.owner.wall", { count: String(wall.ownerFailed) }))}</span></div>`
+        : "";
+      const shortId = (id) => (id && id.length > 10 ? `${id.slice(0, 8)}…` : id || "");
+      const laneLabelOf = (laneId) => (laneId === "default" ? t("desktop.sharing.lane.defaultTitle") : laneTitleOf(lanes, laneId));
+      const claimRow = (c) => `
+        <div class="cs-kv" style="${c.state !== "valid" ? "opacity:.55" : ""}">
+          <span>${esc(c.borrower || c.keyId)}${c.displayId ? ` <span class="cs-muted" title="${esc(c.displayId)}">${esc(shortId(c.displayId))}</span>` : ""}${c.laneId ? ` <span class="cs-lane-tag">${esc(laneLabelOf(c.laneId))}</span>` : ""} · <span class="num">${esc(String(c.keyId).slice(0, 11))}…</span></span>
+          <span class="num">${esc(compact(c.usedTokens))} · ${esc(claimStateText(c.state))}</span>
+        </div>`;
+      // valid claims always show; the ended tail collapses to a recent slice so
+      // the console stays readable as history accumulates
+      const ENDED_SHOWN = 4;
+      const ended = claims.filter((c) => c.state !== "valid");
+      let endedShown = 0;
+      const rows = claims
+        .filter((c) => c.state === "valid" || showAllClaims || endedShown++ < ENDED_SHOWN)
+        .map(claimRow)
+        .join("");
+      const claimsToggle = ended.length > ENDED_SHOWN
+        ? `<button class="outline-button" type="button" data-cs="claimsToggle">${esc(t(showAllClaims ? "desktop.sharing.owner.claimsCollapse" : "desktop.sharing.owner.claimsShowAll", { n: String(ended.length) }))}</button>`
+        : "";
       els.ownerBody.innerHTML = `
+        ${wallBanner}
         <div class="cs-row">
           <div class="cs-kv"><strong>${esc(share.title || share.shareId)}</strong>
-            <span>${esc(stateLabel)}${share.plugin && share.plugin.online ? "" : ` · ${esc(t("desktop.sharing.owner.pluginOffline"))}`}</span></div>
-          <div class="cs-kv"><span class="cs-muted">${esc(t("web.sharing.budget"))}</span><span class="num">${esc(compact(used))} / ${esc(compact(total))}</span></div>
-          <div class="cs-meter"><i style="width:${pct}%"></i></div>
-          <div class="cs-kv"><span class="cs-muted">${esc(t("web.sharing.slots"))}</span><span class="num">${esc(String(share.slotsLeft ?? "—"))}</span></div>
+            <span>${esc(t("web.sharing.online"))}${share.plugin && share.plugin.online ? "" : ` · ${esc(t("desktop.sharing.owner.pluginOffline"))}`}</span></div>
           <div class="cs-kv"><span class="cs-muted">${esc(t("desktop.sharing.owner.lifetime"))}</span><span class="num">${esc(compact(share.lifetimeSettled))}</span></div>
-          ${rows ? `<div class="cs-muted">${esc(t("desktop.sharing.owner.claims"))}</div>${rows}` : `<div class="cs-muted">${esc(t("desktop.sharing.owner.noClaims"))}</div>`}
+          ${lanes.map(renderLaneRow).join("")}
+          ${renderLaneEditor(lanes)}
+          ${laneEditor ? "" : `<div class="cs-templates">
+            <span class="cs-muted">${esc(t("desktop.sharing.lane.add"))}:</span>
+            ${LANE_TEMPLATES.map((tpl, i) => `<button class="outline-button" type="button" data-cs-lane-template="${i}">${esc(t(`desktop.sharing.lane.template.${tpl.key}`))}</button>`).join("")}
+          </div>`}
+          ${suggestBlock()}
+          ${rows ? `<div class="cs-muted">${esc(t("desktop.sharing.owner.claims"))}</div>${rows}${claimsToggle}` : `<div class="cs-muted">${esc(t("desktop.sharing.owner.noClaims"))}</div>`}
         </div>
         <div class="cs-row">
-          <div class="cs-muted">${esc(t("desktop.sharing.owner.policyTitle"))}</div>
+          <div class="cs-muted">${esc(t("desktop.sharing.owner.advanced"))}</div>
           <div class="cs-fields">${ownerFieldDefs.map(([key, labelKey]) => `
             <label>${esc(t(labelKey))}<input data-cs-policy="${key}" type="number" step="1" placeholder="${esc(String((share.policy && share.policy[key]) ?? ""))}" /></label>`).join("")}
           </div>
@@ -178,7 +392,70 @@ export default {
             <button class="outline-button" type="button" data-cs="stop">${esc(t("desktop.sharing.owner.stop"))}</button>
           </div>
         </div>`;
-      els.ownerBody.querySelector('[data-cs="savePolicy"]').addEventListener("click", () => guard(async () => {
+      applyTabs();
+      wireOwnerEvents(lanes);
+    }
+
+    const laneTitleOf = (lanes, laneId) => {
+      const lane = (lanes || []).find((l) => l.id === laneId);
+      return lane ? lane.title : laneId;
+    };
+
+    const laneSlotsUsedOf = (lanes, laneId) => {
+      const claims = (lastOwnerData && lastOwnerData.claims) || [];
+      return claims.filter((c) => (c.laneId || "default") === laneId && c.state === "valid").length;
+    };
+
+    function readLaneForm() {
+      const form = els.ownerBody.querySelector('[data-cs="lane-form"]');
+      if (!form) return null;
+      const val = (name) => form.querySelector(`[data-cs-f="${name}"]`)?.value ?? "";
+      return {
+        title: val("title").trim(),
+        models: val("models").trim(),
+        period: val("period"),
+        budget: Number(val("budget")),
+        maxClaims: Number(val("maxClaims")),
+        winStart: val("winStart"),
+        winEnd: val("winEnd"),
+        peakStart: val("peakStart"),
+        peakEnd: val("peakEnd"),
+        peakMultiplier: Number(val("peakMultiplier")) || 1,
+      };
+    }
+
+    async function saveLanes(lanes, { successKey = "desktop.sharing.lane.saved" } = {}) {
+      await ctx.invoke("compute-sharing:owner-policy", { lanes });
+      notify(t(successKey));
+      laneEditor = null;
+      await refresh();
+    }
+
+    // lanes wire format: budget/schedule/peak nests; id/title/models flat.
+    // Accepts view-shaped lanes (models array, schedule/peak view) — the only
+    // shape owner-status and the editor produce.
+    function toWireLane(lane) {
+      const wire = {
+        id: lane.id,
+        title: lane.title,
+        models: Array.isArray(lane.models) ? lane.models : String(lane.models).split(",").map((m) => m.trim()).filter(Boolean),
+        budget: { tokens: lane.budgetTokens },
+        period: lane.period,
+        maxClaims: lane.maxClaims,
+        state: lane.state,
+      };
+      if (lane.schedule && lane.schedule.length) {
+        wire.schedule = { windows: lane.schedule.map((w) => ({ start: w.start, end: w.end })) };
+      }
+      if (lane.peak && lane.peak.windows && lane.peak.windows.length && lane.peak.multiplier > 1) {
+        wire.peak = { windows: lane.peak.windows.map((w) => ({ start: w.start, end: w.end })), multiplier: lane.peak.multiplier };
+      }
+      return wire;
+    }
+
+    function wireOwnerEvents(lanes) {
+      const savePolicy = els.ownerBody.querySelector('[data-cs="savePolicy"]');
+      if (savePolicy) savePolicy.addEventListener("click", () => guard(async () => {
         const policy = {};
         for (const [key] of ownerFieldDefs) {
           const raw = els.ownerBody.querySelector(`[data-cs-policy="${key}"]`)?.value;
@@ -188,47 +465,252 @@ export default {
           policy[key] = Math.round(value);
         }
         if (!Object.keys(policy).length) throw new Error(t("desktop.sharing.owner.policyEmpty"));
-        await ctx.invoke("sharing:owner-policy", { policy });
+        await ctx.invoke("compute-sharing:owner-policy", { policy });
         notify(t("desktop.sharing.owner.policySaved"));
         await refresh();
       }));
-      els.ownerBody.querySelector('[data-cs="stop"]').addEventListener("click", () => guard(async () => {
+      const stop = els.ownerBody.querySelector('[data-cs="stop"]');
+      if (stop) stop.addEventListener("click", () => guard(async () => {
         if (!window.confirm(t("desktop.sharing.owner.stopConfirm"))) return;
-        await ctx.invoke("sharing:owner-unregister", {});
+        await ctx.invoke("compute-sharing:owner-unregister", {});
         notify(t("desktop.sharing.owner.stopped"));
         await refresh();
       }));
+
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-edit]")) {
+        button.addEventListener("click", () => {
+          const lane = lanes[Number(button.dataset.csLaneEdit)];
+          // switching edit targets: the old form's unsaved values must NOT
+          // bleed into the new draft (review B-1 regression guard)
+          skipFormReadback = true;
+          laneEditor = {
+            isNew: false,
+            // multi-window lanes (built via admin/API) collapse to their first
+            // window on save — surface that instead of dropping it silently
+            multiWindow: (lane.schedule?.length || 0) > 1 || (lane.peak?.windows?.length || 0) > 1,
+            draft: {
+              id: lane.id, title: lane.title, models: lane.models.join(", "), period: lane.period,
+              budget: lane.budgetTokens, maxClaims: lane.maxClaims,
+              winStart: lane.schedule?.[0]?.start || "", winEnd: lane.schedule?.[0]?.end || "",
+              peakStart: lane.peak?.windows?.[0]?.start || "", peakEnd: lane.peak?.windows?.[0]?.end || "",
+              peakMultiplier: lane.peak?.multiplier || 1, state: lane.state,
+            },
+          };
+          renderOwnerLast();
+        });
+      }
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-template]")) {
+        button.addEventListener("click", () => {
+          const tpl = LANE_TEMPLATES[Number(button.dataset.csLaneTemplate)];
+          skipFormReadback = true;
+          laneEditor = {
+            isNew: true,
+            draft: {
+              id: "", title: t(`desktop.sharing.lane.template.${tpl.key}`), models: tpl.models, period: tpl.period,
+              budget: tpl.budget, maxClaims: tpl.maxClaims,
+              winStart: tpl.schedule?.start || "", winEnd: tpl.schedule?.end || "",
+              peakStart: "", peakEnd: "", peakMultiplier: 1, state: "active",
+            },
+          };
+          renderOwnerLast();
+        });
+      }
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-toggle]")) {
+        button.addEventListener("click", () => guard(async () => {
+          const index = Number(button.dataset.csLaneToggle);
+          const lane = lanes[index];
+          const suspending = lane.state !== "suspended";
+          // Pausing revokes every borrower key on this lane (review B5):
+          // same destructive weight as 停止分享, so it confirms first.
+          if (suspending && !window.confirm(t("desktop.sharing.lane.pauseConfirm", { count: String(lanes ? laneSlotsUsedOf(lanes, lane.id) : 0) }))) return;
+          const next = lanes.map((l, i) => (i === index ? { ...l, state: l.state === "suspended" ? "active" : "suspended" } : l));
+          await saveLanes(next.map(toWireLane), {
+            successKey: suspending ? "desktop.sharing.lane.pausedSaved" : "desktop.sharing.lane.resumed",
+          });
+        }));
+      }
+      const claimsToggle = els.ownerBody.querySelector('[data-cs="claimsToggle"]');
+      if (claimsToggle) claimsToggle.addEventListener("click", () => {
+        showAllClaims = !showAllClaims;
+        renderOwnerLast();
+      });
+      const laneCancel = els.ownerBody.querySelector('[data-cs="laneCancel"]');
+      if (laneCancel) laneCancel.addEventListener("click", () => { laneEditor = null; renderOwnerLast(); });
+      const laneDelete = els.ownerBody.querySelector('[data-cs="laneDelete"]');
+      if (laneDelete) laneDelete.addEventListener("click", () => guard(async () => {
+        if (!window.confirm(t("desktop.sharing.lane.deleteConfirm"))) return;
+        const id = laneEditor.draft.id;
+        await saveLanes(lanes.filter((l) => l.id !== id).map(toWireLane), { successKey: "desktop.sharing.lane.deleted" });
+      }));
+      const laneSave = els.ownerBody.querySelector('[data-cs="laneSave"]');
+      if (laneSave) laneSave.addEventListener("click", () => guard(async () => {
+        const form = readLaneForm();
+        if (!form) return;
+        if (!form.title) throw new Error(t("desktop.sharing.lane.titleRequired"));
+        const titleTaken = lanes.some((l) => l.id !== laneEditor.draft.id && l.title === form.title);
+        if (titleTaken) throw new Error(t("desktop.sharing.lane.titleDuplicate"));
+        if (!Number.isFinite(form.budget) || form.budget < 1000) throw new Error(t("desktop.sharing.lane.budgetInvalid"));
+        if (!Number.isFinite(form.maxClaims) || form.maxClaims < 1) throw new Error(t("desktop.sharing.lane.maxClaimsInvalid"));
+        // Half-filled windows must never degrade into "open all day" silently
+        // (review B4): both bounds or neither; equal bounds are rejected too
+        // instead of silently collapsing to all-day (review B2).
+        const winComplete = (form.winStart && form.winEnd) || (!form.winStart && !form.winEnd);
+        if (!winComplete) throw new Error(t("desktop.sharing.lane.windowIncomplete"));
+        if (form.winStart && form.winStart === form.winEnd) throw new Error(t("desktop.sharing.lane.windowEqual"));
+        const peakComplete = (form.peakStart && form.peakEnd) || (!form.peakStart && !form.peakEnd);
+        if (!peakComplete) throw new Error(t("desktop.sharing.lane.peakIncomplete"));
+        if (form.peakStart && form.peakStart === form.peakEnd) throw new Error(t("desktop.sharing.lane.windowEqual"));
+        const halfWin = (start, end) => (start && end && start !== end) ? [{ start, end }] : [];
+        const schedule = halfWin(form.winStart, form.winEnd);
+        const peak = halfWin(form.peakStart, form.peakEnd);
+        const draft = {
+          id: laneEditor.draft.id || form.title,
+          title: form.title,
+          models: form.models.split(",").map((m) => m.trim()).filter(Boolean),
+          budgetTokens: Math.round(form.budget),
+          period: form.period,
+          maxClaims: Math.round(form.maxClaims),
+          state: laneEditor.draft.state || "active",
+          schedule,
+          peak: { windows: peak, multiplier: Math.round(form.peakMultiplier) },
+        };
+        const next = laneEditor.isNew
+          ? [...lanes, draft]
+          : lanes.map((l) => (l.id === laneEditor.draft.id ? draft : l));
+        await saveLanes(next.map(toWireLane));
+      }));
+
+      // Live budget conversion hint (review B2): raw tokens <-> compact display
+      const budgetInput = els.ownerBody.querySelector('[data-cs-f="budget"]');
+      const budgetHint = els.ownerBody.querySelector('[data-cs="budgetHint"]');
+      if (budgetInput && budgetHint) {
+        budgetInput.addEventListener("input", () => {
+          budgetHint.textContent = t("desktop.sharing.lane.budgetHint", { text: compact(Number(budgetInput.value) || 0) });
+        });
+      }
     }
 
-    // ── 算力借用（目录 + 我的认领） ──────────────────────────────────────
+    let lastOwnerData = {};
+    const renderOwnerLast = () => renderOwner(lastOwnerData);
+
+    // Lane budget suggestions (P1): loaded once per mount, advisory only —
+    // the sidecar reads the zhipu live windows + the owner's own CPA usage.
+    let suggestData = null;
+    ctx.invoke("compute-sharing:owner-suggest", {}).then((data) => {
+      if (!data || (!data.cpaWeekly && !data.zhipu)) return;
+      suggestData = data;
+      renderOwnerLast();
+    }).catch(() => { /* advisory: stay silent when unavailable */ });
+
+    function suggestBlock() {
+      if (!suggestData) return "";
+      const lines = [];
+      const weekly = suggestData.cpaWeekly || {};
+      // amounts under 10k read better with an explicit unit than as a bare number
+      const usage = (value) => (value < 10_000 ? `${value} tokens` : compact(value));
+      if (Number.isFinite(weekly.antigravity)) {
+        lines.push(t("desktop.sharing.suggest.gemini", {
+          used: usage(weekly.antigravity),
+          suggested: compact(Math.max(50_000_000, Math.round(weekly.antigravity * 0.25))),
+        }));
+      }
+      if (Number.isFinite(weekly.codex)) {
+        lines.push(t("desktop.sharing.suggest.codex", { used: usage(weekly.codex) }));
+      }
+      const zhipuKeys = (suggestData.zhipu && suggestData.zhipu.results) || [];
+      const zhipuParts = zhipuKeys
+        .map((result) => {
+          const window = result.quota && result.quota.windows && result.quota.windows[0];
+          return window ? `${result.label} ${window.pct ?? "?"}%` : null;
+        })
+        .filter(Boolean);
+      if (zhipuParts.length) lines.push(t("desktop.sharing.suggest.zhipu", { list: zhipuParts.join(" · ") }));
+      if (!lines.length) return "";
+      return `<div class="cs-suggest">
+        <div class="cs-muted" style="margin-bottom:2px"><strong>${esc(t("desktop.sharing.suggest.title"))}</strong></div>
+        ${lines.map((line) => `<div class="cs-muted">· ${esc(line)}</div>`).join("")}
+      </div>`;
+    }
+
+    // ── 算力借用（车道目录 + 我的认领） ────────────────────────────────────
     function configBlock(claim) {
       const base = String(claim.baseURL || "").replace(/\/+$/, "");
       const block = document.createElement("div");
       block.className = "cs-config";
-      for (const [name, value] of [
-        ["OPENAI_BASE_URL", `${base}/v1`],
-        ["OPENAI_API_KEY", claim.token],
-        ["ANTHROPIC_BASE_URL", base],
-        ["ANTHROPIC_AUTH_TOKEN", claim.token],
+      const maskOf = (value) => (value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : "…");
+      for (const [name, value, secret] of [
+        ["OPENAI_BASE_URL", `${base}/v1`, false],
+        ["OPENAI_API_KEY", claim.token, true],
+        ["ANTHROPIC_BASE_URL", base, false],
+        ["ANTHROPIC_AUTH_TOKEN", claim.token, true],
       ]) {
         const row = document.createElement("div");
         row.className = "cs-config-row";
         const code = document.createElement("code");
-        code.textContent = `export ${name}=${value}`;
+        const line = () => `export ${name}=${value}`;
+        // secrets render masked (screenshot-safe) with a reveal toggle; the
+        // copy action always copies the full executable export line (B11)
+        if (secret) {
+          let revealed = false;
+          const render = () => { code.textContent = revealed ? line() : `export ${name}=${maskOf(value)}`; };
+          render();
+          const reveal = document.createElement("button");
+          reveal.className = "outline-button";
+          reveal.type = "button";
+          reveal.textContent = t("desktop.sharing.borrow.reveal");
+          reveal.addEventListener("click", () => {
+            revealed = !revealed;
+            render();
+            reveal.textContent = t(revealed ? "desktop.sharing.borrow.hide" : "desktop.sharing.borrow.reveal");
+          });
+          row.append(code, reveal);
+        } else {
+          code.textContent = line();
+          row.append(code);
+        }
         const copy = document.createElement("button");
         copy.className = "outline-button";
         copy.type = "button";
         copy.textContent = t("desktop.sharing.borrow.copy");
         copy.addEventListener("click", () => {
-          navigator.clipboard?.writeText(value).then(() => {
+          navigator.clipboard?.writeText(line()).then(() => {
             copy.textContent = t("desktop.sharing.borrow.copied");
             setTimeout(() => { copy.textContent = t("desktop.sharing.borrow.copy"); }, 1200);
           });
         });
-        row.append(code, copy);
+        row.append(copy);
         block.appendChild(row);
       }
       return block;
+    }
+
+    function laneClaimRow(share, lane) {
+      const total = lane.budgetTokens || 0;
+      const used = lane.settledTokens || 0;
+      const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0;
+      const claimable = lane.open && !lane.exhausted && lane.slotsLeft > 0;
+      const status = lane.state === "suspended"
+        ? `<span class="cs-state">${esc(t("desktop.sharing.lane.paused"))}</span>`
+        : lane.open
+          ? (lane.exhausted
+            ? `<span class="cs-state">${esc(t("desktop.sharing.lane.exhausted"))}</span> ${esc(t("desktop.sharing.lane.resetAt", { time: clockText(lane.windowEndsAtMs || Date.now()) }))}`
+            : esc(t("web.sharing.online")))
+          : `${esc(t("desktop.sharing.lane.closedUntil"))} · ${esc(clockText(Date.now() + (lane.retryAfterMs || 0)))}`;
+      return `<div class="cs-lane">
+        <div class="cs-kv">
+          <span><span class="cs-dot cs-dot-${laneDot(lane)}"></span> <strong>${esc(lane.title)}</strong>
+            <span class="cs-lane-tag">${esc(lane.models.join(", "))}</span></span>
+          <span>${status}</span>
+        </div>
+        <div class="cs-kv"><span class="cs-muted">${esc(periodLabel(lane.period))} · ${esc(scheduleText(lane))} ${laneTags(lane)}</span>
+          <span class="num">${esc(compact(used))} / ${esc(compact(total))}</span></div>
+        <div class="cs-meter"><i style="width:${pct}%"></i></div>
+        <div class="cs-actions">
+          <span class="cs-muted">${esc(t("web.sharing.slots"))}: ${lane.slotsLeft > 0 ? lane.slotsLeft : esc(t("web.sharing.claimFull"))}</span>
+          <span class="cs-grow"></span>
+          <button class="primary-pill" data-cs-claim="${esc(share.shareId)}" data-cs-claim-lane="${esc(lane.id)}" type="button"${claimable ? "" : " disabled"}>${esc(t("desktop.sharing.borrow.claim"))}</button>
+        </div>
+      </div>`;
     }
 
     function borrowStatusView(share) {
@@ -238,37 +720,32 @@ export default {
     }
 
     function renderDirectory(shares, noBase) {
-      const online = (shares || []).filter((s) => s.online);
       if (noBase) {
         els.directory.innerHTML = `<div class="cs-muted">${esc(t("desktop.modules.onlineNoCloud"))}</div>`;
         return;
       }
+      const online = (shares || []).filter((s) => s.online);
       if (!online.length) {
         els.directory.innerHTML = `<div class="cs-muted">${esc(t("web.sharing.empty"))}</div>`;
         return;
       }
       els.directory.innerHTML = online.map((share) => {
         const status = borrowStatusView(share);
-        const total = share.budgetTokens || 0;
-        const used = share.settledTokens || 0;
-        const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0;
-        const claimable = share.state === "active" && share.slotsLeft > 0 && !share.exhausted;
-        return `<div class="cs-row" data-share="${esc(share.shareId)}">
-          <div class="cs-kv">
-            <strong>${esc(share.title)}</strong>
-            <span class="cs-dot cs-dot-${status.cls}" title="${esc(status.label)}"></span>
-          </div>
-          <div class="cs-muted">${esc(t("web.sharing.models"))}: ${esc((share.models || []).join(", ") || "—")}</div>
-          <div class="cs-muted">${esc(compact(used))} / ${esc(compact(total))}</div>
-          <div class="cs-meter"><i style="width:${pct}%"></i></div>
-          <div class="cs-actions">
+        const lanes = share.lanes || [];
+        const header = `<div class="cs-row">
+          <div class="cs-kv"><strong>${esc(share.title)}</strong>
+            <span class="cs-dot cs-dot-${status.cls}" title="${esc(status.label)}"></span></div>
+          ${lanes.length ? "" : `<div class="cs-actions">
             <span class="cs-muted">${esc(t("web.sharing.slots"))}: ${share.slotsLeft > 0 ? share.slotsLeft : esc(t("web.sharing.claimFull"))}</span>
-            <button class="primary-pill" data-cs-claim="${esc(share.shareId)}" type="button"${claimable ? "" : " disabled"}>${esc(t("desktop.sharing.borrow.claim"))}</button>
-          </div>
+            <button class="primary-pill" data-cs-claim="${esc(share.shareId)}" type="button"${share.state === "active" && share.slotsLeft > 0 && !share.exhausted ? "" : " disabled"}>${esc(t("desktop.sharing.borrow.claim"))}</button>
+          </div>`}
         </div>`;
+        // lanes render inside the share card (each claims its own key);
+        // legacy single-pool shares keep the share-level claim button above
+        return header + lanes.map((lane) => laneClaimRow(share, lane)).join("");
       }).join("");
       for (const button of els.directory.querySelectorAll("[data-cs-claim]")) {
-        button.addEventListener("click", () => guard(() => claimShare(button.dataset.csClaim)));
+        button.addEventListener("click", () => guard(() => claimShare(button.dataset.csClaim, button.dataset.csClaimLane || null)));
       }
     }
 
@@ -290,7 +767,7 @@ export default {
             <strong>${esc(claim.shareTitle || claim.shareId)}</strong>
             <span class="cs-muted">${esc(String(claim.keyId).slice(0, 11))}…</span>
           </div>
-          <div class="cs-muted">${esc(t("desktop.sharing.borrow.expires"))}: ${esc(new Date(claim.expiresAt).toLocaleString())}${live ? ` · ${esc(t("desktop.sharing.borrow.used"))}: ${esc(compact(live.usedTokens))}` : ""}${state !== "valid" ? ` · <span class="cs-state">${esc(t(state === "revoked" ? "desktop.sharing.borrow.stateRevoked" : "desktop.sharing.borrow.stateExpired"))}</span>` : ""}</div>`;
+          <div class="cs-muted">${claim.laneTitle ? `<span class="cs-lane-tag">${esc(claim.laneTitle)}</span>${claim.models && claim.models.length ? ` <span class="cs-lane-tag">${esc(claim.models.join(", "))}</span>` : ""}${claim.tzLabel ? ` <span class="cs-lane-tag">${esc(claim.tzLabel)}</span>` : ""} · ` : ""}${esc(t("desktop.sharing.borrow.expires"))}: ${esc(fmtDateTime(claim.expiresAt))}${live ? ` · ${esc(t("desktop.sharing.borrow.used"))}: ${esc(compact(live.usedTokens))}` : ""}${state !== "valid" ? ` · <span class="cs-state">${esc(t(state === "revoked" ? "desktop.sharing.borrow.stateRevoked" : "desktop.sharing.borrow.stateExpired"))}</span>` : ""}</div>`;
         if (state === "valid") {
           row.appendChild(configBlock(claim));
           const actions = document.createElement("div");
@@ -307,37 +784,41 @@ export default {
       }
     }
 
-    async function claimShare(shareId) {
+    async function claimShare(shareId, laneId) {
       notify(t("desktop.sharing.borrow.claiming"));
       const ts = Date.now();
-      const signed = await ctx.invoke("sharing:claim-sign", { shareId, ts });
+      const signed = await ctx.invoke("compute-sharing:claim-sign", { shareId, ts });
       const data = await apiPost("/api/shares/claim", {
         shareId,
+        laneId: laneId || undefined,
         participantId: signed.participantId,
         ts: signed.ts ?? ts,
         signature: signed.signature,
       });
-      const store = await ctx.invoke("sharing:borrow-get");
+      const store = await ctx.invoke("compute-sharing:borrow-get");
       const claims = Array.isArray(store && store.claims) ? store.claims : [];
       const record = {
         keyId: data.keyId,
         token: data.token,
         baseURL: data.baseURL,
         shareId,
+        laneId: data.laneId || null,
+        laneTitle: data.laneTitle || "",
+        tzLabel: data.tzLabel || "",
         shareTitle: data.shareTitle,
         models: data.models || [],
         expiresAt: data.expiresAt,
       };
-      await ctx.invoke("sharing:borrow-set", { claims: [record, ...claims.filter((c) => c.keyId !== record.keyId)] });
+      await ctx.invoke("compute-sharing:borrow-set", { claims: [record, ...claims.filter((c) => c.keyId !== record.keyId)] });
       notify(t("desktop.sharing.borrow.claimed"));
       await refresh({ forceShares: true });
     }
 
     async function revokeClaim(claim) {
       await apiPost("/api/shares/claims/revoke", { token: claim.token });
-      const store = await ctx.invoke("sharing:borrow-get");
+      const store = await ctx.invoke("compute-sharing:borrow-get");
       const claims = (Array.isArray(store && store.claims) ? store.claims : []).filter((c) => c.keyId !== claim.keyId);
-      await ctx.invoke("sharing:borrow-set", { claims });
+      await ctx.invoke("compute-sharing:borrow-set", { claims });
       notify(t("desktop.sharing.borrow.revoked"));
       await refresh({ forceShares: true });
     }
@@ -348,12 +829,22 @@ export default {
       // the section; any other error collapses it too — owner data never
       // blocks the borrow flow below.
       try {
-        renderOwner(await ctx.invoke("sharing:owner-status", {}));
-      } catch {
-        renderOwner({});
+        lastOwnerData = await ctx.invoke("compute-sharing:owner-status", {});
+      } catch (error) {
+        // A transient failure must not freeze the card into the borrower-only
+        // layout: retry briefly before settling the definitive "no owner".
+        lastOwnerData = {};
+        for (let attempt = 0; attempt < 2 && !lastOwnerData.share; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          try {
+            lastOwnerData = await ctx.invoke("compute-sharing:owner-status", {});
+          } catch { /* keep retrying */ }
+        }
       }
+      ownerSettled = true;
+      renderOwner(lastOwnerData);
       // borrow: local claims + live usage
-      const store = await ctx.invoke("sharing:borrow-get");
+      const store = await ctx.invoke("compute-sharing:borrow-get");
       const claims = Array.isArray(store && store.claims) ? store.claims : [];
       let liveById = null;
       if (claims.length) {

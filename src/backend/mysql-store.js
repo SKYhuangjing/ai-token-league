@@ -202,6 +202,9 @@ export class MySqlStore extends Store {
         modelsJson TEXT NOT NULL,
         policyJson TEXT NOT NULL,
         settledJson TEXT NOT NULL,
+        lanesJson TEXT NULL,
+        laneSettledJson TEXT NULL,
+        wallSignalJson TEXT NULL,
         lifetimeSettled BIGINT NOT NULL DEFAULT 0,
         claimsIssued INT NOT NULL DEFAULT 0,
         participantId VARCHAR(96) NOT NULL DEFAULT '',
@@ -218,6 +221,7 @@ export class MySqlStore extends Store {
       `CREATE TABLE IF NOT EXISTS sharing_claims (
         keyId VARCHAR(96) PRIMARY KEY,
         shareId VARCHAR(96) NOT NULL,
+        laneId VARCHAR(96) NOT NULL DEFAULT '',
         shareTitle VARCHAR(80) NOT NULL DEFAULT '',
         token VARCHAR(128) NOT NULL,
         borrower VARCHAR(80) NOT NULL DEFAULT '',
@@ -233,6 +237,22 @@ export class MySqlStore extends Store {
         INDEX idx_sharing_claims_share (shareId)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     );
+    // lanes-design columns on pre-existing sharing tables (fresh installs get
+    // them from the CREATE above; these guarded ALTERs upgrade old deploys)
+    const [shareLaneColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sharing_shares' AND COLUMN_NAME = 'lanesJson'`
+    );
+    if (!shareLaneColumns.length) {
+      await this.pool.query("ALTER TABLE sharing_shares ADD COLUMN lanesJson TEXT NULL AFTER settledJson, ADD COLUMN laneSettledJson TEXT NULL AFTER lanesJson, ADD COLUMN wallSignalJson TEXT NULL AFTER laneSettledJson");
+    }
+    const [claimLaneColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sharing_claims' AND COLUMN_NAME = 'laneId'`
+    );
+    if (!claimLaneColumns.length) {
+      await this.pool.query("ALTER TABLE sharing_claims ADD COLUMN laneId VARCHAR(96) NOT NULL DEFAULT '' AFTER shareId");
+    }
   }
 
   async load() {

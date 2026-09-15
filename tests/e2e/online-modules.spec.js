@@ -21,8 +21,8 @@ const catalog = {
       id: 'compute-sharing', version: '0.1.2', type: 'query',
       title: '算力共享', desc: '认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点。', titleKey: 'desktop.sharing.plugin.title',
       permissions: [
-        'sidecar:sharing:claim-sign', 'sidecar:sharing:borrow-get', 'sidecar:sharing:borrow-set',
-        'sidecar:sharing:owner-status', 'sidecar:sharing:owner-policy', 'sidecar:sharing:owner-unregister',
+        'sidecar:compute-sharing:claim-sign', 'sidecar:compute-sharing:borrow-get', 'sidecar:compute-sharing:borrow-set',
+        'sidecar:compute-sharing:owner-status', 'sidecar:compute-sharing:owner-policy', 'sidecar:compute-sharing:owner-unregister',
       ],
     },
   ],
@@ -158,12 +158,18 @@ online.describe('Online plugins tab', () => {
     await page.locator('[data-online-install="compute-sharing"]').click();
     await page.click('[data-modules-tab="installed"]');
     const card = page.locator('[data-module-card="compute-sharing"]');
-    await expect(card).toContainText('No claims yet.', { timeout: 5_000 });
+    // mount settled = the card's owner state left "pending" (deterministic,
+    // independent of which tab is active)
+    const settled = () => page.waitForFunction(() => {
+      const tabs = document.querySelector('[data-cs="tabs"]');
+      return tabs && tabs.dataset.owner && tabs.dataset.owner !== "pending";
+    }, { timeout: 5_000 });
+    await settled();
     await page.route('**/api/modules/remote/file/compute-sharing/0.1.2/index.js', (route) => route.abort());
     await page.locator('[data-module-toggle="compute-sharing"]').click();
-    await expect(card).not.toContainText('No claims yet.');
+    await expect(card.locator('[data-cs="tabs"]')).toHaveCount(0);
     await page.locator('[data-module-toggle="compute-sharing"]').click();
-    await expect(card).toContainText('No claims yet.', { timeout: 5_000 });
+    await settled();
     await expect(card).not.toContainText('Plugin failed to load');
   });
 });

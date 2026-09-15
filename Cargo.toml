@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["collector-core", "atl-collector", "src-tauri", "plugins/zhipu-plan/rust"]
+members = ["collector-core", "atl-collector", "src-tauri", "plugins/zhipu-plan/rust", "plugins/compute-sharing/rust"]
 
 [workspace.package]
 version = "0.7.15"

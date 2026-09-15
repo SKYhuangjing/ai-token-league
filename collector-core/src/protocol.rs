@@ -91,12 +91,6 @@ pub enum Command {
     ModulesPackageDelete,
     ModulesRemoteCatalog,
     ModulesRemoteFile,
-    SharingClaimSign,
-    SharingBorrowGet,
-    SharingBorrowSet,
-    SharingOwnerStatus,
-    SharingOwnerPolicy,
-    SharingOwnerUnregister,
 }
 
 impl Command {
@@ -167,12 +161,6 @@ impl Command {
             "modules:package-delete" => Some(Self::ModulesPackageDelete),
             "modules:remote-catalog" => Some(Self::ModulesRemoteCatalog),
             "modules:remote-file" => Some(Self::ModulesRemoteFile),
-            "sharing:claim-sign" => Some(Self::SharingClaimSign),
-            "sharing:borrow-get" => Some(Self::SharingBorrowGet),
-            "sharing:borrow-set" => Some(Self::SharingBorrowSet),
-            "sharing:owner-status" => Some(Self::SharingOwnerStatus),
-            "sharing:owner-policy" => Some(Self::SharingOwnerPolicy),
-            "sharing:owner-unregister" => Some(Self::SharingOwnerUnregister),
             _ => None,
         }
     }
@@ -309,12 +297,6 @@ mod tests {
             ("modules:package-delete", Command::ModulesPackageDelete),
             ("modules:remote-catalog", Command::ModulesRemoteCatalog),
             ("modules:remote-file", Command::ModulesRemoteFile),
-            ("sharing:claim-sign", Command::SharingClaimSign),
-            ("sharing:borrow-get", Command::SharingBorrowGet),
-            ("sharing:borrow-set", Command::SharingBorrowSet),
-            ("sharing:owner-status", Command::SharingOwnerStatus),
-            ("sharing:owner-policy", Command::SharingOwnerPolicy),
-            ("sharing:owner-unregister", Command::SharingOwnerUnregister),
         ];
         for (s, expected) in &commands {
             assert_eq!(

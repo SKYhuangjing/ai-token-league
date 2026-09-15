@@ -1,23 +1,25 @@
-// E2E: compute-sharing plugin (R29b merged) — one remote card with the owner
-// console section (hidden when unregistered) and the borrowing directory.
-// Routes mimic the distribution proxy + sharing control plane; the guarded
-// sidecar channel is mocked in mock-tauri.js (sharing:* commands).
+// E2E: compute-sharing plugin (0.2.0 lanes) — one remote card with the owner
+// console (lane table + editor + advanced policy + stop/resume) and the
+// lane-scoped borrowing directory. Routes mimic the distribution proxy +
+// sharing control plane; the guarded sidecar channel is mocked in
+// mock-tauri.js (sharing:* commands).
 import { test as base, expect } from '@playwright/test';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { navigateTo } from './helpers.js';
 
-const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf-8');
-const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf-8');
+const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf8');
+const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
-const VERSION = '0.1.2';
+const VERSION = '0.5.1';
 const CATALOG = {
   version: 1,
   catalog: [
     { id: 'compute-sharing', version: VERSION, type: 'query', title: '算力共享', desc: 'merged card',
       entry: 'index.js', permissions: [
-        'sidecar:sharing:claim-sign', 'sidecar:sharing:borrow-get', 'sidecar:sharing:borrow-set',
-        'sidecar:sharing:owner-status', 'sidecar:sharing:owner-policy', 'sidecar:sharing:owner-unregister',
+        'sidecar:compute-sharing:claim-sign', 'sidecar:compute-sharing:borrow-get', 'sidecar:compute-sharing:borrow-set',
+        'sidecar:compute-sharing:owner-status', 'sidecar:compute-sharing:owner-policy', 'sidecar:compute-sharing:owner-resume',
+        'sidecar:compute-sharing:owner-suggest', 'sidecar:compute-sharing:owner-unregister',
       ] },
   ],
 };
@@ -25,9 +27,23 @@ const CATALOG = {
 const SHARES = {
   shares: [
     {
-      shareId: 'shr_e2e1', title: 'E2E CPA', models: ['glm-*'], online: true, state: 'active',
+      shareId: 'shr_e2e1', title: 'E2E CPA', models: ['*'], online: true, state: 'active',
       slotsLeft: 2, budgetTokens: 1000000, settledTokens: 1200, availableTokens: 998800,
       exhausted: false, updatedAt: Date.now(),
+      lanes: [
+        {
+          id: 'gemini-week', title: 'Gemini weekly', models: ['gemini-*'], period: 'week',
+          budgetTokens: 1000000, settledTokens: 1200, availableTokens: 998800, exhausted: false,
+          state: 'active', open: true, retryAfterMs: 0, slotsLeft: 2, maxClaims: 3, tzLabel: 'UTC+8',
+          schedule: [{ start: '22:00', end: '14:00' }], peak: { windows: [], multiplier: 1 },
+        },
+        {
+          id: 'glm-offpeak', title: 'GLM off-peak', models: ['glm-5.3-flash'], period: 'hour5',
+          budgetTokens: 200000, settledTokens: 0, availableTokens: 200000, exhausted: false,
+          state: 'active', open: false, retryAfterMs: 30 * 60_000, slotsLeft: 1, maxClaims: 2, tzLabel: 'UTC+8',
+          schedule: [{ start: '22:00', end: '12:00' }], peak: { windows: [{ start: '14:00', end: '21:00' }], multiplier: 2 },
+        },
+      ],
     },
   ],
 };
@@ -63,24 +79,69 @@ const installed = scenarioTest({
   modules: { 'compute-sharing': { enabled: true, config: {}, installedVersion: VERSION } },
 });
 
-async function openCard(page) {
+async function openCard(page, tab = "owner") {
   await navigateTo(page, 'modules');
   await page.waitForSelector('[data-module-card="compute-sharing"]', { timeout: 5_000 });
-  await page.waitForSelector('[data-cs="directory"]', { timeout: 5_000 });
+  await page.waitForSelector('[data-cs="directory"]', { state: 'attached', timeout: 5_000 });
+  // the card settles its owner state first (data-owner=pending→yes|no):
+  // waiting on that removes the board-temporarily-visible race for pure
+  // borrowers (no tab bar at all in that case)
+  await page.waitForFunction(() => {
+    const tabs = document.querySelector('[data-cs="tabs"]');
+    return tabs && tabs.dataset.owner && tabs.dataset.owner !== "pending";
+  }, { timeout: 5_000 });
+  if (tab !== "owner") {
+    // owners: the tab appears once owner state settles (click retries until
+    // then); pure borrowers never get a tab bar — the board is the card
+    const tabButton = page.locator(`[data-cs-tab="${tab}"]`);
+    try {
+      await tabButton.click({ timeout: 5_000 });
+      await expect(page.locator('[data-cs="board"]')).toBeVisible({ timeout: 5_000 });
+      await page.waitForTimeout(800);
+      await expect(page.locator('[data-cs="board"]')).toBeVisible();
+    } catch {
+      await expect(page.locator('[data-cs="board"]')).toBeVisible({ timeout: 5_000 });
+    }
+  }
 }
 
-installed.describe('Compute sharing (merged card, en)', () => {
-  installed('owner section shows the ledger; borrow directory lists shares', async ({ page }) => {
-    await openCard(page);
-    // owner section visible with the mocked registered share
+installed.describe('Compute sharing (lanes card, en)', () => {
+  installed('owner console renders the lane table with per-lane state', async ({ page }) => {
+    await openCard(page, "owner");
     await expect(page.locator('[data-cs="owner"]')).toBeVisible();
-    await expect(page.locator('[data-cs="owner-body"]')).toContainText('Sky-Macbook CPA', { timeout: 5_000 });
-    await expect(page.locator('[data-cs="owner-body"]')).toContainText('sky-dev');
-    await expect(page.locator('[data-cs-policy="budget"]')).toBeVisible();
-    // borrow directory + empty my-claims
-    await expect(page.locator('[data-cs="directory"]')).toContainText('E2E CPA');
-    await expect(page.locator('[data-cs="directory"]')).toContainText('1.2K / 1M');
-    await expect(page.locator('[data-cs="mine"]')).toContainText('No claims yet.');
+    const body = page.locator('[data-cs="owner-body"]');
+    await expect(body).toContainText('Sky-Macbook CPA', { timeout: 5_000 });
+    await expect(body).toContainText('Gemini weekly');
+    await expect(body).toContainText('GLM off-peak');
+    // exhausted lane surfaces its badge; claims carry the lane tag
+    await expect(body).toContainText('Window budget exhausted');
+    await expect(body).toContainText('Gemini weekly', { useInnerText: false });
+    await expect(page.locator('[data-cs-lane="gemini-week"]')).toBeVisible();
+    // template buttons render (owner can add lanes)
+    await expect(page.locator('[data-cs-lane-template="0"]')).toBeVisible();
+    // claims history collapses: valid row + 4 ended rows shown, 6 total ended
+    const claimRows = page.locator('[data-cs="owner-body"] .cs-kv', { hasText: 'csk_' });
+    await expect(claimRows).toHaveCount(5, { timeout: 5_000 });            // 1 valid + 4 ended
+    await expect(page.locator('[data-cs="claimsToggle"]')).toHaveText('Show all 6 past claims');
+    await page.locator('[data-cs="claimsToggle"]').click();
+    await expect(claimRows).toHaveCount(7, { timeout: 5_000 });            // 1 valid + 6 ended
+    await page.locator('[data-cs="claimsToggle"]').click();
+    await expect(claimRows).toHaveCount(5, { timeout: 5_000 });
+
+    // advisory surfaces: wall-signal banner + budget suggestions
+    await expect(page.locator('.cs-wall')).toContainText('failed 3 times');
+    await expect(body).toContainText('Quota reference', { timeout: 5_000 });   // block heading anchors the lines
+    await expect(body).toContainText('own use (7d): 1.3B');
+    await expect(body).toContainText('Zhipu 5h windows:');
+    // switch to the borrow tab: directory renders lane rows there
+    await page.locator('[data-cs-tab="borrow"]').click();
+    const dir = page.locator('[data-cs="directory"]');
+    await expect(dir).toContainText('E2E CPA');
+    await expect(page.locator('[data-cs-claim-lane="gemini-week"]')).toBeEnabled();
+    await expect(page.locator('[data-cs-claim-lane="glm-offpeak"]')).toBeDisabled();
+    await expect(dir).toContainText('Closed ·');                       // B8 wording
+    await expect(dir).toContainText('Peak ×2 14:00–21:00');            // B12 peak rule visible
+    await expect(dir).toContainText('UTC+8');                          // B10 anchor label
     // persisted install record + uninstall removes the card
     const state = await page.evaluate(() => window.__ATL_E2E_STATE__.modulesState.modules['compute-sharing']);
     expect(state.installedVersion).toBe(VERSION);
@@ -88,52 +149,153 @@ installed.describe('Compute sharing (merged card, en)', () => {
     await expect(page.locator('[data-module-card="compute-sharing"]')).toHaveCount(0);
   });
 
-  installed('claim signs via the sidecar identity channel and renders integration env', async ({ page }) => {
+  installed('lane claim signs via the sidecar channel and tags my-claims', async ({ page }) => {
     await page.route('**/api/shares/claim', async (route) => {
       const body = route.request().postDataJSON();
       if (!body.participantId || !body.signature || !body.ts) {
         await route.fulfill({ status: 401, json: { error: 'identity_required' } });
         return;
       }
+      if (body.laneId !== 'gemini-week') {
+        await route.fulfill({ status: 404, json: { error: 'lane_not_found' } });
+        return;
+      }
       await route.fulfill({
         json: {
           keyId: 'csk_e2e99', token: 'atl_sk_e2e_secret', baseURL: 'http://192.168.1.4:8317',
-          models: ['*'], expiresAt: Date.now() + 86400000, shareTitle: 'E2E CPA', keyMaxTokens: 200000,
+          laneId: 'gemini-week', laneTitle: 'Gemini weekly', models: ['gemini-*'], period: 'week', tzLabel: 'UTC+8',
+          expiresAt: Date.now() + 86400000, shareTitle: 'E2E CPA', keyMaxTokens: 200000,
         },
       });
     });
-    await openCard(page);
-    await page.locator('[data-cs-claim="shr_e2e1"]').click();
-    await expect(page.locator('[data-cs="mine"]')).toContainText('atl_sk_e2e_secret', { timeout: 5_000 });
+    await openCard(page, "borrow");
+    await page.locator('[data-cs-claim-lane="gemini-week"]').click();
+    // secrets are masked in the DOM from the start (C5): prefix + ellipsis
+    await expect(page.locator('[data-cs="mine"]')).toContainText('atl_sk_e…cret', { timeout: 5_000 });
     await expect(page.locator('[data-cs="mine"]')).toContainText('OPENAI_BASE_URL=http://192.168.1.4:8317/v1');
-    await expect(page.locator('[data-cs="mine"]')).toContainText('ANTHROPIC_BASE_URL=http://192.168.1.4:8317');
+    // my-claims shows the lane tag (+ model scope chip + anchor tz) so
+    // borrowers know which slice they hold and which models it serves
+    await expect(page.locator('[data-cs="mine"] .cs-lane-tag').first()).toHaveText('Gemini weekly');
+    await expect(page.locator('[data-cs="mine"] .cs-lane-tag').nth(1)).toHaveText('gemini-*');
+    await expect(page.locator('[data-cs="mine"] .cs-lane-tag').nth(2)).toHaveText('UTC+8');
+    // secrets render masked by default and reveal on toggle (C5)
+    const keyRow = page.locator('[data-cs="mine"] .cs-config-row', { hasText: 'OPENAI_API_KEY' });
+    await expect(keyRow.locator('code')).toContainText('atl_sk_…cret' === 'x' ? '' : '…');
+    await expect(keyRow.locator('code')).not.toContainText('atl_sk_e2e_secret');
+    await keyRow.locator('button', { hasText: 'Reveal' }).click();
+    await expect(keyRow.locator('code')).toContainText('export OPENAI_API_KEY=atl_sk_e2e_secret');
+    // copy yields the full executable export line, not the bare value (B11)
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await keyRow.locator('button', { hasText: 'Copy' }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe('export OPENAI_API_KEY=atl_sk_e2e_secret');
     const signs = await page.evaluate(() => window.__ATL_E2E_STATE__.borrowCalls.signs);
     expect(signs.at(-1)?.shareId).toBe('shr_e2e1');
     await expect(page.locator('#toast')).toContainText('Claimed');
   });
 
-  installed('backend identity rejection surfaces a friendly error', async ({ page }) => {
-    await page.route('**/api/shares/claim', (route) => route.fulfill({ status: 401, json: { error: 'invalid_signature' } }));
-    await openCard(page);
-    await page.locator('[data-cs-claim="shr_e2e1"]').click();
-    await expect(page.locator('[data-cs="status"]')).toContainText('Identity verification failed', { timeout: 5_000 });
+  installed('backend lane rejection surfaces a friendly error with the reopen time', async ({ page }) => {
+    await page.route('**/api/shares/claim', (route) =>
+      route.fulfill({ status: 409, json: { error: 'lane_closed', laneId: 'gemini-week', retryAfterMs: 45 * 60_000 } }));
+    await openCard(page, "borrow");
+    await page.locator('[data-cs-claim-lane="gemini-week"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('outside its open hours', { timeout: 5_000 });
+    await expect(page.locator('[data-cs="status"]')).toContainText('opens at');
     await expect(page.locator('[data-cs="mine"]')).toContainText('No claims yet.');
   });
 
-  installed('owner policy save sends the delta; stop confirms, unregisters, collapses the section', async ({ page }) => {
-    await openCard(page);
-    await page.locator('[data-cs-policy="budget"]').fill('2000000');
-    await page.locator('[data-cs-policy="maxClaims"]').fill('8');
+  installed('lane editing saves the full lane set; editor survives refresh; pause confirms', async ({ page }) => {
+    await openCard(page, "owner");
+    // edit the gemini lane's budget
+    await page.locator('[data-cs-lane-edit="0"]').click();
+    await expect(page.locator('[data-cs="lane-form"]')).toBeVisible();
+    await page.locator('[data-cs-f="budget"]').fill('200000000');
+    // review-A1 regression: a card refresh mid-edit must not wipe the form —
+    // the live DOM values ride along into the re-rendered editor
+    await page.locator('[data-cs="refresh"]').click();
+    await expect(page.locator('[data-cs-f="budget"]')).toHaveValue('200000000', { timeout: 5_000 });
+    // live conversion hint tracks the input
+    await expect(page.locator('[data-cs="budgetHint"]')).toContainText('200M');
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('#toast')).toContainText('Lane saved', { timeout: 5_000 });
+    const lanes = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.lanes.at(-1));
+    expect(lanes).toHaveLength(2);
+    const gemini = lanes.find((l) => l.id === 'gemini-week');
+    expect(gemini.budget.tokens).toBe(200000000);
+    expect(gemini.schedule.windows).toEqual([{ start: '22:00', end: '14:00' }]);
+    // half-filled schedule window is rejected instead of silently all-day (B4)
+    await page.locator('[data-cs-lane-edit="0"]').click();
+    await page.locator('[data-cs-f="winEnd"]').fill('');
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('both start and end', { timeout: 5_000 });
+    // equal bounds are rejected instead of collapsing to all-day (B2)
+    await page.locator('[data-cs-f="winEnd"]').fill('22:00');
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('must differ', { timeout: 5_000 });
+    // switching edit targets must not bleed unsaved values across drafts (B1)
+    await page.locator('[data-cs-f="title"]').fill('Polluted Draft');
+    await page.locator('[data-cs-lane-edit="1"]').click();
+    await expect(page.locator('[data-cs-f="title"]')).toHaveValue('GLM off-peak', { timeout: 5_000 });
+    await page.locator('[data-cs="laneCancel"]').click();
+    // duplicate lane title is rejected (C2)
+    await page.locator('[data-cs-lane-edit="0"]').click();
+    await page.locator('[data-cs-f="title"]').fill('GLM off-peak');
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('already exists', { timeout: 5_000 });
+    await page.locator('[data-cs="laneCancel"]').click();
+    // template add: new lane rides the same lanes payload (blank template C1)
+    await page.locator('[data-cs-lane-template="3"]').click();
+    await expect(page.locator('[data-cs-f="title"]')).toHaveValue('Blank lane');
+    await page.locator('[data-cs="laneSave"]').click();
+    const afterAdd = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.lanes.at(-1));
+    expect(afterAdd).toHaveLength(3);
+    // pause button carries a real label, not the bare i18n key (round-2 A-1)
+    await expect(page.locator('[data-cs-lane-toggle="0"]')).toHaveText('Pause');
+    // pause asks first and states the blast radius (B5): 1 valid gemini claim
+    page.once('dialog', (dialog) => {
+      expect(dialog.message()).toContain('revoke its 1 borrower key');
+      dialog.accept();
+    });
+    await page.locator('[data-cs-lane-toggle="0"]').click();
+    await expect(page.locator('#toast')).toContainText('Lane paused', { timeout: 5_000 });
+    const afterPause = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.lanes.at(-1));
+    expect(afterPause.find((l) => l.id === 'gemini-week').state).toBe('suspended');
+    // suspended lane's claims were revoked by the mock contract
+    const claims = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerShare.claims);
+    expect(claims.filter((c) => c.laneId === 'gemini-week').every((c) => c.state !== 'valid')).toBe(true);
+  });
+
+  installed('advanced policy save sends the delta; stop shows the stopped row, resume restores the console', async ({ page }) => {
+    await openCard(page, "owner");
+    await page.locator('[data-cs-policy="keyMaxTokens"]').fill('300000');
+    await page.locator('[data-cs-policy="ttlHours"]').fill('72');
     await page.locator('[data-cs="savePolicy"]').click();
     await expect(page.locator('#toast')).toContainText('Policy saved.', { timeout: 5_000 });
     const policy = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.policy.at(-1));
-    expect(policy).toEqual({ budget: 2000000, maxClaims: 8 });
+    expect(policy).toEqual({ keyMaxTokens: 300000, ttlHours: 72 });
     page.once('dialog', (dialog) => dialog.accept());
     await page.locator('[data-cs="stop"]').click();
     await expect(page.locator('#toast')).toContainText('Sharing stopped.', { timeout: 5_000 });
-    // the owner section collapses entirely after unregister
-    await expect(page.locator('[data-cs="owner"]')).toBeHidden({ timeout: 5_000 });
     expect(await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.unregistered)).toBe(true);
+    // stopped keeps a compact row (backend keeps answering owner-status with
+    // state "stopped") — the console never collapses into a dead end anymore
+    await expect(page.locator('[data-cs="owner"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-cs="owner-body"]')).toContainText('Stopped');
+    await expect(page.locator('[data-cs="resume"]')).toBeVisible();
+    // resume: back through the sidecar channel, console returns to active
+    await page.locator('[data-cs="resume"]').click();
+    await expect(page.locator('#toast')).toContainText('Sharing resumed', { timeout: 5_000 });
+    expect(await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.resumed)).toBe(true);
+    await expect(page.locator('[data-cs-lane-edit="0"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-cs="resume"]')).toHaveCount(0);
+  });
+
+  installed('backend identity rejection surfaces a friendly error', async ({ page }) => {
+    await page.route('**/api/shares/claim', (route) => route.fulfill({ status: 401, json: { error: 'invalid_signature' } }));
+    await openCard(page, "borrow");
+    await page.locator('[data-cs-claim-lane="gemini-week"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('Identity verification failed', { timeout: 5_000 });
+    await expect(page.locator('[data-cs="mine"]')).toContainText('No claims yet.');
   });
 });
 
@@ -146,8 +308,10 @@ const borrowerOnly = scenarioTest({
   modules: { 'compute-sharing': { enabled: true, config: {}, installedVersion: VERSION } },
 });
 
-borrowerOnly('pure borrowers never see the owner section', async ({ page }) => {
-  await openCard(page);
+borrowerOnly('pure borrowers never see the owner section or the tab bar', async ({ page }) => {
+  await openCard(page, "borrow");
+  await expect(page.locator('[data-cs="tabs"]')).toBeHidden();
   await expect(page.locator('[data-cs="owner"]')).toBeHidden();
   await expect(page.locator('[data-cs="directory"]')).toContainText('E2E CPA');
+  await expect(page.locator('[data-cs-claim-lane="gemini-week"]')).toBeVisible();
 });

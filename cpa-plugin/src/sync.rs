@@ -14,10 +14,63 @@ use crate::now_ms;
 use crate::bootstrap::{self, OwnerConfig};
 use crate::with_runtime;
 use crate::{PLUGIN_VERSION, Runtime};
-use crate::core_state::{merge_delta, restore_settled, SyncState, UsageDelta};
+use crate::core_state::{merge_delta, restore_lane_settled, restore_settled, LaneEntry, SyncState, UsageDelta, WindowMark};
 
 fn str_of(v: &Value, key: &str) -> String {
     v.get(key).and_then(|x| x.as_str()).unwrap_or("").trim().to_string()
+}
+
+fn window_marks_of(v: &Value, key: &str) -> Vec<WindowMark> {
+    v.get(key)
+        .and_then(|x| x.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|w| {
+                    let start = w.get("startM").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                    let end = w.get("endM").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                    if start == end || start > 1440 || end > 1440 {
+                        return None;
+                    }
+                    Some(WindowMark { start_m: start, end_m: end })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Heartbeat lane entries: unknown/missing fields degrade deny-safe (state
+/// != "active" denies, budget 0 = no window gate, empty schedule = 24h).
+fn lanes_of(resp: &Value) -> Vec<LaneEntry> {
+    resp.get("lanes")
+        .and_then(|x| x.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|l| {
+                    let id = str_of(l, "id");
+                    if id.is_empty() {
+                        return None;
+                    }
+                    Some(LaneEntry {
+                        id,
+                        state: str_of(l, "state"),
+                        models: l
+                            .get("models")
+                            .and_then(|x| x.as_array())
+                            .map(|list| list.iter().filter_map(|m| m.as_str().map(String::from)).collect())
+                            .unwrap_or_default(),
+                        budget_tokens: l.get("budgetTokens").and_then(|x| x.as_u64()).unwrap_or(0),
+                        period: str_of(l, "period"),
+                        window_key: str_of(l, "windowKey"),
+                        window_end_ms: l.get("windowEndMs").and_then(|x| x.as_i64()).unwrap_or(0),
+                        settled_tokens: l.get("settledTokens").and_then(|x| x.as_u64()).unwrap_or(0),
+                        schedule_windows: window_marks_of(l, "scheduleWindows"),
+                        peak_windows: window_marks_of(l, "peakWindows"),
+                        peak_multiplier: l.get("peakMultiplier").and_then(|x| x.as_u64()).unwrap_or(1),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn http_client() -> Option<reqwest::blocking::Client> {
@@ -48,6 +101,7 @@ pub(crate) fn parse_sync_response(resp: &Value, now_ms: i64) -> SyncState {
                         token,
                         key_max_tokens: k.get("keyMaxTokens").and_then(|v| v.as_u64()).unwrap_or(0),
                         expires_at_ms: k.get("expiresAtMs").and_then(|v| v.as_i64()).unwrap_or(0),
+                        lane_id: str_of(k, "laneId"),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -59,6 +113,7 @@ pub(crate) fn parse_sync_response(resp: &Value, now_ms: i64) -> SyncState {
         budget: policy.get("budget").and_then(|v| v.as_u64()).unwrap_or(0),
         key_concurrency: policy.get("keyConcurrency").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         keys,
+        lanes: lanes_of(resp),
         last_sync_ms: now_ms,
         configured: true,
     }
@@ -128,12 +183,19 @@ pub(crate) fn tick() {
 
     let usage: Vec<UsageDelta> = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.pending_usage))
         .unwrap_or_default();
+    let owner_failures = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.owner_failures))
+        .unwrap_or(0);
     let usage_json: Vec<Value> = usage
         .iter()
         .map(|d| json!({ "keyId": d.key_id, "tokens": d.tokens, "requests": d.requests, "failed": d.failed }))
         .collect();
 
-    let Some(client) = http_client() else { return return_requeue(usage) };
+    let Some(client) = http_client() else {
+        // same invariant as the Err(_) branch below: the wall counter goes
+        // back too, or a lost signal window would silently swallow failures
+        with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
+        return return_requeue(usage);
+    };
     let result = client
         .post(format!("{}/api/shares/heartbeat", identity.api))
         .header("x-atl-share-secret", &identity.share_secret)
@@ -142,6 +204,8 @@ pub(crate) fn tick() {
             "pluginVersion": PLUGIN_VERSION,
             "baseURL": bootstrap::current_base_url(&config),
             "usage": usage_json,
+            "wallSignals": { "ownerFailed": owner_failures },
+            "tzOffsetMinutes": crate::tz_offset_minutes(),
         }))
         .send();
     let response: Result<Value, ()> = match result {
@@ -156,9 +220,15 @@ pub(crate) fn tick() {
                 let window_day = str_of(&body, "windowDay");
                 rt.sync = parse_sync_response(&body, now);
                 restore_settled(&mut rt.ledger, &window_day, &settled);
+                restore_lane_settled(&mut rt.ledger, &rt.sync.lanes);
             });
         }
-        Err(_) => return_requeue(usage),
+        Err(_) => {
+            // Heartbeat failed: the wall counter goes back too, or a lost
+            // signal window would silently swallow owner failures.
+            with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
+            return_requeue(usage)
+        }
     }
 }
 
