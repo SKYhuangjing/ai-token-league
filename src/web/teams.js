@@ -463,85 +463,169 @@ function teamCardHtml(team) {
   }).join("");
 
   const toolTotal = Math.max(1, team.tools.reduce((sum, item) => sum + item.tokens, 0));
-  const toolRows = team.tools.map((item) => `
-    <tr>
-      <td>${escapeHtml(toolDisplayName(item.tool))}</td>
-      <td class="num">${escapeHtml(t("web.teams.team.toolUsers", { n: item.users }))}</td>
-      <td class="num">${escapeHtml(fmtTokens(item.tokens))}</td>
-      <td class="num teams-tool-share"><span class="teams-share-track"><i style="width:${(item.tokens / toolTotal) * 100}%"></i></span>${Math.round((item.tokens / toolTotal) * 100)}%</td>
-    </tr>`).join("");
+  const toolCards = team.tools.length > 0
+    ? `<div class="teams-tool-cards">
+        ${team.tools.map((item) => {
+          const sharePct = Math.round((item.tokens / toolTotal) * 100);
+          const usersLabel = item.users === 1
+            ? t("web.teams.team.toolUsersOne")
+            : t("web.teams.team.toolUsers", { n: item.users });
+          return `
+            <div class="teams-tool-card">
+              <div class="ttc-head">
+                <span class="ttc-name">${escapeHtml(toolDisplayName(item.tool))}</span>
+                <span class="ttc-users">${escapeHtml(usersLabel)}</span>
+              </div>
+              <div class="ttc-body">
+                <strong class="ttc-tokens mono">${escapeHtml(fmtTokens(item.tokens))}</strong>
+                <span class="ttc-share">${sharePct}%</span>
+              </div>
+              <div class="ttc-track"><i style="width:${sharePct}%"></i></div>
+            </div>`;
+        }).join("")}
+      </div>`
+    : `<p class="teams-tools-empty" data-dyn-i18n="web.teams.team.noTools"></p>`;
 
   const comboChips = team.combos.slice(0, 3).map((combo) => {
     const label = combo.label.split(" + ").map(toolDisplayName).join(" + ");
     return `<span class="teams-combo-chip">${escapeHtml(label)}<b>${combo.count}</b></span>`;
   }).join("");
+  const multiText = team.multiToolUsers === 1
+    ? t("web.teams.team.multiToolOne")
+    : t("web.teams.team.multiTool", { n: team.multiToolUsers });
   const comboLine = team.multiToolUsers > 0
-    ? `<p class="teams-combos">${escapeHtml(t("web.teams.team.multiTool", { n: team.multiToolUsers }))}${comboChips}</p>`
+    ? `<div class="teams-combos"><span class="teams-combos-text">${escapeHtml(multiText)}</span>${comboChips}</div>`
     : "";
 
   // stable reading order across cards: active members first, inactive after
   const activeMembers = team.members.filter((m) => m.kind !== "paused" && m.kind !== "absent");
   const inactiveMembers = team.members.filter((m) => m.kind === "paused" || m.kind === "absent");
   const maxMemberTokens = Math.max(1, ...team.members.map((m) => m.tokens));
-  const toolsSep = getCurrentLang().startsWith("zh") ? "、" : ", ";
   const memberRows = [];
   for (const [groupMembers, group] of [[activeMembers, "active"], [inactiveMembers, "inactive"]]) {
     if (!groupMembers.length) continue;
-    memberRows.push(`<tr class="teams-group"><td colspan="5">${escapeHtml(t(group === "inactive" ? "web.teams.team.groupInactive" : "web.teams.team.groupActive"))} · ${escapeHtml(t("web.teams.team.groupCount", { n: groupMembers.length }))}</td></tr>`);
+    memberRows.push(`<tr class="teams-group"><td colspan="5"><span class="teams-group-pill">${escapeHtml(t(group === "inactive" ? "web.teams.team.groupInactive" : "web.teams.team.groupActive"))} · ${escapeHtml(t("web.teams.team.groupCount", { n: groupMembers.length }))}</span></td></tr>`);
     for (const member of groupMembers) {
-      const toolsText = member.tools.length ? member.tools.map((tool) => toolDisplayName(tool)).join(toolsSep) : "—";
       const open = state.expanded.has(`${team.id}:${member.participantId}`);
       const evidence = open ? memberEvidenceHtml(member) : "";
       const barWidth = member.tokens > 0 ? Math.max(3, (member.tokens / maxMemberTokens) * 100) : 0;
+      const toolsHtml = member.tools.length
+        ? `<div class="teams-member-tools-list">${member.tools.map((tool) => `<span class="teams-tool-pill">${escapeHtml(toolDisplayName(tool))}</span>`).join("")}</div>`
+        : `<span class="teams-empty-dash">—</span>`;
       memberRows.push(`
       <tr class="teams-member-row${member.activeDays === 0 ? " is-inactive" : ""}" data-member-toggle="${escapeHtml(team.id)}:${escapeHtml(member.participantId)}" tabindex="0" aria-expanded="${open}">
-        <td><a class="teams-member-name" href="/profile.html?id=${encodeURIComponent(member.participantId)}&mode=admin" target="_blank" rel="noopener" title="${escapeHtml(t("web.teams.team.memberProfile"))}">${escapeHtml(member.nickname)}</a>${kindChip(member.kind)}</td>
-        <td class="num">${member.prevActiveDays} / ${state.days}</td>
-        <td class="num"><b>${member.activeDays}</b> / ${state.days}</td>
-        <td class="num"><span class="teams-token-num">${escapeHtml(fmtTokens(member.tokens))}</span><span class="teams-token-bar"><i style="width:${barWidth.toFixed(1)}%"></i></span></td>
-        <td class="teams-member-tools">${escapeHtml(toolsText)}</td>
+        <td>
+          <div class="teams-member-name-wrap">
+            <a class="teams-member-name" href="/profile.html?id=${encodeURIComponent(member.participantId)}&mode=admin" target="_blank" rel="noopener" title="${escapeHtml(t("web.teams.team.memberProfile"))}">${escapeHtml(member.nickname)}</a>
+            ${kindChip(member.kind)}
+          </div>
+        </td>
+        <td class="num"><span class="teams-active-days"><b>${member.activeDays}</b><i> / ${state.days}</i></span></td>
+        <td class="num"><span class="teams-prev-days">${member.prevActiveDays}<i> / ${state.days}</i></span></td>
+        <td class="num">
+          <div class="teams-token-col">
+            <span class="teams-token-num mono">${escapeHtml(fmtTokens(member.tokens))}</span>
+            <span class="teams-token-bar"><i style="width:${barWidth.toFixed(1)}%"></i></span>
+          </div>
+        </td>
+        <td>${toolsHtml}</td>
       </tr>
       ${open ? `<tr class="teams-evidence-row"><td colspan="5">${evidence}</td></tr>` : ""}`);
     }
   }
 
+  const perCapitaTokens = team.active ? team.tokens / team.active : 0;
+  const steadyPct = (team.steady / size) * 100;
+  const lightPct = (team.light / size) * 100;
+  const nonePct = (team.none / size) * 100;
+
   return `
     <article class="card teams-team" id="team-${escapeHtml(team.id)}">
-      <div class="teams-team-head">
-        <div class="card-head">
-          <span class="section-kicker">${escapeHtml(t("web.teams.team.kicker", { n: team.memberCount }))}</span>
-          <h2>${escapeHtml(team.name)}</h2>
+      <!-- 1. 团队头部看板 (Hero Overview Header) -->
+      <div class="teams-team-header">
+        <div class="teams-team-summary">
+          <div class="teams-team-identity">
+            <span class="section-kicker">${escapeHtml(t("web.teams.team.kicker", { n: team.memberCount }))}</span>
+            <h2 class="teams-team-name">${escapeHtml(team.name)}</h2>
+          </div>
+          <div class="teams-metrics-grid">
+            <div class="tm-stat is-hero">
+              <small data-dyn-i18n="web.teams.team.tokens"></small>
+              <div class="tm-val-row">
+                <strong class="mono tm-hero-num">${escapeHtml(fmtTokens(team.tokens))}</strong>
+                ${tokenDeltaHtml}
+              </div>
+            </div>
+            <div class="tm-stat" title="${escapeHtml(t("web.teams.team.perCapitaTip"))}">
+              <small data-dyn-i18n="web.teams.team.perCapita"></small>
+              <strong class="mono">${escapeHtml(fmtTokens(perCapitaTokens))}</strong>
+            </div>
+            <div class="tm-stat">
+              <small data-dyn-i18n="web.teams.team.cost"></small>
+              <strong class="cost-amount">${escapeHtml(formatCost(team.costUsd))}</strong>
+            </div>
+            <div class="tm-stat is-activity">
+              <div class="tm-activity-head">
+                <small data-dyn-i18n="web.teams.team.activityLabel"></small>
+                <div class="tm-activity-ratio"><strong>${team.active}<i> / ${team.memberCount}</i></strong></div>
+              </div>
+              <div class="teams-cohort-box">
+                <div class="teams-cohort-strip small" role="img" aria-label="${escapeHtml(t("web.teams.cohort.aria", { steady: team.steady, light: team.light, none: team.none }))}">
+                  <span class="seg steady" style="width:${steadyPct}%" title="${escapeHtml(t("web.teams.cohort.steady"))}: ${team.steady}"></span>
+                  <span class="seg light" style="width:${lightPct}%" title="${escapeHtml(t("web.teams.cohort.light"))}: ${team.light}"></span>
+                  <span class="seg none" style="width:${nonePct}%" title="${escapeHtml(t("web.teams.cohort.none"))}: ${team.none}"></span>
+                </div>
+                <div class="teams-cohort-legend">
+                  ${[["steady", team.steady, "web.teams.team.steadyShort"], ["light", team.light, "web.teams.team.lightShort"], ["none", team.none, "web.teams.team.noneShort"]].filter(([, n]) => n > 0).map(([cls, n, labelKey]) => `<span class="teams-cohort-mini"><i class="is-${cls}"></i><b>${n}</b><em data-dyn-i18n="${labelKey}"></em></span>`).join("")}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="teams-team-metrics">
-          <div class="tm-item"><small data-dyn-i18n="web.teams.team.telActive"></small><strong>${team.active}<i> / ${team.memberCount}</i></strong></div>
-          <div class="tm-item"><small data-dyn-i18n="web.teams.team.telPaused"></small><strong>${pausedCount}</strong></div>
-          <div class="tm-item"><small data-dyn-i18n="web.teams.team.telNew"></small><strong>${newCount}</strong></div>
-          <div class="tm-item"><small data-dyn-i18n="web.teams.team.tokens"></small><strong class="mono">${escapeHtml(fmtTokens(team.tokens))}</strong>${tokenDeltaHtml}</div>
-          <div class="tm-item" title="${escapeHtml(t("web.teams.team.perCapitaTip"))}"><small data-dyn-i18n="web.teams.team.perCapita"></small><strong class="mono">${escapeHtml(fmtTokens(team.active ? team.tokens / team.active : 0))}</strong></div>
-          <div class="tm-item"><small data-dyn-i18n="web.teams.team.cost"></small><strong class="cost-amount">${escapeHtml(formatCost(team.costUsd))}</strong></div>
+
+        <div class="teams-sparkline-panel">
+          <div class="teams-sparkline-head">
+            <span class="teams-sparkline-label" data-dyn-i18n="web.teams.team.rhythmTitle"></span>
+            <span class="teams-sparkline-peak">${escapeHtml(t("web.teams.team.rhythmPeak", { tokens: fmtTokens(maxDaily) }))}</span>
+          </div>
+          <div class="teams-bars compact">${bars}</div>
         </div>
       </div>
-      <div class="teams-team-cohort">
-        <div class="teams-cohort-strip small"><span class="seg steady" style="width:${(team.steady / size) * 100}%"></span><span class="seg light" style="width:${(team.light / size) * 100}%"></span><span class="seg none" style="width:${(team.none / size) * 100}%"></span></div>
-        ${[["steady", team.steady], ["light", team.light], ["none", team.none]].filter(([, n]) => n > 0).map(([cls, n]) => `<span class="teams-cohort-mini"><i class="is-${cls}"></i>${n}</span>`).join("")}
-      </div>
-      <div class="teams-bars">${bars}</div>
-      <div class="teams-team-body">
-        <div class="teams-tools">
-          <h3 data-dyn-i18n="web.teams.team.toolsTitle"></h3>
-          <div class="table-wrap"><table>
-            <thead><tr><th data-dyn-i18n="web.teams.team.colTool"></th><th data-dyn-i18n="web.teams.team.colUsers"></th><th class="num" data-dyn-i18n="web.teams.team.colTokens"></th><th class="num" data-dyn-i18n="web.teams.team.colShare"></th></tr></thead>
-            <tbody>${toolRows || `<tr><td colspan="4" class="teams-table-empty" data-dyn-i18n="web.teams.team.noTools"></td></tr>`}</tbody>
-          </table></div>
+
+      <!-- 2. 工具生态横向卡片区 (Tool Adoption) -->
+      <div class="teams-tools-section">
+        <div class="teams-tools-head">
+          <div class="teams-tools-title-row">
+            <h3 data-dyn-i18n="web.teams.team.toolsBreakdown"></h3>
+            <span class="teams-tools-count">${team.tools.length}</span>
+          </div>
           ${comboLine}
         </div>
-        <div class="teams-members">
-          <h3 data-dyn-i18n="web.teams.team.membersTitle"></h3>
+        ${toolCards}
+      </div>
+
+      <!-- 3. 成员明细全宽表格 (Members Roster) -->
+      <div class="teams-members-section">
+        <div class="teams-members-head">
+          <div class="teams-members-title-wrap">
+            <h3 data-dyn-i18n="web.teams.team.memberDetails"></h3>
+            <span class="teams-members-badge">${escapeHtml(t("web.teams.team.groupCount", { n: team.memberCount }))}</span>
+          </div>
           <p class="teams-members-note" data-dyn-i18n="web.teams.team.membersNote"></p>
-          <div class="table-wrap"><table class="teams-member-table">
-            <thead><tr><th data-dyn-i18n="web.teams.team.colMember"></th><th class="num" data-dyn-i18n="web.teams.team.colPrevDays"></th><th class="num" data-dyn-i18n="web.teams.team.colDays"></th><th class="num" data-dyn-i18n="web.teams.team.colTokens"></th><th data-dyn-i18n="web.teams.team.colTools"></th></tr></thead>
+        </div>
+        <div class="table-wrap">
+          <table class="teams-member-table">
+            <thead>
+              <tr>
+                <th data-dyn-i18n="web.teams.team.colMember"></th>
+                <th class="num" data-dyn-i18n="web.teams.team.colDays"></th>
+                <th class="num" data-dyn-i18n="web.teams.team.colPrevDays"></th>
+                <th class="num" data-dyn-i18n="web.teams.team.colTokens"></th>
+                <th data-dyn-i18n="web.teams.team.colTools"></th>
+              </tr>
+            </thead>
             <tbody>${memberRows.join("")}</tbody>
-          </table></div>
+          </table>
         </div>
       </div>
     </article>`;
