@@ -163,6 +163,15 @@ pub fn due_refresh(now_ms: i64) -> bool {
     runtime().lock().map(|g| g.state.due_refresh(now_ms)).unwrap_or(false)
 }
 
+/// Config changed (modules:set touched zhipu-plan): expire the tray cache
+/// so the next rebuild re-queries with fresh keys/labels instead of serving
+/// the stale snapshot until TTL (R42 menu-bar staleness fix).
+pub fn invalidate_tray() {
+    if let Ok(mut guard) = runtime().lock() {
+        guard.state.expire();
+    }
+}
+
 /// Query + ingest for the tray-side refresh (no renderer involved).
 pub fn refresh_and_cache(args: &Value, now_ms: i64, alerts_on: bool) -> Value {
     let mut data = query_blocking(args);
@@ -346,6 +355,22 @@ mod tests {
         let data = query_blocking(&json!({ "keys": [ { "label": "blank", "apiKey": "   " } ] }));
         assert_eq!(data["keyCount"], 0);
         assert!(data["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn expire_forces_due_but_keeps_snapshot_and_alerts() {
+        let data = json!({
+            "keyCount": 1,
+            "results": [{ "label": "k", "ok": true, "quota": { "windows": [
+                { "window": "five_hour", "pct": 42.0, "resetMs": 100 }
+            ] } }],
+        });
+        note_success(&data, 1_000, false, None);
+        assert!(!due_refresh(2_000), "fresh observation is not due");
+        invalidate_tray();
+        assert!(due_refresh(2_000), "expired cache is due immediately");
+        // the snapshot still renders until the fresh query lands
+        assert!(menu_items("zh-CN").iter().any(|i| i["label"].as_str().unwrap_or("").contains("42%")));
     }
 
     #[test]

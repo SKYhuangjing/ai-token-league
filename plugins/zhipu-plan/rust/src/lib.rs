@@ -68,6 +68,10 @@ impl collector_core::plugin::SidecarPlugin for ZhipuPlugin {
     fn tray_alerts(&self, lang: &str) -> Vec<serde_json::Value> {
         host::drain_alerts(lang)
     }
+
+    fn on_config_changed(&self) {
+        host::invalidate_tray();
+    }
 }
 
 #[cfg(test)]

@@ -446,3 +446,17 @@ node demo/compute-sharing/mock-upstream/server.js
 - **测试**：run-tests 补 rebind 复活断言（心跳 active+目录重现）+ resume 全路径（错 secret 404 / stopped→active / 幂等 / suspended 409）；e2e 停止用例改为「停止→已停止行→重新开启→控制台恢复」全流程（mock 补 owner-resume 契约）。门禁：npm test ✓ / test:ui 579 ✓ / e2e 115 ✓ / cargo（collector-core+atl-collector）✓。
 - **现场恢复**：用户 share `shr_1aae6eb…`（Sky-Macbook CPA）经 admin resume 拉回 active，目录重现（5 名额/预算满）；已发认领 Key 停止时已吊销，借用方需重新认领（停止语义固有）。
 - **待办**：OSS 目录 compute-sharing 现 0.1.2，0.1.3 需 publish-module + `--prune-keep zhipu-plan@1.1.4,compute-sharing@0.1.3`；端内生效需新版 sidecar/App 发布。
+
+### R42（2026-09-15，智谱 Key 行内编辑 + 用户本地配置改备注——小功能轮）
+- **用户两求**：①Key 备注改名（Zhipu GLM→Fathu、GLM 5.3 -Harry→Harry）——**改用户本地 `~/.ai-token-league/modules.json`**（我误改 dev 沙箱被纠正，沙箱已还原；本地现值 Fathu/Harry，两把 key 不变）；②支持编辑已有 Key。
+- **编辑能力**（plugins/zhipu-plan/index.js，**1.1.5 已发 OSS + 目录 prune**——现值 `zhipu-plan@1.1.5,compute-sharing@0.5.1`，dropped 1.1.4）：Key 行加「编辑」按钮（与移除同组 `.zhipu-key-actions`）；点击→行内编辑态（备注+完整 Key 均**预填**——本机用户自有密钥，原样可改）；保存=校验非空→keys[i] 整条覆写→modules:set→退出编辑→强制刷新（与添加同路径）；取消=丢弃不落盘；删除时同步清编辑态。样式 `.zhipu-key-row.is-editing`（flex 换行，窄容器自适应）注入插件 STYLE，不进平台样式表。
+- **i18n**：平台表 +3 键双语（editKey/saveKey/cancelKey）；旧宿主回退沿用 REFRESHED_FALLBACK 模式（EDIT_FALLBACK zh/en，经 zhHost 嗅探）。
+- **mock/规格**：默认预装与 ZHIPU_VERSION 同步 1.1.5；e2e 新增「行内编辑（改名+换 key+取消不落盘）」用例（断言 modulesSet keys 精确形状 + force 刷新触发 + 取消后写入数不变）。
+- **门禁**：e2e **118/118** / test:ui **579/579** / npm test ✓。工作区 5 文件未提交。
+- **用户侧生效路径**：dev/已装 App 打开插件屏→智谱卡右栏 Key 列表即见「编辑」；线上目录侧 1.1.5 已就位（已装 1.1.4 会出「升级 v1.1.5」按钮）。
+
+### R42b（2026-09-15，menu bar 备注滞后修复——配置变更即时触达插件缓存）
+- **用户现场**：本地配置改了 Key 备注（Fathu/Harry）后菜单栏仍显示旧名。**根因**：托盘行渲染自 sidecar 缓存的查询快照——备注是查询时烙进 `last_data` 的，只有托盘 TTL 到期（基础 15min，任一窗口 ≥70% 提频 5min）+ 5min 调度器才带新备注重查；`modules:set` 改配置对缓存零感知。
+- **修复（平台标准扩展）**：①`SidecarPlugin::on_config_changed()`（默认空实现）——宿主在 `modules:set` 成功落盘后对同 id 插件触发；②zhipu 实现=`invalidate_tray()`（tray_state 新增 `expire()`：只摘 `last_success_ms` → `due_refresh` 立即为真；**保留数据快照与已武装告警态**，菜单持续渲染、无重基线副作用）；③lib.rs `command_updates_usage_cache` 加 `modules:set` → 保存后立即重建托盘。
+- **验证**：插件 host 单测（expire 后 due=true 且菜单仍渲染 42% 快照）；**CLI 同会话全链路**——tray:menu-data 缓存旧名 → modules:set 改备注 → tray:menu-data 立即返回新名（`🟢 Zhipu GLM 35%`→`🟢 Probe-A 35%`，沙箱验证后已还原）。门禁：cargo workspace **458/0** / e2e 118/118。
+- **用户当前实例说明**：/Applications 现行 App 是旧二进制，无此修复——但标签存量滞后会被 TTL 自然治愈（当前 Fathu≈88% 走 5min 快档，几分钟内已应更新；若仍旧，重启 App 立即重查）。结构性修复待下次本地构建/发布进 App。

@@ -9,7 +9,7 @@ const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), '
 // plugin entry through the distribution proxy route so the mounted code is
 // the shipped code. Source serving must precede goto (the modules screen
 // renders and mounts during boot).
-const ZHIPU_VERSION = '1.1.4';
+const ZHIPU_VERSION = '1.1.5';
 const zhipuSource = readFileSync(resolve(import.meta.dirname, '../../plugins/zhipu-plan/index.js'), 'utf-8');
 
 function scenarioTest(config) {
@@ -98,6 +98,39 @@ enabled.describe('Modules screen (enabled, en)', () => {
     // refresh age rides next to the refresh button, same clock family
     await expect(page.locator('#zhipu-refreshed')).toBeVisible();
     await expect(page.locator('#zhipu-refreshed')).toContainText('just now');
+  });
+
+  enabled('zhipu key rows support inline edit (rename + rekey) and cancel', async ({ page }) => {
+    await openModulesScreen(page);
+    const card = page.locator('[data-module-card="zhipu-plan"]');
+    await card.locator('#zhipu-key-label').fill('Old Name');
+    await card.locator('#zhipu-key-input').fill('e2e-edit-key-0001');
+    await card.locator('#zhipu-key-add').click();
+    await expect(card.locator('.zhipu-key-row')).toContainText('Old Name');
+    // edit opens prefilled with the exact label and the full key
+    await card.locator('[data-zhipu-key-edit="0"]').click();
+    await expect(card.locator('[data-zhipu-edit-label]')).toHaveValue('Old Name');
+    await expect(card.locator('[data-zhipu-edit-key]')).toHaveValue('e2e-edit-key-0001');
+    // save writes the updated entry (label changed, key intact)
+    await card.locator('[data-zhipu-edit-label]').fill('New Name');
+    await card.locator('[data-zhipu-edit-key]').fill('e2e-edit-key-0002');
+    await card.locator('[data-zhipu-key-save="0"]').click();
+    await expect(card.locator('.zhipu-key-row')).toContainText('New Name');
+    const calls = await page.evaluate(() =>
+      window.__ATL_E2E_STATE__.modulesSetCalls.filter((c) => Array.isArray(c.config?.keys)));
+    expect(calls.at(-1).config.keys).toEqual([{ label: 'New Name', apiKey: 'e2e-edit-key-0002' }]);
+    await expect.poll(() =>
+      page.evaluate(() => window.__ATL_E2E_STATE__.zhipuUsageCalls.filter((c) => c.force === true).length)
+    ).toBeGreaterThan(0);
+    // cancel discards edits without persisting
+    await card.locator('[data-zhipu-key-edit="0"]').click();
+    await card.locator('[data-zhipu-edit-label]').fill('Discarded');
+    await card.locator('[data-zhipu-key-cancel="0"]').click();
+    await expect(card.locator('.zhipu-key-row')).toContainText('New Name');
+    await expect(card.locator('[data-zhipu-edit-label]')).toHaveCount(0);
+    const afterCancel = await page.evaluate(() =>
+      window.__ATL_E2E_STATE__.modulesSetCalls.filter((c) => Array.isArray(c.config?.keys)));
+    expect(afterCancel.length).toBe(calls.length);
   });
 
   enabled('zhipu card: manual refresh forces, menu-bar/alerts toggles persist, key removal', async ({ page }) => {

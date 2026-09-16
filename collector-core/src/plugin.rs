@@ -60,6 +60,12 @@ pub trait SidecarPlugin: Send + Sync {
         let _ = lang;
         Vec::new()
     }
+
+    /// Fired after a `modules:set` persisted a change to this plugin's
+    /// entry (enable/install/config). Plugins with derived caches (e.g. a
+    /// tray snapshot) expire them here so the next read reflects the change
+    /// immediately instead of at TTL expiry.
+    fn on_config_changed(&self) {}
 }
 
 /// Route "{id}:{sub}" to a registered plugin. Called as the fallback after

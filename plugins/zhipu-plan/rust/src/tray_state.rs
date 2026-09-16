@@ -159,6 +159,14 @@ impl ZhipuTrayState {
     pub fn due_refresh(&self, now_ms: i64) -> bool {
         self.last_success_ms.is_none() || now_ms >= self.next_refresh_ms
     }
+
+    /// Force the next refresh: keep the last data snapshot and the armed
+    /// alert states (menus keep rendering, no re-baselining), only drop the
+    /// success stamp so `due_refresh` reads true. Used when the config
+    /// changed under the cache (renamed labels, edited keys).
+    pub fn expire(&mut self) {
+        self.last_success_ms = None;
+    }
 }
 
 /// Human-readable key display name (R22): labels are user-typed in the

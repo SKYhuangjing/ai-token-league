@@ -563,7 +563,7 @@ async fn forward_to_sidecar(
 }
 
 fn command_updates_usage_cache(command: &str, result: &Value) -> bool {
-    if matches!(command, "usage:scan" | "usage:scan-start" | "usage:sync") {
+    if matches!(command, "usage:scan" | "usage:scan-start" | "usage:sync" | "modules:set") {
         return true;
     }
     if command != "usage:scan-status" {

@@ -182,7 +182,18 @@ async fn handle_command(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "modules:set requires id".to_string())?
                 .to_string();
-            collector_core::modules::set_module_state(&id, &request.args)
+            let result = collector_core::modules::set_module_state(&id, &request.args);
+            if result.is_ok() {
+                // Config/enable/version changes must reach the plugin now —
+                // a renamed key label must not sit in its tray cache until
+                // TTL expiry (R42 menu-bar staleness fix).
+                for plugin in crate::plugins::sidecar_plugins() {
+                    if plugin.id() == id {
+                        plugin.on_config_changed();
+                    }
+                }
+            }
+            result
         }
         Command::ModulesPackageGet => {
             let id = package_arg(&request.args, "id")?;

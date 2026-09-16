@@ -620,7 +620,7 @@
     // R24 pluggable model: zhipu-plan is no longer a built-in — the default
     // sandbox pre-installs it (installedVersion) so card specs exercise the
     // installed-plugin path.
-    window.__ATL_E2E_STATE__.modulesState = { version: 1, modules: modulesScenario || { "zhipu-plan": { enabled: true, config: {}, installedVersion: "1.1.4" } } };
+    window.__ATL_E2E_STATE__.modulesState = { version: 1, modules: modulesScenario || { "zhipu-plan": { enabled: true, config: {}, installedVersion: "1.1.5" } } };
     window.__ATL_E2E_STATE__.modulesSetCalls = [];
     window.__ATL_E2E_STATE__.pluginPackages = {};
     api.modulesPackageGet = (input) => {

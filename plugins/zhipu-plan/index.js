@@ -35,7 +35,12 @@ const STYLE = `
 .zhipu-key-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name remove" "mask remove"; align-items: center; gap: 1px 16px; min-height: 52px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
 .zhipu-key-row strong { grid-area: name; font-size: 13.5px; }
 .zhipu-key-mask { grid-area: mask; font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.zhipu-key-row .outline-button { grid-area: remove; align-self: center; }
+.zhipu-key-actions { grid-area: remove; display: flex; gap: 6px; align-self: center; }
+.zhipu-key-row.is-editing { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.zhipu-key-edit-label { flex: 0 1 170px; min-width: 130px; }
+.zhipu-key-edit-key { flex: 1 1 220px; min-width: 150px; }
+.zhipu-key-edit-actions { flex: none; display: flex; gap: 6px; }
+.zhipu-key-row.is-editing input { font-size: 13px; padding: 8px 10px; }
 .zhipu-add { display: grid; gap: 8px; margin-top: 12px; }
 .zhipu-add-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .zhipu-board .zhipu-add input { font-size: 13px; padding: 8px 10px; }
@@ -136,6 +141,14 @@ export function refreshedAgeLabel(refreshedMs, nowMs, t) {
   if (hours < 24) return t("desktop.modules.zhipu.refreshedHoursAgo", { h: hours, m: mins % 60 });
   return t("desktop.modules.zhipu.refreshedDaysAgo", { d: Math.floor(mins / 1440) });
 }
+
+// Edit-control keys postdate some hosts; fall back to built-in strings the
+// same way (language sniffed via an always-present key).
+const EDIT_FALLBACK = {
+  "desktop.modules.zhipu.editKey": { zh: "编辑", en: "Edit" },
+  "desktop.modules.zhipu.saveKey": { zh: "保存", en: "Save" },
+  "desktop.modules.zhipu.cancelKey": { zh: "取消", en: "Cancel" },
+};
 
 // The four refreshed-age keys postdate some hosts; fall back to built-in
 // strings (language sniffed via an always-present key) instead of raw keys.
@@ -238,6 +251,13 @@ export default {
       for (const [name, value] of Object.entries(params || {})) text = text.replace(`{${name}}`, String(value));
       return text;
     };
+    const editT = (key) => {
+      const out = t(key);
+      if (out !== key) return out;
+      const template = EDIT_FALLBACK[key];
+      return template ? template[zhHost ? "zh" : "en"] : key;
+    };
+    let editingKeyIndex = null;
 
     const readConfig = async () => {
       const state = await ctx.invoke("modules:get", {});
@@ -304,12 +324,31 @@ export default {
       const listEl = el.querySelector("#zhipu-keys-list");
       if (!listEl) return;
       const keys = configKeys();
-      listEl.innerHTML = keys.map((k, i) => `
+      if (editingKeyIndex != null && (editingKeyIndex < 0 || editingKeyIndex >= keys.length)) editingKeyIndex = null;
+      listEl.innerHTML = keys.map((k, i) => {
+        if (i === editingKeyIndex) {
+          // inline edit: both fields prefilled — the key is the user's own
+          // local secret, editing it verbatim is the whole point
+          return `
+        <div class="zhipu-key-row is-editing">
+          <input class="zhipu-key-edit-label" data-zhipu-edit-label value="${esc(String(k.label || ""))}" placeholder="${esc(t("desktop.modules.zhipu.keyLabelPlaceholder"))}" autocomplete="off" />
+          <input class="zhipu-key-edit-key mono" data-zhipu-edit-key value="${esc(String(k.apiKey || ""))}" autocomplete="off" spellcheck="false" />
+          <div class="zhipu-key-edit-actions">
+            <button class="outline-button row-inline-action" data-zhipu-key-save="${i}" type="button">${esc(editT("desktop.modules.zhipu.saveKey"))}</button>
+            <button class="outline-button row-inline-action" data-zhipu-key-cancel="${i}" type="button">${esc(editT("desktop.modules.zhipu.cancelKey"))}</button>
+          </div>
+        </div>`;
+        }
+        return `
         <div class="zhipu-key-row">
           <strong>${esc(String(k.label || "").trim() || t("desktop.modules.zhipu.keyFallback", { n: i + 1 }))}</strong>
           <span class="muted mono zhipu-key-mask">${esc(maskApiKey(k.apiKey))}</span>
-          <button class="outline-button row-inline-action" data-zhipu-key-del="${i}" type="button">${esc(t("desktop.modules.zhipu.removeKey"))}</button>
-        </div>`).join("");
+          <div class="zhipu-key-actions">
+            <button class="outline-button row-inline-action" data-zhipu-key-edit="${i}" type="button">${esc(editT("desktop.modules.zhipu.editKey"))}</button>
+            <button class="outline-button row-inline-action" data-zhipu-key-del="${i}" type="button">${esc(t("desktop.modules.zhipu.removeKey"))}</button>
+          </div>
+        </div>`;
+      }).join("");
     }
 
     async function refreshUsage({ force = false } = {}) {
@@ -422,11 +461,45 @@ export default {
       await refreshUsage({ force: true });
     }));
     el.addEventListener("click", (event) => {
+      const editBtn = event.target.closest("[data-zhipu-key-edit]");
+      if (editBtn) {
+        editingKeyIndex = Number(editBtn.dataset.zhipuKeyEdit);
+        renderKeysList();
+        el.querySelector(".zhipu-key-edit-label")?.focus();
+        return;
+      }
+      const cancelBtn = event.target.closest("[data-zhipu-key-cancel]");
+      if (cancelBtn) {
+        editingKeyIndex = null;
+        renderKeysList();
+        return;
+      }
+      const saveBtn = event.target.closest("[data-zhipu-key-save]");
+      if (saveBtn) {
+        const row = saveBtn.closest(".zhipu-key-row");
+        const index = Number(saveBtn.dataset.zhipuKeySave);
+        const label = (row?.querySelector("[data-zhipu-edit-label]")?.value || "").trim();
+        const apiKey = (row?.querySelector("[data-zhipu-edit-key]")?.value || "").trim();
+        if (!apiKey) {
+          status(t("desktop.modules.zhipu.error.noKey"));
+          return;
+        }
+        guard(async () => {
+          const keys = configKeys();
+          if (index >= 0 && index < keys.length) keys[index] = { label, apiKey };
+          await writeConfig({ keys });
+          editingKeyIndex = null;
+          renderKeysList();
+          await refreshUsage({ force: true });
+        });
+        return;
+      }
       const btn = event.target.closest("[data-zhipu-key-del]");
       if (!btn) return;
       guard(async () => {
         const keys = configKeys();
         keys.splice(Number(btn.dataset.zhipuKeyDel), 1);
+        editingKeyIndex = null;
         await writeConfig({ keys });
         renderKeysList();
         usageData = null;
