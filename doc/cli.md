@@ -30,7 +30,7 @@ ln -sfn "/Applications/AI Token League.app/Contents/Resources/atl-collector" ~/.
 ```bash
 atl-collector init --nickname sky --api http://your-server:8787
 atl-collector scan                 # 扫描并写入本地 usage 数据库
-atl-collector usage                # 查看近 7 天统计
+atl-collector usage                # 查看今日统计
 atl-collector sync                 # 同步到服务器
 ```
 
@@ -52,6 +52,7 @@ atl-collector scan [--full] [--json]
 atl-collector sync [--full-resync] [--json]
 ```
 
+- 所有命令的 `--json` 均可简写为 `-j`。
 - `status`：身份、API 地址、最近同步状态、本地数据量。
 - `scan`：扫描全部已启用来源并**写入本地 usage 数据库**；该库同时充当增量扫描缓存，重复执行只重读变化过的来源。`--full` 清空来源缓存全量重扫。**任一 provider 报错时拒绝落库**（避免抹掉失败来源的历史数据），并列出失败项与修复提示。
 - `sync`：扫描（同上，成功时落库）后上传到服务器。来源有错误时拒绝同步；`--full-resync` 清空同步清单做全量对账上传。
@@ -59,22 +60,32 @@ atl-collector sync [--full-resync] [--json]
 ### usage
 
 ```bash
-atl-collector usage [--range today|7d|30d|all|A..B]
-                    [--view summary|trend|workdirs|detail]
+atl-collector usage [today|7d|30d|all|A..B|summary|trend|workdirs|detail ...]
                     [--grain day|week|month|hour]
                     [--limit N] [--offset N]
                     [--provider P] [--model M] [--workdir W]
                     [--cost] [--json]
 ```
 
-- `--range` 默认 `7d`；`A..B` 为 `YYYY-MM-DD..YYYY-MM-DD`，两端可留空（如 `..2026-09-01`）。**非法 range/日期格式直接报错**，不会静默降级为"今天"。
+- 范围与视图可直接写在命令后面（最多两个词，顺序不限）：视图词（`summary`/`trend`/`workdirs`/`detail`）自动识别，其余按范围解析。常用组合：
+
+  ```bash
+  atl-collector usage              # 今日汇总（默认）
+  atl-collector usage trend        # 今日按小时趋势
+  atl-collector usage 7d           # 近 7 天汇总
+  atl-collector usage 7d trend     # 近 7 天按日趋势
+  ```
+
+- 默认范围 `today`、默认视图 `summary`；`--range`/`--view` 长参数仍可用（便于脚本），但与位置参数指定同一项时报错。`A..B` 为 `YYYY-MM-DD..YYYY-MM-DD`，两端可留空（如 `..2026-09-01`）。**非法 range/视图词直接报错**，不会静默降级。
+- 高频参数有一字母短写：`-r` range、`-v` view、`-g` grain、`-n` limit、`-o` offset、`-c` cost、`-j` json，可与位置参数混用（如 `atl-collector usage 30d trend -g week`）；过滤器 `--provider/--model/--workdir` 仅长写。
+- `--grain` 默认跟随范围：`today` 时为 `hour`（单日看小时分布，与桌面一致），其余为 `day`；显式传入时始终生效。
 - 查询以**只读方式**打开本地库：不会创建或改动任何文件，可与桌面 App 同时使用。
 - `--provider/--model/--workdir` 为大小写不敏感的子串过滤器，作用于所有视图（如 `--provider codex`、`--model glm-5.3`、`--workdir control`），可组合。
 - `--cost`（仅 summary 视图）：用服务器公开的 `/api/model-prices` 价格对本地数据估算费用，输出总价与每模型费用（`≈$xx.xx`）；价格缺失的模型计入 `unpricedModels`，`costQuality` 标记 exact/estimated/unknown。价格数据始终来自服务器，不在本地复制价格表。`--json` 输出中对应 `cost` 块（`estimatedCostUsd`/`costQuality`/`unpricedTokens`/`unpricedModels`/`pricingSource`）。`apiBaseUrl` 未配置时提示配置命令并退出（码 1）；服务器不可达时按网络错误退出（码 12），不影响不带 `--cost` 的本地查询。
-- `--view summary`（默认）：总量、token 构成、按来源/模型/项目目录 Top 榜。
-- `--view trend`：按 `--grain` 粒度的时间趋势（终端带 ASCII 条形）。
-- `--view workdirs`：项目目录明细（`--limit` 默认 20，上限 500）。
-- `--view detail`：原始行明细（按日聚合前的小时粒度事实行）。
+- `summary`（默认视图）：总量、token 构成、按来源/模型/项目目录 Top 榜。
+- `trend`：按 `--grain` 粒度的时间趋势（终端带 ASCII 条形）。
+- `workdirs`：项目目录明细（`--limit` 默认 20，上限 500）。
+- `detail`：原始行明细（按日聚合前的小时粒度事实行）。
 
 token 口径与产品一致：`totalTokens = input + output + cacheRead + cacheWrite`（reasoning 仅诊断展示，不计入总量）。
 
@@ -110,10 +121,11 @@ atl-collector config set <key> <value>
 ### top / rank（服务器侧榜单）
 
 ```bash
-atl-collector top [--range today|yesterday|7d|30d|all|A..B] [--limit N] [--json]
-atl-collector rank [--range ...] [--json]
+atl-collector top [today|yesterday|7d|30d|all|A..B] [--limit N] [--json]
+atl-collector rank [today|yesterday|7d|30d|all|A..B] [--json]
 ```
 
+- 范围可直接写在命令后（如 `atl-collector top today`），默认 `7d`；`--range`（短写 `-r`）仍可用，与位置参数同时给出时报错；`-n` 条数、`-j` JSON。
 - `top`：拉取服务器排行榜前 N（默认 10），显示名次、昵称/匿名名、总 token。
 - `rank`：定位"我"的名次并显示前后邻居与差距。匿名榜单模式下自动通过 `my-identity` 接口换算 publicId，公开模式下直接按 participantId 匹配。需要已配置 `apiBaseUrl` 且设备已向该服务器同步过数据。
 - 两者均为对公开 board API 的只读透传，排名与统计逻辑全部在服务器侧。未初始化时退出码 10，服务器不可达时退出码 12。

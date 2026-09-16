@@ -107,6 +107,7 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
             json,
         } => cmd_sync(full_resync, json).await?,
         crate::Commands::Usage {
+            words,
             range,
             view,
             grain,
@@ -118,6 +119,10 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
             cost,
             json,
         } => {
+            let (range, view) = resolve_usage_args(&words, range.as_deref(), view.as_deref())?;
+            let grain = grain
+                .as_deref()
+                .unwrap_or(if range == "today" { "hour" } else { "day" });
             let filters = UsageFilters {
                 provider,
                 model,
@@ -126,17 +131,24 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
             cmd_usage(&range, &view, &grain, limit, offset, &filters, cost, json).await?
         }
         crate::Commands::Top {
+            range_word,
             range,
             limit,
             json,
         } => {
+            let range = resolve_board_range(range_word.as_deref(), range.as_deref())?;
             let cfg = require_config()?;
             board::board_query(&range).map_err(CliError::Message)?;
             board::cmd_top(&cfg, &range, limit, json)
                 .await
                 .map_err(CliError::Network)?
         }
-        crate::Commands::Rank { range, json } => {
+        crate::Commands::Rank {
+            range_word,
+            range,
+            json,
+        } => {
+            let range = resolve_board_range(range_word.as_deref(), range.as_deref())?;
             let cfg = require_config()?;
             board::board_query(&range).map_err(CliError::Message)?;
             board::cmd_rank(&cfg, &range, json)
@@ -522,6 +534,59 @@ fn validate_range(range: &str) -> Result<(), String> {
     ))
 }
 
+const USAGE_VIEWS: [&str; 4] = ["summary", "trend", "workdirs", "detail"];
+
+/// Resolve the `usage` positional shorthand (`atl usage 7d trend`, order-free)
+/// together with the explicit --range/--view flags into (range, view).
+/// Defaults: today / summary.
+pub fn resolve_usage_args(
+    words: &[String],
+    flag_range: Option<&str>,
+    flag_view: Option<&str>,
+) -> Result<(String, String), String> {
+    let mut pos_range: Option<&str> = None;
+    let mut pos_view: Option<&str> = None;
+    for word in words {
+        let word = word.as_str();
+        if USAGE_VIEWS.contains(&word) {
+            if pos_view.is_some() {
+                return Err(format!("view '{}' given twice", word));
+            }
+            pos_view = Some(word);
+        } else if validate_range(word).is_ok() {
+            if pos_range.is_some() {
+                return Err(format!("range '{}' given twice", word));
+            }
+            pos_range = Some(word);
+        } else {
+            return Err(format!(
+                "unknown range or view '{}'. Range: today, 7d, 30d, all, or \
+                 YYYY-MM-DD..YYYY-MM-DD. View: summary, trend, workdirs, detail.",
+                word
+            ));
+        }
+    }
+    if let (Some(flag), Some(pos)) = (flag_view, pos_view) {
+        return Err(format!("view set twice: --view {} and '{}'", flag, pos));
+    }
+    if let (Some(flag), Some(pos)) = (flag_range, pos_range) {
+        return Err(format!("range set twice: --range {} and '{}'", flag, pos));
+    }
+    Ok((
+        flag_range.or(pos_range).unwrap_or("today").to_string(),
+        flag_view.or(pos_view).unwrap_or("summary").to_string(),
+    ))
+}
+
+/// Resolve the `top`/`rank` positional range shorthand against --range.
+/// Defaults to 7d.
+pub fn resolve_board_range(pos: Option<&str>, flag: Option<&str>) -> Result<String, String> {
+    if let (Some(flag), Some(pos)) = (flag, pos) {
+        return Err(format!("range set twice: --range {} and '{}'", flag, pos));
+    }
+    Ok(flag.or(pos).unwrap_or("7d").to_string())
+}
+
 async fn cmd_usage(
     range: &str,
     view: &str,
@@ -542,7 +607,8 @@ async fn cmd_usage(
     }
     if cost && view != "summary" {
         return Err(
-            "--cost is only supported with --view summary (per-model prices need the model breakdown)"
+            "--cost is only supported with the summary view (per-model prices need the model \
+             breakdown)"
                 .into(),
         );
     }
@@ -1266,6 +1332,67 @@ mod tests {
         assert_eq!(lookup_path(&value, "a.b"), Some(&json!({ "c": 7 })));
         assert_eq!(lookup_path(&value, "a.bogus"), None);
         assert_eq!(lookup_path(&value, "list.0"), None);
+    }
+
+    #[test]
+    fn usage_positional_shorthand_resolves_range_and_view() {
+        let words = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+        let ok = |range: &str, view: &str| (range.to_string(), view.to_string());
+
+        assert_eq!(
+            resolve_usage_args(&[], None, None).unwrap(),
+            ok("today", "summary")
+        );
+        assert_eq!(
+            resolve_usage_args(&words(&["trend"]), None, None).unwrap(),
+            ok("today", "trend")
+        );
+        assert_eq!(
+            resolve_usage_args(&words(&["7d"]), None, None).unwrap(),
+            ok("7d", "summary")
+        );
+        // Order-free: view word first also works.
+        assert_eq!(
+            resolve_usage_args(&words(&["trend", "7d"]), None, None).unwrap(),
+            ok("7d", "trend")
+        );
+        assert_eq!(
+            resolve_usage_args(&words(&["2026-09-01..2026-09-15", "detail"]), None, None)
+                .unwrap(),
+            ok("2026-09-01..2026-09-15", "detail")
+        );
+        // Flags merge with positionals when each slot gets only one value.
+        assert_eq!(
+            resolve_usage_args(&words(&["trend"]), Some("30d"), None).unwrap(),
+            ok("30d", "trend")
+        );
+        assert_eq!(
+            resolve_usage_args(&words(&["7d"]), None, Some("workdirs")).unwrap(),
+            ok("7d", "workdirs")
+        );
+
+        assert!(resolve_usage_args(&words(&["trend", "workdirs"]), None, None).is_err());
+        assert!(resolve_usage_args(&words(&["7d", "30d"]), None, None).is_err());
+        assert!(resolve_usage_args(&words(&["trend"]), None, Some("detail")).is_err());
+        assert!(resolve_usage_args(&words(&["7d"]), Some("30d"), None).is_err());
+        assert!(resolve_usage_args(&words(&["bogus"]), None, None).is_err());
+    }
+
+    #[test]
+    fn board_positional_range_resolves_with_flag_precedence_check() {
+        assert_eq!(
+            resolve_board_range(None, None).unwrap(),
+            "7d".to_string()
+        );
+        assert_eq!(
+            resolve_board_range(Some("today"), None).unwrap(),
+            "today".to_string()
+        );
+        assert_eq!(
+            resolve_board_range(None, Some("30d")).unwrap(),
+            "30d".to_string()
+        );
+        assert!(resolve_board_range(Some("today"), Some("7d")).is_err());
     }
 
     #[test]

@@ -31,7 +31,7 @@ enum Commands {
     /// Show collector identity, sync state, and local data summary
     Status {
         /// Output machine-readable JSON
-        #[arg(long)]
+        #[arg(short = 'j', long)]
         json: bool,
     },
     /// Scan local usage sources and refresh the local usage database
@@ -40,7 +40,7 @@ enum Commands {
         #[arg(long)]
         full: bool,
         /// Output machine-readable JSON
-        #[arg(long)]
+        #[arg(short = 'j', long)]
         json: bool,
     },
     /// Sync usage data to server
@@ -48,25 +48,29 @@ enum Commands {
         #[arg(long)]
         full_resync: bool,
         /// Output machine-readable JSON
-        #[arg(long)]
+        #[arg(short = 'j', long)]
         json: bool,
     },
     /// Query locally collected usage data (same store as the desktop app)
+    #[command(after_help = "Examples:\n  atl-collector usage              today, summary\n  atl-collector usage 7d trend     last 7 days, daily trend\n  atl-collector usage detail --provider codex --limit 50")]
     Usage {
-        /// Range: today, 7d, 30d, all, or YYYY-MM-DD..YYYY-MM-DD
-        #[arg(long, default_value = "7d")]
-        range: String,
-        /// View: summary, trend, workdirs, detail
-        #[arg(long, default_value = "summary")]
-        view: String,
-        /// Trend grain: day, week, month, hour
-        #[arg(long, default_value = "day")]
-        grain: String,
+        /// Range and/or view shorthand: e.g. "7d", "trend", "7d trend"
+        #[arg(value_name = "RANGE|VIEW", num_args = 0..=2)]
+        words: Vec<String>,
+        /// Range: today, 7d, 30d, all, or YYYY-MM-DD..YYYY-MM-DD (default today)
+        #[arg(short = 'r', long)]
+        range: Option<String>,
+        /// View: summary, trend, workdirs, detail (default summary)
+        #[arg(short = 'v', long)]
+        view: Option<String>,
+        /// Trend grain: day, week, month, hour (default hour for today, else day)
+        #[arg(short = 'g', long)]
+        grain: Option<String>,
         /// Row limit for workdirs and detail views (1-500)
-        #[arg(long, default_value = "20")]
+        #[arg(short = 'n', long, default_value = "20")]
         limit: usize,
         /// Row offset for detail view pagination
-        #[arg(long, default_value = "0")]
+        #[arg(short = 'o', long, default_value = "0")]
         offset: usize,
         /// Filter by provider id (case-insensitive substring)
         #[arg(long)]
@@ -78,31 +82,37 @@ enum Commands {
         #[arg(long)]
         workdir: Option<String>,
         /// Estimate cost with server model prices (summary view only)
-        #[arg(long)]
+        #[arg(short = 'c', long)]
         cost: bool,
         /// Output machine-readable JSON
-        #[arg(long)]
+        #[arg(short = 'j', long)]
         json: bool,
     },
     /// Show the server leaderboard top entries
     Top {
-        /// Range: today, yesterday, 7d, 30d, all, or YYYY-MM-DD..YYYY-MM-DD
-        #[arg(long, default_value = "7d")]
-        range: String,
+        /// Range: today, yesterday, 7d, 30d, all, or YYYY-MM-DD..YYYY-MM-DD (default 7d)
+        #[arg(value_name = "RANGE")]
+        range_word: Option<String>,
+        /// Same range as the positional shorthand
+        #[arg(short = 'r', long)]
+        range: Option<String>,
         /// How many entries to show
-        #[arg(long, default_value = "10")]
+        #[arg(short = 'n', long, default_value = "10")]
         limit: usize,
         /// Output machine-readable JSON
-        #[arg(long)]
+        #[arg(short = 'j', long)]
         json: bool,
     },
     /// Show my rank on the server leaderboard
     Rank {
-        /// Range: today, yesterday, 7d, 30d, all, or YYYY-MM-DD..YYYY-MM-DD
-        #[arg(long, default_value = "7d")]
-        range: String,
+        /// Range: today, yesterday, 7d, 30d, all, or YYYY-MM-DD..YYYY-MM-DD (default 7d)
+        #[arg(value_name = "RANGE")]
+        range_word: Option<String>,
+        /// Same range as the positional shorthand
+        #[arg(short = 'r', long)]
+        range: Option<String>,
         /// Output machine-readable JSON
-        #[arg(long)]
+        #[arg(short = 'j', long)]
         json: bool,
     },
     /// Inspect or change collector settings (same keys as the desktop settings page)
