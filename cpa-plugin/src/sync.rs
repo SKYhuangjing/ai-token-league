@@ -38,6 +38,35 @@ fn window_marks_of(v: &Value, key: &str) -> Vec<WindowMark> {
         .unwrap_or_default()
 }
 
+/// Window spec parsing (R50): the wire sends window {unit, n}; the legacy
+/// period strings ("hour5"/"week"/"day") normalize so mixed-version
+/// heartbeats keep gating. Unknown specs degrade to heartbeat-marked day
+/// windows (unit "day"), never a self-rolling hour grid.
+fn window_unit_of(l: &Value) -> String {
+    let spec = l.get("window").filter(|v| v.is_object());
+    if let Some(unit) = spec.and_then(|s| s.get("unit")).and_then(|x| x.as_str()) {
+        if unit == "hour" || unit == "day" || unit == "week" {
+            return unit.to_string();
+        }
+    }
+    match str_of(l, "period").as_str() {
+        "hour5" => "hour".to_string(),
+        _ => "day".to_string(),
+    }
+}
+
+fn window_n_of(l: &Value) -> u32 {
+    if let Some(n) = l.get("window").and_then(|s| s.get("n")).and_then(|x| x.as_u64()) {
+        if (1..=48).contains(&n) {
+            return n as u32;
+        }
+    }
+    if str_of(l, "period") == "hour5" {
+        return 5;
+    }
+    1
+}
+
 /// Heartbeat lane entries: unknown/missing fields degrade deny-safe (state
 /// != "active" denies, budget 0 = no window gate, empty schedule = 24h).
 fn lanes_of(resp: &Value) -> Vec<LaneEntry> {
@@ -59,7 +88,8 @@ fn lanes_of(resp: &Value) -> Vec<LaneEntry> {
                             .map(|list| list.iter().filter_map(|m| m.as_str().map(String::from)).collect())
                             .unwrap_or_default(),
                         budget_tokens: l.get("budgetTokens").and_then(|x| x.as_u64()).unwrap_or(0),
-                        period: str_of(l, "period"),
+                        window_unit: window_unit_of(l),
+                        window_n: window_n_of(l),
                         window_key: str_of(l, "windowKey"),
                         window_end_ms: l.get("windowEndMs").and_then(|x| x.as_i64()).unwrap_or(0),
                         settled_tokens: l.get("settledTokens").and_then(|x| x.as_u64()).unwrap_or(0),

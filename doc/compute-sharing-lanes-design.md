@@ -1,6 +1,8 @@
 # 算力共享车道(Sharing Lanes)设计
 
 状态:**P0/P1/P2 已实现并真机验证(2026-09-15)**;OSS compute-sharing@0.5.0。
+**R49/R50 产品化(2026-09-16,卡片 0.6.0→0.7.0)**:厂商事实全面退出代码。①**推导建议**——`owner-suggest` 按 CPA usage.db 真实模型名推模型族(`gemini-3.8-flash-high`→`gemini-*`,split('-')+`-*`,单测),按 `local_hour` 聚 24h 直方图推忙时窗(2..12h 环形块,>50% 占比才算峰,平直→全天),卡面把忙时补集+`自用×(1−自留率)` 预填进编辑器;自留率是卡片旋钮(5–95%,存模块 config),非魔法数。②**个人模板**——「存为模板」把当前表单存 config.laneTemplates(≤6,chip 点击回填,× 删除);静态厂商模板(Gemini 周限版/智谱避峰版/全天小流量)删除,只留空白车道。③**window schema**——`period ∈ {day,week,hour5}`(hour5=智谱套餐窗烧死在通用枚举)泛化为 `window:{unit,n}`(hour n≤48/day≤31/week≤12);三种单位都是**固定网格**(epoch/n 对齐,N 天窗不会每天零点重启;该语义 bug 被自家新单测抓住);legacy period 字符串读时归一(clampWindowSpec/同步侧 window_unit_of),存量 lanesJson 无需迁移;CPA dylib 0.2.0 n 小时窗本地自滚,day/week 仍跟心跳标记。已删 suggest.gemini/codex/cpaWeekly(antigravity 字段名透传 UI 的口子一并关闭)。
+
 **R46 架构还债(2026-09-15)**:全部特权命令(claim-sign / borrow-get/set / owner-status|policy|unregister|resume|suggest)从 sidecar 平台命令(protocol 枚举)迁入 first-party 插件 crate `plugins/compute-sharing/rust`(atl-plugin-sharing,组合根一行注册)——sidecar 与 collector-core 协议层回到零业务字面量(R26 标准还清);命令名与权限串整体改 `compute-sharing:` 命名空间(未大规模上线,无兼容层);owner-suggest 经 crate 依赖复用 atl-plugin-zhipu 的配额查询(同一 60s 缓存)。
 上游架构与轮次记录见 `compute-sharing-handoff.md`(R23 起);本文只写车道扩展的设计基线。
 

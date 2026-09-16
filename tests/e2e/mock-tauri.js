@@ -694,7 +694,7 @@
               id: wire.id,
               title: wire.title,
               models: wire.models || ["*"],
-              period: wire.period || "day",
+              window: wire.window || { unit: "day", n: 1 },
               budgetTokens: (wire.budget && wire.budget.tokens) || 0,
               maxClaims: wire.maxClaims || 2,
               state: wire.state || "active",
@@ -733,10 +733,14 @@
         return Promise.resolve({ shareId: window.__ATL_E2E_STATE__.ownerShare?.share?.shareId, state: 'active' });
       }
       if (command === "compute-sharing:owner-suggest") {
-        // mirror the sidecar suggest payload: zhipu live windows + own CPA usage
+        // mirror the sidecar suggest payload: zhipu live windows + derived
+        // usage families (family wildcard, 7d own use, busy window or null)
         return Promise.resolve({
           zhipu: { keyCount: 1, results: [{ label: 'GLM 5.3 -Harry', ok: true, quota: { tier: 'pro', windows: [{ pct: 40, window: 'five_hour' }] } }] },
-          cpaWeekly: { antigravity: 1300000000, codex: 0 },
+          families: [
+            { family: 'gemini-*', weeklyTokens: 1300000000, busy: { start: '15:00', end: '21:00' } },
+            { family: 'gpt-*', weeklyTokens: 54000, busy: null },
+          ],
         });
       }
       if (command === "compute-sharing:borrow-set") {
@@ -762,13 +766,13 @@
         wallSignal: { at: Date.now(), ownerFailed: 3 },
         lanes: [
           {
-            id: 'gemini-week', title: 'Gemini weekly', models: ['gemini-*'], period: 'week',
+            id: 'gemini-week', title: 'Gemini weekly', models: ['gemini-*'], window: { unit: 'week', n: 1 },
             budgetTokens: 150000000, settledTokens: 30000000, availableTokens: 120000000,
             exhausted: false, state: 'active', open: true, retryAfterMs: 0, slotsLeft: 2, maxClaims: 3,
             schedule: [{ start: '22:00', end: '14:00' }], peak: { windows: [], multiplier: 1 },
           },
           {
-            id: 'glm-offpeak', title: 'GLM off-peak', models: ['glm-5.3-flash'], period: 'hour5',
+            id: 'glm-offpeak', title: 'GLM off-peak', models: ['glm-5.3-flash'], window: { unit: 'hour', n: 5 },
             budgetTokens: 20000000, settledTokens: 20000000, availableTokens: 0,
             exhausted: true, state: 'active', open: true, retryAfterMs: 0, slotsLeft: 1, maxClaims: 2,
             schedule: [{ start: '22:00', end: '12:00' }], peak: { windows: [], multiplier: 1 },

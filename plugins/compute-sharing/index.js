@@ -44,7 +44,14 @@ const STYLE = `
 .cs-tabs button { padding: 5px 12px; font-size: 12px; font-weight: 650; }
 .cs-lane-tag { font-size: 11px; color: var(--muted, #888); border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 999px; padding: 1px 8px; }
 .cs-wall { display: flex; gap: 8px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--gold, #c90); border-radius: 10px; margin-bottom: 6px; font-size: 12.5px; }
-.cs-templates { display: flex; gap: 6px; flex-wrap: wrap; }
+.cs-templates { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.cs-suggest-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+.cs-reserve { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted, #888); }
+.cs-reserve input { width: 52px; text-align: right; }
+.cs-tpl-chip { display: inline-flex; align-items: center; gap: 2px; }
+.cs-tpl-del { border: 0; background: transparent; color: var(--muted, #888); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
+.cs-tpl-del:hover { color: var(--red, #c0392b); }
+.cs-suggest [data-cs-family] { margin-left: 6px; padding: 2px 10px; font-size: 12px; }
 `;
 
 function compact(value) {
@@ -70,14 +77,10 @@ function clockText(ms) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// Owner lane templates (P1 presets): one click fills the edit form; every
-// number stays adjustable before saving.
-const LANE_TEMPLATES = [
-  { key: "gemini", models: "gemini-*", period: "week", budget: 150_000_000, schedule: { start: "22:00", end: "14:00" }, maxClaims: 3 },
-  { key: "glm", models: "glm-5.3-flash", period: "hour5", budget: 20_000_000, schedule: { start: "22:00", end: "12:00" }, maxClaims: 2 },
-  { key: "allDay", models: "*", period: "day", budget: 50_000_000, schedule: null, maxClaims: 2 },
-  { key: "blank", models: "*", period: "day", budget: 10_000_000, schedule: null, maxClaims: 1 },
-];
+// Lane creation entrypoints are derived, not hardcoded (R49): the suggest
+// block turns the owner's own usage families into pre-filled editors, and
+// personal templates (module config laneTemplates) are user-saved presets.
+// Every prefilled number stays adjustable before saving.
 
 export default {
   async mount(el, ctx) {
@@ -182,8 +185,13 @@ export default {
       ["ttlHours", "desktop.sharing.owner.f.ttl"],
     ];
 
-    const periodLabel = (period) => t(period === "week" ? "desktop.sharing.lane.period.week"
-      : period === "hour5" ? "desktop.sharing.lane.period.hour5" : "desktop.sharing.lane.period.day");
+    // window spec label (R50): {hour|day|week, n} → 每天 / 每 5 小时 / 每 2 周…
+    const windowLabel = (window) => {
+      const unit = window && window.unit ? String(window.unit) : "day";
+      const n = Math.max(1, Math.round(Number(window && window.n) || 1));
+      if (n === 1) return t(`desktop.sharing.lane.window.${unit}One`);
+      return t(`desktop.sharing.lane.window.${unit}`, { n: String(n) });
+    };
     const scheduleText = (lane) => (lane.schedule && lane.schedule.length
       ? lane.schedule.map((w) => `${w.start}–${w.end}`).join(", ")
       : t("desktop.sharing.lane.scheduleAllDay"));
@@ -259,7 +267,7 @@ export default {
               <span class="cs-lane-tag">${esc(lane.models.join(", "))}</span></span>
             <span>${laneStatusText(lane)}</span>
           </div>
-          <div class="cs-kv"><span class="cs-muted">${esc(periodLabel(lane.period))} · ${esc(scheduleText(lane))} ${laneTags(lane)}</span>
+          <div class="cs-kv"><span class="cs-muted">${esc(windowLabel(lane.window))} · ${esc(scheduleText(lane))} ${laneTags(lane)}</span>
             <span class="num">${esc(compact(used))} / ${esc(compact(total))}</span></div>
           <div class="cs-meter"><i style="width:${pct}%"></i></div>
           <div class="cs-actions">
@@ -281,9 +289,10 @@ export default {
           <div class="cs-fields">
             <label class="grow">${esc(t("desktop.sharing.lane.f.title"))}<input data-cs-f="title" type="text" value="${esc(draft.title)}" /></label>
             <label class="grow">${esc(t("desktop.sharing.lane.f.models"))}<input data-cs-f="models" type="text" placeholder="*" value="${esc(draft.models)}" /></label>
-            <label>${esc(t("desktop.sharing.lane.f.period"))}<select data-cs-f="period">
-              ${["day", "week", "hour5"].map((p) => `<option value="${p}"${draft.period === p ? " selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}
+            <label>${esc(t("desktop.sharing.lane.f.period"))}<select data-cs-f="windowUnit">
+              ${["day", "week", "hour"].map((u) => `<option value="${u}"${draft.windowUnit === u ? " selected" : ""}>${esc(windowLabel({ unit: u, n: 1 }))}</option>`).join("")}
             </select></label>
+            <label>${esc(t("desktop.sharing.lane.f.windowN"))}<input data-cs-f="windowN" type="number" min="1" max="48" step="1" value="${esc(String(draft.windowN || 1))}" /></label>
             <label>${esc(t("desktop.sharing.lane.f.budget"))}<input data-cs-f="budget" type="number" step="1000" min="1000" value="${esc(String(draft.budget))}" /><span class="cs-muted" data-cs="budgetHint">${esc(t("desktop.sharing.lane.budgetHint", { text: compact(draft.budget) }))}</span></label>
             <label>${esc(t("desktop.sharing.lane.f.maxClaims"))}<input data-cs-f="maxClaims" type="number" step="1" min="1" value="${esc(String(draft.maxClaims))}" /></label>
           </div>
@@ -298,6 +307,7 @@ export default {
           ${editing.multiWindow ? `<div class="cs-state">${esc(t("desktop.sharing.lane.multiWindowHint"))}</div>` : ""}
           <div class="cs-actions">
             <span class="cs-grow"></span>
+            <button class="outline-button" type="button" data-cs="laneSaveTpl">${esc(t("desktop.sharing.lane.saveTemplate"))}</button>
             <button class="outline-button" type="button" data-cs="laneCancel">${esc(t("desktop.sharing.lane.cancel"))}</button>
             ${editing.isNew ? "" : `<button class="outline-button" type="button" data-cs="laneDelete">${esc(t("desktop.sharing.lane.delete"))}</button>`}
             <button class="primary-pill" type="button" data-cs="laneSave">${esc(t("desktop.sharing.lane.save"))}</button>
@@ -375,10 +385,7 @@ export default {
           <div class="cs-kv"><span class="cs-muted">${esc(t("desktop.sharing.owner.lifetime"))}</span><span class="num">${esc(compact(share.lifetimeSettled))}</span></div>
           ${lanes.map(renderLaneRow).join("")}
           ${renderLaneEditor(lanes)}
-          ${laneEditor ? "" : `<div class="cs-templates">
-            <span class="cs-muted">${esc(t("desktop.sharing.lane.add"))}:</span>
-            ${LANE_TEMPLATES.map((tpl, i) => `<button class="outline-button" type="button" data-cs-lane-template="${i}">${esc(t(`desktop.sharing.lane.template.${tpl.key}`))}</button>`).join("")}
-          </div>`}
+          ${laneEditor ? "" : templateBlock()}
           ${suggestBlock()}
           ${rows ? `<div class="cs-muted">${esc(t("desktop.sharing.owner.claims"))}</div>${rows}${claimsToggle}` : `<div class="cs-muted">${esc(t("desktop.sharing.owner.noClaims"))}</div>`}
         </div>
@@ -413,7 +420,8 @@ export default {
       return {
         title: val("title").trim(),
         models: val("models").trim(),
-        period: val("period"),
+        windowUnit: val("windowUnit") || "day",
+        windowN: Number(val("windowN")) || 1,
         budget: Number(val("budget")),
         maxClaims: Number(val("maxClaims")),
         winStart: val("winStart"),
@@ -440,7 +448,7 @@ export default {
         title: lane.title,
         models: Array.isArray(lane.models) ? lane.models : String(lane.models).split(",").map((m) => m.trim()).filter(Boolean),
         budget: { tokens: lane.budgetTokens },
-        period: lane.period,
+        window: { unit: lane.windowUnit || "day", n: Math.max(1, Math.round(Number(lane.windowN) || 1)) },
         maxClaims: lane.maxClaims,
         state: lane.state,
       };
@@ -489,7 +497,8 @@ export default {
             // window on save — surface that instead of dropping it silently
             multiWindow: (lane.schedule?.length || 0) > 1 || (lane.peak?.windows?.length || 0) > 1,
             draft: {
-              id: lane.id, title: lane.title, models: lane.models.join(", "), period: lane.period,
+              id: lane.id, title: lane.title, models: lane.models.join(", "),
+              windowUnit: (lane.window && lane.window.unit) || "day", windowN: (lane.window && lane.window.n) || 1,
               budget: lane.budgetTokens, maxClaims: lane.maxClaims,
               winStart: lane.schedule?.[0]?.start || "", winEnd: lane.schedule?.[0]?.end || "",
               peakStart: lane.peak?.windows?.[0]?.start || "", peakEnd: lane.peak?.windows?.[0]?.end || "",
@@ -499,22 +508,81 @@ export default {
           renderOwnerLast();
         });
       }
-      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-template]")) {
+      // derived suggestion → pre-filled editor: family wildcard, complement of
+      // the owner's busy window, budget = own use × (1 − reserve). All editable.
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-family]")) {
         button.addEventListener("click", () => {
-          const tpl = LANE_TEMPLATES[Number(button.dataset.csLaneTemplate)];
+          const fam = ((suggestData && suggestData.families) || [])[Number(button.dataset.csFamily)];
+          if (!fam) return;
           skipFormReadback = true;
+          const open = fam.busy ? { start: fam.busy.end, end: fam.busy.start } : null;
           laneEditor = {
             isNew: true,
             draft: {
-              id: "", title: t(`desktop.sharing.lane.template.${tpl.key}`), models: tpl.models, period: tpl.period,
-              budget: tpl.budget, maxClaims: tpl.maxClaims,
-              winStart: tpl.schedule?.start || "", winEnd: tpl.schedule?.end || "",
+              id: "", title: fam.family, models: fam.family, windowUnit: "week", windowN: 1,
+              budget: suggestedBudget(fam.weeklyTokens), maxClaims: 2,
+              winStart: open?.start || "", winEnd: open?.end || "",
               peakStart: "", peakEnd: "", peakMultiplier: 1, state: "active",
             },
           };
           renderOwnerLast();
         });
       }
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-tpl]")) {
+        button.addEventListener("click", () => {
+          const key = button.dataset.csTpl;
+          skipFormReadback = true;
+          const tpl = key === "blank" ? null : cardConfig.laneTemplates[Number(key)];
+          if (key !== "blank" && !tpl) return;
+          laneEditor = {
+            isNew: true,
+            draft: tpl ? {
+              id: "", title: tpl.title || tpl.models, models: tpl.models, windowUnit: tpl.windowUnit || "week", windowN: Number(tpl.windowN) || 1,
+              budget: Number(tpl.budget) || 10_000_000, maxClaims: Number(tpl.maxClaims) || 1,
+              winStart: tpl.winStart || "", winEnd: tpl.winEnd || "",
+              peakStart: "", peakEnd: "", peakMultiplier: 1, state: "active",
+            } : {
+              id: "", title: "", models: "*", windowUnit: "day", windowN: 1, budget: 10_000_000, maxClaims: 1,
+              winStart: "", winEnd: "", peakStart: "", peakEnd: "", peakMultiplier: 1, state: "active",
+            },
+          };
+          renderOwnerLast();
+        });
+      }
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-tpl-del]")) {
+        button.addEventListener("click", () => guard(async () => {
+          const index = Number(button.dataset.csTplDel);
+          const list = cardConfig.laneTemplates.filter((_, i) => i !== index);
+          cardConfig.laneTemplates = list;
+          await saveCardConfig({ laneTemplates: list });
+          renderOwnerLast();
+        }));
+      }
+      const reserveInput = els.ownerBody.querySelector('[data-cs="reserve"]');
+      if (reserveInput) reserveInput.addEventListener("change", () => guard(async () => {
+        const value = Math.min(95, Math.max(5, Math.round(Number(reserveInput.value) || 25)));
+        reserveInput.value = String(value);
+        cardConfig.reservePct = value;
+        await saveCardConfig({ reservePct: value });
+        renderOwnerLast();
+      }));
+      const laneSaveTpl = els.ownerBody.querySelector('[data-cs="laneSaveTpl"]');
+      if (laneSaveTpl) laneSaveTpl.addEventListener("click", () => guard(async () => {
+        const form = readLaneForm();
+        if (!form || !form.models.trim() || !Number.isFinite(form.budget) || form.budget < 1000) {
+          throw new Error(t("desktop.sharing.lane.templateInvalid"));
+        }
+        if (cardConfig.laneTemplates.length >= 6) throw new Error(t("desktop.sharing.lane.templatesFull"));
+        const tpl = {
+          title: form.title.trim() || form.models.trim(), models: form.models.trim(), windowUnit: form.windowUnit, windowN: form.windowN,
+          budget: Math.round(form.budget), maxClaims: Math.round(form.maxClaims) || 1,
+          winStart: form.winStart, winEnd: form.winEnd,
+        };
+        const list = [...cardConfig.laneTemplates.filter((x) => x.title !== tpl.title), tpl].slice(-6);
+        cardConfig.laneTemplates = list;
+        await saveCardConfig({ laneTemplates: list });
+        notify(t("desktop.sharing.lane.templateSaved"));
+      }));
       for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-toggle]")) {
         button.addEventListener("click", () => guard(async () => {
           const index = Number(button.dataset.csLaneToggle);
@@ -568,7 +636,8 @@ export default {
           title: form.title,
           models: form.models.split(",").map((m) => m.trim()).filter(Boolean),
           budgetTokens: Math.round(form.budget),
-          period: form.period,
+          windowUnit: form.windowUnit,
+          windowN: Math.max(1, Math.min(48, Math.round(form.windowN) || 1)),
           maxClaims: Math.round(form.maxClaims),
           state: laneEditor.draft.state || "active",
           schedule,
@@ -593,42 +662,73 @@ export default {
     let lastOwnerData = {};
     const renderOwnerLast = () => renderOwner(lastOwnerData);
 
-    // Lane budget suggestions (P1): loaded once per mount, advisory only —
-    // the sidecar reads the zhipu live windows + the owner's own CPA usage.
+    // Lane budget suggestions (R49 productized): the sidecar derives usage
+    // families + busy windows from the owner's own CPA usage; the card turns
+    // them into per-family pre-fills. The reserve ratio is a user knob —
+    // suggested budget = own use × (1 − reserve), recomputed live.
     let suggestData = null;
     ctx.invoke("compute-sharing:owner-suggest", {}).then((data) => {
-      if (!data || (!data.cpaWeekly && !data.zhipu)) return;
+      if (!data || (!data.families && !data.zhipu)) return;
       suggestData = data;
       renderOwnerLast();
     }).catch(() => { /* advisory: stay silent when unavailable */ });
 
+    // card-side config: reserve ratio + personal lane templates, persisted in
+    // the module config store (same channel the zhipu-plan card uses)
+    let cardConfig = { reservePct: 25, laneTemplates: [] };
+    ctx.invoke("modules:get", {}).then((state) => {
+      const entry = ((state || {}).modules || {})["compute-sharing"] || {};
+      const config = entry.config || {};
+      const reserve = Number(config.reservePct);
+      if (Number.isFinite(reserve)) cardConfig.reservePct = Math.min(95, Math.max(5, Math.round(reserve)));
+      if (Array.isArray(config.laneTemplates)) {
+        cardConfig.laneTemplates = config.laneTemplates.filter((tpl) => tpl && tpl.models && Number.isFinite(Number(tpl.budget))).slice(0, 6);
+      }
+      renderOwnerLast();
+    }).catch(() => { /* defaults hold when the store is unreadable */ });
+    const saveCardConfig = (patch) => ctx.invoke("modules:set", { id: "compute-sharing", config: patch })
+      .catch(() => { /* keep UI state even if persistence fails */ });
+
+    const suggestedBudget = (weeklyTokens) => Math.max(1000, Math.round(weeklyTokens * (1 - cardConfig.reservePct / 100)));
+
     function suggestBlock() {
-      if (!suggestData) return "";
-      const lines = [];
-      const weekly = suggestData.cpaWeekly || {};
-      // amounts under 10k read better with an explicit unit than as a bare number
-      const usage = (value) => (value < 10_000 ? `${value} tokens` : compact(value));
-      if (Number.isFinite(weekly.antigravity)) {
-        lines.push(t("desktop.sharing.suggest.gemini", {
-          used: usage(weekly.antigravity),
-          suggested: compact(Math.max(50_000_000, Math.round(weekly.antigravity * 0.25))),
-        }));
-      }
-      if (Number.isFinite(weekly.codex)) {
-        lines.push(t("desktop.sharing.suggest.codex", { used: usage(weekly.codex) }));
-      }
-      const zhipuKeys = (suggestData.zhipu && suggestData.zhipu.results) || [];
+      const families = (suggestData && suggestData.families) || [];
+      const zhipuKeys = (suggestData && suggestData.zhipu && suggestData.zhipu.results) || [];
+      if (!families.length && !zhipuKeys.length) return "";
       const zhipuParts = zhipuKeys
         .map((result) => {
           const window = result.quota && result.quota.windows && result.quota.windows[0];
           return window ? `${result.label} ${window.pct ?? "?"}%` : null;
         })
         .filter(Boolean);
-      if (zhipuParts.length) lines.push(t("desktop.sharing.suggest.zhipu", { list: zhipuParts.join(" · ") }));
-      if (!lines.length) return "";
+      const familyLines = families.map((fam, i) => {
+        const sched = fam.busy
+          ? t("desktop.sharing.suggest.schedOffpeak", { busy: `${fam.busy.start}–${fam.busy.end}`, open: `${fam.busy.end}–${fam.busy.start}` })
+          : t("desktop.sharing.suggest.schedAllDay");
+        return `<div class="cs-muted">· ${esc(fam.family)} · ${esc(t("desktop.sharing.suggest.famUsed", { used: compact(fam.weeklyTokens) }))} · ${esc(sched)} · ${esc(t("desktop.sharing.suggest.famBudget", { budget: compact(suggestedBudget(fam.weeklyTokens)) }))} <button class="outline-button" type="button" data-cs-family="${i}">${esc(t("desktop.sharing.suggest.createLane"))}</button></div>`;
+      });
       return `<div class="cs-suggest">
-        <div class="cs-muted" style="margin-bottom:2px"><strong>${esc(t("desktop.sharing.suggest.title"))}</strong></div>
-        ${lines.map((line) => `<div class="cs-muted">· ${esc(line)}</div>`).join("")}
+        <div class="cs-suggest-head">
+          <strong>${esc(t("desktop.sharing.suggest.title"))}</strong>
+          <label class="cs-reserve">${esc(t("desktop.sharing.suggest.reserve"))} <input data-cs="reserve" type="number" min="5" max="95" step="1" value="${esc(String(cardConfig.reservePct))}" />%</label>
+        </div>
+        ${familyLines.map((line) => `<div>${line}</div>`).join("")}
+        ${zhipuParts.length ? `<div class="cs-muted">· ${esc(t("desktop.sharing.suggest.zhipu", { list: zhipuParts.join(" · ") }))}</div>` : ""}
+        <div class="cs-muted">${esc(t("desktop.sharing.suggest.reserveHint"))}</div>
+      </div>`;
+    }
+
+    // personal templates + the blank entry: chips fill the editor as drafts
+    function templateBlock() {
+      const chips = cardConfig.laneTemplates.map((tpl, i) => `
+        <span class="cs-tpl-chip">
+          <button class="outline-button" type="button" data-cs-tpl="${i}">${esc(tpl.title || tpl.models)}</button>
+          <button class="cs-tpl-del" type="button" data-cs-tpl-del="${i}" title="${esc(t("desktop.sharing.lane.templateRemove"))}">×</button>
+        </span>`).join("");
+      return `<div class="cs-templates">
+        <span class="cs-muted">${esc(t("desktop.sharing.lane.add"))}:</span>
+        ${chips}
+        <button class="outline-button" type="button" data-cs-tpl="blank">${esc(t("desktop.sharing.lane.template.blank"))}</button>
       </div>`;
     }
 
@@ -702,7 +802,7 @@ export default {
             <span class="cs-lane-tag">${esc(lane.models.join(", "))}</span></span>
           <span>${status}</span>
         </div>
-        <div class="cs-kv"><span class="cs-muted">${esc(periodLabel(lane.period))} · ${esc(scheduleText(lane))} ${laneTags(lane)}</span>
+        <div class="cs-kv"><span class="cs-muted">${esc(windowLabel(lane.window))} · ${esc(scheduleText(lane))} ${laneTags(lane)}</span>
           <span class="num">${esc(compact(used))} / ${esc(compact(total))}</span></div>
         <div class="cs-meter"><i style="width:${pct}%"></i></div>
         <div class="cs-actions">

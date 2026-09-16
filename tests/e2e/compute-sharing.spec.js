@@ -11,7 +11,7 @@ import { navigateTo } from './helpers.js';
 const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf8');
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
-const VERSION = '0.5.1';
+const VERSION = '0.7.0';
 const CATALOG = {
   version: 1,
   catalog: [
@@ -32,13 +32,13 @@ const SHARES = {
       exhausted: false, updatedAt: Date.now(),
       lanes: [
         {
-          id: 'gemini-week', title: 'Gemini weekly', models: ['gemini-*'], period: 'week',
+          id: 'gemini-week', title: 'Gemini weekly', models: ['gemini-*'], window: { unit: 'week', n: 1 },
           budgetTokens: 1000000, settledTokens: 1200, availableTokens: 998800, exhausted: false,
           state: 'active', open: true, retryAfterMs: 0, slotsLeft: 2, maxClaims: 3, tzLabel: 'UTC+8',
           schedule: [{ start: '22:00', end: '14:00' }], peak: { windows: [], multiplier: 1 },
         },
         {
-          id: 'glm-offpeak', title: 'GLM off-peak', models: ['glm-5.3-flash'], period: 'hour5',
+          id: 'glm-offpeak', title: 'GLM off-peak', models: ['glm-5.3-flash'], window: { unit: 'hour', n: 5 },
           budgetTokens: 200000, settledTokens: 0, availableTokens: 200000, exhausted: false,
           state: 'active', open: false, retryAfterMs: 30 * 60_000, slotsLeft: 1, maxClaims: 2, tzLabel: 'UTC+8',
           schedule: [{ start: '22:00', end: '12:00' }], peak: { windows: [{ start: '14:00', end: '21:00' }], multiplier: 2 },
@@ -117,8 +117,9 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     await expect(body).toContainText('Window budget exhausted');
     await expect(body).toContainText('Gemini weekly', { useInnerText: false });
     await expect(page.locator('[data-cs-lane="gemini-week"]')).toBeVisible();
-    // template buttons render (owner can add lanes)
-    await expect(page.locator('[data-cs-lane-template="0"]')).toBeVisible();
+    // derived suggestions render (owner can create lanes from own usage)
+    await expect(page.locator('[data-cs-family="0"]')).toBeVisible();
+    await expect(page.locator('[data-cs-tpl="blank"]')).toBeVisible();
     // claims history collapses: valid row + 4 ended rows shown, 6 total ended
     const claimRows = page.locator('[data-cs="owner-body"] .cs-kv', { hasText: 'csk_' });
     await expect(claimRows).toHaveCount(5, { timeout: 5_000 });            // 1 valid + 4 ended
@@ -133,6 +134,9 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     await expect(body).toContainText('Quota reference', { timeout: 5_000 });   // block heading anchors the lines
     await expect(body).toContainText('own use (7d): 1.3B');
     await expect(body).toContainText('Zhipu 5h windows:');
+    // derived busy window + its complement are visible (productized suggestions)
+    await expect(body).toContainText('your peak 15:00–21:00');
+    await expect(body).toContainText('weekly budget ≤ 975M');
     // switch to the borrow tab: directory renders lane rows there
     await page.locator('[data-cs-tab="borrow"]').click();
     const dir = page.locator('[data-cs="directory"]');
@@ -149,6 +153,63 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     await expect(page.locator('[data-module-card="compute-sharing"]')).toHaveCount(0);
   });
 
+  installed('derived suggestions prefill the editor; the reserve ratio recalculates live and persists', async ({ page }) => {
+    await openCard(page, "owner");
+    const body = page.locator('[data-cs="owner-body"]');
+    await expect(body).toContainText('Quota reference', { timeout: 5_000 });
+    // default reserve 25% → 1.3B own use suggests 975M
+    await page.locator('[data-cs-family="0"]').click();
+    await expect(page.locator('[data-cs-f="title"]')).toHaveValue('gemini-*');
+    await expect(page.locator('[data-cs-f="models"]')).toHaveValue('gemini-*');
+    await expect(page.locator('[data-cs-f="budget"]')).toHaveValue('975000000');
+    // busy 15:00–21:00 → lane opens the complement 21:00–15:00
+    await expect(page.locator('[data-cs-f="winStart"]')).toHaveValue('21:00');
+    await expect(page.locator('[data-cs-f="winEnd"]')).toHaveValue('15:00');
+    await page.locator('[data-cs="laneCancel"]').click();
+    // reserve 50% → suggestion line recomputes to 650M and persists via modules:set
+    const reserve = page.locator('[data-cs="reserve"]');
+    await reserve.fill('50');
+    await reserve.dispatchEvent('change');
+    await expect(body).toContainText('weekly budget ≤ 650M', { timeout: 5_000 });
+    const saved = await page.evaluate(() => window.__ATL_E2E_STATE__.modulesSetCalls.at(-1));
+    expect(saved).toMatchObject({ id: 'compute-sharing', config: { reservePct: 50 } });
+    // clamped back into 5–95: garbage input falls back to the clamp, not NaN
+    await reserve.fill('200');
+    await reserve.dispatchEvent('change');
+    await expect(page.locator('[data-cs="reserve"]')).toHaveValue('95');
+  });
+
+  installed('personal templates: save from the editor, refill from the chip, delete with ×', async ({ page }) => {
+    await openCard(page, "owner");
+    const body = page.locator('[data-cs="owner-body"]');
+    await expect(body).toContainText('Quota reference', { timeout: 5_000 });
+    await page.locator('[data-cs-tpl="blank"]').click();
+    await page.locator('[data-cs-f="title"]').fill('夜班车道');
+    await page.locator('[data-cs-f="models"]').fill('glm-*,gemini-*');
+    await page.locator('[data-cs-f="budget"]').fill('25000000');
+    await page.locator('[data-cs-f="winStart"]').fill('22:00');
+    await page.locator('[data-cs-f="winEnd"]').fill('08:00');
+    await page.locator('[data-cs="laneSaveTpl"]').click();
+    await expect(page.locator('#toast')).toContainText('Saved as template', { timeout: 5_000 });
+    // persisted in module config
+    const stored = await page.evaluate(() => window.__ATL_E2E_STATE__.modulesState.modules['compute-sharing'].config.laneTemplates);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ title: '夜班车道', models: 'glm-*,gemini-*', budget: 25000000, winStart: '22:00', winEnd: '08:00' });
+    await page.locator('[data-cs="laneCancel"]').click();
+    // chip appears and refills the editor as a fresh draft
+    const chip = page.locator('[data-cs-tpl="0"]');
+    await expect(chip).toHaveText('夜班车道');
+    await chip.click();
+    await expect(page.locator('[data-cs-f="title"]')).toHaveValue('夜班车道');
+    await expect(page.locator('[data-cs-f="winStart"]')).toHaveValue('22:00');
+    await page.locator('[data-cs="laneCancel"]').click();
+    // × removes the template and persists the shorter list
+    await page.locator('[data-cs-tpl-del="0"]').click();
+    await expect(page.locator('[data-cs-tpl="0"]')).toHaveCount(0);
+    const after = await page.evaluate(() => window.__ATL_E2E_STATE__.modulesState.modules['compute-sharing'].config.laneTemplates);
+    expect(after).toHaveLength(0);
+  });
+
   installed('lane claim signs via the sidecar channel and tags my-claims', async ({ page }) => {
     await page.route('**/api/shares/claim', async (route) => {
       const body = route.request().postDataJSON();
@@ -163,7 +224,7 @@ installed.describe('Compute sharing (lanes card, en)', () => {
       await route.fulfill({
         json: {
           keyId: 'csk_e2e99', token: 'atl_sk_e2e_secret', baseURL: 'http://192.168.1.4:8317',
-          laneId: 'gemini-week', laneTitle: 'Gemini weekly', models: ['gemini-*'], period: 'week', tzLabel: 'UTC+8',
+          laneId: 'gemini-week', laneTitle: 'Gemini weekly', models: ['gemini-*'], window: { unit: 'week', n: 1 }, tzLabel: 'UTC+8',
           expiresAt: Date.now() + 86400000, shareTitle: 'E2E CPA', keyMaxTokens: 200000,
         },
       });
@@ -243,9 +304,10 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     await page.locator('[data-cs="laneSave"]').click();
     await expect(page.locator('[data-cs="status"]')).toContainText('already exists', { timeout: 5_000 });
     await page.locator('[data-cs="laneCancel"]').click();
-    // template add: new lane rides the same lanes payload (blank template C1)
-    await page.locator('[data-cs-lane-template="3"]').click();
-    await expect(page.locator('[data-cs-f="title"]')).toHaveValue('Blank lane');
+    // blank entry: an empty draft the owner fills by hand (C1)
+    await page.locator('[data-cs-tpl="blank"]').click();
+    await expect(page.locator('[data-cs-f="title"]')).toHaveValue('');
+    await page.locator('[data-cs-f="title"]').fill('Spare lane');
     await page.locator('[data-cs="laneSave"]').click();
     const afterAdd = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.lanes.at(-1));
     expect(afterAdd).toHaveLength(3);

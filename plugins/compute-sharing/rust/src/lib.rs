@@ -175,11 +175,16 @@ fn owner_call(call: OwnerCall, args: &Value) -> Result<Value, String> {
     Ok(body)
 }
 
-// ── lane budget suggestions (advisory) ──────────────────────────────────────
+// ── lane suggestions derived from the owner's own CPA usage ─────────────────
+//
+// Productized (R49): no vendor facts live in code. Families are derived from
+// the model names the owner actually used; the busy window is computed from
+// their own hour-of-day histogram; the card turns both into editable
+// pre-fills (reserve ratio is a card-side knob, not a constant here).
 
 /// zhipu windows come from the zhipu plugin's own cached query (crate-level
-/// reuse, no duplicated fetcher); cpaWeekly reads the CPA GUI usage sqlite.
-/// Any failure degrades to an empty section — the card renders hints only.
+/// reuse, no duplicated fetcher). Any failure degrades to an empty section —
+/// the card renders hints only.
 fn owner_suggest(ctx: PluginCtx<'_>) -> Result<Value, String> {
     let (zhipu_enabled, alerts_on) = plugin_zhipu::host::gate(ctx.modules_state);
     let _ = zhipu_enabled;
@@ -190,27 +195,120 @@ fn owner_suggest(ctx: PluginCtx<'_>) -> Result<Value, String> {
         .unwrap_or(Value::Null);
     let zhipu = plugin_zhipu::host::usage_cached(&json!({ "keys": keys }), alerts_on);
 
-    let mut cpa_weekly = json!({});
+    let mut rows: Vec<(String, u8, i64)> = Vec::new();
     if let Some(db) = cpa_usage_db_path() {
         if let Ok(connection) = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
             let week_ago = now_millis() - 7 * 86_400_000;
-            // schema drift / locked db degrade to an empty weekly map: a
-            // broken CPA usage.db must not kill the zhipu suggestions
+            // schema drift / locked db degrade to an empty list: a broken
+            // CPA usage.db must not kill the zhipu suggestions
             if let Ok(mut statement) = connection.prepare(
-                "SELECT provider, SUM(input_tokens + output_tokens + cached_tokens + IFNULL(cache_creation_tokens, 0))
-                 FROM usage_events WHERE timestamp_ms >= ?1 GROUP BY provider",
+                "SELECT model, substr(local_hour, -2), SUM(input_tokens + output_tokens + cached_tokens + IFNULL(cache_creation_tokens, 0))
+                 FROM usage_events WHERE timestamp_ms >= ?1 AND model != ''
+                 GROUP BY model, substr(local_hour, -2)",
             ) {
-                if let Ok(rows) = statement.query_map([week_ago], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                if let Ok(mapped) = statement.query_map([week_ago], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
                 }) {
-                    for row in rows.flatten() {
-                        cpa_weekly[row.0] = json!(row.1);
+                    for row in mapped.flatten() {
+                        if let Ok(hour) = row.1.parse::<u8>() {
+                            if hour < 24 {
+                                rows.push((row.0, hour, row.2));
+                            }
+                        }
                     }
                 }
             }
         }
     }
-    Ok(json!({ "zhipu": zhipu, "cpaWeekly": cpa_weekly }))
+    Ok(json!({ "zhipu": zhipu, "families": families_json(&fold_family_hours(&rows)) }))
+}
+
+/// Model family wildcard: the segment before the first '-' plus "-*"
+/// ("gemini-3.8-flash-high" → "gemini-*"). Empty names fold to None.
+fn family_of(model: &str) -> Option<String> {
+    let name = model.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let prefix = name.split('-').next().unwrap_or("");
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(format!("{}-*", prefix.to_lowercase()))
+}
+
+/// Fold (model, hour-of-day, tokens) rows into one 24-hour histogram per family.
+fn fold_family_hours(rows: &[(String, u8, i64)]) -> Vec<(String, [i64; 24])> {
+    let mut folded: Vec<(String, [i64; 24])> = Vec::new();
+    for (model, hour, tokens) in rows {
+        let Some(family) = family_of(model) else { continue };
+        let hour = *hour as usize;
+        match folded.iter_mut().find(|(f, _)| f == &family) {
+            Some((_, hist)) => hist[hour] += *tokens,
+            None => {
+                let mut hist = [0i64; 24];
+                hist[hour] = *tokens;
+                folded.push((family, hist));
+            }
+        }
+    }
+    folded
+}
+
+/// The owner's busy window for one family: the contiguous circular block of
+/// 2..=12 hours holding the most usage. None when no block reaches 50% — a
+/// flat profile gets an all-day suggestion instead of an arbitrary cut.
+fn busy_window(hours: &[i64; 24]) -> Option<(String, String)> {
+    let total: i64 = hours.iter().sum();
+    if total <= 0 {
+        return None;
+    }
+    let mut best: Option<(i64, usize, usize)> = None; // (sum, len, start)
+    for len in 2..=12usize {
+        for start in 0..24usize {
+            let mut sum = 0i64;
+            for i in 0..len {
+                sum += hours[(start + i) % 24];
+            }
+            let better = match best {
+                None => true,
+                Some((best_sum, best_len, _)) => sum > best_sum || (sum == best_sum && len < best_len),
+            };
+            if better {
+                best = Some((sum, len, start));
+            }
+        }
+    }
+    let (sum, len, start) = best?;
+    // strictly above half: a flat profile's longest block sits at exactly 50%
+    // and must not read as a peak
+    if sum * 2 <= total {
+        return None;
+    }
+    let fmt = |hour: usize| format!("{:02}:00", hour);
+    Some((fmt(start), fmt((start + len) % 24)))
+}
+
+/// Families as wire data: drop noise (< 1M weekly tokens), sort by weight,
+/// cap at 4, each with its derived busy window (null when flat).
+fn families_json(families: &[(String, [i64; 24])]) -> Value {
+    let mut list: Vec<(i64, &[i64; 24], &String)> = families
+        .iter()
+        .map(|(family, hist)| (hist.iter().sum(), hist, family))
+        .filter(|(total, _, _)| *total >= 1_000_000)
+        .collect();
+    list.sort_by(|a, b| b.0.cmp(&a.0));
+    list.truncate(4);
+    Value::Array(
+        list.into_iter()
+            .map(|(total, hist, family)| {
+                let busy = busy_window(hist)
+                    .map(|(start, end)| json!({ "start": start, "end": end }))
+                    .unwrap_or(Value::Null);
+                json!({ "family": family, "weeklyTokens": total, "busy": busy })
+            })
+            .collect(),
+    )
 }
 
 /// The CPA GUI usage db: env override first, then the macOS GUI default.
@@ -322,5 +420,76 @@ mod tests {
         .unwrap();
         assert_eq!(read_back["claims"][0]["keyId"], "csk_1");
         });
+    }
+
+    #[test]
+    fn family_of_derives_wildcard_prefix() {
+        assert_eq!(family_of("gemini-3.8-flash-high").as_deref(), Some("gemini-*"));
+        assert_eq!(family_of("GLM-5.3").as_deref(), Some("glm-*"));
+        assert_eq!(family_of("opus").as_deref(), Some("opus-*"));
+        assert_eq!(family_of("  "), None);
+        assert_eq!(family_of(""), None);
+    }
+
+    #[test]
+    fn fold_family_hours_merges_models_and_hours() {
+        let folded = fold_family_hours(&[
+            ("gemini-3.8-flash-high".into(), 15, 100),
+            ("gemini-2.5-pro".into(), 16, 50),
+            ("gpt-5.6-terra".into(), 9, 10),
+            ("gpt-5.6-terra".into(), 9, 5),
+            ("".into(), 3, 999),
+        ]);
+        assert_eq!(folded.len(), 2);
+        let (gemini, gemini_hist) = &folded[0];
+        assert_eq!(gemini, "gemini-*");
+        assert_eq!(gemini_hist[15], 100);
+        assert_eq!(gemini_hist[16], 50);
+        let (_, gpt_hist) = &folded[1];
+        assert_eq!(gpt_hist[9], 15);
+    }
+
+    #[test]
+    fn busy_window_finds_peak_and_none_for_flat() {
+        let mut peak = [0i64; 24];
+        for hour in 15..21 {
+            peak[hour] = 10;
+        }
+        peak[3] = 2;
+        let (start, end) = busy_window(&peak).expect("clear peak expected");
+        assert_eq!((start.as_str(), end.as_str()), ("15:00", "21:00"));
+
+        let flat = [7i64; 24];
+        assert!(busy_window(&flat).is_none());
+
+        // wrap-midnight peak: busy 23:00–02:00
+        let mut wrap = [0i64; 24];
+        for hour in [23, 0, 1] {
+            wrap[hour] = 10;
+        }
+        let (start, end) = busy_window(&wrap).expect("wrap peak expected");
+        assert_eq!((start.as_str(), end.as_str()), ("23:00", "02:00"));
+    }
+
+    #[test]
+    fn families_json_filters_sorts_and_caps() {
+        let mut big = [0i64; 24];
+        big[10] = 9_000_000;
+        let mut small = [0i64; 24];
+        small[10] = 500_000; // below the 1M noise floor
+        let mut mid = [0i64; 24];
+        mid[12] = 2_000_000;
+        let value = families_json(&[
+            ("small-*".into(), small),
+            ("big-*".into(), big),
+            ("mid-*".into(), mid),
+        ]);
+        let list = value.as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["family"], "big-*");
+        assert_eq!(list[0]["weeklyTokens"], json!(9_000_000));
+        // a single-hour spike is a peak: min window length widens it to 2h
+        assert_eq!(list[1]["busy"]["start"], "11:00");
+        assert_eq!(list[1]["busy"]["end"], "13:00");
     }
 }

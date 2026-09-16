@@ -10095,7 +10095,7 @@ async function testSharingCpaLanesLegacyCompat() {
     const hb = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} })).json();
     assert.equal(hb.lanes.length, 1);
     assert.equal(hb.lanes[0].id, "default");
-    assert.equal(hb.lanes[0].period, "day");
+    assert.deepEqual(hb.lanes[0].window, { unit: "day", n: 1 });
     assert.equal(hb.lanes[0].budgetTokens, 5_000);
     assert.deepEqual(hb.lanes[0].scheduleWindows, []);
     // claim without laneId keeps working; legacy budget error code preserved
@@ -10154,22 +10154,40 @@ function testSharingLaneUnits() {
   assert.equal(weekStartTs(nextMonday), nextMonday);
 
   // laneWindowOf: hour5 grid alignment; week span is exactly 7 days
-  const weekLane = { period: "week" };
+  const weekLane = { window: { unit: "week", n: 1 } };
   const weekWindow = laneWindowOf(weekLane, monday);
   assert.equal(weekWindow.endMs - weekWindow.startMs, 7 * 86_400_000);
   assert.equal(weekWindow.key, "week:2026-09-14");
-  const h5Lane = { period: "hour5" };
+  const h5Lane = { window: { unit: "hour", n: 5 } };
   const t = 1_789_000_000_123;
   const h5Window = laneWindowOf(h5Lane, t);
   assert.equal(h5Window.startMs % (5 * 3_600_000), 0);
   assert.equal(h5Window.endMs - h5Window.startMs, 5 * 3_600_000);
   assert.equal(h5Window.key, `h5:${h5Window.startMs}`);
+  // generalized rolling windows (R50): any n-hour grid, n-day spans
+  const h3 = laneWindowOf({ window: { unit: "hour", n: 3 } }, t);
+  assert.equal(h3.startMs % (3 * 3_600_000), 0);
+  assert.equal(h3.endMs - h3.startMs, 3 * 3_600_000);
+  assert.equal(h3.key, `h3:${h3.startMs}`);
+  // n-day windows form a stable grid: same-day moments share a window, the
+  // next day either shares it or starts the adjacent one (parity-dependent)
+  const day2 = laneWindowOf({ window: { unit: "day", n: 2 } }, Date.UTC(2026, 8, 15, 7, 0), 0);
+  assert.equal(day2.endMs - day2.startMs, 2 * 86_400_000);
+  assert.equal(laneWindowOf({ window: { unit: "day", n: 2 } }, Date.UTC(2026, 8, 15, 23, 0), 0).startMs, day2.startMs);
+  const day2Next = laneWindowOf({ window: { unit: "day", n: 2 } }, Date.UTC(2026, 8, 16, 7, 0), 0).startMs;
+  assert.ok(day2Next === day2.startMs || day2Next === day2.startMs + 2 * 86_400_000);
+  // and the grid never restarts mid-window: day-2 spans begin on even epoch days
+  assert.equal(day2.startMs % (2 * 86_400_000), 0);
 
   // cross-midnight schedule truth table (22:00-14:00 offpeak lane)
   const [offpeak] = clampLanes([{
     id: "glm-offpeak", title: "offpeak", period: "hour5", budget: { tokens: 2000 },
     schedule: { windows: [{ start: "22:00", end: "14:00" }] },
   }]);
+  // legacy period strings normalize on read (persisted lanes stay valid)
+  assert.deepEqual(offpeak.window, { unit: "hour", n: 5 });
+  const [legacyWeek] = clampLanes([{ id: "w", title: "w", period: "week", budget: { tokens: 1000 } }]);
+  assert.deepEqual(legacyWeek.window, { unit: "week", n: 1 });
   const at = (h, m) => new Date(2026, 8, 14, h, m).getTime();
   assert.equal(scheduleStateAt(offpeak, at(2, 0)).open, true);   // early morning inside
   assert.equal(scheduleStateAt(offpeak, at(12, 59)).open, true); // just before close
@@ -10193,12 +10211,12 @@ function testSharingLaneUnits() {
   assert.equal(scheduleStateAt(offpeak, tsUtc, 480).open, false);
   assert.equal(minutesOfDayAt(tsUtc, -300), 2 * 60);
   // day window key/Starts anchor to owner midnight (UTC-5 → 05:00Z)
-  const dayWin = laneWindowOf({ period: "day" }, tsUtc, -300);
+  const dayWin = laneWindowOf({ window: { unit: "day", n: 1 } }, tsUtc, -300);
   assert.equal(dayWin.startMs, Date.UTC(2026, 8, 15, 5, 0));
   assert.equal(dayWin.endMs - dayWin.startMs, 86_400_000);
   assert.equal(dayWin.key, "day:2026-09-15");
   // week start anchors to owner-tz Monday
-  const weekWin = laneWindowOf({ period: "week" }, Date.UTC(2026, 8, 16, 3, 0), -300);
+  const weekWin = laneWindowOf({ window: { unit: "week", n: 1 } }, Date.UTC(2026, 8, 16, 3, 0), -300);
   assert.equal(weekWin.startMs, Date.UTC(2026, 8, 14, 5, 0));
   // tz labels render half-hour offsets correctly
   assert.equal(tzLabelOf(480), "UTC+8");

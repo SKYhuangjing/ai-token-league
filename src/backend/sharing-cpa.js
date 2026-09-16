@@ -69,14 +69,32 @@ function clampPolicy(input = {}) {
 }
 
 // ── Sharing lanes (compute-sharing-lanes-design.md) ─────────────────────────
-// A share slices into lanes; each lane binds a budget period (day | week |
-// hour5 rolling grid), a local-time schedule, and its own claim slots. Claim
+// A share slices into lanes; each lane binds a budget window {unit,n} (R50
+// generalized rolling grid; legacy day/week/hour5 normalize on read), a
+// local-time schedule, and its own claim slots. Claim
 // keys carry their lane id — the CPA plugin gates on key→lane because the
 // intercept ABI has no request model field.
 
-const LANE_PERIODS = new Set(["day", "week", "hour5"]);
+const WINDOW_UNITS = new Set(["hour", "day", "week"]);
+const WINDOW_N_RANGE = { hour: [1, 48], day: [1, 31], week: [1, 12] };
 const MAX_LANES = 8;
-const HOUR5_MS = 5 * 60 * 60 * 1000;
+
+// Lane budget window {unit, n} (R50): "hour5" was Zhipu's plan window burned
+// into a generic enum — the schema now expresses any rolling window. The
+// legacy period strings ("day" | "week" | "hour5") normalize on read so
+// persisted lanes and old wire payloads keep working; every write stores the
+// {unit, n} form.
+function clampWindowSpec(raw) {
+  const spec = raw && typeof raw.window === "object" && raw.window ? raw.window : null;
+  let unit = spec ? String(spec.unit || "") : "";
+  let n = spec ? Number(spec.n) : NaN;
+  if (!WINDOW_UNITS.has(unit) || !Number.isFinite(n)) {
+    const legacy = { day: ["day", 1], week: ["week", 1], hour5: ["hour", 5] }[raw && raw.period] || ["day", 1];
+    [unit, n] = legacy;
+  }
+  const [minN, maxN] = WINDOW_N_RANGE[unit];
+  return { unit, n: Math.min(maxN, Math.max(minN, Math.round(n))) };
+}
 
 const clampInt = (v, fallback, min, max) => {
   const n = Number(v);
@@ -133,7 +151,7 @@ function clampLane(raw, index, existing = []) {
       ? raw.models.map((m) => String(m).slice(0, 80)).slice(0, 10)
       : ["*"],
     budgetTokens: clampInt(budgetInput, DEFAULT_POLICY.budget, 1_000, 1_000_000_000_000),
-    period: LANE_PERIODS.has(raw && raw.period) ? raw.period : "day",
+    window: clampWindowSpec(raw),
     scheduleWindows: clampWindows(scheduleInput),
     maxClaims: clampInt(raw && raw.maxClaims, DEFAULT_POLICY.maxClaims, 1, 200),
     peakWindows: clampWindows(peakInput),
@@ -166,7 +184,7 @@ function effectiveLanes(share) {
     title: share.title || "default",
     models: share.models && share.models.length ? share.models : ["*"],
     budgetTokens: share.policy.budget,
-    period: "day",
+    window: { unit: "day", n: 1 },
     scheduleWindows: [],
     maxClaims: share.policy.maxClaims,
     peakWindows: [],
@@ -188,19 +206,29 @@ function weekStartTs(ts, offsetMinutes = serverOffsetMinutes()) {
 
 const serverOffsetMinutes = () => -new Date().getTimezoneOffset();
 
+// The lane's effective budget window at ts. All units are fixed grids (R50):
+// hour windows align to the epoch in n-hour steps, day/week windows to the
+// owner timezone in n-day / n-week steps — a 2-day window does not restart
+// every midnight, it belongs to a stable grid. Fixed-length spans across DST
+// shifts are a documented approximation (design doc §9).
 function laneWindowOf(lane, ts = now(), offsetMinutes = serverOffsetMinutes()) {
-  if (lane.period === "week") {
-    const start = weekStartTs(ts, offsetMinutes);
-    return { key: `week:${anchorDayString(start, offsetMinutes)}`, startMs: start, endMs: start + 7 * 86_400_000 };
+  const spec = lane.window || { unit: "day", n: 1 };
+  const n = Math.max(1, Number(spec.n) || 1);
+  if (spec.unit === "hour") {
+    const span = n * 3_600_000;
+    const start = Math.floor(ts / span) * span;
+    return { key: `h${n}:${start}`, startMs: start, endMs: start + span };
   }
-  if (lane.period === "hour5") {
-    const start = Math.floor(ts / HOUR5_MS) * HOUR5_MS;
-    return { key: `h5:${start}`, startMs: start, endMs: start + HOUR5_MS };
+  const day = Math.floor((ts + offsetMinutes * 60_000) / 86_400_000); // anchor-tz epoch day
+  if (spec.unit === "week") {
+    const weekIdx = Math.floor((day + 3) / 7); // epoch day 0 = Thursday → Monday-aligned weeks
+    const startIdx = Math.floor(weekIdx / n) * n;
+    const start = (startIdx * 7 - 3) * 86_400_000 - offsetMinutes * 60_000;
+    return { key: `week:${anchorDayString(start, offsetMinutes)}`, startMs: start, endMs: start + n * 7 * 86_400_000 };
   }
-  const shifted = ts + offsetMinutes * 60_000;
-  const dayStartUtc = Math.floor(shifted / 86_400_000) * 86_400_000;
-  const start = dayStartUtc - offsetMinutes * 60_000;
-  return { key: `day:${anchorDayString(start, offsetMinutes)}`, startMs: start, endMs: start + 86_400_000 };
+  const startIdx = Math.floor(day / n) * n;
+  const start = startIdx * 86_400_000 - offsetMinutes * 60_000;
+  return { key: `day:${anchorDayString(start, offsetMinutes)}`, startMs: start, endMs: start + n * 86_400_000 };
 }
 
 // YYYY-MM-DD of an epoch ms rendered in the anchor timezone (UTC getters on
@@ -366,7 +394,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       id: lane.id,
       title: lane.title,
       models: lane.models,
-      period: lane.period,
+      window: lane.window,
       budgetTokens: lane.budgetTokens,
       settledTokens: settled,
       availableTokens: Math.max(0, lane.budgetTokens - settled),
@@ -400,7 +428,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       state: lane.state,
       models: lane.models,
       budgetTokens: lane.budgetTokens,
-      period: lane.period,
+      window: lane.window,
       windowKey: window.key,
       windowStartMs: window.startMs,
       windowEndMs: window.endMs,
@@ -842,7 +870,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     // laneId is only valid on single-lane (legacy) shares.
     const nowTs = now();
     const lanes = effectiveLanes(share);
-    const laneOptions = lanes.map((l) => ({ id: l.id, title: l.title, models: l.models, period: l.period }));
+    const laneOptions = lanes.map((l) => ({ id: l.id, title: l.title, models: l.models, window: l.window }));
     let lane = null;
     if (body.laneId) {
       lane = lanes.find((l) => l.id === String(body.laneId)) || null;
@@ -906,7 +934,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       laneId: lane.id,
       laneTitle: lane.title,
       models: lane.models,
-      period: lane.period,
+      window: lane.window,
       tzLabel: tzLabelOf(tzOf(share)),
       laneBudgetTokens: lane.budgetTokens,
       expiresAt: claim.expiresAt,

@@ -42,7 +42,10 @@ pub struct LaneEntry {
     /// Model scope (exact ids + `*` wildcards); empty = every model.
     pub models: Vec<String>,
     pub budget_tokens: u64,
-    pub period: String, // day | week | hour5
+    /// Budget window spec (R50): hour windows self-roll on an n-hour grid;
+    /// day/week follow the backend heartbeat marks.
+    pub window_unit: String, // hour | day | week
+    pub window_n: u32,
     pub window_key: String,
     pub window_end_ms: i64,
     /// Baseline settled tokens for window_key (backend-authoritative).
@@ -135,7 +138,7 @@ pub enum Gate {
     TerminateLane { reason: String, retry_after_secs: u64 },
 }
 
-const HOUR5_MS: i64 = 5 * 3_600_000;
+const HOUR_MS: i64 = 3_600_000;
 
 pub fn minute_in_windows(minute: u32, windows: &[WindowMark]) -> bool {
     windows.iter().any(|w| {
@@ -161,17 +164,18 @@ pub fn minutes_until_flip(minute: u32, windows: &[WindowMark]) -> u32 {
     0
 }
 
-fn hour5_grid(now_ms: i64) -> (String, i64, i64) {
-    let start = now_ms.div_euclid(HOUR5_MS) * HOUR5_MS;
-    (format!("h5:{}", start), start, start + HOUR5_MS)
+fn hour_grid(now_ms: i64, n: u32) -> (String, i64, i64) {
+    let span = (n.max(1) as i64) * HOUR_MS;
+    let start = now_ms.div_euclid(span) * span;
+    (format!("h{}:{}", n, start), start, start + span)
 }
 
-/// The lane's effective window at now_ms. hour5 windows self-roll on a
-/// tz-free grid; day/week windows follow the backend heartbeat (8s ticks, so
-/// boundary lag is bounded by the 600s staleness rule that denies anyway).
+/// The lane's effective window at now_ms. n-hour windows self-roll on a
+/// tz-free grid (any n, R50); day/week windows follow the backend heartbeat
+/// (8s ticks, so boundary lag is bounded by the 600s staleness rule).
 pub fn effective_lane_window(lane: &LaneEntry, now_ms: i64) -> (String, i64) {
-    if lane.period == "hour5" {
-        let (key, _, end) = hour5_grid(now_ms);
+    if lane.window_unit == "hour" && lane.window_n >= 1 {
+        let (key, _, end) = hour_grid(now_ms, lane.window_n);
         (key, end)
     } else {
         (lane.window_key.clone(), lane.window_end_ms)
@@ -474,9 +478,10 @@ mod tests {
             id: id.into(),
             state: "active".into(),
             budget_tokens: 1_000,
-            period: "hour5".into(),
+            window_unit: "hour".into(),
+            window_n: 5,
             window_key: format!("h5:{}", 1_000_000),
-            window_end_ms: 1_000_000 + HOUR5_MS,
+            window_end_ms: 1_000_000 + 5 * HOUR_MS,
             models: Vec::new(),
             settled_tokens: 0,
             schedule_windows: vec![],
@@ -555,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_gate_enforces_lane_budget_and_hour5_self_roll() {
+    fn lane_gate_enforces_lane_budget_and_hour_window_self_roll() {
         let sync = sync_lanes(vec![lane("default")]);
         let mut ledger = Ledger::default();
         // no local accumulation -> backend baseline 0 -> pass
@@ -566,14 +571,14 @@ mod tests {
         assert_eq!(applied, 900);
         let applied2 = settle_lane_usage(&lane("default"), &mut ledger.lane_settled, 200, 1_100_000, 0);
         assert_eq!(applied2, 200);
-        let grid_end = HOUR5_MS;
+        let grid_end = 5 * HOUR_MS;
         assert!(matches!(
             gate(&ledger, &sync, "csk_1", 9_999_999),
             Gate::TerminateLane { reason, retry_after_secs } if reason == "lane_exhausted"
                 && retry_after_secs == ((grid_end - 1_100_000) / 1000) as u64
         ));
         // past the grid window the lane self-rolls: settled resets, gate reopens
-        let after = HOUR5_MS + 1;
+        let after = 5 * HOUR_MS + 1;
         assert!(matches!(
             gate_request(&ledger, &sync, "csk_1", 9_999_999, after, 0, None),
             Gate::Pass

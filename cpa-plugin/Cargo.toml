@@ -1,6 +1,6 @@
 [package]
 name = "atl-share-cpa-plugin"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Sky"]
 description = "AI Token League compute-sharing plugin for CLIProxyAPI (CPA)"
