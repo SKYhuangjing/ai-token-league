@@ -224,7 +224,8 @@ function homeRenderHeatmap() {
     to: data.to,
     businessDay: data.businessDay,
     tooltip: document.querySelector("#chart-tooltip"),
-    localeTokenCompact
+    localeTokenCompact,
+    layout: "heatfull"
   });
 }
 

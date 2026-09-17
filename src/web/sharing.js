@@ -27,7 +27,30 @@ function statusView(share) {
 function renderShares() {
   const shares = state.shares.filter((s) => s.online);
   if (!shares.length) {
-    els.grid.innerHTML = `<div class="sharing-empty">${escapeHtml(t("web.sharing.empty"))}</div>`;
+    els.grid.innerHTML = `
+      <article class="card sharing-guide-card">
+        <div class="sharing-guide-header">
+          <div class="sharing-guide-badge">⚡</div>
+          <div>
+            <h3>${escapeHtml(t("web.sharing.empty"))}</h3>
+            <p class="sharing-guide-sub">${escapeHtml(t("web.sharing.guideTitle"))}</p>
+          </div>
+        </div>
+        <div class="sharing-steps">
+          <div class="sharing-step">
+            <span class="step-num">1</span>
+            <span class="step-desc">${escapeHtml(t("web.sharing.step1"))}</span>
+          </div>
+          <div class="sharing-step">
+            <span class="step-num">2</span>
+            <span class="step-desc">${escapeHtml(t("web.sharing.step2"))}</span>
+          </div>
+          <div class="sharing-step">
+            <span class="step-num">3</span>
+            <span class="step-desc">${escapeHtml(t("web.sharing.step3"))}</span>
+          </div>
+        </div>
+      </article>`;
     return;
   }
   els.grid.innerHTML = shares.map((share) => {

@@ -459,7 +459,7 @@ function renderBentoStats(profile) {
     {
       cls: "metric-streak bento-span-2",
       label: t("web.profile.currentStreak"),
-      val: `${currentStreak} <small class="stat-unit">${t("web.profile.daysUnit")}</small>`,
+      val: `${currentStreak > 0 ? '<span class="streak-flame" aria-label="streak">🔥</span>' : ""}${currentStreak} <small class="stat-unit">${t("web.profile.daysUnit")}</small>`,
       sub: bestStreak ? `${t("web.profile.bestStreak")}: ${bestStreak} ${t("web.profile.daysUnit")}` : "",
       hint: bestStreak ? t("web.profile.streakHint", { days: bestStreak }) : "",
       meter: streakMeter
