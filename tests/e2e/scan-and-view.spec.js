@@ -68,6 +68,19 @@ test.describe('Scan and View Usage', () => {
     expect(await workdirList.locator('.mini-meter-row').count()).toBe(2);
   });
 
+  test('workdir range emphasizes the selected-range total and keeps today as secondary context', async ({ page }) => {
+    await waitForScanComplete(page);
+
+    await page.click('[data-section="workdirs"]');
+    const firstCard = page.locator('#workdirs-analysis-list .workdir-card').first();
+    await expect(firstCard.locator('.workdir-total')).toContainText('Today');
+    await expect(firstCard.locator('.workdir-today')).toHaveCount(0);
+
+    await page.click('#workdirs-range [data-range="all"]');
+    await expect(firstCard.locator('.workdir-total')).toContainText('All');
+    await expect(firstCard.locator('.workdir-today')).toContainText('Today +');
+  });
+
   test('trend chart renders at least one spark bar for today', async ({ page }) => {
     await waitForScanComplete(page);
 

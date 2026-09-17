@@ -11,7 +11,7 @@ import {
   renderTrendDetailHero, renderTrendDetailBreakdown
 } from '../../src/desktop/renderer-components.js';
 
-const t = (k) => ({
+const translations = {
   'common.cache': 'Cache', 'common.input': 'Input', 'common.output': 'Output',
   'common.cacheRead': 'Cache read', 'common.cacheWrite': 'Cache write',
   'common.cost': 'Cost', 'common.estimated': 'Estimated',
@@ -23,7 +23,8 @@ const t = (k) => ({
   'desktop.renderer.dominant': 'Dominant', 'desktop.renderer.recentContribution': 'Recent',
   'desktop.renderer.dayBucket': 'day', 'desktop.renderer.modelDetail': 'Model Detail',
   'desktop.workdirs.tierMain': 'Main', 'desktop.workdirs.tierMid': 'Mid', 'desktop.workdirs.tierSmall': 'Small',
-  'desktop.range.today': 'Today', 'unit.tokens': 'tokens',
+  'desktop.range.today': 'Today', 'desktop.range.7d': '7d', 'desktop.range.30d': '30d', 'desktop.range.all': 'All', 'unit.tokens': 'tokens',
+  'desktop.workdirs.contribution': '{pct}% of {range}', 'desktop.workdirs.todayIncrease': 'Today +{tokens}',
   'desktop.trend.hourlyDetail': 'Hourly', 'desktop.renderer.missing': 'missing',
   'desktop.renderer.unknownPrice': 'unknown', 'desktop.renderer.noPricingVersion': 'no version',
   'desktop.sources.disable': 'Disable', 'desktop.sources.enable': 'Enable',
@@ -36,7 +37,9 @@ const t = (k) => ({
   'desktop.sources.overviewCapped': 'Dataset too large for this overview',
   'desktop.renderer.groupedBy': 'grouped by', 'desktop.renderer.workdir': 'Workdir',
   'desktop.renderer.model': 'Model', 'desktop.today.estCost': 'Est. Cost',
-}[k] || k);
+};
+
+const t = (key, params = {}) => (translations[key] || key).replace(/\{(\w+)\}/g, (_, name) => params[name] ?? `{${name}}`);
 
 // ── formatToken ──
 
@@ -191,6 +194,17 @@ describe('renderWorkdirCards', () => {
   it('handles default opts', () => {
     const html = renderWorkdirCards(items);
     expect(html).toContain('workdir-card');
+  });
+  it('prioritizes selected-range total and omits redundant daily increase for today', () => {
+    const html = renderWorkdirCards(items, { range: 'today', t });
+    expect(html).toContain('workdir-total');
+    expect(html).toContain('Today');
+    expect(html).not.toContain('Today +');
+  });
+  it('shows today increase only as supporting information outside today range', () => {
+    const html = renderWorkdirCards(items, { range: 'all', t });
+    expect(html).toContain('All');
+    expect(html).toContain('Today +');
   });
 });
 

@@ -110,9 +110,11 @@ export function renderDetailMeters(items = [], opts = {}) {
 // ── Workdir Cards ──
 
 export function renderWorkdirCards(items, opts = {}) {
-  const { lang = "en", showEstimatedCost = false, pricingSource = "", t = (k) => k } = opts;
+  const { lang = "en", range = "today", showEstimatedCost = false, pricingSource = "", t = (k) => k } = opts;
   const max = Math.max(...items.map((item) => item.totalTokens), 1);
   const colorClasses = ["", "meter-yellow", "meter-violet"];
+  const isToday = range === "today";
+  const rangeLabel = t(`desktop.range.${range}`);
   return items.map((item, index) => {
     const pct = Math.round(item.contributionRatio * 100);
     const badgeClass = pct > 50 ? "badge dark" : pct > 20 ? "badge" : "badge";
@@ -122,13 +124,14 @@ export function renderWorkdirCards(items, opts = {}) {
     const colorClass = colorClasses[index % colorClasses.length] || "";
     return `<article class="workdir-card" data-open-workdir="${escapeHtml(item.workdirHash)}" role="button" tabindex="0">
     <span class="workdir-rank">#${index + 1}</span>
-    <div>
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;">
-        <strong>${escapeHtml(item.name)}</strong>
-        <span class="workdir-today">+${formatToken(todayTokens, { lang })} ${t("desktop.range.today").toLowerCase()}</span>
-      </div>
-      <span class="workdir-meta muted">${formatToken(item.totalTokens, { lang })} ${t("unit.tokens")}${costText} · ${pct}%</span>
+    <div class="workdir-content">
+      <strong>${escapeHtml(item.name)}</strong>
+      <span class="workdir-meta muted">${t("desktop.workdirs.contribution", { range: rangeLabel, pct })}${costText}${isToday ? "" : ` · <span class="workdir-today">${t("desktop.workdirs.todayIncrease", { tokens: formatToken(todayTokens, { lang }) })}</span>`}</span>
       <div class="workdir-progress ${colorClass}"><i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%; transition: width 0.3s ease;"></i></div>
+    </div>
+    <div class="workdir-total" title="${formatTokenRaw(item.totalTokens)} ${t("unit.tokens")}">
+      <strong>${formatToken(item.totalTokens, { lang })}</strong>
+      <span>${rangeLabel}</span>
     </div>
     <span class="${badgeClass}" style="align-self:flex-start;margin-top:4px;">${badgeText}</span>
   </article>`;

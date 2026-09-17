@@ -1002,7 +1002,7 @@ nav .provider-nav-item[data-nav-status="off"] .provider-nav-dot { color: var(--m
 
 .workdir-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 12px;
   align-items: center;
   border: none;
@@ -1027,6 +1027,24 @@ nav .provider-nav-item[data-nav-status="off"] .provider-nav-dot { color: var(--m
 
 .workdir-card strong { display: block; font-size: 16px; }
 .workdir-card small, .workdir-card span { display: block; color: var(--muted); font-size: 13px; }
+
+.workdir-total {
+  min-width: 76px;
+  text-align: right;
+}
+
+.workdir-total strong {
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.workdir-total span {
+  margin-top: 2px;
+  font-size: 11px;
+}
 
 .workdir-card .workdir-meta {
   display: flex;

@@ -4251,28 +4251,12 @@ function renderDetailMeters(items = []) {
 }
 
 function renderWorkdirCards(items) {
-  const max = Math.max(...items.map((item) => item.totalTokens), 1);
-  const colorClasses = ["", "meter-yellow", "meter-violet"];
-  return items.map((item, index) => {
-    const pct = Math.round(item.contributionRatio * 100);
-    const badgeClass = pct > 50 ? "badge dark" : pct > 20 ? "badge" : "badge";
-    const badgeText = pct > 50 ? t("desktop.workdirs.tierMain") : pct > 20 ? t("desktop.workdirs.tierMid") : t("desktop.workdirs.tierSmall");
-    const costText = latestConfig?.showEstimatedCost && item.estimatedCostUsd !== undefined ? ` · ${renderCostAmount(item)}` : "";
-    const todayTokens = item.todayTokens || 0;
-    const colorClass = colorClasses[index % colorClasses.length] || "";
-    return `<article class="workdir-card" data-open-workdir="${escapeHtml(item.workdirHash)}" role="button" tabindex="0">
-    <span class="workdir-rank">#${index + 1}</span>
-    <div>
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;">
-        <strong>${escapeHtml(item.name)}</strong>
-        <span class="workdir-today">+${formatToken(todayTokens)} ${t("desktop.range.today").toLowerCase()}</span>
-      </div>
-      <span class="workdir-meta muted">${formatToken(item.totalTokens)} ${t("unit.tokens")}${costText} · ${pct}%</span>
-      <div class="workdir-progress ${colorClass}"><i style="width:${Math.max(3, (item.totalTokens / max) * 100)}%; transition: width 0.3s ease;"></i></div>
-    </div>
-    <span class="${badgeClass}" style="align-self:flex-start;margin-top:4px;">${badgeText}</span>
-  </article>`;
-  }).join("");
+  return _renderWorkdirCards(items, {
+    lang: getCurrentLang(),
+    range: workdirsRange,
+    showEstimatedCost: latestConfig?.showEstimatedCost,
+    t
+  });
 }
 
 function renderCompositionTiles(item) {
