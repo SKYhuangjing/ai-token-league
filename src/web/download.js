@@ -263,9 +263,10 @@ function profileUrl(displayId) {
 }
 
 // Click-through only: rows keep their original markup and styling, a data attribute gates navigation.
+// Covers both home leaderboard preview (.top-row) and source-top list rows (li).
 function bindProfileRowNavigation(container) {
   if (!container) return;
-  container.querySelectorAll(".top-row[data-display-id]").forEach((row) => {
+  container.querySelectorAll("[data-display-id]").forEach((row) => {
     row.addEventListener("click", () => {
       window.location.assign(profileUrl(row.dataset.displayId));
     });
