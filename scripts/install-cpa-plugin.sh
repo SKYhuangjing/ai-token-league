@@ -94,6 +94,19 @@ if [[ -n "$API_URL" ]]; then
 fi
 printf '%s' "$EXTRA"
 
+cat <<'LISTEN_NOTE'
+
+==> borrowers reach the share through CPA itself, so CPA must listen on the
+    LAN for sharing to work. In the same config.yaml:
+
+      host: 0.0.0.0        # default empty also binds all interfaces
+
+    WARNING: this exposes the WHOLE CPA (management API stays key-guarded),
+    not just the share. Pair it with an intranet/VPN. The atl-share plugin
+    detects the mismatch (LAN baseURL + loopback bind) and reports it in the
+    card; it never changes the bind itself — that is the owner's call.
+LISTEN_NOTE
+
 cat <<'FOOTER'
 
 ==> plugin state (identity/ledger) lives in ~/.ai-token-league/cpa-plugin/

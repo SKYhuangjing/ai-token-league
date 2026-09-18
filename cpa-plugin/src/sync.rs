@@ -239,6 +239,12 @@ pub(crate) fn tick() {
     }
     let api = config.api.trim_end_matches('/').to_string();
     status.api = api.clone();
+    // R53-1: advisory endpoint precheck — a LAN baseURL with a loopback-only
+    // CPA bind is dead on arrival; surface it without blocking heartbeats
+    status.endpoint_warning = bootstrap::endpoint_bind_warning(
+        &bootstrap::current_base_url(&config),
+        bootstrap::discover_cpa_bind().as_deref(),
+    );
 
     let mut usage: Vec<UsageDelta> = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.pending_usage))
         .unwrap_or_default();

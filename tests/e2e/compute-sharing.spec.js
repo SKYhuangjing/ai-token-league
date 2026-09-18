@@ -11,7 +11,7 @@ import { navigateTo } from './helpers.js';
 const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf8');
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
-const VERSION = '0.9.0';
+const VERSION = '0.9.1';
 const CATALOG = {
   version: 1,
   catalog: [
@@ -187,11 +187,14 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     // must carry the reason — a silent failure can never hide again
     await page.evaluate(() => {
       window.__ATL_E2E_STATE__.ownerShare.share.plugin.online = false;
-      window.__ATL_E2E_STATE__.pluginStatus = { phase: 'error', lastError: 'heartbeat transport: connection refused' };
+      window.__ATL_E2E_STATE__.pluginStatus = { phase: 'error', lastError: 'heartbeat transport: connection refused',
+        endpointWarning: 'share endpoint 192.168.1.4 is unreachable: CPA binds 127.0.0.1 only — set host: 0.0.0.0 in the CPA config to serve the LAN' };
     });
     await page.locator('[data-cs="refresh"]').click();
     await expect(body).toContainText('plugin offline', { timeout: 5_000 });
     await expect(body).toContainText('heartbeat transport: connection refused');
+    await expect(body).toContainText('Endpoint warning');
+    await expect(body).toContainText('CPA binds 127.0.0.1 only');
     await expect(page.locator('[data-cs="owner"]')).toBeVisible();
   });
 

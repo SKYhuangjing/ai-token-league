@@ -154,6 +154,9 @@ pub(crate) struct PluginStatus {
     pub phase: String, // off | beating | registering | registered | error
     pub last_register_attempt_at: i64,
     pub api: String,
+    /// Share endpoint misconfiguration (advisory): non-empty while the
+    /// advertised baseURL cannot be reached because of the CPA listen bind.
+    pub endpoint_warning: Option<String>,
 }
 
 pub(crate) fn status_path() -> std::path::PathBuf {
@@ -174,6 +177,7 @@ pub(crate) fn read_status() -> PluginStatus {
         phase: value.get("phase").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         last_register_attempt_at: i64_of("lastRegisterAttemptAt"),
         api: value.get("api").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        endpoint_warning: value.get("endpointWarning").and_then(|x| x.as_str()).map(String::from),
     }
 }
 
@@ -188,6 +192,7 @@ fn stable_status_key(status: &PluginStatus) -> String {
         "phase": status.phase,
         "lastRegisterAttemptAt": status.last_register_attempt_at,
         "api": status.api,
+        "endpointWarning": status.endpoint_warning,
     }))
     .unwrap_or_default()
 }
@@ -207,6 +212,7 @@ pub(crate) fn write_status(status: &PluginStatus) {
         "phase": status.phase,
         "lastRegisterAttemptAt": status.last_register_attempt_at,
         "api": status.api,
+        "endpointWarning": status.endpoint_warning,
     }))
     .unwrap_or_default();
     let mut last = LAST_WRITTEN_STATUS.lock().unwrap_or_else(|e| e.into_inner());
@@ -221,6 +227,60 @@ pub(crate) fn write_status(status: &PluginStatus) {
 
 /// CPA's own listen port, read from the same config paths cpa.rs probes.
 /// ATL_CPA_CONFIG overrides (isolated-instance testing).
+/// CPA's listen bind ("host" key; CPA semantics: absent/empty = all
+/// interfaces). None when no config is readable.
+pub(crate) fn discover_cpa_bind() -> Option<String> {
+    let parse_host = |text: &str| parse_config_yaml(text).get("host").cloned();
+    if let Ok(path) = std::env::var("ATL_CPA_CONFIG") {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Some(host) = parse_host(&text) {
+                return Some(host);
+            }
+        }
+    }
+    let home = std::env::var("HOME").ok()?;
+    let candidates = [
+        std::path::PathBuf::from(home.clone()).join("Library/Application Support/com.cpa.gui/cpa-core/config.yaml"),
+        std::path::PathBuf::from(home).join(".cli-proxy-api/config.yaml"),
+    ];
+    candidates.iter().find_map(|path| {
+        std::fs::read_to_string(path).ok().and_then(|text| parse_host(&text))
+    })
+}
+
+pub(crate) fn host_is_loopback(host: &str) -> bool {
+    let h = host.trim().to_lowercase();
+    h == "localhost" || h == "::1" || h == "[::1]" || h.split('.').next().map(|first| first == "127").unwrap_or(false)
+}
+
+pub(crate) fn host_of_url(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let authority = after_scheme.split(['/']).next().unwrap_or("");
+    let host = authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority);
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Share-endpoint reachability precheck (R53-1): the plugin never changes the
+/// host's listen bind — that is the owner's security decision — but a share
+/// advertising a LAN address while CPA binds loopback only is dead on
+/// arrival, and that must be loud from day one. Unreadable config stays
+/// silent (no opinion); detection must not block heartbeats.
+pub(crate) fn endpoint_bind_warning(base_url: &str, cpa_bind: Option<&str>) -> Option<String> {
+    let host = host_of_url(base_url)?;
+    if host_is_loopback(&host) {
+        return None;
+    }
+    let bind = cpa_bind?;
+    let bind_all = bind.trim().is_empty() || bind == "0.0.0.0" || bind == "::";
+    if bind_all {
+        return None;
+    }
+    Some(format!(
+        "share endpoint {host} is unreachable: CPA binds {bind} only — set host: 0.0.0.0 in the CPA config to serve the LAN"
+    ))
+}
+
 pub(crate) fn discover_cpa_port() -> Option<u16> {
     let parse_port = |text: &str| {
         parse_config_yaml(text).get("port").and_then(|p| p.parse::<u16>().ok())
@@ -395,6 +455,29 @@ mod tests {
         assert!(!rewritten.contains("127.0.0.1"), "legacy api must be stripped: {rewritten}");
         assert!(rewritten.contains("shareId"));
         std::env::remove_var("ATL_HOME");
+    }
+
+    #[test]
+    fn endpoint_bind_warning_detects_loopback_only_cpa() {
+        // LAN endpoint + loopback bind -> loud actionable warning
+        let warn = endpoint_bind_warning("http://192.168.1.4:8317", Some("127.0.0.1")).expect("mismatch");
+        assert!(warn.contains("192.168.1.4") && warn.contains("0.0.0.0"), "{warn}");
+        // all-interfaces and empty binds are fine; loopback targets never warn
+        assert!(endpoint_bind_warning("http://192.168.1.4:8317", Some("0.0.0.0")).is_none());
+        assert!(endpoint_bind_warning("http://192.168.1.4:8317", Some("")).is_none());
+        assert!(endpoint_bind_warning("http://127.0.0.1:8317", Some("127.0.0.1")).is_none());
+        assert!(endpoint_bind_warning("http://localhost:8317", Some("localhost")).is_none());
+        // unreadable config -> no opinion (never blocks heartbeats)
+        assert!(endpoint_bind_warning("http://192.168.1.4:8317", None).is_none());
+    }
+
+    #[test]
+    fn host_of_url_parses_scheme_port_and_ipv6() {
+        assert_eq!(host_of_url("http://192.168.1.4:8317").as_deref(), Some("192.168.1.4"));
+        assert_eq!(host_of_url("http://api.example.com/base").as_deref(), Some("api.example.com"));
+        assert_eq!(host_of_url("http://[::1]:8317").as_deref(), Some("::1"));
+        assert!(host_is_loopback("::1") && host_is_loopback("127.0.0.1") && host_is_loopback("LOCALHOST"));
+        assert!(!host_is_loopback("192.168.1.4"));
     }
 
     #[test]

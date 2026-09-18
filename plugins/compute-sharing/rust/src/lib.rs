@@ -172,7 +172,20 @@ fn borrow_test(args: &Value) -> Result<Value, String> {
         .header("authorization", format!("Bearer {}", token))
         .json(&json!({ "model": model, "max_tokens": 4, "messages": [{ "role": "user", "content": "ping" }] }))
         .send()
-        .map_err(|e| format!("transport:{}", e))?;
+        .map_err(|e| {
+            // R53-2: a LAN endpoint that cannot even connect, on a machine
+            // where CPA commonly binds loopback only, deserves the fix, not
+            // a bare transport error
+            let host = base.split_once("://").map(|(_, r)| r).unwrap_or(base.as_str());
+            let host = host.split(['/']).next().unwrap_or("");
+            let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+            let loopback = host == "localhost" || host == "::1" || host.split('.').next() == Some("127");
+            if loopback {
+                format!("transport:{}", e)
+            } else {
+                format!("transport:{} — endpoint {} unreachable; if CPA listens on 127.0.0.1 only, set host: 0.0.0.0 in the CPA config", e, host)
+            }
+        })?;
     let status = response.status().as_u16();
     let body: Value = response.json().unwrap_or(Value::Null);
     let error = body
@@ -222,6 +235,7 @@ fn plugin_status_value() -> Option<Value> {
     Some(json!({
         "phase": cap(value.get("phase").unwrap_or(&Value::Null), 24),
         "lastError": value.get("lastError").and_then(|v| v.as_str()).map(|s| cap(&Value::from(s), 160)),
+        "endpointWarning": value.get("endpointWarning").and_then(|v| v.as_str()).map(|s| cap(&Value::from(s), 220)),
         "lastTickAt": value.get("lastTickAt").and_then(|v| v.as_i64()).unwrap_or(0),
         "lastSuccessAt": value.get("lastSuccessAt").and_then(|v| v.as_i64()).unwrap_or(0),
         "api": cap(value.get("api").unwrap_or(&Value::Null), 120),

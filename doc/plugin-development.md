@@ -193,3 +193,7 @@ node scripts/publish-module.js --module-dir plugins/<your-plugin> --env env.loca
 - 密钥类数据只存自己 config（modules.json 在用户本机）；绝不要把密钥打到远端
 - 网络调用设超时（AbortSignal.timeout）+ 失败降级文案
 - 自己的定时器/观察器注意重复挂载幂等（每次进入插件屏都会重新 mount）
+
+## CPA 监听与分享可达性（R53）
+
+分享端点就是 CPA 本身：借用方流量打 CPA 端口，atl-share 只在端口上做拦截门控。要让局域网借用方可达，CPA 需监听非回环地址（`host: 0.0.0.0`，默认空即全接口）。这暴露的是整个 CPA（管理 API 仍有密钥保护），是否开放属于 owner 的安全决策——插件不改宿主配置，但会检测「LAN baseURL + 回环绑定」这一出生即死的组合并写进 status.json，卡片以「端点警告」展示；borrow-test 的传输错误也会带上针对性修复提示。

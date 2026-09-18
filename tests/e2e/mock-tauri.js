@@ -677,7 +677,7 @@
         if (cfg.ownerNotRegistered || !window.__ATL_E2E_STATE__.ownerShare) return Promise.reject(new Error("not_registered"));
         // mirror the sidecar merge (R51-4): plugin status file rides along
         const owner = clone(window.__ATL_E2E_STATE__.ownerShare);
-        if (owner.share) owner.pluginStatus = window.__ATL_E2E_STATE__.pluginStatus || { phase: 'beating', lastError: null };
+        if (owner.share) owner.pluginStatus = window.__ATL_E2E_STATE__.pluginStatus || { phase: 'beating', lastError: null, endpointWarning: null };
         return Promise.resolve(owner);
       }
       if (command === "compute-sharing:owner-policy") {

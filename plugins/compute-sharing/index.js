@@ -394,6 +394,11 @@ export default {
       }
       const lanes = share.lanes || [];
       const wall = share.wallSignal;
+      // R53-1: advisory endpoint misconfiguration (LAN baseURL + loopback
+      // CPA bind) — loud from day one, right where the owner looks
+      const endpointWarn = data.pluginStatus && data.pluginStatus.endpointWarning
+        ? `<div class="cs-wall"><span>⚠️</span><span>${esc(t("desktop.sharing.owner.endpointWarn"))}: ${esc(data.pluginStatus.endpointWarning)}</span></div>`
+        : "";
       const wallBanner = wall && wall.ownerFailed
         ? `<div class="cs-wall"><span>⚠️</span><span>${esc(t("desktop.sharing.owner.wall", { count: String(wall.ownerFailed) }))}</span></div>`
         : "";
@@ -417,7 +422,7 @@ export default {
         ? `<button class="outline-button" type="button" data-cs="claimsToggle">${esc(t(showAllClaims ? "desktop.sharing.owner.claimsCollapse" : "desktop.sharing.owner.claimsShowAll", { n: String(ended.length) }))}</button>`
         : "";
       els.ownerBody.innerHTML = `
-        ${wallBanner}
+        ${endpointWarn}${wallBanner}
         <div class="cs-row">
           <div class="cs-kv"><strong>${esc(share.title || share.shareId)}</strong>
             <span>${esc(t("web.sharing.online"))}${share.plugin && share.plugin.online ? "" : ` · ${esc(t("desktop.sharing.owner.pluginOffline"))}${pluginOfflineReason(data)}`}</span></div>
