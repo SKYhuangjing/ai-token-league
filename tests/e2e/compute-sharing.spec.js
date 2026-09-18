@@ -11,7 +11,7 @@ import { navigateTo } from './helpers.js';
 const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf8');
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 const CATALOG = {
   version: 1,
   catalog: [
@@ -247,23 +247,27 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     });
     await openCard(page, "borrow");
     await page.locator('[data-cs-claim-lane="gemini-week"]').click();
-    // secrets are masked in the DOM from the start (C5): prefix + ellipsis
+    // secrets are masked in the DOM from the start (C5): prefix + ellipsis;
+    // values render as single-line labels (grid), copy keeps the full line (B11)
     await expect(page.locator('[data-cs="mine"]')).toContainText('atl_sk_e…cret', { timeout: 5_000 });
-    await expect(page.locator('[data-cs="mine"]')).toContainText('OPENAI_BASE_URL=http://192.168.1.4:8317/v1');
+    const openaiUrl = page.locator('[data-cs-config="openai-url"]');
+    await expect(openaiUrl).toHaveText('http://192.168.1.4:8317/v1');
+    await expect(openaiUrl).toHaveAttribute('title', 'export OPENAI_BASE_URL=http://192.168.1.4:8317/v1');
     // my-claims shows the lane tag (+ model scope chip + anchor tz) so
     // borrowers know which slice they hold and which models it serves
     await expect(page.locator('[data-cs="mine"] .cs-lane-tag').first()).toHaveText('Gemini weekly');
     await expect(page.locator('[data-cs="mine"] .cs-lane-tag').nth(1)).toHaveText('gemini-*');
     await expect(page.locator('[data-cs="mine"] .cs-lane-tag').nth(2)).toHaveText('UTC+8');
     // secrets render masked by default and reveal on toggle (C5)
-    const keyRow = page.locator('[data-cs="mine"] .cs-config-row', { hasText: 'OPENAI_API_KEY' });
-    await expect(keyRow.locator('code')).toContainText('atl_sk_…cret' === 'x' ? '' : '…');
-    await expect(keyRow.locator('code')).not.toContainText('atl_sk_e2e_secret');
-    await keyRow.locator('button', { hasText: 'Reveal' }).click();
-    await expect(keyRow.locator('code')).toContainText('export OPENAI_API_KEY=atl_sk_e2e_secret');
+    const keyRow = page.locator('[data-cs="mine"] [data-cs-config="openai-key"]');
+    await expect(keyRow).toContainText('…');
+    await expect(keyRow).not.toContainText('atl_sk_e2e_secret');
+    const keyRowEl = page.locator('[data-cs="mine"] .cs-claim-row', { hasText: 'OpenAI Key' });
+    await keyRowEl.locator('button', { hasText: 'Reveal' }).click();
+    await expect(keyRow).toContainText('atl_sk_e2e_secret');
     // copy yields the full executable export line, not the bare value (B11)
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
-    await keyRow.locator('button', { hasText: 'Copy' }).click();
+    await keyRowEl.locator('button', { hasText: 'Copy' }).click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe('export OPENAI_API_KEY=atl_sk_e2e_secret');
     const signs = await page.evaluate(() => window.__ATL_E2E_STATE__.borrowCalls.signs);

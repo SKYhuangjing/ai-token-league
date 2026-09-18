@@ -45,6 +45,17 @@ const STYLE = `
 .cs-lane-tag { font-size: 11px; color: var(--muted, #888); border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 999px; padding: 1px 8px; }
 .cs-wall { display: flex; gap: 8px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--gold, #c90); border-radius: 10px; margin-bottom: 6px; font-size: 12.5px; }
 .cs-templates { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* 认领卡（我的认领）：标签/值/操作网格，值不折行 */
+.cs-claim-config { display: flex; flex-direction: column; gap: 5px; }
+.cs-claim-row { display: flex; align-items: center; gap: 8px; }
+.cs-claim-label { flex: 0 0 108px; font-size: 11px; color: var(--muted, #888); white-space: nowrap; }
+.cs-claim-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.cs-claim-mini { padding: 2px 8px; font-size: 11px; }
+.cs-claim-section { margin: 10px 0 4px; font-size: 11px; letter-spacing: .06em; color: var(--muted, #888); border-bottom: 1px solid var(--border-subtle, #e3e3e0); padding-bottom: 2px; }
+.cs-claim-meta { line-height: 1.5; }
+.cs-test-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cs-test-row .grow { flex: 1 1 160px; min-width: 0; }
+.cs-claim-footer { justify-content: flex-end; border-top: 1px dashed var(--border-subtle, #e3e3e0); padding-top: 6px; }
 .cs-suggest-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
 .cs-reserve { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted, #888); }
 .cs-reserve input { width: 52px; text-align: right; }
@@ -743,43 +754,29 @@ export default {
     }
 
     // ── 算力借用（车道目录 + 我的认领） ────────────────────────────────────
+    // 认领卡「接入配置」：标签/值/操作三列网格。值单行省略号截断（悬停看全量），
+    // 复制始终给完整可执行行（B11）——可读性来自不折行，不是靠缩短内容。
     function configBlock(claim) {
       const base = String(claim.baseURL || "").replace(/\/+$/, "");
       const block = document.createElement("div");
-      block.className = "cs-config";
+      block.className = "cs-claim-config";
       const maskOf = (value) => (value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : "…");
-      for (const [name, value, secret] of [
-        ["OPENAI_BASE_URL", `${base}/v1`, false],
-        ["OPENAI_API_KEY", claim.token, true],
-        ["ANTHROPIC_BASE_URL", base, false],
-        ["ANTHROPIC_AUTH_TOKEN", claim.token, true],
+      for (const [id, labelKey, name, value, secret] of [
+        ["openai-url", "desktop.sharing.borrow.label.openaiUrl", "OPENAI_BASE_URL", `${base}/v1`, false],
+        ["openai-key", "desktop.sharing.borrow.label.openaiKey", "OPENAI_API_KEY", claim.token, true],
+        ["anthropic-url", "desktop.sharing.borrow.label.anthropicUrl", "ANTHROPIC_BASE_URL", base, false],
+        ["anthropic-token", "desktop.sharing.borrow.label.anthropicToken", "ANTHROPIC_AUTH_TOKEN", claim.token, true],
       ]) {
-        const row = document.createElement("div");
-        row.className = "cs-config-row";
+        const label = document.createElement("span");
+        label.className = "cs-claim-label";
+        label.textContent = t(labelKey);
         const code = document.createElement("code");
+        code.className = "cs-claim-value";
+        code.dataset.csConfig = id;
+        code.title = `export ${name}=${value}`;
         const line = () => `export ${name}=${value}`;
-        // secrets render masked (screenshot-safe) with a reveal toggle; the
-        // copy action always copies the full executable export line (B11)
-        if (secret) {
-          let revealed = false;
-          const render = () => { code.textContent = revealed ? line() : `export ${name}=${maskOf(value)}`; };
-          render();
-          const reveal = document.createElement("button");
-          reveal.className = "outline-button";
-          reveal.type = "button";
-          reveal.textContent = t("desktop.sharing.borrow.reveal");
-          reveal.addEventListener("click", () => {
-            revealed = !revealed;
-            render();
-            reveal.textContent = t(revealed ? "desktop.sharing.borrow.hide" : "desktop.sharing.borrow.reveal");
-          });
-          row.append(code, reveal);
-        } else {
-          code.textContent = line();
-          row.append(code);
-        }
         const copy = document.createElement("button");
-        copy.className = "outline-button";
+        copy.className = "outline-button cs-claim-mini";
         copy.type = "button";
         copy.textContent = t("desktop.sharing.borrow.copy");
         copy.addEventListener("click", () => {
@@ -788,8 +785,27 @@ export default {
             setTimeout(() => { copy.textContent = t("desktop.sharing.borrow.copy"); }, 1200);
           });
         });
+        const row = document.createElement("div");
+        row.className = "cs-claim-row";
+        if (!secret) code.textContent = value;
+        row.append(label, code);
+        if (secret) {
+          let revealed = false;
+          const render = () => { code.textContent = revealed ? value : maskOf(value); };
+          render();
+          const reveal = document.createElement("button");
+          reveal.className = "outline-button cs-claim-mini";
+          reveal.type = "button";
+          reveal.textContent = t("desktop.sharing.borrow.reveal");
+          reveal.addEventListener("click", () => {
+            revealed = !revealed;
+            render();
+            reveal.textContent = t(revealed ? "desktop.sharing.borrow.hide" : "desktop.sharing.borrow.reveal");
+          });
+          row.append(reveal);
+        }
         row.append(copy);
-        block.appendChild(row);
+        block.append(row);
       }
       return block;
     }
@@ -877,17 +893,23 @@ export default {
             <strong>${esc(claim.shareTitle || claim.shareId)}</strong>
             <span class="cs-muted">${esc(String(claim.keyId).slice(0, 11))}…</span>
           </div>
-          <div class="cs-muted">${claim.laneTitle ? `<span class="cs-lane-tag">${esc(claim.laneTitle)}</span>${claim.models && claim.models.length ? ` <span class="cs-lane-tag">${esc(claim.models.join(", "))}</span>` : ""}${claim.tzLabel ? ` <span class="cs-lane-tag">${esc(claim.tzLabel)}</span>` : ""} · ` : ""}${esc(t("desktop.sharing.borrow.expires"))}: ${esc(fmtDateTime(claim.expiresAt))}${live ? ` · ${esc(t("desktop.sharing.borrow.used"))}: ${esc(compact(live.usedTokens))}` : ""}${state !== "valid" ? ` · <span class="cs-state">${esc(t(state === "revoked" ? "desktop.sharing.borrow.stateRevoked" : "desktop.sharing.borrow.stateExpired"))}</span>` : ""}</div>`;
+          <div class="cs-muted cs-claim-meta">${claim.laneTitle ? `<span class="cs-lane-tag">${esc(claim.laneTitle)}</span>${claim.models && claim.models.length ? ` <span class="cs-lane-tag">${esc(claim.models.join(", "))}</span>` : ""}${claim.tzLabel ? ` <span class="cs-lane-tag">${esc(claim.tzLabel)}</span>` : ""}` : ""}</div>
+          <div class="cs-muted cs-claim-meta">${esc(t("desktop.sharing.borrow.expires"))}: ${esc(fmtDateTime(claim.expiresAt))}${live ? ` · ${esc(t("desktop.sharing.borrow.used"))}: ${esc(compact(live.usedTokens))}` : ""}${state !== "valid" ? ` · <span class="cs-state">${esc(t(state === "revoked" ? "desktop.sharing.borrow.stateRevoked" : "desktop.sharing.borrow.stateExpired"))}</span>` : ""}</div>
+          <div class="cs-claim-section">${esc(t("desktop.sharing.borrow.sectionConfig"))}</div>`;
         if (state === "valid") {
           row.appendChild(configBlock(claim));
+          const testHead = document.createElement("div");
+          testHead.className = "cs-claim-section";
+          testHead.textContent = t("desktop.sharing.borrow.sectionTest");
+          row.appendChild(testHead);
           // connectivity test (G3): one minimal generation through the owner's
           // CPA — the sidecar relays it (no CORS on CPA). The model input
           // defaults to the lane's exact model; wildcards need a real name.
           const exactModel = (claim.models || []).find((m) => m && !m.includes("*"));
           const test = document.createElement("div");
-          test.className = "cs-fields";
+          test.className = "cs-fields cs-test-row";
           test.innerHTML = `
-            <label class="grow">${esc(t("desktop.sharing.borrow.testModel"))}<input data-cs-test-model="${esc(claim.keyId)}" type="text" placeholder="${esc(exactModel || "gemini-3.8-flash-high")}" /></label>
+            <input class="grow" data-cs-test-model="${esc(claim.keyId)}" type="text" placeholder="${esc(t("desktop.sharing.borrow.testModel"))}: ${esc(exactModel || "gemini-3.8-flash-high")}" />
             <button class="outline-button" type="button" data-cs-test="${esc(claim.keyId)}">${esc(t("desktop.sharing.borrow.test"))}</button>
             <span class="cs-status" data-cs-test-result="${esc(claim.keyId)}"></span>`;
           row.appendChild(test);
@@ -912,9 +934,9 @@ export default {
             }
           }));
           const actions = document.createElement("div");
-          actions.className = "cs-actions";
+          actions.className = "cs-actions cs-claim-footer";
           const revoke = document.createElement("button");
-          revoke.className = "outline-button";
+          revoke.className = "link-button";
           revoke.type = "button";
           revoke.textContent = t("desktop.sharing.borrow.revoke");
           revoke.addEventListener("click", () => guard(() => revokeClaim(claim)));
