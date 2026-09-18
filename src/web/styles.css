@@ -7992,6 +7992,19 @@ body.page-home::before {
   white-space: nowrap;
 }
 
+.admin-shell .sources-top-card {
+  margin: 0 20px 14px;
+}
+
+.admin-shell .sources-top-card .sources-card-head {
+  align-items: baseline;
+}
+
+.admin-shell .sources-top-card .source-top-grid {
+  padding: 0 16px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
 .admin-shell .sources-viz-grid {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);

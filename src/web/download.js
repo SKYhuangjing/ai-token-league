@@ -8,6 +8,7 @@ import {
   renderModelSegments, renderCost, renderTrendChart,
   renderBarChart, renderDonutChart, renderActivityHeatmap, renderParticipantTreemap
 } from "/shared/chart-helpers.js";
+import { mountSourceTop } from "/shared/source-top.js";
 import { initPublicNavProfile, rememberProfileId } from "/public-nav-profile.js";
 
 initI18n();
@@ -304,34 +305,10 @@ function renderLeaderboardPreview(items) {
 }
 
 function renderSourceTop(sources = []) {
-  const el = document.querySelector("#home-source-top");
-  if (!el) return;
-  const blocks = sources.filter((source) => (source.items || []).length);
-  if (!blocks.length) {
-    el.innerHTML = `<div class="meter-empty">${t("web.leaderboard.noUsage")}</div>`;
-    return;
-  }
-  el.innerHTML = blocks
-    .map((source) => {
-      const count = Number(source.participantCount || 0);
-      const rows = (source.items || [])
-        .map((item, index) => {
-          const displayIdAttr = item.displayId ? ` data-display-id="${escapeHtml(item.displayId)}"` : "";
-          return `<li${displayIdAttr} data-tooltip="${escapeHtml(modelUsageTitle(item, localeTokenCompact))}">
-            <span class="source-top-row-name">#${index + 1} · ${escapeHtml(item.displayName || "")}</span>
-            <b>${localeTokenCompact(item.totalTokens)}</b>
-          </li>`;
-        })
-        .join("");
-      return `<div class="source-top-block">
-        <h3 class="source-top-name">${escapeHtml(sourceName(source.name))}</h3>
-        <strong class="source-top-total">${localeTokenCompact(Number(source.totalTokens || 0))}</strong>
-        <p class="source-top-sub">${escapeHtml(t("web.home.sourceTopParticipantCount", { count, plural: count === 1 ? "" : "s" }))}</p>
-        <ol class="source-top-rows">${rows}</ol>
-      </div>`;
-    })
-    .join("");
-  bindProfileRowNavigation(el);
+  mountSourceTop(document.querySelector("#home-source-top"), sources, {
+    formatToken: localeTokenCompact,
+    profileUrl
+  });
 }
 
 async function loadSourceLeaderboard() {

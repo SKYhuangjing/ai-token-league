@@ -2,6 +2,7 @@ import { tokenCompositionDetails } from "/shared/composition.js";
 import { initI18n, t, getCurrentLang, mountLangSwitcher, updatePageTranslations } from "/shared/i18n.js";
 import { formatTokenCompact } from "/shared/display.js";
 import { renderDonutChart, smoothLinePath, sourceName, rankSeriesColor, positionTooltip } from "/shared/chart-helpers.js";
+import { mountSourceTop } from "/shared/source-top.js";
 
 initI18n();
 mountLangSwitcher("#lang-switcher-container", () => window.location.reload());
@@ -93,6 +94,8 @@ function showAuthRequired() {
   tbody.innerHTML = `<tr><td class="empty" colspan="8">${message}</td></tr>`;
   const sourcesTbody = document.querySelector("#sources-tbody");
   if (sourcesTbody) sourcesTbody.innerHTML = `<tr><td class="empty" colspan="5">${message}</td></tr>`;
+  const sourcesTop = document.querySelector("#sources-top");
+  if (sourcesTop) sourcesTop.innerHTML = `<div class="meter-empty">${escapeHtml(message)}</div>`;
 }
 
 function applyUsageView() {
@@ -1132,9 +1135,18 @@ function renderSourceStatsBoard(data = {}) {
     });
   }
   renderSourceStatsSummary(data, sources);
+  renderSourceTopBoard(data.sourceTop || []);
   renderSourceShare(sources);
   renderSourceTrends(sources, data);
   renderSourceTable(sources);
+}
+
+function renderSourceTopBoard(sources = []) {
+  mountSourceTop(document.querySelector("#sources-top"), sources, {
+    formatToken,
+    emptyMessage: t("admin.sources.empty"),
+    profileUrl: (id) => adminProfileUrl(id)
+  });
 }
 
 function renderSourceStatsSummary(data, sources) {
@@ -1871,10 +1883,19 @@ function renderCostQuality(item) {
   return `<span class="cost-quality ${escapeHtml(quality)}" title="${escapeHtml(costTitle(item))}">${cost}${priceLine}</span>`;
 }
 
+function primarySliceTooltip(items = []) {
+  if (items.length <= 1) return "";
+  const total = items.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0) || 1;
+  return items
+    .map((item) => `${item.name}: ${formatToken(item.totalTokens)} (${Math.round((Number(item.totalTokens || 0) / total) * 100)}%)`)
+    .join("\n");
+}
+
 function renderPrimarySlice(items = []) {
   const [first, ...rest] = items;
   if (!first) return `<span class="muted-cell">-</span>`;
-  return `<span class="primary-slice">
+  const tip = primarySliceTooltip(items);
+  return `<span class="primary-slice"${tip ? ` data-tooltip="${escapeHtml(tip)}" tabindex="0"` : ""}>
     <strong>${escapeHtml(first.name)}</strong>
     <small>${formatToken(first.totalTokens)}${rest.length ? ` · +${rest.length}` : ""}</small>
   </span>`;

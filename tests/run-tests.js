@@ -4907,6 +4907,10 @@ async function testAdminSourceStatsEndpoint() {
     assert.deepEqual(codex.trend.at(-1), { day, totalTokens: 500 });
     assert.deepEqual(codex.trend.find((entry) => entry.day === previousDay), { day: previousDay, totalTokens: 300 });
     assert.deepEqual(codex.trend[0], { day: addDays(day, -6), totalTokens: 0 });
+    assert.ok(Array.isArray(today.sourceTop));
+    assert.equal(today.sourceTop[0].name, "codex_local");
+    assert.equal(today.sourceTop[0].items[0].nickname, "stats-alpha");
+    assert.equal(today.sourceTop[0].items[0].totalTokens, 500);
     const claude = today.sources[1];
     assert.equal(claude.name, "claude_code_local");
     assert.equal(claude.totalTokens, 200);
@@ -6073,6 +6077,12 @@ function testWebAdminStructure() {
   assert.match(js, /iframe && !iframe\.dataset\.loaded/);
   assert.match(js, /function setAdminPanelBusy/);
   assert.strictEqual((js.match(/renderPrimarySource\(item\.providers\)/g) || []).length, 2, "ranking and aggregate rows should render provider data");
+  assert.match(js, /function primarySliceTooltip/);
+  assert.match(js, /primary-slice".*?data-tooltip/);
+  assert.match(js, /mountSourceTop/);
+  assert.match(js, /renderSourceTopBoard/);
+  assert.match(html, /id="sources-top"/);
+  assert.match(html, /admin\.sources\.topTitle/);
   assert.match(js, /codex_local:\s*"Codex"/);
   assert.match(js, /panel\.classList\.toggle\("is-refreshing", on\)/);
   assert.match(js, /panel\.classList\.add\("is-entering"\)/);
@@ -6109,6 +6119,8 @@ function testWebDownloadStructure() {
   assert.match(js, /renderParticipantTreemap/);
   // Source-top / today-top rows keep their original article markup; click-through is JS-only.
   assert.match(js, /bindProfileRowNavigation/);
+  assert.match(js, /mountSourceTop/);
+  assert.match(js, /from\s+["']\/shared\/source-top\.js["']/);
   assert.doesNotMatch(js, /<a class="top-row/);
   assert.match(js, /renderDonutChart/);
   assert.match(js, /renderActivityHeatmap/);
@@ -6123,6 +6135,9 @@ function testWebDownloadStructure() {
   assert.match(shared, /export function formatCost/);
   assert.match(shared, /export function sourceName/);
   assert.match(shared, /export function normalizeModelSegments/);
+  const sourceTop = fs.readFileSync("src/shared/source-top.js", "utf8");
+  assert.match(sourceTop, /export function mountSourceTop/);
+  assert.match(sourceTop, /export function renderSourceTopHtml/);
   assert.match(js, /darwin|windows|platform/i);
   assert.match(fs.readFileSync("src/web/styles.css", "utf8"), /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation-duration: 0\.01ms/);
   console.log("  testWebDownloadStructure passed");

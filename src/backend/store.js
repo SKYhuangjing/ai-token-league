@@ -2309,6 +2309,12 @@ export class Store {
       })
       .sort((a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name));
     const bounds = rangeBounds(days, Object.values(this.db.usageDaily || {}).filter((item) => matchesDaySet(item.day, daySet)));
+    const sourceTop = this.computeSourceLeaderboard({
+      range,
+      startDay,
+      endDay,
+      top: SOURCE_LEADERBOARD_DEFAULT_TOP
+    }).sources;
     return {
       range,
       from: bounds.from,
@@ -2317,7 +2323,8 @@ export class Store {
       trendFrom: trendDayList[0] || "",
       trendTo: trendDayList.at(-1) || "",
       totalTokens,
-      sources
+      sources,
+      sourceTop
     };
   }
 
