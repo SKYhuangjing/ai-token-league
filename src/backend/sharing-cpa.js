@@ -28,6 +28,10 @@ const DEFAULT_POLICY = {
 };
 const HEARTBEAT_ONLINE_MS = 120_000; // claim requires a live plugin heartbeat
 const CLAIM_RATE_PER_MINUTE = 6;
+// Anti-hoarding (M4): one borrower holding every node's slots must not be
+// possible once the directory grows. Counted per participant over valid
+// claims; revoking frees capacity immediately.
+const MAX_ACTIVE_CLAIMS_PER_BORROWER = 5;
 // Signed-claim freshness window: the device signature covers {kind,
 // participantId, shareId, ts}; stale signatures are rejected to prevent replay.
 const CLAIM_TS_WINDOW_MS = 10 * 60 * 1000;
@@ -840,6 +844,17 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
 
   async function handleClaim(req, res, body) {
     const ip = req.socket.remoteAddress || "unknown";
+    const activeMine = Object.values(db.claims).filter(
+      (c) => c.state === "valid" && c.participantId === String(body.participantId || ""),
+    ).length;
+    if (body.participantId && activeMine >= MAX_ACTIVE_CLAIMS_PER_BORROWER) {
+      sendJson(res, 409, {
+        error: "too_many_active_claims",
+        active: activeMine,
+        max: MAX_ACTIVE_CLAIMS_PER_BORROWER,
+      });
+      return;
+    }
     if (!claimRateOk(ip)) {
       sendJson(res, 429, { error: "rate_limited" });
       return;

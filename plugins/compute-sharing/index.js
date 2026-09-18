@@ -58,6 +58,16 @@ const STYLE = `
 .cs-test-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cs-test-row .grow { flex: 1 1 160px; min-width: 0; }
 .cs-claim-footer { justify-content: flex-end; border-top: 1px dashed var(--border-subtle, #e3e3e0); padding-top: 6px; }
+.cs-dir-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.cs-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.cs-chip { border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 999px; background: transparent; padding: 2px 10px; font-size: 11.5px; cursor: pointer; color: var(--muted, #888); white-space: nowrap; }
+.cs-chip.active { background: var(--subtle-bg, #eee); color: inherit; font-weight: 600; }
+.cs-check { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted, #888); white-space: nowrap; }
+.cs-dir-card { margin-bottom: 6px; }
+.cs-lane-more { font-size: 11.5px; color: var(--muted, #888); cursor: pointer; background: transparent; border: 0; padding: 2px 0; }
+.cs-t3 { margin-top: 6px; border-top: 1px dashed var(--border-subtle, #e3e3e0); padding-top: 6px; }
+.cs-t3-row { padding: 2px 0; opacity: .7; }
+.cs-hidden-note { margin-top: 6px; opacity: .8; }
 .cs-suggest-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
 .cs-reserve { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted, #888); }
 .cs-reserve input { width: 52px; text-align: right; }
@@ -183,7 +193,11 @@ export default {
           invalid_signature: "desktop.sharing.borrow.identityFailed",
           claim_not_found: "desktop.sharing.borrow.claimGone",
           share_not_active: "web.sharing.paused",
+          too_many_active_claims: "desktop.sharing.borrow.tooManyClaims",
         }[data.error];
+        if (data.error === "too_many_active_claims") {
+          throw new Error(t("desktop.sharing.borrow.tooManyClaims", { active: String(data.active ?? "?"), max: String(data.max ?? "?") }));
+        }
         const detail = data.retryAfterMs
           ? t("desktop.sharing.borrow.retryAt", { time: clockText(Date.now() + data.retryAfterMs) })
           : "";
@@ -851,11 +865,47 @@ export default {
       </div>`;
     }
 
+    const hbAgeOf = (share) => Date.now() - (((share.plugin || {}).lastHeartbeatAt) || 0);
+
     function borrowStatusView(share) {
       if (!share.online) return { cls: "off", label: t("web.sharing.offline") };
       if (share.state && share.state !== "active") return { cls: "paused", label: t("web.sharing.paused") };
       return { cls: "on", label: t("web.sharing.online") };
     }
+
+    // ── 目录规模化（M1-M3/M5）：分层 → 排序 → 过滤 → 折叠，先算后渲染 ──
+    const laneClaimable = (lane) => lane.state !== "suspended" && lane.open && !lane.exhausted
+      && (lane.slotsLeft ?? 0) > 0 && (lane.availableTokens ?? lane.budgetTokens ?? 1) > 0;
+    // T1 可认领 / T2 等待开放（时段未开但有名额有量）/ T3 其余（耗尽·满员·暂停）
+    const shareTierOf = (share) => {
+      const lanes = share.lanes || [];
+      if (lanes.length) {
+        if (lanes.some(laneClaimable)) return 1;
+        if (lanes.some((l) => l.state !== "suspended" && !l.open && (l.slotsLeft ?? 0) > 0 && !l.exhausted)) return 2;
+        return 3;
+      }
+      if (share.state === "active" && (share.slotsLeft ?? 0) > 0 && !share.exhausted) return 1;
+      return share.state === "active" ? 2 : 3;
+    };
+    const shareRemainingRatio = (share) => {
+      const lanes = share.lanes || [];
+      const ratio = (budget, available) => (budget > 0 ? Math.min(1, (available ?? budget) / budget) : 0);
+      return lanes.length
+        ? Math.max(...lanes.map((l) => ratio(l.budgetTokens, l.availableTokens)))
+        : ratio(share.budgetTokens, share.availableTokens);
+    };
+    const familyOfModel = (model) => (model.includes("*") ? model : `${model.split("-")[0]}-*`);
+    const laneMatchesFamily = (lane, family) => (lane.models || []).some((m) => {
+      if (m === family) return true;
+      const lanePrefix = m.endsWith("*") ? m.slice(0, -1) : null;
+      const famPrefix = family.endsWith("*") ? family.slice(0, -1) : null;
+      return (lanePrefix !== null && family.startsWith(lanePrefix)) || (famPrefix !== null && m.startsWith(famPrefix));
+    });
+    // 会话内过滤态：目录是低频操作面，不持久化（方案 §5.2）
+    let borrowFilterFamily = null;
+    let borrowOnlyAvailable = true;
+    const borrowExpandedLanes = new Set();
+    let borrowT3Open = false;
 
     function renderDirectory(shares, noBase) {
       if (noBase) {
@@ -867,21 +917,96 @@ export default {
         els.directory.innerHTML = `<div class="cs-muted">${esc(t("web.sharing.empty"))}</div>`;
         return;
       }
-      els.directory.innerHTML = online.map((share) => {
+      // M1: tier → remaining ratio → heartbeat freshness → title（稳定排序）
+      const ranked = online
+        .map((share) => ({ share, tier: shareTierOf(share) }))
+        .sort((a, b) => (a.tier - b.tier)
+          || (shareRemainingRatio(b.share) - shareRemainingRatio(a.share))
+          || (hbAgeOf(a.share) - hbAgeOf(b.share))
+          || String(a.share.title).localeCompare(String(b.share.title)));
+      const families = [...new Set(online.flatMap((s) => (s.lanes || []).flatMap((l) => (l.models || []).map(familyOfModel))))].sort();
+      const filterLanes = (lanes) => (borrowFilterFamily ? lanes.filter((l) => laneMatchesFamily(l, borrowFilterFamily)) : lanes);
+      // T3 never renders as a card — it lives in the collapsed tail group;
+      // the claimable-only toggle additionally hides waiting (T2) nodes
+      const visible = ranked.filter(({ share, tier }) => {
+        if (tier === 3) return false;
+        if (borrowOnlyAvailable && tier !== 1) return false;
+        if (borrowFilterFamily && !(share.lanes || []).some((l) => laneMatchesFamily(l, borrowFilterFamily))) return false;
+        return true;
+      });
+      const hiddenCount = ranked.length - visible.length;
+
+      const chips = [`<button class="cs-chip${borrowFilterFamily === null ? " active" : ""}" type="button" data-cs-family="">${esc(t("desktop.sharing.borrow.filterAll"))}</button>`,
+        ...families.map((f) => `<button class="cs-chip${borrowFilterFamily === f ? " active" : ""}" type="button" data-cs-family="${esc(f)}">${esc(f)}</button>`)].join("");
+      const toolbar = `<div class="cs-dir-tools">
+        <span class="cs-chips">${chips}</span>
+        <label class="cs-check"><input type="checkbox" data-cs="onlyAvailable"${borrowOnlyAvailable ? " checked" : ""} /><span>${esc(t("desktop.sharing.borrow.onlyAvailable"))}</span></label>
+      </div>`;
+
+      const LANES_SHOWN = 3;
+      const cardOf = ({ share }) => {
         const status = borrowStatusView(share);
-        const lanes = share.lanes || [];
+        const lanes = filterLanes(share.lanes || []);
+        const expanded = borrowExpandedLanes.has(share.shareId);
+        const shown = expanded ? lanes : lanes.slice(0, LANES_SHOWN);
+        const more = lanes.length - shown.length;
         const header = `<div class="cs-row">
           <div class="cs-kv"><strong>${esc(share.title)}</strong>
             <span class="cs-dot cs-dot-${status.cls}" title="${esc(status.label)}"></span></div>
           ${lanes.length ? "" : `<div class="cs-actions">
             <span class="cs-muted">${esc(t("web.sharing.slots"))}: ${share.slotsLeft > 0 ? share.slotsLeft : esc(t("web.sharing.claimFull"))}</span>
+            <span class="cs-grow"></span>
             <button class="primary-pill" data-cs-claim="${esc(share.shareId)}" type="button"${share.state === "active" && share.slotsLeft > 0 && !share.exhausted ? "" : " disabled"}>${esc(t("desktop.sharing.borrow.claim"))}</button>
           </div>`}
         </div>`;
-        // lanes render inside the share card (each claims its own key);
-        // legacy single-pool shares keep the share-level claim button above
-        return header + lanes.map((lane) => laneClaimRow(share, lane)).join("");
-      }).join("");
+        const expander = more > 0
+          ? `<button class="cs-tpl-del cs-lane-more" type="button" data-cs-lanes-more="${esc(share.shareId)}">${esc(t("desktop.sharing.borrow.expandLanes", { n: String(more) }))}</button>`
+          : (expanded && lanes.length > LANES_SHOWN
+            ? `<button class="cs-tpl-del cs-lane-more" type="button" data-cs-lanes-more="${esc(share.shareId)}">${esc(t("desktop.sharing.borrow.collapseLanes"))}</button>`
+            : "");
+        return `<div class="cs-dir-card">${header}${shown.map((lane) => laneClaimRow(share, lane)).join("")}${expander}</div>`;
+      };
+
+      const t3Group = (!borrowOnlyAvailable || hiddenCount > 0) && !borrowOnlyAvailable
+        ? "" : ""; // placeholder, replaced below
+      const t3 = ranked.filter((x) => x.tier === 3);
+      const t3Section = t3.length && !borrowOnlyAvailable
+        ? `<div class="cs-t3">
+            <button class="cs-lane-more" type="button" data-cs="t3Toggle">${esc(t("desktop.sharing.borrow.hiddenGroup", { n: String(t3.length) }))}${borrowT3Open ? " ▴" : " ▾"}</button>
+            ${borrowT3Open ? t3.map(({ share }) => `<div class="cs-kv cs-t3-row"><span>${esc(share.title)}</span><span class="cs-muted">${esc(borrowStatusView(share).label)} · ${esc(t("web.sharing.slots"))}: ${share.slotsLeft > 0 ? share.slotsLeft : esc(t("web.sharing.claimFull"))}</span></div>`).join("") : ""}
+          </div>`
+        : "";
+
+      const body = visible.length
+        ? visible.map(cardOf).join("")
+        : `<div class="cs-muted">${esc(t("desktop.sharing.borrow.emptyFiltered"))} <button class="cs-tpl-del" type="button" data-cs="clearFilter">${esc(t("desktop.sharing.borrow.clearFilter"))}</button></div>`;
+      const hiddenNote = borrowOnlyAvailable && hiddenCount > 0
+        ? `<div class="cs-muted cs-hidden-note">${esc(t("desktop.sharing.borrow.hiddenNote", { n: String(hiddenCount) }))}</div>`
+        : "";
+      els.directory.innerHTML = toolbar + body + hiddenNote + t3Section;
+
+      for (const chip of els.directory.querySelectorAll("[data-cs-family]")) {
+        chip.addEventListener("click", () => {
+          borrowFilterFamily = chip.dataset.csFamily || null;
+          renderDirectory(shares, noBase);
+        });
+      }
+      const onlyBox = els.directory.querySelector('[data-cs="onlyAvailable"]');
+      if (onlyBox) onlyBox.addEventListener("change", () => {
+        borrowOnlyAvailable = onlyBox.checked;
+        renderDirectory(shares, noBase);
+      });
+      for (const btn of els.directory.querySelectorAll("[data-cs-lanes-more]")) {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.csLanesMore;
+          if (borrowExpandedLanes.has(id)) borrowExpandedLanes.delete(id); else borrowExpandedLanes.add(id);
+          renderDirectory(shares, noBase);
+        });
+      }
+      const t3Btn = els.directory.querySelector('[data-cs="t3Toggle"]');
+      if (t3Btn) t3Btn.addEventListener("click", () => { borrowT3Open = !borrowT3Open; renderDirectory(shares, noBase); });
+      const clearBtn = els.directory.querySelector('[data-cs="clearFilter"]');
+      if (clearBtn) clearBtn.addEventListener("click", () => { borrowFilterFamily = null; borrowOnlyAvailable = true; renderDirectory(shares, noBase); });
       for (const button of els.directory.querySelectorAll("[data-cs-claim]")) {
         button.addEventListener("click", () => guard(() => claimShare(button.dataset.csClaim, button.dataset.csClaimLane || null)));
       }

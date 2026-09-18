@@ -9985,6 +9985,34 @@ async function testSharingCpaUnregisterAndAdmin() {
   });
 }
 
+async function testSharingBorrowerCap() {
+  await withCpaServer({}, async (base, dir, identity) => {
+    const reg = await (await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: { title: "cap", baseURL: "http://10.0.0.2:8317", ...signedRegisterBody(identity) },
+    })).json();
+    await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret: reg.shareSecret, body: {} });
+    // fill the ceiling: five concurrent valid keys for the same borrower
+    const tokens = [];
+    for (let i = 0; i < 5; i += 1) {
+      const claim = await (await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(reg.shareId, identity) })).json();
+      tokens.push(claim.token);
+    }
+    // the 6th is rejected with the mapped anti-hoarding error, not slot
+    // exhaustion (the cap check runs before slot accounting)
+    const capped = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(reg.shareId, identity) });
+    assert.equal(capped.status, 409);
+    const cappedBody = await capped.json();
+    assert.equal(cappedBody.error, "too_many_active_claims");
+    assert.equal(cappedBody.active, 5);
+    assert.equal(cappedBody.max, 5);
+    // revoking frees capacity immediately (valid count is live)
+    await cpaFetch(base, "/api/shares/claims/revoke", { method: "POST", body: { token: tokens[0] } });
+    const again = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(reg.shareId, identity) });
+    assert.equal(again.status, 200);
+  });
+}
+
 // Deterministic local-time schedule helpers: windows are built relative to
 // the current wall clock with 30-minute margins so minute rolls can't flip
 // an assertion mid-test.
@@ -10179,6 +10207,7 @@ async function testSharingCpaAdminGuardAndPolicy() {
 
 await testSharingCpaRegisterHeartbeatClaim();
 await testSharingCpaUnregisterAndAdmin();
+  await testSharingBorrowerCap();
 await testSharingCpaAdminGuardAndPolicy();
 await testSharingCpaLanes();
 await testSharingCpaLanesLegacyCompat();

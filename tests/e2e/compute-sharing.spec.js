@@ -11,7 +11,7 @@ import { navigateTo } from './helpers.js';
 const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf8');
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
-const VERSION = '0.8.5';
+const VERSION = '0.9.0';
 const CATALOG = {
   version: 1,
   catalog: [
@@ -416,6 +416,52 @@ const borrowerOnly = scenarioTest({
   ownerNotRegistered: true,
   modules: { 'compute-sharing': { enabled: true, config: {}, installedVersion: VERSION } },
 });
+
+  installed('borrower directory scale (M1-M3): tiers, chips, collapse, cap message', async ({ page }) => {
+    const lane = (over) => ({ id: over.id, title: over.id, models: over.models ?? ['gemini-*'], window: { unit: 'day', n: 1 },
+      budgetTokens: over.budget ?? 1000000, settledTokens: over.settled ?? 0, availableTokens: (over.budget ?? 1000000) - (over.settled ?? 0),
+      exhausted: Boolean(over.exhausted), state: over.state ?? 'active', open: over.open ?? true, retryAfterMs: over.retry ?? 0,
+      slotsLeft: over.slots ?? 2, maxClaims: 3, tzLabel: 'UTC+8', schedule: [], peak: { windows: [], multiplier: 1 } });
+    const share = (over) => ({ shareId: over.id, title: over.title, models: ['*'], online: true, state: 'active',
+      slotsLeft: 2, budgetTokens: 1000000, settledTokens: 0, availableTokens: 1000000, exhausted: false, updatedAt: Date.now(),
+      plugin: { online: true, version: '0.3.1', lastHeartbeatAt: 1234567890000 },  // fixed: heartbeat ties fall through to title
+      lanes: over.lanes });
+    await page.route('**/api/shares', (route) => route.fulfill({ json: { shares: [
+      share({ id: 'shr_t3', title: 'Drained node', lanes: [lane({ id: 'dry', exhausted: true, settled: 1000000 })] }),
+      share({ id: 'shr_t1', title: 'Fresh node', lanes: [lane({ id: 'big', budget: 2000000 }), lane({ id: 'small', budget: 100000, models: ['gpt-*'], settled: 90000 })] }),
+      share({ id: 'shr_t2', title: 'Night node', lanes: [lane({ id: 'night', open: false, retry: 3600000 })] }),
+      share({ id: 'shr_many', title: 'Many lanes', lanes: ['a', 'b', 'c', 'd', 'e'].map((x) => lane({ id: `ln-${x}` })) }),
+    ] } }));
+    await page.route('**/api/shares/claim', (route) =>
+      route.fulfill({ status: 409, json: { error: 'too_many_active_claims', active: 5, max: 5 } }));
+    await openCard(page, "borrow");
+    const dir = page.locator('[data-cs="directory"]');
+    const cards = dir.locator('.cs-dir-card');
+    // M1 + M2 defaults: claimable-only ON hides both the waiting (Night) and
+    // drained nodes, with a count note; Fresh (most remaining) sorts first
+    await expect(cards).toHaveCount(2, { timeout: 5_000 });
+    await expect(cards.first()).toContainText('Fresh node');
+    await expect(dir).toContainText('2 nodes not claimable');
+    // T2 stays a normal card when the toggle is off; T3 stays in the group
+    await page.locator('[data-cs="onlyAvailable"]').uncheck();
+    await expect(cards).toHaveCount(3);
+    await expect(dir).toContainText('Not claimable (1)');
+    // M2: gpt-* chip leaves one node with only its gpt lane
+    await page.locator('[data-cs-family="gpt-*"]').click();
+    await expect(cards).toHaveCount(1);
+    await expect(dir.locator('.cs-lane')).toHaveCount(1);
+    await page.locator('[data-cs-family=""]').click();  // "All" chip clears the family filter
+    await expect(cards).toHaveCount(3);
+    // M3: 5-lane node collapses to 3 + expander with the remaining count
+    const manyCard = dir.locator('.cs-dir-card', { hasText: 'Many lanes' });
+    await expect(manyCard.locator('.cs-lane')).toHaveCount(3);
+    await expect(manyCard.locator('[data-cs-lanes-more]')).toContainText('2 more lanes');
+    await manyCard.locator('[data-cs-lanes-more]').click();
+    await expect(manyCard.locator('.cs-lane')).toHaveCount(5);
+    // M4: the mapped cap message carries live counts
+    await page.locator('[data-cs-claim-lane="big"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('You hold 5 active keys (limit 5)');
+  });
 
 borrowerOnly('pure borrowers never see the owner section or the tab bar', async ({ page }) => {
   await openCard(page, "borrow");
