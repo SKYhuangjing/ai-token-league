@@ -9975,6 +9975,13 @@ async function testSharingCpaUnregisterAndAdmin() {
     const resumeSuspended = await cpaFetch(base, "/api/shares/owner/resume", { method: "POST", secret: reg.shareSecret });
     assert.equal(resumeSuspended.status, 409);
     assert.equal((await resumeSuspended.json()).error, "share_suspended");
+
+    // claims-clear-ended purges revoked/expired keys (the one cascade-revoked
+    // claim above), never valid ones
+    const purge = await (await cpaFetch(base, "/api/admin/shares/claims-clear-ended", { method: "POST", body: {} })).json();
+    assert.equal(purge.removed, 1);
+    const claimsAfterPurge = await (await cpaFetch(base, "/api/admin/shares/claims")).json();
+    assert.equal(claimsAfterPurge.claims.filter((c) => c.state !== "valid").length, 0);
   });
 }
 

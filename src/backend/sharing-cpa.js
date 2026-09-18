@@ -1046,6 +1046,22 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       sendJson(res, 200, { revoked: claim.keyId });
       return;
     }
+    if (action === "claims-clear-ended") {
+      // Purge every non-valid claim (revoked/expired) across all shares —
+      // verification rounds and churn otherwise accumulate forever. Valid
+      // keys are never touched.
+      pruneExpiredClaims();
+      let removed = 0;
+      for (const [keyId, claim] of Object.entries(db.claims)) {
+        if (claim.state !== "valid") {
+          delete db.claims[keyId];
+          removed += 1;
+        }
+      }
+      persist();
+      sendJson(res, 200, { removed });
+      return;
+    }
     if (action === "suspend" || action === "resume") {
       const share = db.shares[String(body.shareId || "")];
       if (!share) {

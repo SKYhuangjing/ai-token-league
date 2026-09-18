@@ -2110,6 +2110,20 @@ function renderSharingShares(shares) {
   });
 }
 
+async function clearEndedClaims() {
+  if (!window.confirm(t("admin.sharing.clearEndedConfirm"))) return;
+  try {
+    const response = await fetchAdmin("/api/admin/shares/claims-clear-ended", { method: "POST", body: JSON.stringify({}) });
+    const data = await response.json();
+    const statusEl = document.querySelector("#sharing-admin-status");
+    if (statusEl) statusEl.textContent = t("admin.sharing.clearEndedDone", { n: String(data.removed ?? 0) });
+    await loadSharing();
+  } catch (error) {
+    const statusEl = document.querySelector("#sharing-admin-status");
+    if (statusEl) statusEl.textContent = sharingAdminErrorText(error);
+  }
+}
+
 function renderSharingClaims(claims) {
   const tbody = document.querySelector("#sharing-admin-claims-tbody");
   if (!claims.length) {
@@ -2155,6 +2169,8 @@ async function sharingAdminAction(action, body, label, confirmKey, doneKey) {
   }
   loadSharing().catch(() => {});
 }
+
+document.getElementById("sharing-admin-clear-ended")?.addEventListener("click", () => { clearEndedClaims(); });
 
 document.getElementById("sharing-admin-refresh")?.addEventListener("click", () => {
   loadSharing().catch((error) => {
