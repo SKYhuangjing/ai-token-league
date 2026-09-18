@@ -31,9 +31,10 @@ const STYLE = `
 .cs-muted { color: var(--muted, #888); font-size: 12.5px; line-height: 1.4; }
 .cs-state { color: var(--red, #c0392b); font-weight: 600; }
 .cs-status { min-height: 16px; font-size: 12.5px; }
-.cs-board { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr); gap: 8px 32px; align-items: start; }
+.cs-board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 1fr); gap: 8px 28px; align-items: start; }
 .cs-board .cs-section { margin-top: 0; }
-@media (max-width: 860px) { .cs-board { grid-template-columns: 1fr; } .cs-board .cs-section { margin-top: 10px; } }
+@media (max-width: 1000px) { .cs-board { grid-template-columns: 1fr; } .cs-board .cs-section { margin-top: 10px; } }
+.cs-board.cs-stacked { grid-template-columns: 1fr; }
 .cs-lane { display: grid; gap: 4px; padding: 7px 10px; border: 1px dashed var(--border-subtle, #e3e3e0); border-radius: 10px; margin-bottom: 6px; }
 .cs-lane .cs-kv { align-items: baseline; }
 .cs-tabs-row { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
@@ -48,9 +49,10 @@ const STYLE = `
 /* 认领卡（我的认领）：标签/值/操作网格，值不折行 */
 .cs-claim-config { display: flex; flex-direction: column; gap: 5px; }
 .cs-claim-row { display: flex; align-items: center; gap: 8px; }
-.cs-claim-label { flex: 0 0 108px; font-size: 11px; color: var(--muted, #888); white-space: nowrap; }
+.cs-claim-label { flex: 0 0 96px; font-size: 11px; color: var(--muted, #888); white-space: nowrap; }
 .cs-claim-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
-.cs-claim-mini { padding: 2px 8px; font-size: 11px; }
+.cs-claim-mini { padding: 2px 8px; font-size: 11px; white-space: nowrap; }
+.cs-claim-row .outline-button { white-space: nowrap; }
 .cs-claim-section { margin: 10px 0 4px; font-size: 11px; letter-spacing: .06em; color: var(--muted, #888); border-bottom: 1px solid var(--border-subtle, #e3e3e0); padding-bottom: 2px; }
 .cs-claim-meta { line-height: 1.5; }
 .cs-test-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -226,7 +228,17 @@ export default {
       els.tabs.hidden = !hasOwner;
       els.owner.hidden = !hasOwner || activeTab !== "owner";
       els.board.hidden = hasOwner && activeTab !== "borrow";
-      for (const button of els.tabs.querySelectorAll("[data-cs-tab]")) {
+      // Stacking is measured, not a viewport media query (R52 review): the
+    // card sits inside the app layout, so 1120px viewport can still mean a
+    // ~830px board — the borrow pane needs the full row there.
+    const stackBoard = () => {
+      const width = els.board.clientWidth || 0;
+      els.board.classList.toggle("cs-stacked", width > 0 && width < 980);
+    };
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(stackBoard).observe(els.board);
+    stackBoard();
+
+    for (const button of els.tabs.querySelectorAll("[data-cs-tab]")) {
         button.classList.toggle("active", button.dataset.csTab === (hasOwner ? activeTab : "borrow"));
       }
     }
