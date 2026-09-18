@@ -97,41 +97,126 @@ pub(crate) fn read_owner_config() -> OwnerConfig {
     }
 }
 
+/// Credentials only (R51-1): the backend URL lives in the CPA config, never
+/// here. The pre-R51 cached `api` field was a second source of truth whose
+/// drift silently killed heartbeats after a backend switch.
 pub(crate) struct ShareIdentity {
-    pub api: String,
     pub share_id: String,
     pub share_secret: String,
 }
 
 pub(crate) fn load_identity() -> Option<ShareIdentity> {
-    let value: Value = serde_json::from_str(
-        &std::fs::read_to_string(identity_path()).ok()?,
-    )
-    .ok()?;
-    let api = value.get("api")?.as_str()?.trim().trim_end_matches('/').to_string();
-    let share_id = value.get("shareId")?.as_str()?.to_string();
-    let share_secret = value.get("shareSecret")?.as_str()?.to_string();
-    if api.is_empty() || share_id.is_empty() || share_secret.is_empty() {
+    let text = std::fs::read_to_string(identity_path()).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    let share_id = value.get("shareId")?.as_str()?.trim().to_string();
+    let share_secret = value.get("shareSecret")?.as_str()?.trim().to_string();
+    if share_id.is_empty() || share_secret.is_empty() {
         return None;
     }
-    Some(ShareIdentity { api, share_id, share_secret })
+    // one-time migration: strip the legacy api field so the file can never
+    // drift again
+    if value.get("api").is_some() {
+        save_identity(&share_id, &share_secret);
+    }
+    Some(ShareIdentity { share_id, share_secret })
 }
 
-pub(crate) fn save_identity(api: &str, share_id: &str, share_secret: &str) {
+pub(crate) fn save_identity(share_id: &str, share_secret: &str) {
     let _ = std::fs::create_dir_all(data_dir());
     let body = serde_json::to_string_pretty(&json!({
-        "api": api.trim_end_matches('/'),
         "shareId": share_id,
         "shareSecret": share_secret,
     }))
     .unwrap_or_default();
-    let _ = std::fs::write(identity_path(), &body);
-    // Owner secret: only the current user may read it (shared machines).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(identity_path(), std::fs::Permissions::from_mode(0o600));
+    // tmp + rename: a crash mid-write must not leave a truncated credentials
+    // file (a truncated identity re-registers — and without backend rebind
+    // that mints a duplicate share)
+    let tmp = identity_path().with_extension("json.tmp");
+    if std::fs::write(&tmp, &body).is_ok() {
+        // Owner secret: only the current user may read it (shared machines).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        let _ = std::fs::rename(&tmp, identity_path());
     }
+}
+
+/// Runtime status (R51-4): one small file beside the identity so a silently
+/// failing tick can never hide — the sidecar merges it into the card's owner
+/// view and the diagnostics export. Written only on change.
+#[derive(Clone, Default)]
+pub(crate) struct PluginStatus {
+    pub last_tick_at: i64,
+    pub last_success_at: i64,
+    pub last_error: Option<String>,
+    pub phase: String, // off | beating | registering | registered | error
+    pub last_register_attempt_at: i64,
+    pub api: String,
+}
+
+pub(crate) fn status_path() -> std::path::PathBuf {
+    data_dir().join("status.json")
+}
+
+pub(crate) fn read_status() -> PluginStatus {
+    let text = std::fs::read_to_string(status_path()).unwrap_or_default();
+    let value: Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(_) => return PluginStatus::default(),
+    };
+    let i64_of = |key: &str| value.get(key).and_then(|x| x.as_i64()).unwrap_or(0);
+    PluginStatus {
+        last_tick_at: i64_of("lastTickAt"),
+        last_success_at: i64_of("lastSuccessAt"),
+        last_error: value.get("lastError").and_then(|x| x.as_str()).map(String::from),
+        phase: value.get("phase").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        last_register_attempt_at: i64_of("lastRegisterAttemptAt"),
+        api: value.get("api").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+    }
+}
+
+static LAST_WRITTEN_STATUS: Mutex<Option<(String, i64)>> = Mutex::new(None);
+
+/// Dedup key: the stable fields only — lastTickAt changes every tick and
+/// must never take part in the comparison (R51 review P1-2).
+fn stable_status_key(status: &PluginStatus) -> String {
+    serde_json::to_string(&json!({
+        "lastSuccessAt": status.last_success_at,
+        "lastError": status.last_error,
+        "phase": status.phase,
+        "lastRegisterAttemptAt": status.last_register_attempt_at,
+        "api": status.api,
+    }))
+    .unwrap_or_default()
+}
+
+/// Written only when the stable fields change, plus a 60s liveness
+/// force-refresh so a frozen lastTickAt still reads as a dead plugin.
+pub(crate) fn write_status(status: &PluginStatus) {
+    let key = stable_status_key(status);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let body = serde_json::to_string(&json!({
+        "lastTickAt": status.last_tick_at,
+        "lastSuccessAt": status.last_success_at,
+        "lastError": status.last_error,
+        "phase": status.phase,
+        "lastRegisterAttemptAt": status.last_register_attempt_at,
+        "api": status.api,
+    }))
+    .unwrap_or_default();
+    let mut last = LAST_WRITTEN_STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((last_key, last_write)) = last.as_ref() {
+        if *last_key == key && now.saturating_sub(*last_write) < 60_000 {
+            return;
+        }
+    }
+    *last = Some((key, now));
+    let _ = std::fs::write(status_path(), &body);
 }
 
 /// CPA's own listen port, read from the same config paths cpa.rs probes.
@@ -288,6 +373,52 @@ pub(crate) fn register_identity(private_key_pem: &str, participant_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // env-swapping tests must serialize: ATL_HOME is process-global and
+    // parallel tests would race each other's data dirs
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn load_identity_strips_legacy_api_field() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("atl-plugin-status-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("ATL_HOME", &dir);
+        let legacy = r#"{ "api": "http://127.0.0.1:8787", "shareId": "shr_x", "shareSecret": "s1" }"#;
+        let identity_file = data_dir().join("identity.json");
+        let _ = std::fs::create_dir_all(data_dir());
+        std::fs::write(&identity_file, legacy).unwrap();
+        let identity = load_identity().expect("credentials parse");
+        assert_eq!(identity.share_id, "shr_x");
+        assert_eq!(identity.share_secret, "s1");
+        let rewritten = std::fs::read_to_string(&identity_file).unwrap();
+        assert!(!rewritten.contains("127.0.0.1"), "legacy api must be stripped: {rewritten}");
+        assert!(rewritten.contains("shareId"));
+        std::env::remove_var("ATL_HOME");
+    }
+
+    #[test]
+    fn stable_status_key_ignores_tick_timestamp() {
+        let a = PluginStatus { last_tick_at: 1, phase: "beating".into(), ..Default::default() };
+        let b = PluginStatus { last_tick_at: 99, phase: "beating".into(), ..Default::default() };
+        assert_eq!(stable_status_key(&a), stable_status_key(&b));
+        let c = PluginStatus { last_tick_at: 99, phase: "error".into(), last_error: Some("x".into()), ..Default::default() };
+        assert_ne!(stable_status_key(&a), stable_status_key(&c));
+    }
+
+    #[test]
+    fn save_identity_rewrites_atomically_with_0600() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("atl-plugin-identity-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("ATL_HOME", &dir);
+        save_identity("shr_a", "sec_a");
+        save_identity("shr_b", "sec_b"); // overwrite exercises the tmp+rename path
+        let text = std::fs::read_to_string(identity_path()).unwrap();
+        assert!(text.contains("shr_b") && !text.contains("shr_a"));
+        assert!(!identity_path().with_extension("json.tmp").exists(), "tmp must be renamed away");
+        std::env::remove_var("ATL_HOME");
+    }
 
     #[test]
     fn parse_config_yaml_reads_host_normalized_mapping() {

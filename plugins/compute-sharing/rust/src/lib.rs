@@ -45,6 +45,7 @@ impl SidecarPlugin for SharingPlugin {
             "claim-sign" => Some(claim_sign(args)),
             "borrow-get" => Some(borrow_get()),
             "borrow-set" => Some(borrow_set(args)),
+            "borrow-test" => Some(borrow_test(args)),
             "owner-status" => Some(owner_call(OwnerCall::Status, args)),
             "owner-policy" => Some(owner_call(OwnerCall::Policy, args)),
             "owner-unregister" => Some(owner_call(OwnerCall::Unregister, args)),
@@ -128,6 +129,59 @@ fn borrow_set(args: &Value) -> Result<Value, String> {
     Ok(json!({ "claims": sanitized }))
 }
 
+// ── borrower connectivity test (G3) ──────────────────────────────────────────
+
+/// One minimal generation through the owner's CPA with the claim token: the
+/// borrower learns immediately whether their model choice rides the lane
+/// (200) or hits a gate (429 lane closed / exhausted / model_not_in_lane).
+/// The webview cannot make this call itself (no CORS on CPA), so the
+/// privileged sidecar relays it. Cost: ~a few tokens.
+fn borrow_test(args: &Value) -> Result<Value, String> {
+    let token = args.get("token").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let base = args.get("baseURL").and_then(|v| v.as_str()).unwrap_or("").trim().trim_end_matches('/').to_string();
+    let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if token.is_empty() || base.is_empty() || model.is_empty() {
+        return Err("borrow-test requires token, baseURL and model".into());
+    }
+    // relay guard (review P2-2): the privileged sidecar must not become an
+    // arbitrary-destination POST oracle — the target has to be exactly one of
+    // this machine's own claims (token + baseURL pair from the local store)
+    let stored: Value = std::fs::read_to_string(collector_core::config::app_dir().join("sharing-borrow.json"))
+        .ok()
+        .and_then(|text| text.parse().ok())
+        .unwrap_or(Value::Null);
+    let owned = stored
+        .get("claims")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter().any(|c| {
+                c.get("token").and_then(|v| v.as_str()) == Some(token.as_str())
+                    && c.get("baseURL").and_then(|v| v.as_str()).map(|b| b.trim_end_matches('/')) == Some(base.as_str())
+            })
+        })
+        .unwrap_or(false);
+    if !owned {
+        return Err("borrow-test target is not one of your claims".into());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .post(format!("{}/v1/chat/completions", base))
+        .header("authorization", format!("Bearer {}", token))
+        .json(&json!({ "model": model, "max_tokens": 4, "messages": [{ "role": "user", "content": "ping" }] }))
+        .send()
+        .map_err(|e| format!("transport:{}", e))?;
+    let status = response.status().as_u16();
+    let body: Value = response.json().unwrap_or(Value::Null);
+    let error = body
+        .pointer("/error/message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.chars().take(200).collect::<String>());
+    Ok(json!({ "ok": (200..=299).contains(&status), "status": status, "error": error }))
+}
+
 // ── owner console proxy ─────────────────────────────────────────────────────
 
 enum OwnerCall {
@@ -138,17 +192,40 @@ enum OwnerCall {
 }
 
 fn owner_identity() -> Result<(String, String, String), String> {
+    // R51-1: the backend URL follows the app's configured apiBase (same
+    // truth the leaderboard and every other card use). The identity file
+    // carries credentials only — its legacy cached api caused owner-status
+    // to hit a dead local backend while the app itself pointed at the cloud.
+    let api = collector_core::config::load_config()
+        .map(|config| collector_core::config::normalize_api_base_url(&config.api_base_url))
+        .filter(|api| !api.is_empty())
+        .ok_or("no_api_base")?;
     let value: Value = std::fs::read_to_string(collector_core::config::app_dir().join("cpa-plugin/identity.json"))
         .map_err(|_| "not_registered".to_string())?
         .parse()
         .map_err(|_| "not_registered".to_string())?;
-    let api = value.get("api").and_then(|v| v.as_str()).unwrap_or("").trim_end_matches('/').to_string();
     let share_id = value.get("shareId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let secret = value.get("shareSecret").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if api.is_empty() || share_id.is_empty() || secret.is_empty() {
+    if share_id.is_empty() || secret.is_empty() {
         return Err("not_registered".into());
     }
     Ok((api, share_id, secret))
+}
+
+/// Plugin runtime status (R51-4): merged into owner-status so the card can
+/// show WHY the share is offline instead of a bare "plugin offline" badge.
+/// Missing file degrades silently — the backend view stays authoritative.
+fn plugin_status_value() -> Option<Value> {
+    let text = std::fs::read_to_string(collector_core::config::app_dir().join("cpa-plugin/status.json")).ok()?;
+    let value: Value = text.parse().ok()?;
+    let cap = |v: &Value, max: usize| -> String { v.as_str().unwrap_or("").chars().take(max).collect() };
+    Some(json!({
+        "phase": cap(value.get("phase").unwrap_or(&Value::Null), 24),
+        "lastError": value.get("lastError").and_then(|v| v.as_str()).map(|s| cap(&Value::from(s), 160)),
+        "lastTickAt": value.get("lastTickAt").and_then(|v| v.as_i64()).unwrap_or(0),
+        "lastSuccessAt": value.get("lastSuccessAt").and_then(|v| v.as_i64()).unwrap_or(0),
+        "api": cap(value.get("api").unwrap_or(&Value::Null), 120),
+    }))
 }
 
 fn owner_call(call: OwnerCall, args: &Value) -> Result<Value, String> {
@@ -168,9 +245,16 @@ fn owner_call(call: OwnerCall, args: &Value) -> Result<Value, String> {
     request = request.header("x-atl-share-secret", &secret);
     let response = request.send().map_err(|e| format!("backend_unreachable:{}", e))?;
     let status = response.status();
-    let body: Value = response.json().unwrap_or_default();
+    let mut body: Value = response.json().unwrap_or_default();
     if !status.is_success() {
         return Err(format!("owner_http_{}:{}", status.as_u16(), body.get("error").and_then(|v| v.as_str()).unwrap_or("")));
+    }
+    if matches!(call, OwnerCall::Status) {
+        if let Some(plugin_status) = plugin_status_value() {
+            if let Some(object) = body.as_object_mut() {
+                object.insert("pluginStatus".into(), plugin_status);
+            }
+        }
     }
     Ok(body)
 }
@@ -384,6 +468,14 @@ mod tests {
     #[test]
     fn owner_status_maps_to_not_registered_without_identity() {
         sandboxed(|| {
+            // production sequence: the app has an api base configured, but
+            // no share identity exists yet (R51: api comes from app config)
+            let home = std::env::var("ATL_HOME").unwrap_or_default();
+            std::fs::write(
+                std::path::PathBuf::from(&home).join("config.json"),
+                r#"{ "participantId": "p_t", "identityPublicKey": "k", "identityPrivateKey": "s", "deviceId": "d_t", "apiBaseUrl": "http://backend.test", "nickname": "t" }"#,
+            )
+            .unwrap();
             let out = route_plugin_command(
                 &[Box::new(SharingPlugin)],
                 "compute-sharing:owner-status",
@@ -392,6 +484,29 @@ mod tests {
             )
             .unwrap();
             assert_eq!(out.unwrap_err(), "not_registered");
+        });
+    }
+
+    #[test]
+    fn borrow_test_rejects_targets_outside_own_claims() {
+        sandboxed(|| {
+            let err = borrow_test(&json!({ "token": "atl_sk_x", "baseURL": "http://evil:1", "model": "m" }))
+                .unwrap_err();
+            assert!(err.contains("not one of your claims"), "{err}");
+        });
+    }
+
+    #[test]
+    fn owner_status_reports_no_api_base_without_app_config() {
+        sandboxed(|| {
+            let out = route_plugin_command(
+                &[Box::new(SharingPlugin)],
+                "compute-sharing:owner-status",
+                &json!({}),
+                &state(true),
+            )
+            .unwrap();
+            assert_eq!(out.unwrap_err(), "no_api_base");
         });
     }
 

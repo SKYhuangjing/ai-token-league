@@ -1,6 +1,6 @@
 {
   "id": "compute-sharing",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "type": "query",
   "title": "算力共享",
   "desc": "双向：认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点（账本/策略/停止/重新开启）。",
@@ -15,6 +15,7 @@
     "sidecar:compute-sharing:owner-policy",
     "sidecar:compute-sharing:owner-resume",
     "sidecar:compute-sharing:owner-suggest",
-    "sidecar:compute-sharing:owner-unregister"
+    "sidecar:compute-sharing:owner-unregister",
+    "sidecar:compute-sharing:borrow-test"
   ]
 }

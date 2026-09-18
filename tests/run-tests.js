@@ -9781,6 +9781,19 @@ async function testSharingCpaRegisterHeartbeatClaim() {
     assert.ok(String(regBody.shareSecret).length >= 32);
     const secret = regBody.shareSecret;
 
+    // participant-idempotent rebind (R51-3): the same owner registering again
+    // (e.g. after a backend switch) gets the SAME share back — no duplicates
+    const reReg = await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: { title: "Harry CPA", baseURL: "http://192.168.1.9:8317", ...signedRegisterBody(identity) },
+    });
+    const reRegBody = await reReg.json();
+    assert.equal(reRegBody.shareId, regBody.shareId);
+    assert.equal(reRegBody.shareSecret, secret);
+    assert.equal(reRegBody.rebind, true);
+    const listStillOne = await (await cpaFetch(base, "/api/shares")).json();
+    assert.equal(listStillOne.shares.length, 1);
+
     // public list: online only after a plugin heartbeat, baseURL never leaks.
     // CORS is required: the desktop webview fetches this cross-origin.
     const listRes = await cpaFetch(base, "/api/shares");
@@ -9794,6 +9807,10 @@ async function testSharingCpaRegisterHeartbeatClaim() {
     // claim before heartbeat -> offline 409 (borrower must not get a dead key)
     const early = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: signedClaimBody(regBody.shareId, identity) });
     assert.equal(early.status, 409);
+
+    // renewal keeps the same key and extends expiry (G3); unknown tokens 404
+    const renewUnknown = await cpaFetch(base, "/api/shares/claims/renew", { method: "POST", body: { token: "atl_sk_missing" } });
+    assert.equal(renewUnknown.status, 404);
 
     // unsigned / stale-signature claims are rejected (identity-bound claiming)
     const unsigned = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { shareId: regBody.shareId } });
@@ -9870,6 +9887,15 @@ async function testSharingCpaRegisterHeartbeatClaim() {
     const mine = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claimBody.token] } })).json();
     assert.equal(mine.claims.length, 1);
     assert.equal(mine.claims[0].usedTokens, 5200);
+
+    // renewal keeps the same key and extends expiry; the next heartbeat
+    // carries the pushed-out expiresAtMs to the owner plugin (G3)
+    const renewed = await (await cpaFetch(base, "/api/shares/claims/renew", { method: "POST", body: { token: claimBody.token } })).json();
+    assert.equal(renewed.renewed, claimBody.keyId);
+    assert.ok(renewed.expiresAt > claimBody.expiresAt);
+    const hbRenew = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: {} })).json();
+    assert.equal(hbRenew.keys[0].keyId, claimBody.keyId);
+    assert.equal(hbRenew.keys[0].expiresAtMs, renewed.expiresAt);
 
     // revoke own claim; next heartbeat no longer carries it
     await cpaFetch(base, "/api/shares/claims/revoke", { method: "POST", body: { token: claimBody.token } });

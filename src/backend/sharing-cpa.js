@@ -605,7 +605,15 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     }
     const owner = identity.participant || {};
     const existing = findShareBySecret(req.headers["x-atl-share-secret"]);
-    let share = existing;
+    // Participant-idempotent rebind (R51-3): without this, every re-register
+    // after a backend switch mints a duplicate share. A signed register from
+    // an owner who already has an active share rebinds to it (returns the
+    // original credentials); stopped/suspended shares are never rebound —
+    // unregister then register stays the explicit fresh-start door.
+    const ownedActive = existing ? null : Object.values(db.shares)
+      .filter((s) => s.participantId === String(body.participantId) && s.state === "active")
+      .sort((a, b) => a.createdAt - b.createdAt)[0] || null;
+    let share = existing || ownedActive;
     if (!share) {
       // register-trust: a new registration goes live immediately (same
       // semantics as the stashed control plane; admin can suspend after).
@@ -642,7 +650,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       shareId: share.shareId,
       shareSecret: share.shareSecret,
       registered: true,
-      rebind: Boolean(existing),
+      rebind: Boolean(existing || ownedActive),
     });
   }
 
@@ -946,6 +954,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
   }
 
   async function handleRevokeClaim(req, res, body) {
+    pruneExpiredClaims();
     const token = String(body.token || "");
     const claim = Object.values(db.claims).find((c) => c.token === token && c.state === "valid");
     if (!claim) {
@@ -955,6 +964,27 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     claim.state = "revoked";
     persist();
     sendJson(res, 200, { revoked: claim.keyId });
+  }
+
+  // Renewal keeps the SAME key (G3): no slot churn, no client re-config — the
+  // next heartbeat delivers the extended expiresAtMs to the owner plugin.
+  async function handleRenewClaim(req, res, body) {
+    // expired-but-not-yet-pruned claims must not resurrect via renewal
+    pruneExpiredClaims();
+    const token = String(body.token || "");
+    const claim = Object.values(db.claims).find((c) => c.token === token && c.state === "valid");
+    if (!claim) {
+      sendJson(res, 404, { error: "claim_not_found" });
+      return;
+    }
+    const share = db.shares[claim.shareId];
+    if (!share || share.state !== "active") {
+      sendJson(res, 409, { error: "share_not_active" });
+      return;
+    }
+    claim.expiresAt = now() + share.policy.ttlHours * 3_600_000;
+    persist();
+    sendJson(res, 200, { renewed: claim.keyId, expiresAt: claim.expiresAt });
   }
 
   async function handleMyClaims(req, res, body) {
@@ -977,6 +1007,15 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         lifetimeSettled: s.lifetimeSettled || 0,
         ownerNickname: s.ownerNickname || "",
         ownerDisplayId: s.ownerDisplayId || "",
+        // health columns (G4): why a share is offline is a local status.json
+        // on the owner box — the server side reports heartbeat age + plugin
+        // version + live claim pressure instead
+        plugin: {
+          online: now() - (s.lastHeartbeatAt || 0) <= HEARTBEAT_ONLINE_MS,
+          version: s.lastPluginVersion || "",
+          lastHeartbeatAt: s.lastHeartbeatAt || 0,
+        },
+        validClaims: activeClaimsOf(s.shareId).length,
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt);
     sendJson(res, 200, { shares });
@@ -1075,6 +1114,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       if (p === "/api/shares" && req.method === "GET") return void await handleListShares(req, res);
       if (p === "/api/shares/claim" && req.method === "POST") return void await handleClaim(req, res, await readBody(req));
       if (p === "/api/shares/claims/revoke" && req.method === "POST") return void await handleRevokeClaim(req, res, await readBody(req));
+      if (p === "/api/shares/claims/renew" && req.method === "POST") return void await handleRenewClaim(req, res, await readBody(req));
       if (p === "/api/shares/claims/mine" && req.method === "POST") return void await handleMyClaims(req, res, await readBody(req));
       if (p === "/api/admin/shares" && req.method === "GET") return void await handleAdminShares(req, res);
       if (p === "/api/admin/shares/claims" && req.method === "GET") return void await handleAdminClaims(req, res);

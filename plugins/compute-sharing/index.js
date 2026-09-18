@@ -168,6 +168,8 @@ export default {
           identity_required: "desktop.sharing.borrow.identityFailed",
           participant_not_registered: "desktop.sharing.borrow.identityFailed",
           invalid_signature: "desktop.sharing.borrow.identityFailed",
+          claim_not_found: "desktop.sharing.borrow.claimGone",
+          share_not_active: "web.sharing.paused",
         }[data.error];
         const detail = data.retryAfterMs
           ? t("desktop.sharing.borrow.retryAt", { time: clockText(Date.now() + data.retryAfterMs) })
@@ -381,7 +383,7 @@ export default {
         ${wallBanner}
         <div class="cs-row">
           <div class="cs-kv"><strong>${esc(share.title || share.shareId)}</strong>
-            <span>${esc(t("web.sharing.online"))}${share.plugin && share.plugin.online ? "" : ` · ${esc(t("desktop.sharing.owner.pluginOffline"))}`}</span></div>
+            <span>${esc(t("web.sharing.online"))}${share.plugin && share.plugin.online ? "" : ` · ${esc(t("desktop.sharing.owner.pluginOffline"))}${pluginOfflineReason(data)}`}</span></div>
           <div class="cs-kv"><span class="cs-muted">${esc(t("desktop.sharing.owner.lifetime"))}</span><span class="num">${esc(compact(share.lifetimeSettled))}</span></div>
           ${lanes.map(renderLaneRow).join("")}
           ${renderLaneEditor(lanes)}
@@ -402,6 +404,14 @@ export default {
       applyTabs();
       wireOwnerEvents(lanes);
     }
+
+    // R51-4: the plugin writes status.json beside its identity; owner-status
+    // merges it — surface WHY it is offline, not just that it is. Raw reason
+    // text is diagnostic (transport/status strings), not localized UI copy.
+    const pluginOfflineReason = (data) => {
+      const status = data && data.pluginStatus;
+      return status && status.lastError ? ` · ${esc(status.lastError)}` : "";
+    };
 
     const laneTitleOf = (lanes, laneId) => {
       const lane = (lanes || []).find((l) => l.id === laneId);
@@ -870,6 +880,37 @@ export default {
           <div class="cs-muted">${claim.laneTitle ? `<span class="cs-lane-tag">${esc(claim.laneTitle)}</span>${claim.models && claim.models.length ? ` <span class="cs-lane-tag">${esc(claim.models.join(", "))}</span>` : ""}${claim.tzLabel ? ` <span class="cs-lane-tag">${esc(claim.tzLabel)}</span>` : ""} · ` : ""}${esc(t("desktop.sharing.borrow.expires"))}: ${esc(fmtDateTime(claim.expiresAt))}${live ? ` · ${esc(t("desktop.sharing.borrow.used"))}: ${esc(compact(live.usedTokens))}` : ""}${state !== "valid" ? ` · <span class="cs-state">${esc(t(state === "revoked" ? "desktop.sharing.borrow.stateRevoked" : "desktop.sharing.borrow.stateExpired"))}</span>` : ""}</div>`;
         if (state === "valid") {
           row.appendChild(configBlock(claim));
+          // connectivity test (G3): one minimal generation through the owner's
+          // CPA — the sidecar relays it (no CORS on CPA). The model input
+          // defaults to the lane's exact model; wildcards need a real name.
+          const exactModel = (claim.models || []).find((m) => m && !m.includes("*"));
+          const test = document.createElement("div");
+          test.className = "cs-fields";
+          test.innerHTML = `
+            <label class="grow">${esc(t("desktop.sharing.borrow.testModel"))}<input data-cs-test-model="${esc(claim.keyId)}" type="text" placeholder="${esc(exactModel || "gemini-3.8-flash-high")}" /></label>
+            <button class="outline-button" type="button" data-cs-test="${esc(claim.keyId)}">${esc(t("desktop.sharing.borrow.test"))}</button>
+            <span class="cs-status" data-cs-test-result="${esc(claim.keyId)}"></span>`;
+          row.appendChild(test);
+          row.querySelector(`[data-cs-test="${CSS.escape(claim.keyId)}"]`).addEventListener("click", () => guard(async () => {
+            const model = String(row.querySelector(`[data-cs-test-model="${CSS.escape(claim.keyId)}"]`).value || exactModel || "").trim();
+            const resultEl = row.querySelector(`[data-cs-test-result="${CSS.escape(claim.keyId)}"]`);
+            if (!model) {
+              resultEl.textContent = t("desktop.sharing.borrow.testModelRequired");
+              resultEl.className = "cs-status cs-state";
+              return;
+            }
+            resultEl.textContent = t("desktop.sharing.borrow.testing");
+            try {
+              const result = await ctx.invoke("compute-sharing:borrow-test", { token: claim.token, baseURL: claim.baseURL, model });
+              resultEl.textContent = result.ok
+                ? t("desktop.sharing.borrow.testOk", { model })
+                : t("desktop.sharing.borrow.testFail", { status: String(result.status), reason: result.error || "" });
+              resultEl.className = `cs-status ${result.ok ? "" : "cs-state"}`;
+            } catch (error) {
+              resultEl.textContent = t("desktop.sharing.borrow.testFail", { status: "-", reason: String(error).slice(0, 120) });
+              resultEl.className = "cs-status cs-state";
+            }
+          }));
           const actions = document.createElement("div");
           actions.className = "cs-actions";
           const revoke = document.createElement("button");
@@ -878,6 +919,17 @@ export default {
           revoke.textContent = t("desktop.sharing.borrow.revoke");
           revoke.addEventListener("click", () => guard(() => revokeClaim(claim)));
           actions.appendChild(revoke);
+          // renewal keeps the same key (G3): offered when under a day is left,
+          // the extended expiry reaches the owner plugin on its next heartbeat
+          const dayLeft = claim.expiresAt - Date.now() < 24 * 3_600_000;
+          if (dayLeft) {
+            const renew = document.createElement("button");
+            renew.className = "outline-button";
+            renew.type = "button";
+            renew.textContent = t("desktop.sharing.borrow.renew");
+            renew.addEventListener("click", () => guard(() => renewClaim(claim)));
+            actions.appendChild(renew);
+          }
           row.appendChild(actions);
         }
         els.mine.appendChild(row);
@@ -911,6 +963,16 @@ export default {
       };
       await ctx.invoke("compute-sharing:borrow-set", { claims: [record, ...claims.filter((c) => c.keyId !== record.keyId)] });
       notify(t("desktop.sharing.borrow.claimed"));
+      await refresh({ forceShares: true });
+    }
+
+    async function renewClaim(claim) {
+      const data = await apiPost("/api/shares/claims/renew", { token: claim.token });
+      const store = await ctx.invoke("compute-sharing:borrow-get");
+      const claims = (Array.isArray(store && store.claims) ? store.claims : [])
+        .map((c) => (c.keyId === claim.keyId ? { ...c, expiresAt: data.expiresAt } : c));
+      await ctx.invoke("compute-sharing:borrow-set", { claims });
+      notify(t("desktop.sharing.borrow.renewed"));
       await refresh({ forceShares: true });
     }
 

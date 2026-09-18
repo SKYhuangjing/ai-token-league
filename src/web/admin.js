@@ -2057,10 +2057,21 @@ function sharingStateView(share) {
   return { cls: "on", label: t("admin.sharing.online") };
 }
 
+// plugin health cell (G4): online dot + dylib version + heartbeat age. The
+// server cannot see the owner's local status.json — heartbeat age is the
+// closest server-side proxy for "is the node alive".
+function sharingPluginCell(share) {
+  const plugin = share.plugin || {};
+  const online = Boolean(plugin.online);
+  const age = plugin.lastHeartbeatAt ? Math.max(0, Math.round((Date.now() - plugin.lastHeartbeatAt) / 60000)) : null;
+  const ageText = age === null ? "-" : t("admin.sharing.hbAge", { n: String(age) });
+  return `<div class="device-cell"><span class="sharing-dot sharing-dot-${online ? "active" : "off"}"></span><span class="device-meta">${online ? escapeHtml(t("admin.sharing.pluginOnline")) : escapeHtml(t("admin.sharing.pluginOffline"))} · v${escapeHtml(plugin.version || "?")} · ${escapeHtml(ageText)}</span></div>`;
+}
+
 function renderSharingShares(shares) {
   const tbody = document.querySelector("#sharing-admin-shares-tbody");
   if (!shares.length) {
-    tbody.innerHTML = `<tr><td class="empty" colspan="6">${t("admin.sharing.empty")}</td></tr>`;
+    tbody.innerHTML = `<tr><td class="empty" colspan="8">${t("admin.sharing.empty")}</td></tr>`;
     return;
   }
   tbody.innerHTML = shares.map((share) => {
@@ -2072,6 +2083,8 @@ function renderSharingShares(shares) {
       <td><div class="device-cell"><span class="device-name" title="${escapeHtml(share.shareId)}">${escapeHtml(share.title || share.shareId)}</span></div></td>
       <td><span class="truncated-cell" title="${escapeHtml(share.baseURL || "-")}">${escapeHtml(share.baseURL || "-")}</span></td>
       <td><span class="sharing-dot sharing-dot-${state.cls}"></span>${escapeHtml(state.label)}</td>
+      <td>${sharingPluginCell(share)}</td>
+      <td class="num">${share.validClaims ?? "-"}</td>
       <td class="num">${share.claimsIssued || 0}</td>
       <td class="num">${formatTokenCompact(share.settledTokens || 0, getCurrentLang())} / ${formatTokenCompact(share.budgetTokens || 0, getCurrentLang())}</td>
       <td>

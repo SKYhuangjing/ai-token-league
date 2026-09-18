@@ -160,58 +160,87 @@ fn settled_map_of(resp: &Value) -> HashMap<String, u64> {
         .unwrap_or_default()
 }
 
-/// First-run (or backend-switch) self-registration. The backend mints the
-/// share identity under register-trust semantics; we persist it so CPA
-/// restarts rebind to the same share instead of minting duplicates.
-fn ensure_identity(api: &str, config: &OwnerConfig) -> Option<bootstrap::ShareIdentity> {
-    if let Some(existing) = bootstrap::load_identity() {
-        if existing.api == api {
-            return Some(existing);
-        }
+/// Reconciliation policy (R51-2): only a definitive rejection (401/404 —
+/// this backend does not know our credentials) may trigger re-registration.
+/// Transient failures (network, 5xx, malformed) must retry — or a backend
+/// outage would recover into a register flood.
+pub(crate) enum BeatOutcome {
+    Success,
+    Rejected,
+    Transient,
+}
+
+pub(crate) fn beat_outcome(status: u16) -> BeatOutcome {
+    match status {
+        401 | 404 => BeatOutcome::Rejected,
+        200..=299 => BeatOutcome::Success,
+        _ => BeatOutcome::Transient,
     }
+}
+
+/// Minimum spacing between register attempts, persisted in status.json so a
+/// plugin restart cannot reset the cooldown into a minting burst.
+pub(crate) const REGISTER_COOLDOWN_MS: i64 = 5 * 60_000;
+
+/// Register (or rebind — the backend is participant-idempotent, R51-3)
+/// against the configured api and persist the credentials. Returns a
+/// human-readable error string for status.json on failure.
+fn register_share(
+    client: &reqwest::blocking::Client,
+    api: &str,
+    config: &OwnerConfig,
+) -> Result<bootstrap::ShareIdentity, String> {
     // A.1: registration is league-identity-bound — no signed ATL identity on
     // this machine means no share (fail-closed, the owner's keys unaffected).
-    let (participant_id, private_key) = bootstrap::atl_identity(config)?;
-    let credentials = bootstrap::register_identity(&private_key, &participant_id)?;
+    let (participant_id, private_key) =
+        bootstrap::atl_identity(config).ok_or("no league identity on this machine")?;
+    let credentials = bootstrap::register_identity(&private_key, &participant_id)
+        .ok_or("signing the register payload failed")?;
     let mut body = bootstrap::register_body(config);
     for (key, value) in credentials.as_object().into_iter().flatten() {
         body[key.as_str()] = value.clone();
     }
-    let client = http_client()?;
     let response = client
         .post(format!("{}/api/shares/register", api))
         .json(&body)
         .send()
-        .ok()?;
+        .map_err(|error| format!("register transport: {error}"))?;
     if !response.status().is_success() {
-        return None;
+        return Err(format!("register rejected: HTTP {}", response.status()));
     }
-    let body: Value = response.json().ok()?;
+    let body: Value = response
+        .json()
+        .map_err(|error| format!("register decode: {error}"))?;
     let share_id = str_of(&body, "shareId");
     let share_secret = str_of(&body, "shareSecret");
     if share_id.is_empty() || share_secret.is_empty() {
-        return None;
+        return Err("register response missing credentials".to_string());
     }
-    bootstrap::save_identity(api, &share_id, &share_secret);
-    Some(bootstrap::ShareIdentity { api: api.to_string(), share_id, share_secret })
+    let identity = bootstrap::ShareIdentity { share_id, share_secret };
+    bootstrap::save_identity(&identity.share_id, &identity.share_secret);
+    Ok(identity)
 }
 
 /// One sync round. Panics are contained by the caller (catch_unwind).
+/// Every exit path writes status.json (R51-4) — a failing tick must leave a
+/// trace, never disappear silently.
 pub(crate) fn tick() {
+    let mut status = bootstrap::read_status();
+    status.last_tick_at = now_ms();
     let config = bootstrap::read_owner_config();
     if config.api.is_empty() {
         // No owner onboarding yet: sharing off, owner's builtin keys untouched.
         with_runtime(|rt: &mut Runtime| rt.sync = SyncState::default());
+        status.phase = "off".into();
+        status.api = String::new();
+        status.last_error = Some("no api configured in the CPA plugin config".into());
+        bootstrap::write_status(&status);
         return;
     }
     let api = config.api.trim_end_matches('/').to_string();
-    let Some(identity) = ensure_identity(&api, &config) else {
-        // Registration failed (backend down / rejected): stay fail-closed and
-        // retry next tick.
-        return;
-    };
+    status.api = api.clone();
 
-    let usage: Vec<UsageDelta> = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.pending_usage))
+    let mut usage: Vec<UsageDelta> = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.pending_usage))
         .unwrap_or_default();
     let owner_failures = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.owner_failures))
         .unwrap_or(0);
@@ -221,45 +250,111 @@ pub(crate) fn tick() {
         .collect();
 
     let Some(client) = http_client() else {
-        // same invariant as the Err(_) branch below: the wall counter goes
+        // same invariant as the Err branches below: the wall counter goes
         // back too, or a lost signal window would silently swallow failures
         with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
-        return return_requeue(usage);
+        return_requeue(std::mem::take(&mut usage));
+        status.phase = "error".into();
+        status.last_error = Some("http client unavailable".into());
+        bootstrap::write_status(&status);
+        return;
     };
-    let result = client
-        .post(format!("{}/api/shares/heartbeat", identity.api))
-        .header("x-atl-share-secret", &identity.share_secret)
-        .json(&json!({
-            "shareId": identity.share_id,
-            "pluginVersion": PLUGIN_VERSION,
-            "baseURL": bootstrap::current_base_url(&config),
-            "usage": usage_json,
-            "wallSignals": { "ownerFailed": owner_failures },
-            "tzOffsetMinutes": crate::tz_offset_minutes(),
-        }))
-        .send();
-    let response: Result<Value, ()> = match result {
-        Ok(resp) if resp.status().is_success() => resp.json::<Value>().map_err(|_| ()),
-        _ => Err(()),
-    };
-    match response {
-        Ok(body) => {
-            let now = now_ms();
-            let settled = settled_map_of(&body);
-            with_runtime(move |rt: &mut Runtime| {
-                let window_day = str_of(&body, "windowDay");
-                rt.sync = parse_sync_response(&body, now);
-                restore_settled(&mut rt.ledger, &window_day, &settled);
-                restore_lane_settled(&mut rt.ledger, &rt.sync.lanes);
-            });
-        }
-        Err(_) => {
-            // Heartbeat failed: the wall counter goes back too, or a lost
-            // signal window would silently swallow owner failures.
-            with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
-            return_requeue(usage)
+
+    // Credentials (R51-1) + configured api beat directly; reconciliation is
+    // driven by the backend's response, never by a cached URL.
+    let identity = bootstrap::load_identity();
+    let mut need_register = identity.is_none();
+    if identity.is_none() {
+        // No credentials this tick: nothing can be acknowledged, so the
+        // deltas must survive until a register + successful heartbeat clears
+        // them (same invariant as the transport-failure paths).
+        with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
+        return_requeue(std::mem::take(&mut usage));
+    }
+    if let Some(id) = &identity {
+        let result = client
+            .post(format!("{}/api/shares/heartbeat", api))
+            .header("x-atl-share-secret", &id.share_secret)
+            .json(&json!({
+                "shareId": id.share_id,
+                "pluginVersion": PLUGIN_VERSION,
+                "baseURL": bootstrap::current_base_url(&config),
+                "usage": usage_json,
+                "wallSignals": { "ownerFailed": owner_failures },
+                "tzOffsetMinutes": crate::tz_offset_minutes(),
+            }))
+            .send();
+        match result {
+            Ok(resp) if resp.status().is_success() => match resp.json::<Value>() {
+                Ok(body) => {
+                    let now = now_ms();
+                    let settled = settled_map_of(&body);
+                    with_runtime(move |rt: &mut Runtime| {
+                        let window_day = str_of(&body, "windowDay");
+                        rt.sync = parse_sync_response(&body, now);
+                        restore_settled(&mut rt.ledger, &window_day, &settled);
+                        restore_lane_settled(&mut rt.ledger, &rt.sync.lanes);
+                    });
+                    status.phase = "beating".into();
+                    status.last_success_at = status.last_tick_at;
+                    status.last_error = None;
+                }
+                Err(error) => {
+                    with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
+                    return_requeue(std::mem::take(&mut usage));
+                    status.phase = "error".into();
+                    status.last_error = Some(format!("heartbeat decode: {error}"));
+                }
+            },
+            Ok(resp) => {
+                let rejected = matches!(beat_outcome(resp.status().as_u16()), BeatOutcome::Rejected);
+                with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
+                return_requeue(std::mem::take(&mut usage));
+                status.phase = "error".into();
+                if rejected {
+                    // definitive: this backend does not know the stored
+                    // credentials — reconcile by re-registering (cooldown
+                    // guarded; backend rebinds to the owner's active share)
+                    if status.last_tick_at - status.last_register_attempt_at >= REGISTER_COOLDOWN_MS {
+                        need_register = true;
+                    } else {
+                        status.last_error = Some("share rejected by backend; re-register cooling down".into());
+                    }
+                } else {
+                    status.last_error = Some(format!("heartbeat status {}", resp.status()));
+                }
+            }
+            Err(error) => {
+                with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
+                return_requeue(std::mem::take(&mut usage));
+                status.phase = "error".into();
+                status.last_error = Some(format!("heartbeat transport: {error}"));
+            }
         }
     }
+
+    if need_register {
+        if status.last_tick_at - status.last_register_attempt_at < REGISTER_COOLDOWN_MS {
+            status.phase = "error".into();
+            status.last_error = Some("register cooling down after a recent attempt".into());
+        } else {
+            status.phase = "registering".into();
+            status.last_register_attempt_at = status.last_tick_at;
+            bootstrap::write_status(&status);
+            match register_share(&client, &api, &config) {
+                Ok(_) => {
+                    // credentials persisted; the next tick (8s) beats with them
+                    status.phase = "registered".into();
+                    status.last_error = None;
+                }
+                Err(error) => {
+                    status.phase = "error".into();
+                    status.last_error = Some(error);
+                }
+            }
+        }
+    }
+    bootstrap::write_status(&status);
 }
 
 /// Heartbeat failed: nothing is acknowledged — merge the deltas back so the
@@ -278,6 +373,20 @@ fn return_requeue(usage: Vec<UsageDelta>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn beat_outcome_only_definitive_rejections_reregister() {
+        assert!(matches!(beat_outcome(200), BeatOutcome::Success));
+        assert!(matches!(beat_outcome(204), BeatOutcome::Success));
+        assert!(matches!(beat_outcome(401), BeatOutcome::Rejected));
+        assert!(matches!(beat_outcome(404), BeatOutcome::Rejected));
+        // transient classes must NEVER trigger re-registration: a backend
+        // outage recovering into a register flood is the failure R51-2 kills
+        assert!(matches!(beat_outcome(500), BeatOutcome::Transient));
+        assert!(matches!(beat_outcome(503), BeatOutcome::Transient));
+        assert!(matches!(beat_outcome(400), BeatOutcome::Transient));
+        assert!(matches!(beat_outcome(409), BeatOutcome::Transient));
+    }
 
     #[test]
     fn parse_sync_response_extracts_contract_fields() {

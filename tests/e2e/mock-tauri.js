@@ -675,7 +675,10 @@
       if (command === "compute-sharing:owner-status") {
         window.__ATL_E2E_STATE__.ownerCalls.status = (window.__ATL_E2E_STATE__.ownerCalls.status || 0) + 1;
         if (cfg.ownerNotRegistered || !window.__ATL_E2E_STATE__.ownerShare) return Promise.reject(new Error("not_registered"));
-        return Promise.resolve(clone(window.__ATL_E2E_STATE__.ownerShare));
+        // mirror the sidecar merge (R51-4): plugin status file rides along
+        const owner = clone(window.__ATL_E2E_STATE__.ownerShare);
+        if (owner.share) owner.pluginStatus = window.__ATL_E2E_STATE__.pluginStatus || { phase: 'beating', lastError: null };
+        return Promise.resolve(owner);
       }
       if (command === "compute-sharing:owner-policy") {
         window.__ATL_E2E_STATE__.ownerCalls.policy.push(clone((args || {}).policy || {}));
@@ -742,6 +745,11 @@
             { family: 'gpt-*', weeklyTokens: 54000, busy: null },
           ],
         });
+      }
+      if (command === "compute-sharing:borrow-test") {
+        // scenario knob: __ATL_E2E_STATE__.borrowTestResult forces a failure
+        const forced = window.__ATL_E2E_STATE__.borrowTestResult;
+        return Promise.resolve(forced || { ok: true, status: 200, error: null });
       }
       if (command === "compute-sharing:borrow-set") {
         window.__ATL_E2E_STATE__.borrowCalls.sets += 1;

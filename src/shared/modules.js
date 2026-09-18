@@ -31,6 +31,7 @@ export const FIRST_PARTY_PLUGINS = {
       "sidecar:compute-sharing:claim-sign",
       "sidecar:compute-sharing:borrow-get",
       "sidecar:compute-sharing:borrow-set",
+        "sidecar:compute-sharing:borrow-test",
       "sidecar:compute-sharing:owner-status",
       "sidecar:compute-sharing:owner-policy",
       "sidecar:compute-sharing:owner-resume",

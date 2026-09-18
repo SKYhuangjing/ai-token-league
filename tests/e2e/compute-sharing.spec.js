@@ -11,13 +11,13 @@ import { navigateTo } from './helpers.js';
 const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf8');
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.1';
 const CATALOG = {
   version: 1,
   catalog: [
     { id: 'compute-sharing', version: VERSION, type: 'query', title: '算力共享', desc: 'merged card',
       entry: 'index.js', permissions: [
-        'sidecar:compute-sharing:claim-sign', 'sidecar:compute-sharing:borrow-get', 'sidecar:compute-sharing:borrow-set',
+        'sidecar:compute-sharing:claim-sign', 'sidecar:compute-sharing:borrow-get', 'sidecar:compute-sharing:borrow-set', 'sidecar:compute-sharing:borrow-test',
         'sidecar:compute-sharing:owner-status', 'sidecar:compute-sharing:owner-policy', 'sidecar:compute-sharing:owner-resume',
         'sidecar:compute-sharing:owner-suggest', 'sidecar:compute-sharing:owner-unregister',
       ] },
@@ -179,6 +179,22 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     await expect(page.locator('[data-cs="reserve"]')).toHaveValue('95');
   });
 
+  installed('offline share surfaces the plugin failure reason from status.json (R51)', async ({ page }) => {
+    await openCard(page, "owner");
+    const body = page.locator('[data-cs="owner-body"]');
+    await expect(body).toContainText('Sky-Macbook CPA', { timeout: 5_000 });
+    // flip the plugin offline with a concrete error, refresh, and the header
+    // must carry the reason — a silent failure can never hide again
+    await page.evaluate(() => {
+      window.__ATL_E2E_STATE__.ownerShare.share.plugin.online = false;
+      window.__ATL_E2E_STATE__.pluginStatus = { phase: 'error', lastError: 'heartbeat transport: connection refused' };
+    });
+    await page.locator('[data-cs="refresh"]').click();
+    await expect(body).toContainText('plugin offline', { timeout: 5_000 });
+    await expect(body).toContainText('heartbeat transport: connection refused');
+    await expect(page.locator('[data-cs="owner"]')).toBeVisible();
+  });
+
   installed('personal templates: save from the editor, refill from the chip, delete with ×', async ({ page }) => {
     await openCard(page, "owner");
     const body = page.locator('[data-cs="owner-body"]');
@@ -225,7 +241,7 @@ installed.describe('Compute sharing (lanes card, en)', () => {
         json: {
           keyId: 'csk_e2e99', token: 'atl_sk_e2e_secret', baseURL: 'http://192.168.1.4:8317',
           laneId: 'gemini-week', laneTitle: 'Gemini weekly', models: ['gemini-*'], window: { unit: 'week', n: 1 }, tzLabel: 'UTC+8',
-          expiresAt: Date.now() + 86400000, shareTitle: 'E2E CPA', keyMaxTokens: 200000,
+          expiresAt: Date.now() + 3600000, shareTitle: 'E2E CPA', keyMaxTokens: 200000,
         },
       });
     });
@@ -253,6 +269,33 @@ installed.describe('Compute sharing (lanes card, en)', () => {
     const signs = await page.evaluate(() => window.__ATL_E2E_STATE__.borrowCalls.signs);
     expect(signs.at(-1)?.shareId).toBe('shr_e2e1');
     await expect(page.locator('#toast')).toContainText('Claimed');
+
+    // G3 connectivity test: a wildcard lane has no default model, so testing
+    // without one asks for it; with a model the sidecar relay reports the verdict
+    const testResult = page.locator('[data-cs-test-result="csk_e2e99"]');
+    await page.locator('[data-cs-test="csk_e2e99"]').click();
+    await expect(testResult).toContainText('Enter a model name', { timeout: 5_000 });
+    await page.locator('[data-cs-test-model="csk_e2e99"]').fill('gemini-3.8-flash-high');
+    await page.locator('[data-cs-test="csk_e2e99"]').click();
+    await expect(testResult).toContainText('gemini-3.8-flash-high reachable');
+    // a gate rejection surfaces status + reason verbatim (lane exhausted etc.)
+    await page.evaluate(() => {
+      window.__ATL_E2E_STATE__.borrowTestResult = { ok: false, status: 429, error: 'compute-sharing limit reached: lane_exhausted' };
+    });
+    await page.locator('[data-cs-test="csk_e2e99"]').click();
+    await expect(testResult).toContainText('HTTP 429');
+    await expect(testResult).toContainText('lane_exhausted');
+    await page.evaluate(() => { window.__ATL_E2E_STATE__.borrowTestResult = null; });
+
+    // G3 renewal: offered under a day of life left, keeps the same key
+    await page.route('**/api/shares/claims/renew', (route) =>
+      route.fulfill({ json: { renewed: 'csk_e2e99', expiresAt: Date.now() + 7 * 86400000 } }));
+    const renewButton = page.locator('[data-cs="mine"] button', { hasText: 'Renew' });
+    await expect(renewButton).toBeVisible();
+    await renewButton.click();
+    await expect(page.locator('#toast')).toContainText('Renewed', { timeout: 5_000 });
+    const stored = await page.evaluate(() => window.__ATL_E2E_STATE__.borrowStore.claims);
+    expect(stored.find((c) => c.keyId === 'csk_e2e99').expiresAt).toBeGreaterThan(Date.now() + 6 * 86400000);
   });
 
   installed('backend lane rejection surfaces a friendly error with the reopen time', async ({ page }) => {
