@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.16] - 2026-09-19
+
+### Added
+
+- [Desktop] New terminal command line: from the desktop app's settings, one click copies an install command for the `atl` terminal tool. Once installed, you can query your collected usage (`usage` — summaries, daily trends, per-project breakdowns, cost estimates), check your leaderboard rank (`top` / `rank`), adjust settings (`config`), and run scans (`scan` / `sync`) without opening the app. Output is script-friendly (`--json`), and `scan` / `sync` read and write the same local database the app uses.
+- [Desktop] The command line also manages plugins: `atl plugin install` adds desktop plugins, `atl zhipu usage` reads your Zhipu coding-plan quota, and `atl share ...` covers the compute-sharing borrower and owner flows — a claim command prints `export OPENAI_...` lines that you paste into a terminal so your local AI tools can use the shared quota.
+- [Desktop] The command line is AI-assistant friendly: the setup prompt from settings (or the manual bundled inside the app) gives your AI assistant everything it needs to install and drive it for you.
+- [Desktop] Plugins get a built-in screen: install, upgrade, or reinstall plugins from the in-app catalog (starting with the Zhipu quota and compute-sharing plugins), with popup notifications and upgrade buttons on installed cards.
+- [Desktop] Compute-sharing, owner side: one share can now be split into several lanes — a lane is one slice of your shared capacity with its own token budget, active hours, and model filter. A suggestion computed from your real usage history pre-fills the lane editor, and every value stays editable.
+- [Desktop] Compute-sharing, borrower side: the borrow directory lists claimable nodes — other members' open shares — first and supports model filters, with one-click connection tests and one-click renewals. Each borrower can hold at most five active claims; a claim is a temporary key that lets you use another member's shared capacity.
+- [Desktop] Compute-sharing, reliability: changing the server address or losing connection no longer silences the plugin — the card always shows why it is offline and what to fix.
+- [Desktop] Zhipu quota card: edit keys and labels inline, and the menu-bar tray now shows the remaining quota percentage and the time until each usage window resets, e.g. "49% · 3h30m".
+- [Web] Four new color themes with a switcher next to the language menu on public pages and admin.
+- [Web] The admin analytics tab is now a company-wide statistics board: how concentrated usage is across the top members, monthly model composition, per-project (workdir) and 7×24 hourly-rhythm charts, plus client version / platform cards built from the device list and a cleaner device table; the source stats tab also shows each source's top participants.
+- [Web] New team analysis board for admins: tag members into teams on the teams page, then compare 7/14/30-day activity, tool combinations, and per-member contributions on a dedicated board.
+- [Web] Profile pages gain an hourly coding-rhythm card (when you code, with night-owl / overtime badges), heatmap shading that makes lighter days visible, and the activity heatmap on the profile and download pages now spans the full year (up to 53 week columns) instead of a fixed window.
+- [Web] Admin sharing panel: a "clear ended" button removes all ended claim keys — the temporary credentials borrowers used — in one click; active claims are untouched.
+
+### Fixed
+
+- [Desktop] Fixed a silent history loss: some usage sources keep only about the last 30 days of data, and the app used to mirror that cleanup into your collected history, so already-finished months quietly lost one more day each day. Your collected history is now kept even after the source deletes or rotates its own logs. Days already lost before this fix are not brought back by upgrading — restore them from a backup if needed.
+- [Web] Fixed: rows in the home page's "source top" module didn't open participant profiles when clicked.
+
+### Changed
+
+- [Web] The site is faster and lighter: pages are compressed and cached, fonts are bundled locally instead of loaded from Google Fonts, and repeat visits to the home page drop from ~772KB to ~7KB of network traffic; the analytics boards compute several times faster (2.6s → 0.67s); switching themes no longer reloads the page.
+- [Web] Site-wide visual polish: the leaderboard podium now shows 2nd-1st-3rd in the classic arrangement, the home usage treemap and concentration panel were redesigned with adaptive layout, phones no longer scroll sideways, chart hover tips are unified, and a batch of mixed-language copy was fixed.
+
+- For self-hosted server operators: the backend now stores plugin, compute-sharing, and teams data and serves the plugin catalog for in-app installs. No manual steps are needed — JSON deployments just work, and MySQL deployments get the new tables and columns applied automatically on startup (see `migrations/004_control_plane.sql`).
+
+- For developers (no user impact): the release gate `npm run verify:ccusage` now reads per-day totals through the CLI's JSON interface, because the scan output it previously parsed changed when scans began saving into the local usage database. Days that exist only in the collector's preserved history (the source's logs were deleted) are reported as preserved instead of counted as mismatches.
+
 ## [0.7.15] - 2026-09-07
 
 ### Added

@@ -122,32 +122,22 @@ function addTotal(map, day, total) {
   map.set(day, (map.get(day) || 0) + total);
 }
 
-function parseCollectorScan(stdout) {
-  const byProvider = {
-    claude: new Map(),
-    codex: new Map(),
-    opencode: new Map(),
-    hermes: new Map(),
-    openclaw: new Map(),
-    mimocode: new Map(),
-    workbuddy: new Map(),
-    kimi: new Map()
-  };
-  for (const line of stdout.split(/\r?\n/)) {
-    const match = line.match(/^\s*(\d{4}-\d{2}-\d{2})\s+(\S+)\s+.+?\s+tokens=(\d+)\s*$/);
-    if (!match) continue;
-    const [, day, providerId, totalRaw] = match;
-    const total = Number(totalRaw);
-    if (providerId === "claude_code_local") addTotal(byProvider.claude, day, total);
-    if (providerId === "codex_local") addTotal(byProvider.codex, day, total);
-    if (providerId === "opencode_local") addTotal(byProvider.opencode, day, total);
-    if (providerId === "hermes_local") addTotal(byProvider.hermes, day, total);
-    if (providerId === "openclaw_local") addTotal(byProvider.openclaw, day, total);
-    if (providerId === "mimocode_local") addTotal(byProvider.mimocode, day, total);
-    if (providerId === "workbuddy_local") addTotal(byProvider.workbuddy, day, total);
-    if (providerId === "kimi_local") addTotal(byProvider.kimi, day, total);
+function collectorDailyTotals(providerId) {
+  const raw = run(
+    "cargo",
+    ["run", "-q", "-p", "atl-collector", "--", "usage", "--range", "all", "--view", "trend", "--grain", "day", "--json", "--provider", providerId],
+    { env: { ...process.env, TZ: TIMEZONE } }
+  );
+  const envelope = JSON.parse(raw);
+  if (!envelope.ok) {
+    throw new Error(`atl-collector usage failed for ${providerId}: ${envelope.error || "unknown error"}`);
   }
-  return byProvider;
+  const totals = new Map();
+  for (const row of envelope.data?.items || []) {
+    const total = Number(row.totalTokens || 0);
+    if (total > 0 && row.bucket) addTotal(totals, row.bucket, total);
+  }
+  return totals;
 }
 
 function expectedClaude() {
@@ -442,12 +432,26 @@ function comparableDays(actual, expected) {
 
 function compareProvider(name, actual, expected) {
   const mismatches = [];
+  let matchedDays = 0;
+  let preservedDays = 0;
+  let preservedTokens = 0;
   for (const day of comparableDays(actual, expected)) {
     const actualTotal = actual.get(day) || 0;
     const expectedTotal = expected.get(day) || 0;
-    if (actualTotal !== expectedTotal) {
-      mismatches.push({ day, actual: actualTotal, expected: expectedTotal, delta: actualTotal - expectedTotal });
+    if (expectedTotal === 0 && actualTotal > 0) {
+      // Day exists only in the collector's preserved history: the source no
+      // longer reports it (rotated/deleted local logs, retention pruning), so
+      // the external reference tool cannot see it. Tolerated by design, but
+      // never silently.
+      preservedDays += 1;
+      preservedTokens += actualTotal;
+      continue;
     }
+    if (actualTotal === expectedTotal && expectedTotal > 0) {
+      matchedDays += 1;
+      continue;
+    }
+    mismatches.push({ day, actual: actualTotal, expected: expectedTotal, delta: actualTotal - expectedTotal });
   }
 
   if (mismatches.length > 0) {
@@ -463,7 +467,10 @@ function compareProvider(name, actual, expected) {
     return false;
   }
 
-  console.log(`${name}: matched ${comparableDays(actual, expected).length} completed day(s)`);
+  const preservedNote = preservedDays > 0
+    ? ` (+${preservedDays} preserved day(s), ${preservedTokens} tokens, no longer visible to the external reference — tolerated)`
+    : "";
+  console.log(`${name}: matched ${matchedDays} completed day(s)${preservedNote}`);
   return true;
 }
 
@@ -485,10 +492,25 @@ function main() {
     throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, workbuddy, kimi, or combinations.");
   }
 
-  const collectorOutput = run("cargo", ["run", "-p", "atl-collector", "--", "scan"], {
+  // scan persists into the local usage database (refusing on provider errors),
+  // and the per-day totals are then read back through the CLI's JSON contract.
+  run("cargo", ["run", "-q", "-p", "atl-collector", "--", "scan"], {
     env: { ...process.env, TZ: TIMEZONE }
   });
-  const actual = parseCollectorScan(collectorOutput);
+  const providerLocalIds = {
+    claude: "claude_code_local",
+    codex: "codex_local",
+    opencode: "opencode_local",
+    hermes: "hermes_local",
+    openclaw: "openclaw_local",
+    mimocode: "mimocode_local",
+    workbuddy: "workbuddy_local",
+    kimi: "kimi_local"
+  };
+  const actual = {};
+  for (const provider of selectedProviders) {
+    actual[provider] = collectorDailyTotals(providerLocalIds[provider]);
+  }
   let ok = true;
 
   if (selectedProviders.has("claude")) {
