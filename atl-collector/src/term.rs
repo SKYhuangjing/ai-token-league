@@ -3,6 +3,21 @@
 
 use chrono::TimeZone;
 
+/// The name the user invoked this binary as: "atl" through the documented
+/// symlink, "atl-collector" as the raw binary (".exe" is stripped on Windows).
+/// Hints echo it so copy-paste always works on the user's machine.
+pub(crate) fn program_name() -> String {
+    std::env::args()
+        .next()
+        .and_then(|arg| {
+            std::path::Path::new(&arg)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "atl-collector".to_string())
+}
+
 /// Local "YYYY-MM-DD HH:MM" for an epoch-ms timestamp ("" when unfetchable).
 pub(crate) fn format_local_datetime(ms: i64) -> String {
     chrono::Local

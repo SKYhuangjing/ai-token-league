@@ -156,6 +156,17 @@ atl-collector share stop --yes | resume [-j]        # 停止分享（撤销全�
 ANTHROPIC_BASE_URL=… / ANTHROPIC_AUTH_TOKEN=…` 四行（借用凭据仅经此显式导出动词输出，
 与 `export-identity` 同类）。设计与命令全表见 `doc/plugin-development.md` §4。
 
+行为细节（2026-09-19 盲测加固轮）：
+
+- 提示行/Usage/版本行跟随实际调用名（经 `atl` 软链调用即显示 `atl`，裸二进制即
+  `atl-collector`），提示中的命令可直接复制执行。
+- `zhipu key add` 入口校验 key 形状（`<id>.<secret>`，两段字母数字）：明显非法的输入
+  退出码 1 拒绝入库，而不是入库后在查询时才失败。
+- `plugin install <id> --version <不存在版本>` 是业务失败（退出码 1，提示不带 --version
+  重试）；仅传输层失败（连不上后端）才是网络错误 12。
+- JSON 模式下 stdout 只含一个 JSON 文档；`plugin install` 成功后的 `Try:` 提示行走
+  stderr，不破坏机器解析。
+
 ### roots
 
 ```bash

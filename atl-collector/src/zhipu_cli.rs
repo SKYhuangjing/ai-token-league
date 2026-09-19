@@ -32,8 +32,10 @@ fn map_error(error: String) -> CliError {
     }
     if error.contains("is not installed") {
         return CliError::Message(format!(
-            "{}\nInstall it first:  atl-collector plugin install {}",
-            error, PLUGIN_ID
+            "{}\nInstall it first:  {} plugin install {}",
+            error,
+            term::program_name(),
+            PLUGIN_ID
         ));
     }
     // exit-code semantics (cli-dev-standard §4): transport failure → 12
@@ -79,7 +81,8 @@ fn render_usage(data: &Value) -> String {
     let key_count = data.get("keyCount").and_then(|v| v.as_u64()).unwrap_or(0);
     if key_count == 0 {
         return format!(
-            "No Zhipu keys configured.\nAdd one:  atl-collector zhipu key add <apiKey> --label main\n(or use the desktop plugin card)\n"
+            "No Zhipu keys configured.\nAdd one:  {} zhipu key add <apiKey> --label main\n(or use the desktop plugin card)\n",
+            term::program_name()
         );
     }
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -164,7 +167,7 @@ fn cmd_key_list(json_out: bool) -> Result<(), CliError> {
     let state = modules::load_modules_state();
     let keys = valid_key_entries(&stored_keys(&state));
     if keys.is_empty() {
-        println!("No keys configured. Add one:  atl-collector zhipu key add <apiKey> --label main");
+        println!("No keys configured. Add one:  {} zhipu key add <apiKey> --label main", term::program_name());
         return Ok(());
     }
     let rows: Vec<Value> = keys
@@ -225,10 +228,31 @@ fn plan_key_add(keys: &[Value], api_key: &str, label: &str) -> (Vec<Value>, KeyA
     (next, KeyAddOutcome::Added)
 }
 
+/// Zhipu API keys are "<id>.<secret>" with both halves alphanumeric-ish.
+/// Entry-shape check only — it rejects obvious garbage, not typos.
+fn key_shape_ok(key: &str) -> bool {
+    let allowed = |part: &str| {
+        !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    match key.split_once('.') {
+        Some((id, secret)) => allowed(id) && allowed(secret),
+        None => false,
+    }
+}
+
 fn cmd_key_add(api_key: &str, label: Option<&str>, json_out: bool) -> Result<(), CliError> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
         return Err("api key must not be empty".into());
+    }
+    // entry validation (user input is untrusted): fail loud at the door
+    // instead of storing garbage that only fails later at query time
+    if !key_shape_ok(api_key) {
+        return Err(
+            "this does not look like a Zhipu API key (expected the '<id>.<secret>' shape) — \
+             check the key in the Zhipu console and paste it exactly"
+                .into(),
+        );
     }
     // read→plan→write under one guard: a concurrent desktop key edit must not
     // be lost to this command's full-list replace (set_module_state re-enters)
@@ -275,7 +299,7 @@ fn cmd_key_add(api_key: &str, label: Option<&str>, json_out: bool) -> Result<(),
         );
     } else {
         println!("Added key '{}' ({}) — {} total", label, masked, next.len());
-        println!("Check it:  atl-collector zhipu usage --force");
+        println!("Check it:  {} zhipu usage --force", term::program_name());
     }
     Ok(())
 }
@@ -296,7 +320,7 @@ fn cmd_key_remove(selector: &str, json_out: bool) -> Result<(), CliError> {
                 key.get("label").and_then(|v| v.as_str()).map(|s| s == selector).unwrap_or(false)
             })
         })
-        .ok_or_else(|| format!("no key matches '{}' — run 'atl-collector zhipu key list'", selector))?;
+        .ok_or_else(|| format!("no key matches '{}' — run '{} zhipu key list'", selector, term::program_name()))?;
     let removed = keys[position].clone();
     let next: Vec<Value> = keys
         .iter()
@@ -395,5 +419,22 @@ mod tests {
         assert_eq!(relabeled.len(), 2);
         assert_eq!(relabeled[0]["label"], "renamed");
         assert_eq!(relabeled[0]["apiKey"], "sk-1");
+    }
+
+    #[test]
+    fn key_shape_rejects_garbage_and_accepts_real_shapes() {
+        // real shapes: domestic and international keys are "<id>.<secret>",
+        // both halves alphanumeric (underscores/dashes tolerated)
+        assert!(key_shape_ok("aaaa1111bbbb2222cccc3333.ddddd666"));
+        assert!(key_shape_ok("54e0c9f3a2b74d6e8f0a1b2c3d4e5f67.O8Avqm7x"));
+        assert!(key_shape_ok("id-with-dash.secret_with_under_score"));
+        // garbage the entry must refuse instead of storing for later failure
+        assert!(!key_shape_ok("not-a-valid-key"));
+        assert!(!key_shape_ok("no-dot-at-all123"));
+        assert!(!key_shape_ok(".leadingdot"));
+        assert!(!key_shape_ok("trailing.dot."));
+        assert!(!key_shape_ok("two.dots.here"));
+        assert!(!key_shape_ok("spaces in.key"));
+        assert!(!key_shape_ok(""));
     }
 }

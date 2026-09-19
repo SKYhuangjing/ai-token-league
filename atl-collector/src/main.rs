@@ -12,7 +12,7 @@ mod zhipu_cli;
 
 /// Exit-code table + key environment variables for the plugin command
 /// families (cli-dev-standard: --help is the AI-facing self-description).
-const EXIT_CODE_TABLE: &str = "Exit codes:\n  0  success (including no-change)\n  1  business failure\n  2  usage error\n  3  busy: another process holds the store lock — retry shortly\n  10 not initialized\n  12 network / backend unreachable\n\nJSON contract: -j / --json prints {\"ok\":true,\"changed\":bool,\"data\":{...}} on success\nand {\"ok\":false,\"error\":...,\"hint\":...} on failure (exit codes still apply).\n\nEnvironment:\n  ATL_HOME  overrides the data directory (default ~/.ai-token-league)";
+const EXIT_CODE_TABLE: &str = "Exit codes:\n  0  success (including no-change)\n  1  business failure\n  2  usage error\n  3  busy: another process holds the store lock — retry shortly\n  10 not initialized\n  11 empty local usage store\n  12 network / backend unreachable\n\nJSON contract: -j / --json prints {\"ok\":true,\"changed\":bool,\"data\":{...}} on success\nand {\"ok\":false,\"error\":...,\"hint\":...} on failure (exit codes still apply).\n\nEnvironment:\n  ATL_HOME  overrides the data directory (default ~/.ai-token-league)";
 
 #[derive(Parser)]
 #[command(name = "atl-collector", version, about = "AI Token League Collector")]
@@ -60,7 +60,6 @@ enum Commands {
         json: bool,
     },
     /// Query locally collected usage data (same store as the desktop app)
-    #[command(after_help = "Examples:\n  atl-collector usage              today, summary\n  atl-collector usage 7d trend     last 7 days, daily trend\n  atl-collector usage detail --provider codex --limit 50")]
     Usage {
         /// Range and/or view shorthand: e.g. "7d", "trend", "7d trend"
         #[arg(value_name = "RANGE|VIEW", num_args = 0..=2)]
@@ -402,7 +401,25 @@ fn split_hint(message: &str) -> (String, Option<String>) {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    // clap shows usage/help under the name the user actually invoked ("atl"
+    // symlink or the raw "atl-collector") so every copy-paste hint works;
+    // clap stores the display name as 'static — leak it, the process is one-shot
+    let prog = crate::term::program_name();
+    let display_name: &'static str = Box::leak(prog.clone().into_boxed_str());
+    let command = <Cli as clap::CommandFactory>::command()
+        .name(display_name)
+        .mut_subcommand("usage", |sub| {
+            sub.after_help(format!(
+                "Examples:\n  {0} usage              today, summary\n  {0} usage 7d trend     last 7 days, daily trend\n  {0} usage detail --provider codex --limit 50",
+                prog
+            ))
+        });
+    let cli = <Cli as clap::FromArgMatches>::from_arg_matches(
+        &command
+            .try_get_matches()
+            .unwrap_or_else(|e| e.exit()),
+    )
+    .expect("matches produced by the same derived command");
 
     if cli.sidecar {
         if let Err(e) = sidecar::run().await {
@@ -433,7 +450,8 @@ async fn main() {
         }
     } else {
         println!(
-            "atl-collector {} -- use --help for usage",
+            "{} {} -- use --help for usage",
+            crate::term::program_name(),
             env!("CARGO_PKG_VERSION")
         );
     }

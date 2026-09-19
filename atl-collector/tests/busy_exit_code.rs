@@ -33,7 +33,7 @@ fn store_lock_busy_contract() {
         .expect("test acquires the store lock");
 
     // write command under lock → exit 3 + structured error JSON on stdout
-    let (code, stdout) = run_atl(&home, &["zhipu", "key", "add", "sk-busy-test-key", "--label", "t", "-j"]);
+    let (code, stdout) = run_atl(&home, &["zhipu", "key", "add", "busyaaa1111bbbb2222.cccc3333", "--label", "t", "-j"]);
     assert_eq!(code, 3, "busy must exit 3, got {} (stdout: {})", code, stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout must be one parseable JSON doc: {} ({})", e, stdout));
@@ -57,7 +57,7 @@ fn store_lock_busy_contract() {
 
     // after release the write goes through
     drop(guard);
-    let (code, stdout) = run_atl(&home, &["zhipu", "key", "add", "sk-busy-test-key", "--label", "t", "-j"]);
+    let (code, stdout) = run_atl(&home, &["zhipu", "key", "add", "busyaaa1111bbbb2222.cccc3333", "--label", "t", "-j"]);
     assert_eq!(code, 0, "write must succeed after release ({} {})", code, stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("envelope parses");
     assert_eq!(parsed["ok"], serde_json::json!(true));

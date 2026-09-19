@@ -21,6 +21,12 @@ pub fn sidecar_plugins() -> &'static [Box<dyn SidecarPlugin>] {
 /// Which installed plugins have a terminal command family, and what the
 /// entry command is — pure presentation metadata for `atl plugin list`
 /// hints. Kept beside the composition root so plugin ids stay in one place.
-pub fn terminal_surfaces() -> &'static [(&'static str, &'static str)] {
-    &[("zhipu-plan", "atl-collector zhipu"), ("compute-sharing", "atl-collector share")]
+/// The command string follows the name the user invoked the binary as, so
+/// hints are copy-pasteable both as `atl` and as `atl-collector`.
+pub fn terminal_surfaces() -> Vec<(&'static str, String)> {
+    let prog = crate::term::program_name();
+    vec![
+        ("zhipu-plan", format!("{} zhipu", prog)),
+        ("compute-sharing", format!("{} share", prog)),
+    ]
 }

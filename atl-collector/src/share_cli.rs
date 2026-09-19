@@ -34,6 +34,7 @@ pub async fn cmd_share(action: crate::ShareAction) -> Result<(), CliError> {
 /// card renders through i18n. Unknown codes fall through verbatim so nothing
 /// is swallowed.
 fn share_error_text(code: &str) -> String {
+    let prog = term::program_name();
     let bare = code.trim();
     let text = match bare {
         "share_offline" => "share node is offline",
@@ -41,25 +42,34 @@ fn share_error_text(code: &str) -> String {
         "lane_exhausted" => "lane budget exhausted",
         "lane_closed" => "lane is outside its open hours",
         "lane_suspended" => "lane paused by the owner",
-        "lane_required" | "lane_not_found" => "this share needs a lane — pick one from 'atl-collector share dir'",
+        "share_not_found" => {
+            return format!("no share with that id — list online ids with '{} share dir'", prog)
+        }
+        "lane_required" | "lane_not_found" => {
+            return format!("this share needs a lane — pick one from '{} share dir'", prog)
+        }
         "no_claim_slots" => "no claim slots left on this share",
         "rate_limited" => "rate limited — try again shortly",
         "identity_required" | "participant_not_registered" | "invalid_signature" => {
-            "league identity missing or not accepted — run 'atl-collector init' and sync once"
+            return format!("league identity missing or not accepted — run '{} init' and sync once", prog)
         }
         "share_not_active" => "share paused by the owner",
-        "too_many_active_claims" => "too many active claims — release one first ('atl-collector share claims')",
-        "no_api_base" => "no API base configured — set it with 'atl-collector config set apiBaseUrl <url>'",
+        "too_many_active_claims" => {
+            return format!("too many active claims — release one first ('{} share claims')", prog)
+        }
+        "no_api_base" => {
+            return format!("no API base configured — set it with '{} config set apiBaseUrl <url>'", prog)
+        }
         "not_registered" => "no share identity on this machine (owner commands need a registered CPA share)",
         other => other,
     };
     if bare.starts_with("claim_not_found") {
-        return format!("no local claim matches that keyId — run 'atl-collector share claims'");
+        return format!("no local claim matches that keyId — run '{} share claims'", prog);
     }
     if let Some(detail) = bare.strip_prefix("backend_unreachable:") {
         return format!(
-            "backend unreachable ({}) — check your network, or the API base with 'atl-collector config get apiBaseUrl'",
-            detail
+            "backend unreachable ({}) — check your network, or the API base with '{} config get apiBaseUrl'",
+            detail, prog
         );
     }
     text.to_string()
@@ -75,8 +85,10 @@ fn map_error(error: String) -> CliError {
     }
     if error.contains("is not installed") {
         return CliError::Message(format!(
-            "{}\nInstall it first:  atl-collector plugin install {}",
-            error, PLUGIN_ID
+            "{}\nInstall it first:  {} plugin install {}",
+            error,
+            term::program_name(),
+            PLUGIN_ID
         ));
     }
     // exit-code semantics (cli-dev-standard §4 / the CLI's documented table):
@@ -85,7 +97,14 @@ fn map_error(error: String) -> CliError {
     if error.starts_with("backend_unreachable") {
         return CliError::Network(share_error_text(&error));
     }
-    CliError::Message(format!("{} (code: {})", share_error_text(&error), error))
+    let text = share_error_text(&error);
+    // skip the code suffix when the rendered text already IS that code —
+    // "share_not_found (code: share_not_found)" says the same thing twice
+    if text == error {
+        CliError::Message(text)
+    } else {
+        CliError::Message(format!("{} (code: {})", text, error))
+    }
 }
 
 fn now_ms() -> i64 {
@@ -338,7 +357,10 @@ fn render_directory(data: &Value) -> String {
             ));
         }
     }
-    out.push_str("Claim one:  atl-collector share claim <shareId> [laneId]\n");
+    out.push_str(&format!(
+        "Claim one:  {} share claim <shareId> [laneId]\n",
+        term::program_name()
+    ));
     out
 }
 
@@ -400,7 +422,7 @@ fn merge_claims(claims: &[Value], live: Option<&Value>, now: i64) -> Vec<Value> 
 
 fn render_claims(claims: &[Value]) -> String {
     if claims.is_empty() {
-        return "No claims yet. Browse the directory:  atl-collector share dir\n".to_string();
+        return format!("No claims yet. Browse the directory:  {} share dir\n", term::program_name());
     }
     let mut out = format!("My claims — {}\n", claims.len());
     for claim in claims {
@@ -422,8 +444,9 @@ fn render_claims(claims: &[Value]) -> String {
             }
         }
     }
-    out.push_str("Test one:    atl-collector share test <keyId>\n");
-    out.push_str("Release it:  atl-collector share revoke <keyId>\n");
+    let prog = term::program_name();
+    out.push_str(&format!("Test one:    {} share test <keyId>\n", prog));
+    out.push_str(&format!("Release it:  {} share revoke <keyId>\n", prog));
     out
 }
 
@@ -456,7 +479,7 @@ async fn cmd_claim(share_id: &str, lane_id: Option<&str>, json_out: bool) -> Res
     ) {
         println!("{}", line);
     }
-    println!("Verify:  atl-collector share test {}", data["keyId"].as_str().unwrap_or("?"));
+    println!("Verify:  {} share test {}", term::program_name(), data["keyId"].as_str().unwrap_or("?"));
     Ok(())
 }
 
@@ -496,7 +519,7 @@ async fn cmd_test(key_id: &str, model: Option<&str>, json_out: bool) -> Result<(
         .unwrap_or_default()
         .into_iter()
         .find(|entry| entry["keyId"].as_str() == Some(key_id))
-        .ok_or_else(|| CliError::Message("no local claim matches that keyId — run 'atl-collector share claims'".into()))?;
+        .ok_or_else(|| CliError::Message(format!("no local claim matches that keyId — run '{} share claims'", term::program_name())))?;
     // model default mirrors the card: the lane's exact model; wildcards need
     // a real name
     let exact_model = claim["models"]
@@ -580,7 +603,7 @@ fn render_owner(data: &Value) -> String {
             "  state: stopped · lifetime settled {}\n",
             format_tokens_compact(share["lifetimeSettled"].as_i64().unwrap_or(0))
         ));
-        out.push_str("  reopen with:  atl-collector share resume\n");
+        out.push_str(&format!("  reopen with:  {} share resume\n", term::program_name()));
         return out;
     }
     let plugin = &share["plugin"];
@@ -724,7 +747,7 @@ async fn cmd_stop(yes: bool, json_out: bool) -> Result<(), CliError> {
         crate::cli::print_json_out(data, true);
         return Ok(());
     }
-    println!("Sharing stopped — all borrower keys revoked (record kept; resume with 'atl-collector share resume')");
+    println!("Sharing stopped — all borrower keys revoked (record kept; resume with '{} share resume')", term::program_name());
     Ok(())
 }
 

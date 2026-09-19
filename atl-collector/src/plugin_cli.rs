@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 
 use crate::board;
 use crate::cli::CliError;
+use crate::term;
 
 /// Route one "{plugin-id}:{sub}" command through the same registry the
 /// desktop sidecar uses — installed/enable gating, permissions and error
@@ -54,7 +55,11 @@ fn api_base() -> Result<String, String> {
     let cfg = config::load_config().ok_or("not initialized")?;
     let api = config::normalize_api_base_url(&cfg.api_base_url);
     if api.is_empty() {
-        return Err("API base URL not configured. Set it with:\n  atl-collector config set apiBaseUrl <url>".into());
+        return Err(format!(
+            "API base URL not configured. Set it with:\n  {} config set apiBaseUrl <url>",
+            term::program_name()
+        )
+        .into());
     }
     Ok(api)
 }
@@ -114,7 +119,7 @@ fn cmd_plugin_list(json_out: bool) -> Result<(), CliError> {
         return Ok(());
     }
     if rows.is_empty() {
-        println!("No plugins installed. Browse the catalog: atl-collector plugin install <id>");
+        println!("No plugins installed. Browse the catalog: {} plugin install <id>", term::program_name());
         return Ok(());
     }
     println!("Installed plugins:");
@@ -212,8 +217,9 @@ async fn cmd_plugin_install(id: &str, version: Option<&str>, json_out: bool) -> 
         .await
         .map_err(|e| {
             CliError::Network(format!(
-                "{} — check your network, or the API base with 'atl-collector config get apiBaseUrl'",
-                e
+                "{} — check your network, or the API base with '{} config get apiBaseUrl'",
+                e,
+                term::program_name()
             ))
         })?;
     let catalog = catalog_payload
@@ -246,10 +252,20 @@ async fn cmd_plugin_install(id: &str, version: Option<&str>, json_out: bool) -> 
     // never runs plugin JS at all.
     let source_url = module_file_url(&api, id, &resolved);
     let source = fetch_text(&source_url).await.map_err(|e| {
-        CliError::Network(format!(
-            "{} — check your network, or the API base with 'atl-collector config get apiBaseUrl'",
-            e
-        ))
+        // the catalog fetch above already proved reachability, so an HTTP
+        // status here means the version itself is unavailable, not the network
+        if e.starts_with("HTTP ") {
+            CliError::Message(format!(
+                "version {} of '{}' is not available ({}) — retry without --version to install the latest",
+                resolved, id, e
+            ))
+        } else {
+            CliError::Network(format!(
+                "{} — check your network, or the API base with '{} config get apiBaseUrl'",
+                e,
+                term::program_name()
+            ))
+        }
     })?;
     // the local-write section runs under the modules store lock (pure fs, no
     // awaits while held)
@@ -275,7 +291,13 @@ async fn cmd_plugin_install(id: &str, version: Option<&str>, json_out: bool) -> 
         .iter()
         .find(|(plugin_id, _)| *plugin_id == id)
     {
-        println!("Try: {} --help", command);
+        // stdout carries exactly one JSON document in --json mode; the hint
+        // rides stderr there so `jq`-style consumers never see extra data
+        if json_out {
+            eprintln!("Try: {} --help", command);
+        } else {
+            println!("Try: {} --help", command);
+        }
     }
     Ok(())
 }

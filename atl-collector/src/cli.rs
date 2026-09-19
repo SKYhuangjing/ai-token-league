@@ -34,17 +34,20 @@ impl CliError {
         match self {
             CliError::Message(text) | CliError::Network(text) => text.clone(),
             CliError::Busy(store) => format!(
-                "another atl-collector process is writing the {} store right now — this is not a \
+                "another {} process is writing the {} store right now — this is not a \
                  failure; retry in a moment",
+                crate::term::program_name(),
                 store
             ),
             CliError::NotInitialized => {
-                "Not initialized. Run 'atl-collector init' first.".to_string()
+                format!("Not initialized. Run '{} init' first.", crate::term::program_name())
             }
             CliError::EmptyData => {
-                "Local usage database is empty. Run 'atl-collector scan' first, or launch the \
-                 desktop app once, then retry."
-                    .to_string()
+                format!(
+                    "Local usage database is empty. Run '{} scan' first, or launch the \
+                     desktop app once, then retry.",
+                    crate::term::program_name()
+                )
             }
         }
     }
@@ -128,7 +131,7 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
                     );
                 }
                 None => {
-                    println!("NOT INITIALIZED  run 'atl-collector init' first");
+                    println!("NOT INITIALIZED  run '{} init' first", crate::term::program_name());
                 }
             }
         }
@@ -308,7 +311,8 @@ async fn scan_and_persist(cfg: &AppConfig, full: bool) -> Result<(scanner::ScanR
         detail.sort();
         return Err(format!(
             "scan incomplete; local database not updated. Retry, or disable the failing provider with\n  \
-             atl-collector config set providerEnabled.<providerId> false\nFailing providers:\n  {}",
+             {} config set providerEnabled.<providerId> false\nFailing providers:\n  {}",
+            crate::term::program_name(),
             detail.join("\n  ")
         ));
     }
@@ -388,7 +392,11 @@ async fn cmd_scan(full: bool, json_out: bool) -> Result<(), CliError> {
 async fn cmd_sync(full_resync: bool, json_out: bool) -> Result<(), CliError> {
     let cfg = require_config()?;
     if cfg.api_base_url.is_empty() {
-        return Err("API base URL not configured. Set it with:\n  atl-collector config set apiBaseUrl <url>".into());
+        return Err(format!(
+            "API base URL not configured. Set it with:\n  {} config set apiBaseUrl <url>",
+            crate::term::program_name()
+        )
+        .into());
     }
     if full_resync {
         config::clear_sync_manifest();
@@ -510,7 +518,7 @@ fn cmd_status(json_out: bool) -> Result<(), CliError> {
             format_tokens_compact(local["totalTokens"].as_i64().unwrap_or(0))
         );
     } else {
-        println!("{:<16}empty. Run 'atl-collector scan' first.", "localData");
+        println!("{:<16}empty. Run '{} scan' first.", "localData", crate::term::program_name());
     }
     Ok(())
 }
@@ -691,9 +699,12 @@ async fn apply_cost(
 ) -> Result<(), CliError> {
     let cfg = require_config()?;
     if cfg.api_base_url.is_empty() {
-        return Err("API base URL not configured. Cost estimation needs server model prices. \
-                    Set it with:\n  atl-collector config set apiBaseUrl <url>"
-            .into());
+        return Err(format!(
+            "API base URL not configured. Cost estimation needs server model prices. \
+                    Set it with:\n  {} config set apiBaseUrl <url>",
+            crate::term::program_name()
+        )
+        .into());
     }
     let payload = board::fetch_json(&cfg.api_base_url, "/api/model-prices")
         .await
@@ -797,8 +808,9 @@ fn cmd_config(action: crate::ConfigAction) -> Result<(), CliError> {
             let view = settings_view(&cfg);
             let found = lookup_path(&view, &key).ok_or_else(|| {
                 format!(
-                    "Unknown setting '{}'. Run 'atl-collector config list' to see all keys.",
-                    key
+                    "Unknown setting '{}'. Run '{} config list' to see all keys.",
+                    key,
+                    crate::term::program_name()
                 )
             })?;
             match found {
@@ -889,9 +901,10 @@ fn config_key_to_patch(key: &str, value: &str) -> Result<Value, String> {
         return Ok(json!({ key: parse_number_value(key, value)? }));
     }
     Err(format!(
-        "Unknown setting '{}'. Run 'atl-collector config list' to see all keys; \
+        "Unknown setting '{}'. Run '{} config list' to see all keys; \
          provider toggles use 'providerEnabled.<providerId>'.",
-        key
+        key,
+        crate::term::program_name()
     ))
 }
 
