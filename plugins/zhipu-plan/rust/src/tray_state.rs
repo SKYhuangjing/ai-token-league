@@ -11,8 +11,9 @@
 //   re-arm after falling tier−5pt or a window rollover (reset changed);
 //   the first observation after start is a baseline and never alerts;
 // - ≥70% on any window bumps the refresh cadence 15min → 5min.
-// R22 dropped the macOS title and the menu footer/reset lines — the tray now
-// shows only `{dot} {name} {pct}%` rows; details live in the app card.
+// R22 dropped the macOS title and the menu footer lines — the tray shows
+// `{dot} {name} {pct}%` rows plus a compact reset countdown ("· 4h40m",
+// user request 2026-09-19); details live in the app card.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -169,6 +170,30 @@ impl ZhipuTrayState {
     }
 }
 
+/// Compact remaining-reset countdown for tray rows: "45m", "4h40m", "5h",
+/// "2d". None when the reset already passed (the next refresh will bring the
+/// new window). Matches the card's compactReset and the CLI's term::compact_reset.
+pub fn compact_reset(reset_ms: i64, now_ms: i64) -> Option<String> {
+    let diff = reset_ms - now_ms;
+    if diff <= 0 {
+        return None;
+    }
+    let mins = ((diff as f64) / 60000.0).ceil() as i64;
+    if mins < 60 {
+        return Some(format!("{}m", mins));
+    }
+    let hours = mins / 60;
+    let rem = mins % 60;
+    if hours < 48 {
+        return Some(if rem > 0 {
+            format!("{}h{:02}m", hours, rem)
+        } else {
+            format!("{}h", hours)
+        });
+    }
+    Some(format!("{}d", (mins as f64 / 1440.0).round()))
+}
+
 /// Human-readable key display name (R22): labels are user-typed in the
 /// module card; an empty label falls back to a numbered default.
 pub fn display_key_label(label: &str, index: usize, lang: &str) -> String {
@@ -264,5 +289,18 @@ mod tests {
         assert_eq!(display_key_label("  Zhipu GLM  ", 1, "en"), "Zhipu GLM");
         assert_eq!(display_key_label("", 2, "zh-CN"), "智谱 Key 3");
         assert_eq!(display_key_label("", 2, "en"), "Zhipu key 3");
+    }
+
+    #[test]
+    fn compact_reset_bands() {
+        let now = 1_000_000_000i64;
+        // already past → nothing to show
+        assert_eq!(compact_reset(now - 1, now), None);
+        assert_eq!(compact_reset(now, now), None);
+        assert_eq!(compact_reset(now + 44 * 60_000, now).as_deref(), Some("44m"));
+        assert_eq!(compact_reset(now + 45 * 60_000, now).as_deref(), Some("45m"));
+        assert_eq!(compact_reset(now + 4 * 3_600_000 + 40 * 60_000, now).as_deref(), Some("4h40m"));
+        assert_eq!(compact_reset(now + 5 * 3_600_000, now).as_deref(), Some("5h"));
+        assert_eq!(compact_reset(now + 50 * 3_600_000, now).as_deref(), Some("2d"));
     }
 }

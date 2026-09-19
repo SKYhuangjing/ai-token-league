@@ -193,6 +193,7 @@ fn tray_t(lang: &str, key: &str, params: &[(&str, String)]) -> String {
     let mut text = match (lang, key) {
         ("en", "tray.zhipuHeader") => "GLM plan usage",
         ("en", "tray.zhipuKey") => "{dot} {name} {pct}%",
+        ("en", "tray.zhipuKeyReset") => "{dot} {name} {pct}% · {reset}",
         ("en", "tray.zhipuFail") => "Zhipu key query failed",
         ("en", "tray.zhipuNoKeys") => "Add a Zhipu key in the app",
         ("en", "tray.zhipuMore") => "+{n} more",
@@ -201,6 +202,7 @@ fn tray_t(lang: &str, key: &str, params: &[(&str, String)]) -> String {
         ("en", "tray.zhipuAlertBody") => "{name} · {window} window {pct}% used",
         (_, "tray.zhipuHeader") => "GLM 套餐用量",
         (_, "tray.zhipuKey") => "{dot} {name} {pct}%",
+        (_, "tray.zhipuKeyReset") => "{dot} {name} {pct}% · {reset}",
         (_, "tray.zhipuFail") => "智谱 Key 查询失败",
         (_, "tray.zhipuNoKeys") => "打开 App 添加智谱 Key",
         (_, "tray.zhipuMore") => "还有 {n} 把 Key",
@@ -221,11 +223,13 @@ fn tray_dot(pct: f64) -> &'static str {
 }
 
 /// Module section items for the tray menu (inserted before "quit" by the
-/// host). Minimal by design (R22): `{dot} {name} {pct}%` per key — tier,
-/// window label, reset times, refresh action and the updated/footer chrome
-/// live in the app card instead. The number is the 5h window (consensus
-/// badge semantics; keys without one fall back to their only window); the
-/// dot follows the card ladder 🟢<70/🟠≥70/🔴≥90 judged across ALL windows of the key.
+/// host). Minimal by design (R22): `{dot} {name} {pct}%` per key plus a
+/// compact reset countdown (`· 4h40m` / `· 45m`, user request 2026-09-19) —
+/// tier, window label, refresh action and the updated/footer chrome live in
+/// the app card instead. The number is the 5h window (consensus badge
+/// semantics; keys without one fall back to their only window) and the
+/// countdown is that SAME window's remaining time; the dot follows the card
+/// ladder 🟢<70/🟠≥70/🔴≥90 judged across ALL windows of the key.
 /// Usage rows stay enabled so macOS does not paint the reading gray.
 pub fn menu_items(lang: &str) -> Vec<Value> {
     let mut items = vec![
@@ -252,6 +256,9 @@ pub fn menu_items(lang: &str) -> Vec<Value> {
         return items;
     }
 
+    // countdown is computed at render time; the tray rebuild tick (5 min)
+    // keeps it fresh enough for the coarse "4h40m" style
+    let now = now_millis();
     let shown = ok_results.split_off(ok_results.len().min(3));
     for (index, result) in ok_results.iter().enumerate() {
         let raw_label = result.get("label").and_then(|v| v.as_str()).unwrap_or("");
@@ -259,23 +266,44 @@ pub fn menu_items(lang: &str) -> Vec<Value> {
         let quota = result.get("quota").cloned().unwrap_or(Value::Null);
         let mut key_max = f64::NEG_INFINITY;
         let mut pct_shown: Option<f64> = None;
+        let mut reset_shown: Option<i64> = None;
         for window in quota.get("windows").and_then(|v| v.as_array()).into_iter().flatten() {
             let pct = window.get("pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if pct > key_max {
                 key_max = pct;
             }
-            match window.get("window").and_then(|v| v.as_str()) {
-                Some("five_hour") if pct_shown.is_none() => pct_shown = Some(pct),
-                Some("weekly") if pct_shown.is_none() => pct_shown = Some(pct),
-                _ => {}
+            if pct_shown.is_none() {
+                match window.get("window").and_then(|v| v.as_str()) {
+                    Some("five_hour") | Some("weekly") => {
+                        pct_shown = Some(pct);
+                        reset_shown = window.get("resetMs").and_then(|v| v.as_i64());
+                    }
+                    _ => {}
+                }
             }
         }
         let pct = pct_shown.unwrap_or(key_max.max(0.0));
-        items.push(tray_item_action(&format!("zhipu-key-{}", index), tray_t(lang, "tray.zhipuKey", &[
-            ("dot", tray_dot(key_max).to_string()),
-            ("name", name),
-            ("pct", format!("{}", pct.round() as i64)),
-        ]), "noop"));
+        let reset_text = reset_shown.and_then(|ms| tray_state::compact_reset(ms, now));
+        let (template, mut params) = match &reset_text {
+            Some(reset) => (
+                "tray.zhipuKeyReset",
+                vec![
+                    ("dot", tray_dot(key_max).to_string()),
+                    ("name", name),
+                    ("pct", format!("{}", pct.round() as i64)),
+                    ("reset", reset.clone()),
+                ],
+            ),
+            None => (
+                "tray.zhipuKey",
+                vec![
+                    ("dot", tray_dot(key_max).to_string()),
+                    ("name", name),
+                    ("pct", format!("{}", pct.round() as i64)),
+                ],
+            ),
+        };
+        items.push(tray_item_action(&format!("zhipu-key-{}", index), tray_t(lang, template, &params), "noop"));
     }
     if !shown.is_empty() {
         items.push(tray_item_disabled("zhipu-more", tray_t(lang, "tray.zhipuMore", &[("n", shown.len().to_string())])));
@@ -324,6 +352,10 @@ pub fn drain_alerts(lang: &str) -> Vec<Value> {
 mod tests {
     use super::*;
 
+    // the tray runtime is a process-global singleton; tests that touch it
+    // (note_success / menu_items / refresh) must not interleave
+    static RUNTIME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn gate_requires_installed_entry() {
         // never-installed: no entry at all → off
@@ -359,6 +391,7 @@ mod tests {
 
     #[test]
     fn expire_forces_due_but_keeps_snapshot_and_alerts() {
+        let _serial = RUNTIME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let data = json!({
             "keyCount": 1,
             "results": [{ "label": "k", "ok": true, "quota": { "windows": [
@@ -375,6 +408,7 @@ mod tests {
 
     #[test]
     fn empty_keys_refresh_never_counts_as_a_tray_observation() {
+        let _serial = RUNTIME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let real = json!({
             "keyCount": 1,
             "results": [{ "label": "k", "ok": true, "quota": { "tier": "pro", "windows": [
@@ -399,5 +433,65 @@ mod tests {
         assert_eq!(tray_state::usage_dot(70.0), "🟠");
         assert_eq!(tray_state::usage_dot(89.0), "🟠");
         assert_eq!(tray_state::usage_dot(90.0), "🔴");
+    }
+
+    #[test]
+    fn tray_rows_carry_compact_reset_countdown() {
+        let _serial = RUNTIME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_millis();
+        // 5h window resetting in 45min → row shows "· 45m"; the weekly window
+        // (later reset) must NOT hijack the countdown — pct and countdown
+        // belong to the same displayed window
+        let data = json!({
+            "keyCount": 2,
+            "results": [
+                { "label": "k-soon", "ok": true, "quota": { "windows": [
+                    { "window": "five_hour", "pct": 30.0, "resetMs": now + 45 * 60_000 },
+                    { "window": "weekly", "pct": 55.0, "resetMs": now + 50 * 3_600_000 }
+                ] } },
+                // weekly-only key: falls back to the weekly window ("2d")
+                { "label": "k-weekly", "ok": true, "quota": { "windows": [
+                    { "window": "weekly", "pct": 12.0, "resetMs": now + 50 * 3_600_000 }
+                ] } },
+            ],
+        });
+        note_success(&data, now, false, None);
+        let labels: Vec<String> = menu_items("zh-CN")
+            .iter()
+            .filter(|i| i.get("id").and_then(|v| v.as_str()).unwrap_or("").starts_with("zhipu-key-"))
+            .map(|i| i["label"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(labels.len(), 2, "rows: {:?}", labels);
+        assert!(labels[0].contains("30% · 45m"), "row0: {}", labels[0]);
+        assert!(labels[1].contains("12% · 2d"), "row1: {}", labels[1]);
+    }
+
+    #[test]
+    fn tray_rows_skip_countdown_when_reset_missing_or_past() {
+        let _serial = RUNTIME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_millis();
+        let data = json!({
+            "keyCount": 2,
+            "results": [
+                // no resetMs at all → plain row, no dangling "·"
+                { "label": "k-norect", "ok": true, "quota": { "windows": [
+                    { "window": "five_hour", "pct": 10.0 }
+                ] } },
+                // reset already passed → the next refresh brings the new window;
+                // until then the row shows no countdown
+                { "label": "k-past", "ok": true, "quota": { "windows": [
+                    { "window": "five_hour", "pct": 20.0, "resetMs": now - 60_000 }
+                ] } },
+            ],
+        });
+        note_success(&data, now, false, None);
+        let labels: Vec<String> = menu_items("zh-CN")
+            .iter()
+            .filter(|i| i.get("id").and_then(|v| v.as_str()).unwrap_or("").starts_with("zhipu-key-"))
+            .map(|i| i["label"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(labels.len(), 2, "rows: {:?}", labels);
+        assert!(!labels[0].contains("·"), "row0: {}", labels[0]);
+        assert!(!labels[1].contains("·"), "row1: {}", labels[1]);
     }
 }
