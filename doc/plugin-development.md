@@ -95,6 +95,18 @@ export default {
 | `compute-sharing:borrow-get` | `{}` | `{ claims: [...] }` —— 本机持久化的认领记录（app 数据目录 sharing-borrow.json） |
 | `compute-sharing:borrow-set` | `{ claims: [...] }` | 清洗后的存储结果（白名单字段、≤50 条、字段限长） |
 
+**借用后端流（`compute-sharing:*`，随终端面加入 2026-09；wire 协议与卡片 JS 完全一致，单一实现在 `atl-plugin-sharing::flow`）**：
+
+| 命令 | 入参 | 返回 |
+|---|---|---|
+| `compute-sharing:directory` | `{}` | `GET /api/shares` 的完整目录（车道视图） |
+| `compute-sharing:claim` | `{ shareId, laneId? }` | 签名 → `POST /api/shares/claim` → 合并进本地认领存储，返回服务端响应（含 token/baseURL） |
+| `compute-sharing:renew` | `{ keyId }` | `POST /api/shares/claims/renew` 并更新本地存储的同 key 过期时间 |
+| `compute-sharing:revoke` | `{ keyId }` | `POST /api/shares/claims/revoke` 并从本地存储移除该认领 |
+| `compute-sharing:live` | `{}` | `POST /api/shares/claims/mine`（携带本地全部 token）——认领的实时状态与用量 |
+
+> 桌面卡片 JS 目前仍直接 `fetch` 这五个端点；后续插件版本可迁移到上述命令，两端共用一条流实现。
+
 **其他插件暴露的命令（经其 manifest.permissions 声明）**：`zhipu-plan:usage`（智谱配额查询，带 60s 缓存）。
 
 > 新增自己的 sidecar 命令：在 `collector-core`/`atl-collector` 实现并注册（②层），或提需求给平台。
@@ -166,7 +178,42 @@ node scripts/publish-module.js --module-dir plugins/<your-plugin> --env env.loca
 
 ---
 
-## 4. 能力边界与信任模型（v1 现状，诚实清单）
+## 4. 终端面（atl CLI，2026-09）
+
+终端是 ②sidecar 能力的**第二个前端**（第一个是 ①webview 卡片）。CLI 通过
+`collector_core::plugin::route_plugin_command` 走与桌面完全相同的
+`{插件id}:{子命令}` 通道——未安装/未启用即拒绝、权限语义、存储位置
+（modules.json / sharing-borrow.json / 身份文件）全部同源，不新增信任面。
+
+```text
+atl-collector plugin list | install <id> [--version v] | remove <id>
+atl-collector zhipu  usage [--force] | key list | key add <apiKey> [--label l] | key remove <index|label>
+atl-collector share  dir [--family gemini-*] | claims | claim <shareId> [laneId]
+                    | renew <keyId> | revoke <keyId> | test <keyId> [--model m]
+                    | owner | suggest | stop --yes | resume
+```
+
+命令族与插件的对应关系是**展示元数据**（`atl-collector/src/plugins.rs` 的
+`terminal_surfaces()`，与组合根同处一地）；通用管理面（`plugin list/install/remove`）
+不含任何插件字面量，per-plugin 命令族各自一个前端模块
+（`zhipu_cli.rs` / `share_cli.rs`），延续 R26"宿主零插件字面量"纪律。
+
+边界与纪律：
+
+- **安装/卸载不执行任何插件代码**（与 R28c 桌面同款）；终端面根本不运行
+  插件 JS——first-party 插件的终端能力由其 sidecar crate 提供。
+- **config 值不出现在终端输出**：`plugin list` / `zhipu key list`（含 `-j`）
+  只输出 config 键名/掩码，API key 永不落终端历史。
+- `share claims/claim` 输出可直接管道的 `export OPENAI_* / ANTHROPIC_*` 行；
+  `share test` 对通配符车道要求显式 `--model`（借用方自己选具体模型名）。
+- 英文输出（Rust CLI 约定，不走 i18n）；全部支持 `-j` / `--json`。
+- **第三方纯 JS 插件的终端宿主是后续里程碑**（插件平台 P2+：嵌入式 JS
+  引擎执行同一 OSS 工件的终端契约）；在那之前终端命令族 = first-party
+  Rust 前端 + sidecar crate 能力。
+
+---
+
+## 5. 能力边界与信任模型（v1 现状，诚实清单）
 
 ### 插件可以
 - 在自己的卡片容器内任意渲染 DOM、注入样式

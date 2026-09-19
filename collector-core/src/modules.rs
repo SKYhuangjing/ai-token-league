@@ -76,7 +76,12 @@ pub fn load_modules_state() -> Value {
     load_modules_state_at(&modules_path())
 }
 
+/// Writes to the shared modules.json take the cross-process store lock:
+/// CLI commands, the desktop sidecar and tray flows all merge into this one
+/// file, and an interleaved read-modify-write must not lose an update. The
+/// lock is process-reentrant, so command-level cycles may already hold it.
 pub fn set_module_state(id: &str, patch: &Value) -> Result<Value, String> {
+    let _guard = crate::store_lock::acquire("modules", crate::store_lock::WRITE_WAIT)?;
     set_module_state_at(&modules_path(), id, patch)
 }
 

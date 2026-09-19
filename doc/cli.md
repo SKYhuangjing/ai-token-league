@@ -130,6 +130,32 @@ atl-collector rank [today|yesterday|7d|30d|all|A..B] [--json]
 - `rank`：定位"我"的名次并显示前后邻居与差距。匿名榜单模式下自动通过 `my-identity` 接口换算 publicId，公开模式下直接按 participantId 匹配。需要已配置 `apiBaseUrl` 且设备已向该服务器同步过数据。
 - 两者均为对公开 board API 的只读透传，排名与统计逻辑全部在服务器侧。未初始化时退出码 10，服务器不可达时退出码 12。
 
+### plugin / zhipu / share（插件终端面）
+
+桌面插件的终端入口，与桌面 App 共享同一份 modules.json、认领存储与配置；
+装卸不执行任何插件代码，config 值与 API key 永不落终端输出（密钥只出掩码）：
+
+```bash
+atl-collector plugin list [-j]                      # 已装插件（__order 等宿主记账键不显示）
+atl-collector plugin install <id> [--version v]     # 经后端代理下载并落盘，幂等（同版本已装则 unchanged）
+atl-collector plugin remove <id>                    # 摘安装记录+删本机包；config 保留可复原
+
+atl-collector zhipu usage [--force] [-j]            # 5h/每周窗口用量（60s 缓存，与托盘同源）
+atl-collector zhipu key list|add <apiKey> [--label l]|remove <序号|标签>   # 幂等：重复 add 不叠加
+
+atl-collector share dir [--family gemini-*] [-j]    # 在线车道目录（分层排序与卡片一致）
+atl-collector share claims [-j]                     # 我的认领 + 实时用量 + export 环境变量行
+atl-collector share claim <shareId> [laneId] [-j]   # 认领并打印可直接管道的接入配置
+atl-collector share renew|revoke <keyId> [-j]       # 续期（同 key）/ 释放
+atl-collector share test <keyId> [--model m] [-j]   # 经认领端点发一次最小生成验证连通
+atl-collector share owner|suggest [-j]              # 我的分享控制台 / 车道预算建议
+atl-collector share stop --yes | resume [-j]        # 停止分享（撤销全部认领 Key，需确认）/ 重开
+```
+
+`share claims` / `share claim` 会打印 `export OPENAI_BASE_URL=… / OPENAI_API_KEY=… /
+ANTHROPIC_BASE_URL=… / ANTHROPIC_AUTH_TOKEN=…` 四行（借用凭据仅经此显式导出动词输出，
+与 `export-identity` 同类）。设计与命令全表见 `doc/plugin-development.md` §4。
+
 ### roots
 
 ```bash
@@ -160,12 +186,27 @@ atl-collector roots remove <providerId> <path>
 
 | 退出码 | 含义 |
 | --- | --- |
-| 0 | 成功 |
+| 0 | 成功（含"无变化"） |
 | 1 | 一般运行错误（扫描不完整、参数**取值**非法如 `--range bogus`、`theme purple` 等） |
 | 2 | 命令行**格式**错误：未知选项/子命令、缺失参数（clap 约定） |
+| 3 | busy：另一进程持有本地存储写锁（modules.json / sharing-borrow.json / config.json）。不算失败，稍后重试即可；定时任务识别 3 跳过不告警 |
 | 10 | 未初始化（先运行 `init`） |
 | 11 | 本地 usage 数据库为空（先运行 `scan`） |
-| 12 | 网络/服务器错误（top/rank/sync/价格拉取失败） |
+| 12 | 网络/服务器错误（top/rank/sync/价格拉取/插件目录下载失败） |
+
+## JSON 输出契约
+
+所有支持 `-j` / `--json` 的命令遵循统一外壳，一条解析规则通吃全部动词：
+
+```json
+// 成功（changed 标识是否改动了本地状态；只读动词恒为 false）
+{"ok": true, "changed": false, "data": { ...各动词自己的字段... }}
+
+// 失败（--json 模式下错误也是 stdout 上的一个完整 JSON 文档；退出码照常生效）
+{"ok": false, "error": "backend unreachable (...) ", "hint": "check your network, or ..."}
+```
+
+例外：`export-identity` 输出的是身份交换格式（供 `import-identity` 消费），保持裸 JSON 不套外壳。
 
 ## 已知边界
 

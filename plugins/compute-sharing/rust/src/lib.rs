@@ -17,6 +17,8 @@
 use collector_core::plugin::{PluginCtx, SidecarPlugin};
 use serde_json::{json, Value};
 
+pub mod flow;
+
 pub struct SharingPlugin;
 
 fn installed(ctx: &PluginCtx<'_>) -> bool {
@@ -46,6 +48,13 @@ impl SidecarPlugin for SharingPlugin {
             "borrow-get" => Some(borrow_get()),
             "borrow-set" => Some(borrow_set(args)),
             "borrow-test" => Some(borrow_test(args)),
+            // borrower backend flows (crate = single implementation; the
+            // terminal CLI routes here, the card migrates in a later version)
+            "directory" => Some(flow::run_directory()),
+            "claim" => Some(flow::run_claim(args)),
+            "renew" => Some(flow::run_renew(args)),
+            "revoke" => Some(flow::run_revoke(args)),
+            "live" => Some(flow::run_live()),
             "owner-status" => Some(owner_call(OwnerCall::Status, args)),
             "owner-policy" => Some(owner_call(OwnerCall::Policy, args)),
             "owner-unregister" => Some(owner_call(OwnerCall::Unregister, args)),
@@ -61,7 +70,7 @@ impl SidecarPlugin for SharingPlugin {
 /// Sign {kind:"share-claim", participantId, shareId, ts} with the league
 /// identity key — the backend verifies the same chain as usage uploads.
 /// The private key never leaves this process.
-fn claim_sign(args: &Value) -> Result<Value, String> {
+pub(crate) fn claim_sign(args: &Value) -> Result<Value, String> {
     let share_id = args
         .get("shareId")
         .and_then(|v| v.as_str())
@@ -82,7 +91,7 @@ fn claim_sign(args: &Value) -> Result<Value, String> {
     Ok(json!({ "participantId": cfg.participant_id, "ts": ts, "signature": signature }))
 }
 
-fn borrow_get() -> Result<Value, String> {
+pub(crate) fn borrow_get() -> Result<Value, String> {
     let claims: Value = std::fs::read_to_string(collector_core::config::app_dir().join("sharing-borrow.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -90,7 +99,11 @@ fn borrow_get() -> Result<Value, String> {
     Ok(claims)
 }
 
-fn borrow_set(args: &Value) -> Result<Value, String> {
+pub(crate) fn borrow_set(args: &Value) -> Result<Value, String> {
+    // cross-process store lock: a CLI claim and a desktop card save must not
+    // lose each other's update to sharing-borrow.json (re-entrant, so flow
+    // cycles that already hold it are unaffected)
+    let _guard = collector_core::store_lock::acquire("sharing-borrow", collector_core::store_lock::WRITE_WAIT)?;
     let claims = args
         .get("claims")
         .and_then(|v| v.as_array())
@@ -209,10 +222,7 @@ fn owner_identity() -> Result<(String, String, String), String> {
     // truth the leaderboard and every other card use). The identity file
     // carries credentials only — its legacy cached api caused owner-status
     // to hit a dead local backend while the app itself pointed at the cloud.
-    let api = collector_core::config::load_config()
-        .map(|config| collector_core::config::normalize_api_base_url(&config.api_base_url))
-        .filter(|api| !api.is_empty())
-        .ok_or("no_api_base")?;
+    let api = flow::api_base()?;
     let value: Value = std::fs::read_to_string(collector_core::config::app_dir().join("cpa-plugin/identity.json"))
         .map_err(|_| "not_registered".to_string())?
         .parse()
@@ -423,24 +433,17 @@ fn cpa_usage_db_path() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use collector_core::plugin::route_plugin_command;
+pub(crate) mod test_sandbox {
     use std::sync::Mutex;
-
-    fn state(installed: bool) -> Value {
-        if installed {
-            json!({ "modules": { "compute-sharing": { "enabled": true } } })
-        } else {
-            json!({ "modules": {} })
-        }
-    }
 
     // These commands touch the real app dir (identity.json, sharing-borrow
     // store) — tests MUST run against a throwaway ATL_HOME, never the user's
-    // live data. The lock serializes the env swap inside this binary.
+    // live data. One lock shared by every test module in this crate: the env
+    // swap is process-global, so separate locks would let tests clobber each
+    // other's ATL_HOME.
     static SANDBOX_LOCK: Mutex<()> = Mutex::new(());
-    fn sandboxed<T>(f: impl FnOnce() -> T) -> T {
+
+    pub fn sandboxed<T>(f: impl FnOnce() -> T) -> T {
         let _guard = SANDBOX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("atl-sharing-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
@@ -454,6 +457,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         out
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use collector_core::plugin::route_plugin_command;
+    use serde_json::json;
+
+    fn state(installed: bool) -> Value {
+        if installed {
+            json!({ "modules": { "compute-sharing": { "enabled": true } } })
+        } else {
+            json!({ "modules": {} })
+        }
+    }
+
+    use crate::test_sandbox::sandboxed;
 
     #[test]
     fn commands_refuse_when_not_installed() {

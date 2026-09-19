@@ -12,6 +12,7 @@ pub mod provider;
 pub mod reconcile;
 pub mod scanner;
 pub mod schema;
+pub mod store_lock;
 pub mod sync;
 pub mod version;
 pub mod workdir;

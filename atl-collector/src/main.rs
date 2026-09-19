@@ -2,9 +2,17 @@ use clap::{Parser, Subcommand};
 
 mod board;
 mod cli;
+mod plugin_cli;
 mod plugins;
 mod pricing;
+mod share_cli;
 mod sidecar;
+mod term;
+mod zhipu_cli;
+
+/// Exit-code table + key environment variables for the plugin command
+/// families (cli-dev-standard: --help is the AI-facing self-description).
+const EXIT_CODE_TABLE: &str = "Exit codes:\n  0  success (including no-change)\n  1  business failure\n  2  usage error\n  3  busy: another process holds the store lock — retry shortly\n  10 not initialized\n  12 network / backend unreachable\n\nJSON contract: -j / --json prints {\"ok\":true,\"changed\":bool,\"data\":{...}} on success\nand {\"ok\":false,\"error\":...,\"hint\":...} on failure (exit codes still apply).\n\nEnvironment:\n  ATL_HOME  overrides the data directory (default ~/.ai-token-league)";
 
 #[derive(Parser)]
 #[command(name = "atl-collector", version, about = "AI Token League Collector")]
@@ -125,6 +133,24 @@ enum Commands {
         #[command(subcommand)]
         action: RootsAction,
     },
+    /// Manage desktop plugins (same install state the desktop app uses)
+    #[command(after_help = EXIT_CODE_TABLE)]
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+    /// Zhipu GLM Coding Plan usage (zhipu-plan plugin, terminal surface)
+    #[command(after_help = EXIT_CODE_TABLE)]
+    Zhipu {
+        #[command(subcommand)]
+        action: ZhipuAction,
+    },
+    /// Compute sharing: borrow shared endpoints, manage your own share
+    #[command(after_help = EXIT_CODE_TABLE)]
+    Share {
+        #[command(subcommand)]
+        action: ShareAction,
+    },
     /// Run full reconcile against server (diagnostic)
     Reconcile {
         #[arg(long)]
@@ -161,6 +187,219 @@ enum RootsAction {
     Remove { provider: String, path: String },
 }
 
+#[derive(Subcommand)]
+enum PluginAction {
+    /// List installed plugins (config values are never printed)
+    List {
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Install a plugin from the online catalog (no plugin code runs)
+    Install {
+        /// Plugin id from the catalog (e.g. zhipu-plan)
+        id: String,
+        /// Version to install (default: catalog's current version)
+        #[arg(long)]
+        version: Option<String>,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Uninstall a plugin (local package removed, config kept)
+    Remove {
+        /// Plugin id
+        id: String,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ZhipuAction {
+    /// Show 5h/weekly window usage for your configured keys (60s cache)
+    Usage {
+        /// Bypass the 60s cache and re-query the quota API
+        #[arg(long)]
+        force: bool,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Manage the keys the plugin queries (stored like the desktop card)
+    Key {
+        #[command(subcommand)]
+        action: ZhipuKeyAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ZhipuKeyAction {
+    /// List keys (masked — full keys never print)
+    List {
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Add a key
+    Add {
+        /// The Zhipu API key
+        api_key: String,
+        /// Optional display label
+        #[arg(long)]
+        label: Option<String>,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Remove a key by 1-based index or label
+    Remove {
+        /// Index from 'key list' or the exact label
+        key: String,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShareAction {
+    /// List online share nodes and their claimable lanes
+    Dir {
+        /// Filter lanes by model family (e.g. gemini-*, glm-*)
+        #[arg(long)]
+        family: Option<String>,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Show my claims with live usage and export lines
+    Claims {
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Claim a lane on a share and print its env export lines
+    Claim {
+        /// Share id from 'share dir'
+        share_id: String,
+        /// Lane id (required when the share has lanes)
+        lane_id: Option<String>,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Renew a claim (same key, extended expiry)
+    Renew {
+        /// Claim key id from 'share claims'
+        key_id: String,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Release a claim
+    Revoke {
+        /// Claim key id from 'share claims'
+        key_id: String,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Send one minimal generation through a claimed endpoint
+    Test {
+        /// Claim key id from 'share claims'
+        key_id: String,
+        /// Model to test with (default: the lane's exact model)
+        #[arg(long)]
+        model: Option<String>,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Show my sharing node: lanes, claimers, plugin status
+    Owner {
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Suggested lanes from my own usage families
+    Suggest {
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Stop sharing (revokes every borrower key; record kept)
+    Stop {
+        /// Confirm the destructive stop
+        #[arg(long)]
+        yes: bool,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Reopen a stopped share
+    Resume {
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+}
+
+/// Whether the invoked command asked for `--json` — decided once here, so
+/// the error path can honor it without every handler plumbing the flag
+/// (cli-dev-standard §3: in JSON mode failures are structured documents too).
+fn wants_json(cmd: &Commands) -> bool {
+    match cmd {
+        Commands::Status { json }
+        | Commands::Scan { json, .. }
+        | Commands::Sync { json, .. }
+        | Commands::Usage { json, .. }
+        | Commands::Top { json, .. }
+        | Commands::Rank { json, .. } => *json,
+        Commands::Plugin { action } => match action {
+            PluginAction::List { json }
+            | PluginAction::Install { json, .. }
+            | PluginAction::Remove { json, .. } => *json,
+        },
+        Commands::Zhipu { action } => match action {
+            ZhipuAction::Usage { json, .. } => *json,
+            ZhipuAction::Key { action } => match action {
+                ZhipuKeyAction::List { json }
+                | ZhipuKeyAction::Add { json, .. }
+                | ZhipuKeyAction::Remove { json, .. } => *json,
+            },
+        },
+        Commands::Share { action } => match action {
+            ShareAction::Dir { json, .. }
+            | ShareAction::Claims { json }
+            | ShareAction::Claim { json, .. }
+            | ShareAction::Renew { json, .. }
+            | ShareAction::Revoke { json, .. }
+            | ShareAction::Test { json, .. }
+            | ShareAction::Owner { json }
+            | ShareAction::Suggest { json }
+            | ShareAction::Stop { json, .. }
+            | ShareAction::Resume { json } => *json,
+        },
+        _ => false,
+    }
+}
+
+/// Split an error message into (error, hint): the fix command rides either
+/// on the lines after the first (multi-line errors) or after an em-dash
+/// separator — that tail becomes the hint.
+fn split_hint(message: &str) -> (String, Option<String>) {
+    let split = message.split_once('\n').or_else(|| message.split_once(" — "));
+    match split {
+        Some((head, tail)) => (
+            head.trim().to_string(),
+            Some(tail.trim().to_string()).filter(|s| !s.is_empty()),
+        ),
+        None => (message.to_string(), None),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -173,8 +412,23 @@ async fn main() {
     }
 
     if let Some(cmd) = cli.command {
+        let json_mode = wants_json(&cmd);
         if let Err(e) = cli::run(cmd).await {
-            eprintln!("Error: {}", e.message());
+            let e = cli::classify_busy(e);
+            if json_mode {
+                let (error, hint) = split_hint(&e.message());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "error": error,
+                        "hint": hint,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                eprintln!("Error: {}", e.message());
+            }
             std::process::exit(e.exit_code());
         }
     } else {

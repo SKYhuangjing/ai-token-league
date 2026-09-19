@@ -9,19 +9,21 @@ use crate::board;
 use crate::pricing;
 
 /// Typed CLI errors with stable exit codes for scripts:
-/// 1 generic, 10 not initialized, 11 empty local data, 12 network/server.
-/// (2 stays clap's argument-error code.)
+/// 1 generic, 3 store lock busy (retry, not a failure), 10 not initialized,
+/// 11 empty local data, 12 network/server. (2 stays clap's argument-error code.)
 pub enum CliError {
     Message(String),
     NotInitialized,
     EmptyData,
     Network(String),
+    Busy(String),
 }
 
 impl CliError {
     pub fn exit_code(&self) -> i32 {
         match self {
             CliError::Message(_) => 1,
+            CliError::Busy(_) => 3,
             CliError::NotInitialized => 10,
             CliError::EmptyData => 11,
             CliError::Network(_) => 12,
@@ -31,6 +33,11 @@ impl CliError {
     pub fn message(&self) -> String {
         match self {
             CliError::Message(text) | CliError::Network(text) => text.clone(),
+            CliError::Busy(store) => format!(
+                "another atl-collector process is writing the {} store right now — this is not a \
+                 failure; retry in a moment",
+                store
+            ),
             CliError::NotInitialized => {
                 "Not initialized. Run 'atl-collector init' first.".to_string()
             }
@@ -41,6 +48,31 @@ impl CliError {
             }
         }
     }
+}
+
+/// Promote raw "busy:<store>" errors (from the cross-process store locks) to
+/// the typed Busy error so the exit code is 3 — called once at the CLI
+/// boundary for every command.
+pub fn classify_busy(error: CliError) -> CliError {
+    match error {
+        CliError::Message(ref text) if collector_core::store_lock::is_busy_error(text) => {
+            CliError::Busy(
+                collector_core::store_lock::busy_store(text).unwrap_or("local").to_string(),
+            )
+        }
+        other => other,
+    }
+}
+
+/// Unified success envelope for every `--json` output (cli-dev-standard §3):
+/// `{"ok": true, "changed": bool, "data": {...}}` — one parsing rule for all
+/// verbs; `changed` is false for read-only verbs.
+pub fn print_json_out(data: Value, changed: bool) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({ "ok": true, "changed": changed, "data": data }))
+            .unwrap_or_default()
+    );
 }
 
 impl From<String> for CliError {
@@ -157,6 +189,9 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
         }
         crate::Commands::Config { action } => cmd_config(action)?,
         crate::Commands::Roots { action } => cmd_roots(action)?,
+        crate::Commands::Plugin { action } => crate::plugin_cli::cmd_plugin(action).await?,
+        crate::Commands::Zhipu { action } => crate::zhipu_cli::cmd_zhipu(action).await?,
+        crate::Commands::Share { action } => crate::share_cli::cmd_share(action).await?,
         crate::Commands::Register => {
             let cfg = config::load_config().ok_or("Not initialized")?;
             if cfg.api_base_url.is_empty() {
@@ -164,14 +199,13 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
             }
             let client = reqwest::Client::new();
             collector_core::sync::register_device(&client, &cfg, &cfg.api_base_url).await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
+            print_json_out(
+                serde_json::json!({
                     "registered": true,
                     "participantId": cfg.participant_id,
                     "deviceId": cfg.device_id
-                }))
-                .unwrap()
+                }),
+                true,
             );
         }
         crate::Commands::Reconcile { full } => {
@@ -206,9 +240,8 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
                 options,
             )
             .await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
+            print_json_out(
+                serde_json::json!({
                     "status": serde_json::to_value(&reconcile_result.status).unwrap(),
                     "checked": reconcile_result.checked_bucket_count,
                     "matched": reconcile_result.matched_bucket_count,
@@ -220,8 +253,8 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
                     "prunedScopes": reconcile_result.pruned_scope_count,
                     "rebuiltDailyScopes": reconcile_result.rebuilt_daily_scope_count,
                     "conflictedScopes": reconcile_result.conflicted_scope_count
-                }))
-                .unwrap()
+                }),
+                true,
             );
         }
         crate::Commands::ExportIdentity => {
@@ -314,16 +347,15 @@ async fn cmd_scan(full: bool, json_out: bool) -> Result<(), CliError> {
     let duration = started.elapsed().as_secs_f64();
     let totals = provider_totals(&result.items);
     if json_out {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
+        print_json_out(
+            json!({
                 "scannedItems": result.items.len(),
                 "scannedAt": now_iso(),
                 "persisted": persisted,
                 "durationSec": (duration * 10.0).round() / 10.0,
                 "providers": totals,
-            }))
-            .map_err(|e| e.to_string())?
+            }),
+            persisted,
         );
         return Ok(());
     }
@@ -369,17 +401,16 @@ async fn cmd_sync(full_resync: bool, json_out: bool) -> Result<(), CliError> {
         collector_core::sync::sync_usage(&cfg, &result.items, &cfg.api_base_url).await?;
     let duration = started.elapsed().as_secs_f64();
     if json_out {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
+        print_json_out(
+            json!({
                 "scannedItems": result.items.len(),
                 "accepted": sync_result.accepted,
                 "rejected": sync_result.rejected,
                 "noopBucketCount": sync_result.noop_bucket_count,
                 "queued": sync_result.queued,
                 "durationSec": (duration * 10.0).round() / 10.0,
-            }))
-            .map_err(|e| e.to_string())?
+            }),
+            true,
         );
         return Ok(());
     }
@@ -430,10 +461,7 @@ fn cmd_status(json_out: bool) -> Result<(), CliError> {
     let cfg = require_config()?;
     let value = build_status_value(&cfg);
     if json_out {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?
-        );
+        print_json_out(value, false);
         return Ok(());
     }
     let sync = &value["sync"];
@@ -639,10 +667,7 @@ async fn cmd_usage(
         apply_cost(&mut value, range, filters, &store).await?;
     }
     if json_out {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?
-        );
+        print_json_out(value, false);
         return Ok(());
     }
     let rendered = match view {
@@ -787,6 +812,9 @@ fn cmd_config(action: crate::ConfigAction) -> Result<(), CliError> {
         crate::ConfigAction::Set { key, value } => {
             let cfg = require_config()?;
             let patch = config_key_to_patch(&key, &value)?;
+            // the load→merge→save cycle runs under the config store lock so a
+            // desktop-side settings save cannot lose this update (or vice versa)
+            let _guard = collector_core::store_lock::acquire("config", collector_core::store_lock::WRITE_WAIT)?;
             let next = config::update_config(patch, &cfg, true);
             let view = settings_view(&next);
             let effective = lookup_path(&view, &key)
@@ -885,13 +913,19 @@ fn cmd_roots(action: crate::RootsAction) -> Result<(), CliError> {
             }
         }
         crate::RootsAction::Add { provider, path } => {
+            let cfg = require_config()?;
+            let _guard = collector_core::store_lock::acquire("config", collector_core::store_lock::WRITE_WAIT)?;
             let next = config::add_provider_root(&provider, &path, &cfg);
             config::save_config(&next);
             println!("Added scan root for {}: {}", provider, path);
         }
         crate::RootsAction::Remove { provider, path } => {
-            let next = config::remove_provider_root(&provider, &path, &cfg);
-            config::save_config(&next);
+            {
+                let cfg = require_config()?;
+                let _guard = collector_core::store_lock::acquire("config", collector_core::store_lock::WRITE_WAIT)?;
+                let next = config::remove_provider_root(&provider, &path, &cfg);
+                config::save_config(&next);
+            }
             println!("Removed scan root for {}: {}", provider, path);
         }
     }

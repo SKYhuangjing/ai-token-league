@@ -97,15 +97,14 @@ pub async fn cmd_top(
     let items = board.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
     let shown: Vec<Value> = items.iter().take(limit).cloned().collect();
     if json_out {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
+        crate::cli::print_json_out(
+            serde_json::json!({
                 "range": range,
                 "identityMode": board.get("identityMode").cloned().unwrap_or(Value::Null),
                 "totalParticipants": items.len(),
                 "items": shown,
-            }))
-            .map_err(|e| e.to_string())?
+            }),
+            false,
         );
         return Ok(());
     }
@@ -194,14 +193,13 @@ pub async fn cmd_rank(cfg: &AppConfig, range: &str, json_out: bool) -> Result<()
             items.len()
         );
         if json_out {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
+            crate::cli::print_json_out(
+                serde_json::json!({
                     "range": range,
                     "found": false,
                     "totalParticipants": items.len(),
-                }))
-                .map_err(|e| e.to_string())?
+                }),
+                false,
             );
             return Ok(());
         }
@@ -213,9 +211,8 @@ pub async fn cmd_rank(cfg: &AppConfig, range: &str, json_out: bool) -> Result<()
     let ahead = items.get(index.wrapping_sub(1)).filter(|_| index > 0);
     let behind = items.get(index + 1);
     if json_out {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
+        crate::cli::print_json_out(
+            serde_json::json!({
                 "range": range,
                 "found": true,
                 "rank": rank,
@@ -223,8 +220,8 @@ pub async fn cmd_rank(cfg: &AppConfig, range: &str, json_out: bool) -> Result<()
                 "me": me,
                 "ahead": ahead,
                 "behind": behind,
-            }))
-            .map_err(|e| e.to_string())?
+            }),
+            false,
         );
         return Ok(());
     }

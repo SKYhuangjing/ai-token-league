@@ -25,6 +25,7 @@ base64 = "0.22"
 urlencoding = "2"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
+fs2 = "0.4"
 
 [profile.dev]
 debug = 1

@@ -17,3 +17,10 @@ pub fn sidecar_plugins() -> &'static [Box<dyn SidecarPlugin>] {
         ]
     })
 }
+
+/// Which installed plugins have a terminal command family, and what the
+/// entry command is — pure presentation metadata for `atl plugin list`
+/// hints. Kept beside the composition root so plugin ids stay in one place.
+pub fn terminal_surfaces() -> &'static [(&'static str, &'static str)] {
+    &[("zhipu-plan", "atl-collector zhipu"), ("compute-sharing", "atl-collector share")]
+}

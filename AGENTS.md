@@ -110,9 +110,13 @@ Run `npm run collector -- --help` for all subcommands (health, register, export-
 Headless terminal surface (same local store and config the desktop app uses):
 
 - `status` / `scan` / `sync` accept `--json`; `scan` persists results into the local usage database and refuses to persist when a provider errors.
+- JSON contract: every `-j`/`--json` verb prints one envelope — `{"ok":true,"changed":bool,"data":{...}}` on success, `{"ok":false,"error":...,"hint":...}` on failure (exit codes still apply; `export-identity` stays a bare interchange format). Exit code 3 = store lock busy (retry, not a failure); shared JSON stores (modules.json, sharing-borrow.json, config.json) take a cross-process flock on writes.
 - `usage [RANGE|VIEW ...] [--grain ...] [--limit N]` queries collected data; range and view can be positional shorthand (`usage`, `usage trend`, `usage 7d trend`, order-free) or `--range`/`--view` flags. Defaults: today + summary; grain defaults to hour for today, else day. Short flags: `-r/-v/-g/-n/-o/-c/-j` on usage, `-r/-n/-j` on top/rank, `-j` everywhere for `--json`.
 - `config list|get|set` reads and writes the same settings keys as the desktop settings page (`providerEnabled.<id>` toggles sources); secrets are redacted on read-back.
 - `roots add|remove|list` manages extra provider scan roots.
+- `plugin list|install|remove` manages desktop plugins over the same modules.json + plugin-packages state the app uses; install downloads via the backend proxy and never executes plugin code; config values never print (API keys stay masked).
+- `zhipu usage [--force]` and `zhipu key list|add|remove` are the zhipu-plan plugin's terminal surface (same 60s-cached quota query and key store the card and tray use).
+- `share dir|claims|claim|renew|revoke|test|owner|suggest|stop --yes|resume` is the compute-sharing plugin's terminal surface (borrower flows and owner console ride the same sidecar commands; `claims`/`claim` print `export OPENAI_*/ANTHROPIC_*` lines for piping).
 
 Desktop:
 
