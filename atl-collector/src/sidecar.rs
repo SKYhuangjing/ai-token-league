@@ -1381,7 +1381,7 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
     let mut provider_errors = result.provider_errors.clone();
     preserve_providers_with_missing_rows(&result.items, &previous_items, cfg, &mut provider_errors);
     let items = merge_failed_provider_items(result.items, previous_items, &provider_errors);
-    let snapshot = build_usage_snapshot(items, result.health, provider_errors.clone(), false, cfg);
+    let mut snapshot = build_usage_snapshot(items, result.health, provider_errors.clone(), false, cfg);
     if let Some(store) = local_store.as_mut() {
         let scanned_at = snapshot
             .get("scannedAt")
@@ -1393,7 +1393,41 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
             .cloned()
             .unwrap_or_default();
         store.replace_source_cache(&result.source_index, scanned_at)?;
-        store.replace_usage_facts(&items, scanned_at)?;
+        store.merge_usage_facts(&items, scanned_at)?;
+        // Renderer views (trend chart, provider overview, share cards) compute
+        // from snapshot items, not store queries. Append ledger rows whose
+        // scopes the scan no longer covers — history pruned upstream — so
+        // preserved data still renders. Bounded: only source-side retention
+        // adds rows here, a few per day, not the whole ledger on every scan.
+        let scan_scopes: std::collections::HashSet<(String, i64, String)> = items
+            .iter()
+            .filter_map(|item| {
+                Some((
+                    item.get("day").and_then(|v| v.as_str())?.to_string(),
+                    item.get("hour").and_then(|v| v.as_i64())?,
+                    item.get("providerId").and_then(|v| v.as_str())?.to_string(),
+                ))
+            })
+            .collect();
+        let mut snapshot_items = items;
+        if let Ok(ledger_items) = store.all_usage_items() {
+            let preserved: Vec<serde_json::Value> = ledger_items
+                .into_iter()
+                .filter(|item| {
+                    let scope = (
+                        item.get("day").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        item.get("hour").and_then(|v| v.as_i64()).unwrap_or(-1),
+                        item.get("providerId").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    );
+                    !scan_scopes.contains(&scope)
+                })
+                .collect();
+            if !preserved.is_empty() {
+                snapshot["rowCount"] = serde_json::json!(snapshot_items.len() + preserved.len());
+                snapshot_items.extend(preserved);
+                snapshot["items"] = serde_json::Value::Array(snapshot_items);
+            }
+        }
         clear_json_source_index_cache();
     } else {
         write_source_index_cache(&result.source_index, &snapshot)?;

@@ -320,7 +320,7 @@ async fn scan_and_persist(cfg: &AppConfig, full: bool) -> Result<(scanner::ScanR
     if let Some(store) = store.as_mut() {
         let scanned_at = now_iso();
         store.replace_source_cache(&result.source_index, &scanned_at)?;
-        store.replace_usage_facts(&result.items, &scanned_at)?;
+        store.merge_usage_facts(&result.items, &scanned_at)?;
         persisted = true;
     }
     Ok((result, persisted))

@@ -469,7 +469,7 @@ fn scenario_scan_store_query_roundtrip() {
     let db_path = config::local_usage_db_path();
     let mut store = LocalUsageStore::open(db_path).unwrap();
     store
-        .replace_usage_facts(&result.items, "integration-test")
+        .merge_usage_facts(&result.items, "integration-test")
         .unwrap();
 
     let summary = store.summary("all", &UsageFilters::default()).unwrap();
@@ -678,7 +678,7 @@ fn scenario_multi_day_range_queries() {
         make_item("2026-05-11", 9, "codex", "codex_local", "gpt-5", 300),
         make_item("2026-05-12", 9, "codex", "codex_local", "gpt-5", 400),
     ];
-    store.replace_usage_facts(&items, "test").unwrap();
+    store.merge_usage_facts(&items, "test").unwrap();
 
     // Single day
     assert_eq!(

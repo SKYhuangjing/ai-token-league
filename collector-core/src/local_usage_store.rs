@@ -163,10 +163,38 @@ impl LocalUsageStore {
             .map_err(|e| e.to_string())
     }
 
-    pub fn replace_usage_facts(&mut self, items: &[Value], scanned_at: &str) -> Result<(), String> {
+    /// Merge a fresh scan into the local usage ledger.
+    ///
+    /// Scopes (day, hour, providerId) present in the scan replace their local
+    /// rows, so re-attribution inside active scopes still self-heals. Scopes
+    /// absent from the scan are preserved: upstream sources may prune their own
+    /// history (e.g. ZCode keeps only ~30 days of `model_usage`) and this store
+    /// is the durable ledger, so vanished-from-source must never mean
+    /// vanished-from-local.
+    pub fn merge_usage_facts(&mut self, items: &[Value], scanned_at: &str) -> Result<(), String> {
+        let mut scan_scopes: std::collections::BTreeSet<(String, i64, String)> =
+            std::collections::BTreeSet::new();
+        for item in items {
+            scan_scopes.insert((
+                str_field(item, "day"),
+                i64_field(item, "hour"),
+                str_field(item, "providerId"),
+            ));
+        }
+
+        let preserved = self.preserved_scope_stats(&scan_scopes)?;
+
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM usage_fact", [])
-            .map_err(|e| e.to_string())?;
+        {
+            let mut delete_stmt = tx
+                .prepare("DELETE FROM usage_fact WHERE day = ? AND hour = ? AND providerId = ?")
+                .map_err(|e| e.to_string())?;
+            for (day, hour, provider) in &scan_scopes {
+                delete_stmt
+                    .execute(params![day, hour, provider])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         {
             let mut stmt = tx
                 .prepare(
@@ -206,7 +234,127 @@ impl LocalUsageStore {
                 .map_err(|e| e.to_string())?;
             }
         }
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+
+        self.note_preserved_scopes(preserved);
+        Ok(())
+    }
+
+    /// Per-provider aggregate of usage rows whose (day, hour, providerId)
+    /// scope exists locally but is absent from the incoming scan — i.e. rows
+    /// the source no longer reports and the ledger keeps.
+    fn preserved_scope_stats(
+        &self,
+        scan_scopes: &std::collections::BTreeSet<(String, i64, String)>,
+    ) -> Result<Vec<Value>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT day, hour, providerId, COUNT(*), SUM(totalTokens)
+                 FROM usage_fact
+                 GROUP BY day, hour, providerId",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        #[derive(Default)]
+        struct ProviderStat {
+            scopes: i64,
+            rows: i64,
+            total_tokens: i64,
+            min_day: String,
+            max_day: String,
+        }
+        let mut per_provider: std::collections::BTreeMap<String, ProviderStat> =
+            std::collections::BTreeMap::new();
+        let mut scope_keys: Vec<String> = Vec::new();
+        for row in rows {
+            let (day, hour, provider, row_count, tokens) =
+                row.map_err(|e| e.to_string())?;
+            if scan_scopes.contains(&(day.clone(), hour, provider.clone())) {
+                continue;
+            }
+            scope_keys.push(format!("{}|{:02}|{}", day, hour, provider));
+            let stat = per_provider.entry(provider).or_default();
+            stat.scopes += 1;
+            stat.rows += row_count;
+            stat.total_tokens += tokens;
+            if stat.min_day.is_empty() || day < stat.min_day {
+                stat.min_day = day.clone();
+            }
+            if day > stat.max_day {
+                stat.max_day = day;
+            }
+        }
+        if per_provider.is_empty() {
+            return Ok(Vec::new());
+        }
+        scope_keys.sort();
+        Ok(vec![json!({
+            "signature": scope_signature(&scope_keys),
+            "providers": per_provider
+                .into_iter()
+                .map(|(provider, stat)| {
+                    json!({
+                        "providerId": provider,
+                        "scopes": stat.scopes,
+                        "rows": stat.rows,
+                        "totalTokens": stat.total_tokens,
+                        "minDay": stat.min_day,
+                        "maxDay": stat.max_day,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        })])
+    }
+
+    /// Emit a runtime event when the set of source-pruned scopes changes, so
+    /// history-keeping never regresses silently. The signature lives in the
+    /// meta table so repeated unchanged scans (auto refresh) stay quiet.
+    fn note_preserved_scopes(&self, preserved: Vec<Value>) {
+        if preserved.is_empty() {
+            let _ = self.conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('preservedScopeSignature', '')",
+                [],
+            );
+            return;
+        }
+        let signature = preserved[0]["signature"].as_str().unwrap_or("").to_string();
+        let previous: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'preservedScopeSignature'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        if previous == signature {
+            return;
+        }
+        let _ = self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('preservedScopeSignature', ?1)",
+            params![signature],
+        );
+        #[cfg(not(test))]
+        crate::observability::append_runtime_event(
+            "local_store",
+            "source_pruned_scopes_preserved",
+            "warn",
+            json!({
+                "providers": preserved[0]["providers"],
+                "note": "scopes absent from scan are preserved locally (source-side retention/pruning)",
+            }),
+        );
     }
 
     pub fn all_usage_items(&self) -> Result<Vec<Value>, String> {
@@ -572,6 +720,17 @@ fn usage_key(item: &Value) -> String {
     .join("|")
 }
 
+/// Deterministic digest of the sorted scope keys; DefaultHasher is seeded with
+/// fixed keys, so the signature is stable across processes and runs.
+fn scope_signature(sorted_scope_keys: &[String]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for key in sorted_scope_keys {
+        key.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
 fn str_field(item: &Value, key: &str) -> String {
     item.get(key)
         .and_then(|v| v.as_str())
@@ -756,7 +915,7 @@ mod tests {
             make_item(&day, 2, "claude", "claude_code_local", "claude-opus", 2000),
             make_item(&day, 3, "zcode", "zcode_local", "glm-5.3", 4000),
         ];
-        store.replace_usage_facts(&items, "now").unwrap();
+        store.merge_usage_facts(&items, "now").unwrap();
 
         let by_provider = UsageFilters {
             provider: Some("codex".to_string()),
@@ -841,7 +1000,7 @@ mod tests {
             .unwrap();
         assert!(store.take_cached_source("fp1").is_none());
         assert_eq!(store.take_cached_source("fp2").unwrap().len(), 1);
-        store.replace_usage_facts(&[item], "now").unwrap();
+        store.merge_usage_facts(&[item], "now").unwrap();
         assert_eq!(
             store.summary("today", &UsageFilters::default()).unwrap()["totals"]["totalTokens"],
             150
@@ -855,7 +1014,7 @@ mod tests {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
         store
-            .replace_usage_facts(
+            .merge_usage_facts(
                 &[
                     make_item(&today, 10, "codex", "codex_local", "codex-1", 100),
                     make_item(
@@ -889,7 +1048,7 @@ mod tests {
     fn trend_daily_grain() {
         let (mut store, path) = temp_db();
         store
-            .replace_usage_facts(
+            .merge_usage_facts(
                 &[
                     make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
                     make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
@@ -911,7 +1070,7 @@ mod tests {
     fn trend_hourly_grain() {
         let (mut store, path) = temp_db();
         store
-            .replace_usage_facts(
+            .merge_usage_facts(
                 &[
                     make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100),
                     make_item("2026-05-10", 11, "codex", "codex_local", "gpt-5", 50),
@@ -932,7 +1091,7 @@ mod tests {
     fn trend_monthly_grain() {
         let (mut store, path) = temp_db();
         store
-            .replace_usage_facts(
+            .merge_usage_facts(
                 &[
                     make_item("2026-05-01", 10, "codex", "codex_local", "gpt-5", 100),
                     make_item("2026-05-15", 10, "codex", "codex_local", "gpt-5", 200),
@@ -956,7 +1115,7 @@ mod tests {
         // 2026-05-18 is Monday, 2026-05-19 is Tuesday (same week: May 18-24)
         // 2026-05-25 is Monday (next week: May 25-31)
         store
-            .replace_usage_facts(
+            .merge_usage_facts(
                 &[
                     make_item("2026-05-18", 10, "codex", "codex_local", "gpt-5", 100),
                     make_item("2026-05-19", 11, "codex", "codex_local", "gpt-5", 200),
@@ -985,7 +1144,7 @@ mod tests {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
         store
-            .replace_usage_facts(
+            .merge_usage_facts(
                 &[
                     make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
                     make_item(&today, 11, "codex", "codex_local", "gpt-5", 200),
@@ -1008,7 +1167,7 @@ mod tests {
         let items: Vec<Value> = (0..15)
             .map(|i| make_item(&today, i, "codex", "codex_local", "gpt-5", (i + 1) * 10))
             .collect();
-        store.replace_usage_facts(&items, "now").unwrap();
+        store.merge_usage_facts(&items, "now").unwrap();
 
         let page1 = store.detail_window("today", 0, 5, &UsageFilters::default()).unwrap();
         assert_eq!(page1["totalRows"], 15);
@@ -1029,7 +1188,7 @@ mod tests {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
         store
-            .replace_usage_facts(
+            .merge_usage_facts(
                 &[make_item(&today, 10, "codex", "codex_local", "gpt-5", 100)],
                 "now",
             )
@@ -1101,21 +1260,25 @@ mod tests {
     }
 
     #[test]
-    fn replace_usage_facts_clears_previous() {
+    fn merge_usage_facts_replaces_rows_within_present_scope() {
         let (mut store, path) = temp_db();
         let today = crate::date::local_day();
         store
-            .replace_usage_facts(
-                &[make_item(&today, 10, "codex", "codex_local", "gpt-5", 100)],
+            .merge_usage_facts(
+                &[
+                    make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
+                    make_item(&today, 10, "codex", "codex_local", "gpt-4", 50),
+                ],
                 "now",
             )
             .unwrap();
         assert_eq!(store.has_usage_facts().unwrap(), true);
 
-        // Replace with new data — old data must be gone
+        // Same (day, hour, provider) scope rescanned with a different model
+        // set — stale rows inside the active scope must be gone.
         store
-            .replace_usage_facts(
-                &[make_item(&today, 11, "codex", "codex_local", "gpt-5", 200)],
+            .merge_usage_facts(
+                &[make_item(&today, 10, "codex", "codex_local", "gpt-5", 200)],
                 "now",
             )
             .unwrap();
@@ -1123,6 +1286,66 @@ mod tests {
         let all = store.all_usage_items().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0]["totalTokens"], 200);
+        assert_eq!(all[0]["model"], "gpt-5");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn merge_usage_facts_preserves_scopes_absent_from_scan() {
+        let (mut store, path) = temp_db();
+        let today = crate::date::local_day();
+        store
+            .merge_usage_facts(
+                &[
+                    make_item("2026-08-16", 12, "zcode", "zcode_local", "glm-5.3", 1000),
+                    make_item("2026-08-17", 9, "zcode", "zcode_local", "glm-5.3", 2000),
+                    make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
+                ],
+                "now",
+            )
+            .unwrap();
+
+        // Source pruned August; the new scan only reports today's scope.
+        store
+            .merge_usage_facts(&[make_item(&today, 10, "codex", "codex_local", "gpt-5", 100)], "now")
+            .unwrap();
+
+        let summary = store.summary("all", &UsageFilters::default()).unwrap();
+        assert_eq!(summary["totals"]["totalTokens"], json!(3100));
+
+        let august = store
+            .summary("2026-08-16..2026-08-17", &UsageFilters::default())
+            .unwrap();
+        assert_eq!(august["totals"]["totalTokens"], json!(3000));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn merge_usage_facts_preserves_provider_missing_from_scan() {
+        let (mut store, path) = temp_db();
+        let today = crate::date::local_day();
+        store
+            .merge_usage_facts(
+                &[
+                    make_item(&today, 10, "codex", "codex_local", "gpt-5", 100),
+                    make_item(&today, 10, "kimi", "kimi_local", "kimi-k2", 700),
+                ],
+                "now",
+            )
+            .unwrap();
+
+        // kimi provider disappeared from the scan entirely (disabled, or its
+        // source errored with zero rows) — its collected history stays.
+        store
+            .merge_usage_facts(&[make_item(&today, 10, "codex", "codex_local", "gpt-5", 100)], "now")
+            .unwrap();
+
+        let by_provider = UsageFilters {
+            provider: Some("kimi".to_string()),
+            ..Default::default()
+        };
+        let summary = store.summary("all", &by_provider).unwrap();
+        assert_eq!(summary["totals"]["totalTokens"], json!(700));
         let _ = std::fs::remove_file(path);
     }
 
@@ -1151,7 +1374,7 @@ mod tests {
                 "now",
             )
             .unwrap();
-        store.replace_usage_facts(&[item], "now").unwrap();
+        store.merge_usage_facts(&[item], "now").unwrap();
 
         store.clear_source_cache().unwrap();
 
