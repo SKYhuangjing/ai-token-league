@@ -73,12 +73,15 @@ describe('installed plugin order', () => {
 });
 
 describe('module context', () => {
-  it('passes the five platform capabilities through, notify included', () => {
+  it('passes the platform capabilities through, notify and lang included', () => {
     const notify = () => {};
-    const ctx = buildModuleContext({ t: String, invoke: () => {}, escapeHtml: String, apiBase: () => 'https://x', notify });
+    const lang = () => 'zh-CN';
+    const ctx = buildModuleContext({ t: String, invoke: () => {}, escapeHtml: String, apiBase: () => 'https://x', notify, lang });
     expect(ctx.notify).toBe(notify);
-    expect(Object.keys(ctx).sort()).toEqual(['apiBase', 'escapeHtml', 'invoke', 'notify', 't']);
+    expect(ctx.lang).toBe(lang);
+    expect(Object.keys(ctx).sort()).toEqual(['apiBase', 'escapeHtml', 'invoke', 'lang', 'notify', 't']);
     expect(buildModuleContext({}).notify).toBeUndefined();
+    expect(buildModuleContext({}).lang).toBeUndefined();
   });
 });
 

@@ -40,7 +40,7 @@ atl-collector sync                 # 同步到服务器
 */30 8-22 * * *  atl-collector scan && atl-collector sync >> ~/.ai-token-league/cron.log 2>&1
 ```
 
-测试隔离：设 `ATL_HOME=/path/to/dir` 可把配置与数据重定向到沙箱目录，不影响真实数据。
+测试隔离：`ATL_HOME=/path/to/dir` 重定向 ATL 配置与本地存储，不重定向各采集器的原始数据源。算力共享建议另读 CPA 用量数据库；隔离该来源还需设置 `ATL_CPA_USAGE_DB=/path/to/test-usage.db`。测试原生 App 时也要隔离子进程 HOME，避免触及真实用户的开机启动配置。
 
 ## 命令参考
 
@@ -150,11 +150,18 @@ atl-collector share renew|revoke <keyId> [-j]       # 续期（同 key）/ 释�
 atl-collector share test <keyId> [--model m] [-j]   # 经认领端点发一次最小生成验证连通
 atl-collector share owner|suggest [-j]              # 我的分享控制台 / 车道预算建议
 atl-collector share stop --yes | resume [-j]        # 停止分享（撤销全部认领 Key，需确认）/ 重开
+atl-collector share doctor [-j]                    # 首次分享诊断：身份、配置、实际 API 地址与心跳新鲜度
+atl-collector share lane-pause <laneId> --yes [-j] # 暂停车道，保留借用 Key
+atl-collector share lane-resume <laneId> [-j]      # 恢复暂停的车道，原 Key 继续使用
+atl-collector share lane-terminate <laneId> --yes [-j] # 终止车道并撤销其 Key，不可恢复
+atl-collector share owner-revoke <keyId> --yes [-j]   # 分享者撤销一个借用 Key
 ```
 
 `share claims` / `share claim` 会打印 `export OPENAI_BASE_URL=… / OPENAI_API_KEY=… /
 ANTHROPIC_BASE_URL=… / ANTHROPIC_AUTH_TOKEN=…` 四行（借用凭据仅经此显式导出动词输出，
 与 `export-identity` 同类）。设计与命令全表见 `doc/plugin-development.md` §4。
+
+`share suggest` 以最近 7 天自己的 CPA 用量为参考，与卡片共用 `referencePct` 比例；它不是订阅剩余额度，也不会自动修改车道预算。`share doctor -j` 的 `ok` 表示诊断执行成功，是否可分享看 `data.ready`；诊断为只读，`changed=false`。车道 ID 从 `share owner` 获取；Key ID 支持完整值或唯一前缀。
 
 行为细节（2026-09-19 盲测加固轮）：
 
@@ -216,6 +223,8 @@ atl-collector roots remove <providerId> <path>
 // 失败（--json 模式下错误也是 stdout 上的一个完整 JSON 文档；退出码照常生效）
 {"ok": false, "error": "backend unreachable (...) ", "hint": "check your network, or ..."}
 ```
+
+带 `-j` / `--json` 的用法错误（如缺参、未知选项）也输出失败外壳，退出码为 2。显式 `--help` / `--version` 仍输出正常帮助或版本文本并成功退出。`--` 分隔符之后的内容是参数值，不用于判断 JSON 模式。
 
 例外：`export-identity` 输出的是身份交换格式（供 `import-identity` 消费），保持裸 JSON 不套外壳。
 

@@ -1,21 +1,35 @@
 {
   "id": "compute-sharing",
-  "version": "0.9.1",
+  "version": "0.1.2",
   "type": "query",
   "title": "算力共享",
-  "desc": "双向：认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点（账本/策略/停止/重新开启）。",
+  "desc": "双向：认领其他成员分享的闲置算力，或管理你自己的 CPA 分享节点（账本/策略/暂停/终止/停止/重新开启）。",
   "titleKey": "desktop.sharing.plugin.title",
   "descKey": "desktop.sharing.plugin.desc",
   "entry": "index.js",
+  "externalService": {
+    "kind": "cpa",
+    "stopPolicy": "independent"
+  },
   "permissions": [
     "sidecar:compute-sharing:claim-sign",
     "sidecar:compute-sharing:borrow-get",
     "sidecar:compute-sharing:borrow-set",
+    "sidecar:compute-sharing:borrow-prune",
+    "sidecar:compute-sharing:doctor",
+    "sidecar:compute-sharing:borrow-test",
+    "sidecar:compute-sharing:directory",
+    "sidecar:compute-sharing:claim",
+    "sidecar:compute-sharing:renew",
+    "sidecar:compute-sharing:revoke",
+    "sidecar:compute-sharing:live",
+    "sidecar:compute-sharing:models",
     "sidecar:compute-sharing:owner-status",
     "sidecar:compute-sharing:owner-policy",
     "sidecar:compute-sharing:owner-resume",
     "sidecar:compute-sharing:owner-suggest",
     "sidecar:compute-sharing:owner-unregister",
-    "sidecar:compute-sharing:borrow-test"
+    "sidecar:compute-sharing:owner-revoke-claim",
+    "sidecar:compute-sharing:owner-lane-action"
   ]
 }

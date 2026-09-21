@@ -27,6 +27,11 @@ pub async fn cmd_share(action: crate::ShareAction) -> Result<(), CliError> {
         crate::ShareAction::Suggest { json } => cmd_suggest(json).await,
         crate::ShareAction::Stop { yes, json } => cmd_stop(yes, json).await,
         crate::ShareAction::Resume { json } => cmd_resume(json).await,
+        crate::ShareAction::LanePause { lane_id, yes, json } => cmd_lane_action(&lane_id, "pause", yes, json).await,
+        crate::ShareAction::LaneResume { lane_id, json } => cmd_lane_action(&lane_id, "resume", true, json).await,
+        crate::ShareAction::LaneTerminate { lane_id, yes, json } => cmd_lane_action(&lane_id, "terminate", yes, json).await,
+        crate::ShareAction::OwnerRevoke { key_id, yes, json } => cmd_owner_revoke(&key_id, yes, json).await,
+        crate::ShareAction::Doctor { json } => cmd_doctor(json).await,
     }
 }
 
@@ -60,7 +65,9 @@ fn share_error_text(code: &str) -> String {
         "no_api_base" => {
             return format!("no API base configured — set it with '{} config set apiBaseUrl <url>'", prog)
         }
-        "not_registered" => "no share identity on this machine (owner commands need a registered CPA share)",
+        "not_registered" => {
+            return format!("no share identity on this machine — run '{} share doctor'; enable atl-share in CPA and start CPA to register this node", prog)
+        }
         other => other,
     };
     if bare.starts_with("claim_not_found") {
@@ -263,12 +270,17 @@ fn schedule_text(lane: &Value) -> String {
 }
 
 fn lane_status_text(lane: &Value, now: i64) -> String {
-    if lane["state"].as_str() == Some("suspended") {
-        return "paused".to_string();
+    // three distinct lane states must read distinctly (blind-eval r3):
+    // suspended is TERMINAL (cascade-revoked, no resume); paused is manual
+    // and reversible; closed is the schedule (auto-reopens at the time)
+    match lane["state"].as_str() {
+        Some("suspended") => return "TERMINATED (irreversible; recreate the lane to share again)".to_string(),
+        Some("paused") => return "paused (manual; resume with 'share lane-resume <laneId>')".to_string(),
+        _ => {}
     }
     if !lane["open"].as_bool().unwrap_or(false) {
         let retry = now + lane["retryAfterMs"].as_i64().unwrap_or(0);
-        return format!("closed until {}", term::clock_text(retry));
+        return format!("closed (schedule), reopens {}", term::clock_text(retry));
     }
     if lane["exhausted"].as_bool().unwrap_or(false) {
         let resets = term::clock_text(lane["windowEndsAtMs"].as_i64().unwrap_or(now));
@@ -373,7 +385,41 @@ async fn cmd_claims(json_out: bool) -> Result<(), CliError> {
         .await
         .ok()
         .filter(|data| data.get("claims").and_then(|v| v.as_array()).is_some());
-    let merged = merge_claims(&claims, live.as_ref(), now_ms());
+    let mut merged = merge_claims(&claims, live.as_ref(), now_ms());
+    // Blind-eval fix: wildcard-only lanes got a "pick a model yourself" note;
+    // users expect the tool to name one — discover the concrete catalog via
+    // the sidecar (same probe the card uses) and prefill it
+    for claim in merged.iter_mut() {
+        let wildcard_only = claim["models"].as_array().cloned().unwrap_or_default()
+            .iter()
+            .filter_map(|m| m.as_str())
+            .all(|m| m.contains('*') || m.is_empty());
+        if !wildcard_only {
+            continue;
+        }
+        let key_id = claim["keyId"].as_str().unwrap_or("").to_string();
+        if key_id.is_empty() {
+            continue;
+        }
+        if let Ok(found) = sidecar_call(&format!("{}:models", PLUGIN_ID), json!({ "keyId": key_id })).await {
+            // shortest concrete id = base tier; suffixed variants (flashx,
+            // flash-lite…) are often not enabled on the owner's plan
+            let mut candidates: Vec<String> = found["models"].as_array().cloned().unwrap_or_default()
+                .iter()
+                .filter_map(|m| m.as_str().map(String::from))
+                .filter(|m| !m.contains('*'))
+                .collect();
+            candidates.sort_by_key(|a| a.len());
+            if let Some(first) = candidates.into_iter().next()
+            {
+                if let Some(models) = claim["models"].as_array_mut() {
+                    models.push(json!(first));
+                }
+                // tag for rendering: discovered, not lane-declared
+                claim["discoveredModel"] = json!(true);
+            }
+        }
+    }
     if json_out {
         crate::cli::print_json_out(json!({ "claims": merged }), false);
         return Ok(());
@@ -407,6 +453,20 @@ fn merge_claims(claims: &[Value], live: Option<&Value>, now: i64) -> Vec<Value> 
                         merged["state"] = json!(state);
                     }
                     merged["usedTokens"] = entry.get("usedTokens").cloned().unwrap_or(json!(0));
+                    // lane identity backfill: claims stored before the lane
+                    // fields existed get them from the live backend view
+                    for field in ["laneId", "laneTitle", "models", "tzLabel"] {
+                        let missing = merged.get(field)
+                            .map(|v| v.is_null() || v.as_str() == Some("") || v.as_array().map(|a| a.is_empty()).unwrap_or(false))
+                            .unwrap_or(true);
+                        if missing {
+                            if let Some(value) = entry.get(field) {
+                                if !value.is_null() {
+                                    merged[field] = value.clone();
+                                }
+                            }
+                        }
+                    }
                 }
                 None => {
                     let expires_at = claim["expiresAt"].as_i64().unwrap_or(0);
@@ -427,25 +487,61 @@ fn render_claims(claims: &[Value]) -> String {
     let mut out = format!("My claims — {}\n", claims.len());
     for claim in claims {
         let state = claim["state"].as_str().unwrap_or("valid");
+        // owner / lane — a claim row must say which lane of which owner it is
+        let owner = claim["shareTitle"].as_str().map(str::to_string)
+            .unwrap_or_else(|| claim["shareId"].as_str().unwrap_or("").to_string());
+        let head = match claim["laneTitle"].as_str() {
+            Some(lane) if !lane.is_empty() => format!("{} / {}", owner, lane),
+            _ => owner,
+        };
         out.push_str(&format!(
             "  {}  {}  {}  expires {}  used {}\n",
-            claim["shareTitle"].as_str().unwrap_or(&claim["shareId"].as_str().unwrap_or("").to_string()),
+            head,
             term::mask_token(claim["keyId"].as_str().unwrap_or("")),
             state,
             term::format_local_datetime(claim["expiresAt"].as_i64().unwrap_or(0)),
             format_tokens_compact(claim["usedTokens"].as_i64().unwrap_or(0))
         ));
         if state == "valid" {
-            for line in term::export_lines(
+            // quota transparency (blind-eval #4): the caps live in the store
+            // but were never shown
+            let key_cap = claim["keyMaxTokens"].as_i64().unwrap_or(0);
+            let lane_budget = claim["laneBudgetTokens"].as_i64().unwrap_or(0);
+            let window = claim["window"].clone();
+            let unit = window["unit"].as_str().unwrap_or("day");
+            let n = window["n"].as_i64().unwrap_or(1);
+            out.push_str(&format!(
+                "    quota: key cap {} / lane budget {} (window: every {} {}{})\n",
+                if key_cap > 0 { format_tokens_compact(key_cap) } else { "auto fair split".into() },
+                if lane_budget > 0 { format_tokens_compact(lane_budget) } else { "—".into() },
+                n,
+                unit,
+                if n == 1 { String::new() } else { "s".into() }
+            ));
+            let exact_model = claim["models"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|m| m.as_str().map(|s| s.to_string()))
+                .find(|m| !m.contains('*'));
+            for line in term::export_lines_with_model(
                 claim["baseURL"].as_str().unwrap_or(""),
                 claim["token"].as_str().unwrap_or(""),
+                exact_model.as_deref(),
             ) {
                 out.push_str(&format!("    {}\n", line));
+            }
+            if exact_model.is_none() {
+                out.push_str(&format!("    note: no concrete model found for this lane — run '{} share test <keyId> --model <name>' after picking one from 'share dir'\n", term::program_name()));
+            } else if claim["discoveredModel"].as_bool().unwrap_or(false) {
+                out.push_str("    note: model above discovered live from the owner's catalog\n");
             }
         }
     }
     let prog = term::program_name();
-    out.push_str(&format!("Test one:    {} share test <keyId>\n", prog));
+    out.push_str("Legend: used = raw lifetime tokens; quota = per-window caps from the owner\n");
+    out.push_str(&format!("Test one:    {} share test <keyId>  (truncated ids from this list work too)\n", prog));
     out.push_str(&format!("Release it:  {} share revoke <keyId>\n", prog));
     out
 }
@@ -484,6 +580,8 @@ async fn cmd_claim(share_id: &str, lane_id: Option<&str>, json_out: bool) -> Res
 }
 
 async fn cmd_renew(key_id: &str, json_out: bool) -> Result<(), CliError> {
+    let full_id = find_claim(key_id).await?["keyId"].as_str().unwrap_or(key_id).to_string();
+    let key_id = full_id.as_str();
     let data = sidecar_call(&format!("{}:renew", PLUGIN_ID), json!({ "keyId": key_id }))
         .await
         .map_err(map_error)?;
@@ -500,6 +598,8 @@ async fn cmd_renew(key_id: &str, json_out: bool) -> Result<(), CliError> {
 }
 
 async fn cmd_revoke(key_id: &str, json_out: bool) -> Result<(), CliError> {
+    let full_id = find_claim(key_id).await?["keyId"].as_str().unwrap_or(key_id).to_string();
+    let key_id = full_id.as_str();
     let data = sidecar_call(&format!("{}:revoke", PLUGIN_ID), json!({ "keyId": key_id }))
         .await
         .map_err(map_error)?;
@@ -511,15 +611,49 @@ async fn cmd_revoke(key_id: &str, json_out: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn cmd_test(key_id: &str, model: Option<&str>, json_out: bool) -> Result<(), CliError> {
+/// Blind-eval fix: 'share claims' shows TRUNCATED ids — resolution must
+/// accept the displayed prefix (unique match) as well as the full id.
+async fn find_claim(key_id: &str) -> Result<Value, CliError> {
     let store = sidecar_call(&format!("{}:borrow-get", PLUGIN_ID), json!({})).await.map_err(map_error)?;
-    let claim = store["claims"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .find(|entry| entry["keyId"].as_str() == Some(key_id))
-        .ok_or_else(|| CliError::Message(format!("no local claim matches that keyId — run '{} share claims'", term::program_name())))?;
+    let claims = store["claims"].as_array().cloned().unwrap_or_default();
+    let needle = key_id.trim();
+    let exact = claims.iter().find(|entry| entry["keyId"].as_str() == Some(needle)).cloned();
+    let resolved = match exact {
+        Some(entry) => Some(entry),
+        None => {
+            let matches: Vec<&Value> = claims
+                .iter()
+                .chain(store.get("removed").and_then(|v| v.as_array()).map(|a| a.iter()).into_iter().flatten())
+                .filter(|entry| {
+                    entry["keyId"]
+                        .as_str()
+                        .map(|id| id.starts_with(needle) && needle.len() >= 6)
+                        .unwrap_or(false)
+                })
+                .collect();
+            match matches.len() {
+                1 => claims.into_iter().find(|entry| {
+                    entry["keyId"].as_str().map(|id| id.starts_with(needle)).unwrap_or(false)
+                }),
+                0 => None,
+                _ => return Err(CliError::Message(format!(
+                    "keyId prefix '{}' matches {} claims — pass more characters (full id is in '{} share claims -j')",
+                    needle,
+                    matches.len(),
+                    term::program_name()
+                ))),
+            }
+        }
+    };
+    resolved.ok_or_else(|| CliError::Message(format!(
+        "no local claim matches that keyId — run '{} share claims' (the full id is in '{} share claims -j')",
+        term::program_name(),
+        term::program_name()
+    )))
+}
+
+async fn cmd_test(key_id: &str, model: Option<&str>, json_out: bool) -> Result<(), CliError> {
+    let claim = find_claim(key_id).await?;
     // model default mirrors the card: the lane's exact model; wildcards need
     // a real name
     let exact_model = claim["models"]
@@ -529,9 +663,24 @@ async fn cmd_test(key_id: &str, model: Option<&str>, json_out: bool) -> Result<(
         .iter()
         .filter_map(|m| m.as_str().map(|s| s.to_string()))
         .find(|m| !m.contains('*'));
-    let model = model
+    let mut model = model
         .map(|m| m.trim().to_string())
-        .filter(|m| !m.is_empty())
+        .filter(|m| !m.is_empty());
+    if model.is_none() && exact_model.is_none() {
+        // bare 'share test <id>' on a wildcard lane: discover a concrete
+        // model from the owner's catalog instead of failing (blind-eval)
+        let key_id = claim["keyId"].as_str().unwrap_or("").to_string();
+        if let Ok(found) = sidecar_call(&format!("{}:models", PLUGIN_ID), json!({ "keyId": key_id })).await {
+            let mut candidates: Vec<String> = found["models"].as_array().cloned().unwrap_or_default()
+                .iter()
+                .filter_map(|m| m.as_str().map(String::from))
+                .filter(|m| !m.contains('*'))
+                .collect();
+            candidates.sort_by_key(|a| a.len());
+            model = candidates.into_iter().next();
+        }
+    }
+    let model = model
         .or(exact_model)
         .ok_or_else(|| {
             let wildcards: Vec<String> = claim["models"]
@@ -594,7 +743,7 @@ fn render_owner(data: &Value) -> String {
     }
     let now = now_ms();
     let mut out = format!(
-        "Owner console — {} [{}]\n",
+        "Owner console — {} [{}]\nLegend: budget = whole-lane used/total (ALL borrowers, not just you) · slots free/total · the [lane id] in brackets is what lane commands take\n",
         share["title"].as_str().unwrap_or(share_id),
         short_id(share_id)
     );
@@ -622,8 +771,8 @@ fn render_owner(data: &Value) -> String {
     out.push_str(&format!("  lanes ({}):\n", lanes.len()));
     for lane in &lanes {
         out.push_str(&format!(
-            "    · {:<18} {:<14} {:>9}/{:<9} slots {}/{}  {} · {} ({})\n",
-            lane["title"].as_str().unwrap_or("(lane)"),
+            "    · {:<18} {:<14} {:>9}/{:<9} slots free {}/{}  {} · {} ({})\n",
+            format!("{} [{}]", lane["title"].as_str().unwrap_or("(lane)"), lane["id"].as_str().unwrap_or("")),
             lane["models"].as_array().cloned().unwrap_or_default()
                 .iter()
                 .filter_map(|m| m.as_str())
@@ -631,7 +780,7 @@ fn render_owner(data: &Value) -> String {
                 .join(","),
             format_tokens_compact(lane["settledTokens"].as_i64().unwrap_or(0)),
             format_tokens_compact(lane["budgetTokens"].as_i64().unwrap_or(0)),
-            lane["maxClaims"].as_i64().unwrap_or(0) - lane["slotsLeft"].as_i64().unwrap_or(0),
+            lane["slotsLeft"].as_i64().unwrap_or(0),
             lane["maxClaims"].as_i64().unwrap_or(0),
             lane_status_text(lane, now),
             schedule_text(lane),
@@ -659,6 +808,10 @@ fn render_owner(data: &Value) -> String {
             ));
         }
     }
+    let prog = term::program_name();
+    out.push_str(&format!("Lane control:  {} share lane-pause <laneId> --yes   (keys kept; resume with lane-resume)\n", prog));
+    out.push_str(&format!("                {} share lane-terminate <laneId> --yes   (revokes the lane's keys — irreversible)\n", prog));
+    out.push_str(&format!("Revoke one borrower key:  {} share owner-revoke <keyId> --yes\n", prog));
     out
 }
 
@@ -677,30 +830,29 @@ async fn cmd_suggest(json_out: bool) -> Result<(), CliError> {
         crate::cli::print_json_out(data, false);
         return Ok(());
     }
-    print!("{}", render_suggest(&data, reserve_pct()));
+    print!("{}", render_suggest(&data, reference_pct(&modules::load_modules_state())));
     Ok(())
 }
 
-/// Card-side reserve ratio knob, read from the same module config the card
-/// persists (default 25, clamped like the card's editor).
-fn reserve_pct() -> i64 {
-    let state = modules::load_modules_state();
-    let reserve = state
-        .pointer(&format!("/modules/{}/config/reservePct", PLUGIN_ID))
-        .and_then(|v| v.as_i64());
-    reserve.unwrap_or(25).clamp(5, 95)
+/// Same reference percentage and one-time legacy interpretation as the card.
+fn reference_pct(state: &Value) -> i64 {
+    let config = &state["modules"][PLUGIN_ID]["config"];
+    config["referencePct"].as_f64()
+        .or_else(|| config["reservePct"].as_f64().map(|reserve| 100.0 - reserve))
+        .unwrap_or(75.0).round().clamp(5.0, 95.0) as i64
 }
 
-fn render_suggest(data: &Value, reserve_pct: i64) -> String {
+fn render_suggest(data: &Value, reference_pct: i64) -> String {
     let families = data["families"].as_array().cloned().unwrap_or_default();
     let zhipu = data["zhipu"]["results"].as_array().cloned().unwrap_or_default();
     if families.is_empty() && zhipu.is_empty() {
-        return "No lane suggestions yet — share usage data builds them (owner-suggest reads your own CPA usage).\n".to_string();
+        let cmd = crate::term::program_name();
+        return format!("No lane suggestions yet — suggestions use your own CPA usage over the last 7 days.\nCheck node setup with '{cmd} share doctor'; after using CPA, run '{cmd} share suggest' again.\n");
     }
-    let mut out = format!("Lane suggestions (reserve {}%)\n", reserve_pct);
+    let mut out = format!("Lane suggestions (reference {}% of your own CPA usage over the last 7 days)\n", reference_pct);
     for family in &families {
         let weekly = family["weeklyTokens"].as_i64().unwrap_or(0);
-        let budget = ((weekly as f64) * (1.0 - reserve_pct as f64 / 100.0)).round() as i64;
+        let budget = ((weekly as f64) * (reference_pct as f64 / 100.0)).round() as i64;
         let schedule = family["busy"]
             .as_object()
             .map(|busy| format!(
@@ -712,7 +864,7 @@ fn render_suggest(data: &Value, reserve_pct: i64) -> String {
             ))
             .unwrap_or_else(|| "flat usage — share all day".to_string());
         out.push_str(&format!(
-            "  · {:<14} weekly {:>9}  {}  budget ≤{}\n",
+            "  · {:<14} weekly {:>9}  {}  suggested budget {}\n",
             family["family"].as_str().unwrap_or("?"),
             format_tokens_compact(weekly),
             schedule,
@@ -767,6 +919,14 @@ async fn cmd_resume(json_out: bool) -> Result<(), CliError> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn unregistered_owner_error_names_the_next_command() {
+        let error = share_error_text("not_registered");
+        assert!(error.contains("share doctor"));
+        assert!(error.contains("enable atl-share in CPA"));
+        assert!(error.contains("start CPA"));
+    }
+
     fn lane(id: &str, title: &str, models: &[&str], open: bool, exhausted: bool, slots: i64) -> Value {
         json!({
             "id": id, "title": title,
@@ -786,6 +946,26 @@ mod tests {
             "lanes": lanes,
             "plugin": { "lastHeartbeatAt": now_ms() },
         })
+    }
+
+    #[test]
+    fn merge_claims_backfills_lane_identity_from_live() {
+        // stored claims from before lane fields existed get lane identity from
+        // the live view; values the claim itself carries must win over live
+        let stored = vec![json!({
+            "keyId": "csk_1", "token": "t", "shareId": "shr_1", "expiresAt": 9,
+            "models": ["gemini-*"],
+        })];
+        let live = json!({ "claims": [{
+            "keyId": "csk_1", "state": "valid", "usedTokens": 7,
+            "laneId": "glm-5h", "laneTitle": "\u{667a}\u{8c31} 5h \u{7a97}", "models": ["glm-*"], "tzLabel": "UTC+8",
+        }]});
+        let merged = merge_claims(&stored, Some(&live), 0);
+        assert_eq!(merged[0]["laneId"], "glm-5h");
+        assert_eq!(merged[0]["laneTitle"], "\u{667a}\u{8c31} 5h \u{7a97}");
+        assert_eq!(merged[0]["tzLabel"], "UTC+8");
+        // stored models win — live never overwrites the claim's own payload
+        assert_eq!(merged[0]["models"][0], "gemini-*");
     }
 
     #[test]
@@ -902,21 +1082,27 @@ mod tests {
     }
 
     #[test]
-    fn suggest_render_derives_budget_from_reserve() {
+    fn suggest_render_uses_the_card_reference_percentage() {
+        let empty = render_suggest(&json!({}), 75);
+        assert!(empty.contains("share doctor"));
+        assert!(empty.contains("share suggest"));
+        assert!(!empty.contains("owner-suggest"));
         let data = json!({
             "families": [
                 { "family": "gemini-*", "weeklyTokens": 1_000_000_000, "busy": { "start": "15:00", "end": "21:00" } }
             ],
             "zhipu": { "results": [ { "label": "main", "quota": { "windows": [ { "pct": 55 } ] } } ] }
         });
-        let text = render_suggest(&data, 25);
-        assert!(text.contains("reserve 25%"));
+        assert_eq!(reference_pct(&json!({"modules":{"compute-sharing":{"config":{"referencePct":20,"reservePct":25}}}})),20);
+        assert_eq!(reference_pct(&json!({"modules":{"compute-sharing":{"config":{"reservePct":25}}}})),75);
+        let text = render_suggest(&data, 75);
+        assert!(text.contains("reference 75% of your own CPA usage over the last 7 days"));
         assert!(text.contains("gemini-*"));
         assert!(text.contains("busy 15:00-21:00 → share 21:00-15:00"));
-        assert!(text.contains("budget ≤750M"));
+        assert!(text.contains("suggested budget 750M"));
         assert!(text.contains("main 55%"));
-        // 95% reserve shrinks the budget accordingly
-        assert!(render_suggest(&data, 95).contains("budget ≤50M"));
+        // The same 5% reference setting as the card shrinks the suggested budget.
+        assert!(render_suggest(&data, 5).contains("suggested budget 50M"));
     }
 
     #[test]
@@ -926,4 +1112,127 @@ mod tests {
         assert!(share_error_text("backend_unreachable:timeout").starts_with("backend unreachable"));
         assert_eq!(share_error_text("weird_new_code"), "weird_new_code");
     }
+}
+
+// ── Blind-eval round-1 additions: owner lane lifecycle, owner per-key
+// revoke, and the doctor readiness report (all ride the same sidecar
+// commands the card uses) ──────────────────────────────────────────────
+
+async fn cmd_lane_action(lane_id: &str, action: &str, yes: bool, json_out: bool) -> Result<(), CliError> {
+    if !yes && action != "resume" {
+        let effect = if action == "pause" {
+            "pausing rejects traffic and new claims on this lane; borrower keys are KEPT"
+        } else {
+            "terminating cascade-revokes every borrower key on this lane and cannot be undone"
+        };
+        return Err(CliError::Message(format!("{effect} — pass --yes to confirm")));
+    }
+    let data = match sidecar_call(
+        &format!("{}:owner-lane-action", PLUGIN_ID),
+        json!({ "laneId": lane_id, "action": action }),
+    )
+    .await
+    {
+        Ok(data) => data,
+        Err(err) => {
+            let text = match map_error(err) {
+                CliError::Message(t) => t,
+                other => return Err(other),
+            };
+            if text.contains("lane_not_found") {
+                return Err(CliError::Message(format!(
+                    "no lane '{}' on your share — the ids in [brackets] from '{} share owner' are the valid ones",
+                    lane_id,
+                    term::program_name()
+                )));
+            }
+            return Err(CliError::Message(text));
+        }
+    };
+    if json_out {
+        crate::cli::print_json_out(data, true);
+        return Ok(());
+    }
+    let state = data["state"].as_str().unwrap_or("?");
+    match action {
+        "pause" => println!("Lane {} paused — keys kept; resume with '{} share lane-resume {}'", lane_id, term::program_name(), lane_id),
+        "resume" => println!("Lane {} resumed ({}) — held keys work again", lane_id, state),
+        _ => println!("Lane {} terminated ({}) — its borrower keys were revoked", lane_id, state),
+    }
+    Ok(())
+}
+
+async fn cmd_owner_revoke(key_id: &str, yes: bool, json_out: bool) -> Result<(), CliError> {
+    // resolve against the OWNER's claim list (owner-status), not the local
+    // borrow store — the blind eval showed users expect the owner view's
+    // keyIds to be usable here
+    let owner = sidecar_call(&format!("{}:owner-status", PLUGIN_ID), json!({}))
+        .await
+        .map_err(map_error)?;
+    let needle = key_id.trim();
+    let claims = owner["claims"].as_array().cloned().unwrap_or_default();
+    let resolved = claims
+        .iter()
+        .find(|c| c["keyId"].as_str() == Some(needle))
+        .or_else(|| {
+            let matches: Vec<&Value> = claims
+                .iter()
+                .filter(|c| c["keyId"].as_str().map(|id| id.starts_with(needle) && needle.len() >= 6).unwrap_or(false))
+                .collect();
+            if matches.len() == 1 { Some(matches[0]) } else { None }
+        })
+        .ok_or_else(|| CliError::Message(format!(
+            "no claim on your share matches '{}' — full ids are in '{} share owner'",
+            needle,
+            term::program_name()
+        )))?;
+    let full_id = resolved["keyId"].as_str().unwrap_or(needle).to_string();
+    let borrower = resolved["borrower"].as_str().unwrap_or("?");
+    if !yes {
+        return Err(CliError::Message(format!(
+            "this revokes {borrower}'s key {full_id} (other borrowers unaffected) — pass --yes to confirm"
+        )));
+    }
+    let data = sidecar_call(
+        &format!("{}:owner-revoke-claim", PLUGIN_ID),
+        json!({ "keyId": full_id, "reason": "owner_cli" }),
+    )
+    .await
+    .map_err(map_error)?;
+    if json_out {
+        crate::cli::print_json_out(data, true);
+        return Ok(());
+    }
+    println!("Revoked {borrower}'s key {} — other borrowers unaffected", full_id);
+    Ok(())
+}
+
+async fn cmd_doctor(json_out: bool) -> Result<(), CliError> {
+    let data = sidecar_call(&format!("{}:doctor", PLUGIN_ID), json!({}))
+        .await
+        .map_err(map_error)?;
+    if json_out {
+        crate::cli::print_json_out(data, false);
+        return Ok(());
+    }
+    let ready = data["ready"].as_bool().unwrap_or(false);
+    println!("First-share readiness — {}", if ready { "READY" } else { "NOT READY" });
+    for item in data["items"].as_array().cloned().unwrap_or_default() {
+        let id = item["id"].as_str().unwrap_or("?");
+        let ok = item["ok"].as_bool().unwrap_or(false);
+        let value = item["value"].as_str().unwrap_or("");
+        let hint = item["hint"].as_str().unwrap_or("");
+        println!(
+            "  [{}] {:<12} {}{}{}",
+            if ok { "✓" } else { "✗" },
+            id,
+            if value.is_empty() { String::new() } else { format!("({value}) ") },
+            if ok { String::new() } else { hint.to_string() },
+            ""
+        );
+    }
+    if !ready {
+        println!("Fix the ✗ items above; borrow-only usage needs none of them.");
+    }
+    Ok(())
 }

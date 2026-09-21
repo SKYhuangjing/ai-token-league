@@ -213,6 +213,9 @@ export class MySqlStore extends Store {
         windowDay VARCHAR(16) NOT NULL DEFAULT '',
         lastHeartbeatAt BIGINT NOT NULL DEFAULT 0,
         lastPluginVersion VARCHAR(64) NOT NULL DEFAULT '',
+        policyRev BIGINT NOT NULL DEFAULT 1,
+        policyAckedRev BIGINT NOT NULL DEFAULT 0,
+        lastProtocol INT NOT NULL DEFAULT 1,
         createdAt BIGINT NOT NULL,
         updatedAt BIGINT NOT NULL DEFAULT 0
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
@@ -234,6 +237,10 @@ export class MySqlStore extends Store {
         createdAt BIGINT NOT NULL,
         expiresAt BIGINT NOT NULL,
         lastUsedAt BIGINT NOT NULL DEFAULT 0,
+        lastSeq BIGINT NOT NULL DEFAULT 0,
+        revokedBy VARCHAR(16) NOT NULL DEFAULT '',
+        revokedAt BIGINT NOT NULL DEFAULT 0,
+        revokeReason VARCHAR(80) NOT NULL DEFAULT '',
         INDEX idx_sharing_claims_share (shareId)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     );
@@ -252,6 +259,23 @@ export class MySqlStore extends Store {
     );
     if (!claimLaneColumns.length) {
       await this.pool.query("ALTER TABLE sharing_claims ADD COLUMN laneId VARCHAR(96) NOT NULL DEFAULT '' AFTER shareId");
+    }
+    // usability-design v2 columns (CS-06/CS-07): policy revision tracking on
+    // shares; usage-seq dedup + owner-revoke audit on claims. Guarded ALTERs
+    // upgrade pre-existing tables; fresh installs get them from the CREATEs.
+    const [shareRevColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sharing_shares' AND COLUMN_NAME = 'policyRev'`
+    );
+    if (!shareRevColumns.length) {
+      await this.pool.query("ALTER TABLE sharing_shares ADD COLUMN policyRev BIGINT NOT NULL DEFAULT 1 AFTER lastPluginVersion, ADD COLUMN policyAckedRev BIGINT NOT NULL DEFAULT 0 AFTER policyRev, ADD COLUMN lastProtocol INT NOT NULL DEFAULT 1 AFTER policyAckedRev");
+    }
+    const [claimSeqColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sharing_claims' AND COLUMN_NAME = 'lastSeq'`
+    );
+    if (!claimSeqColumns.length) {
+      await this.pool.query("ALTER TABLE sharing_claims ADD COLUMN lastSeq BIGINT NOT NULL DEFAULT 0 AFTER lastUsedAt, ADD COLUMN revokedBy VARCHAR(16) NOT NULL DEFAULT '' AFTER lastSeq, ADD COLUMN revokedAt BIGINT NOT NULL DEFAULT 0 AFTER revokedBy, ADD COLUMN revokeReason VARCHAR(80) NOT NULL DEFAULT '' AFTER revokedAt");
     }
   }
 

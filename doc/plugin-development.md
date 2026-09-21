@@ -59,6 +59,15 @@ export default {
 
 可以额外具名导出纯函数供单元测试（参考 plugins/zhipu-plan/index.js 的 `renderResult/windowLabel`）。
 
+
+#### manifest 可选字段 `externalService`（0.1.0 起）
+
+```json
+"externalService": { "kind": "cpa", "stopPolicy": "independent" }
+```
+
+声明"本插件的管理面板背后有一个独立运行的外部服务"。宿主据此渲染通用文案（不写任何插件特例）：面板开关显示「管理面板已显示/已关闭」并附「开关只控制本面板；外部共享服务继续运行」说明；卸载变为两步确认（返回管理 / 仅卸载面板），说明服务与已发 Key 不受影响。适用于服务生命周期不随卡片开关的插件（如 compute-sharing 的 CPA 执行引擎）。
+
 ### 1.2 ctx 能力清单（平台给你的全部，共 5 项）
 
 | 能力 | 签名 | 用途 |
@@ -68,6 +77,7 @@ export default {
 | `ctx.escapeHtml(text)` | `(string) => string` | HTML 转义（& < > " '，属性安全）。**所有动态文本入模板前必须过它** |
 | `ctx.apiBase()` | `() => string` | 后端 API 根地址（活取，随用户配置变化，已去尾斜杠）。`fetch(\`${ctx.apiBase()}/api/...\`)` 走云端 HTTP |
 | `ctx.notify(text, opts?)` | `(string, { duration }?) => void` | App 全局 toast（与总览扫描提示同一表现层；纯文本、自动消失）。操作回执用它，错误建议留在卡片内常驻。旧宿主可能不提供——`ctx.notify ? ctx.notify(x) : 卡内状态行(x)` 兜底。无需权限声明 |
+| `ctx.lang()` | `() => string` | 当前 UI 语言（`"zh-CN"` \| `"en"`）。通用能力：让插件自带双语字典、改文案只 repin 卡片即可（0.1.0 起；旧宿主可能不提供，用 `document.documentElement.lang`/`navigator.language` 兜底）。compute-sharing 0.1.0 的做法可参考其 `STRINGS` 字典 + `t()` 重定义 |
 
 ### 1.3 当前可用的 sidecar 命令
 
@@ -107,7 +117,7 @@ export default {
 
 > 桌面卡片 JS 目前仍直接 `fetch` 这五个端点；后续插件版本可迁移到上述命令，两端共用一条流实现。
 
-**其他插件暴露的命令（经其 manifest.permissions 声明）**：`zhipu-plan:usage`（智谱配额查询，带 60s 缓存）。
+**其他插件暴露的命令（经其 manifest.permissions 声明）**：`zhipu-plan:usage`（智谱配额查询，带 60s 缓存）；`compute-sharing:*`（0.1.0 起借用/owner 动作全部统一为 sidecar 命令：`directory`/`claim`/`renew`/`revoke`/`live`/`models`/`borrow-get`/`borrow-set`/`borrow-test`/`owner-status`/`owner-policy`/`owner-resume`/`owner-suggest`/`owner-unregister`/`owner-revoke-claim`/`owner-lane-action`——与终端 CLI 同一 Rust 实现，跨进程共享存储加锁）。
 
 > 新增自己的 sidecar 命令：在 `collector-core`/`atl-collector` 实现并注册（②层），或提需求给平台。
 

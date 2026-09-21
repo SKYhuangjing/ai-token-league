@@ -58,15 +58,20 @@ function clampPolicy(input = {}) {
     if (!Number.isFinite(n)) return fallback;
     return Math.min(max, Math.max(min, Math.round(n)));
   };
+  const explicitKeyMax = num(input.keyMaxTokens, 0, 0, 1_000_000_000_000);
   const policy = {
     budget: num(input.budget, DEFAULT_POLICY.budget, 1_000, 1_000_000_000_000),
     maxClaims: num(input.maxClaims, DEFAULT_POLICY.maxClaims, 1, 200),
-    keyMaxTokens: num(input.keyMaxTokens, 0, 0, 1_000_000_000_000),
+    keyMaxTokens: explicitKeyMax,
+    // D1 (usability design §6.2): "0 = auto" must be an explicit fact, not a
+    // placeholder guess — the effective per-key cap is derived per lane
+    // (floor(lane.budgetTokens / lane.maxClaims)) only while auto is true.
+    keyMaxTokensAuto: !explicitKeyMax,
     keyConcurrency: num(input.keyConcurrency, DEFAULT_POLICY.keyConcurrency, 1, 64),
     ttlHours: num(input.ttlHours, DEFAULT_POLICY.ttlHours, 1, 24 * 30),
   };
   if (!policy.keyMaxTokens) {
-    // fair split: budget ÷ slots (R19/D5 semantics carried over)
+    // fair split at share level keeps legacy single-lane shares working
     policy.keyMaxTokens = Math.max(1, Math.floor(policy.budget / policy.maxClaims));
   }
   return policy;
@@ -160,7 +165,10 @@ function clampLane(raw, index, existing = []) {
     maxClaims: clampInt(raw && raw.maxClaims, DEFAULT_POLICY.maxClaims, 1, 200),
     peakWindows: clampWindows(peakInput),
     peakMultiplier: clampInt(raw && raw.peak && raw.peak.multiplier, raw && raw.peakMultiplier, 1, 10),
-    state: (raw && raw.state) === "suspended" ? "suspended" : "active",
+    // Three states (D2): active serves; paused rejects requests AND new claims
+    // but keeps valid keys with TTL running; suspended is the legacy terminal
+    // state (cascade-revoked at the moment it was entered).
+    state: ["active", "paused", "suspended"].includes(raw && raw.state) ? raw.state : "active",
   };
   return lane;
 }
@@ -195,6 +203,18 @@ function effectiveLanes(share) {
     peakMultiplier: 1,
     state: "active",
   }];
+}
+
+// Effective per-key window cap for a claim on this lane (D1/§6.2): auto mode
+// derives a fair split inside the lane; an explicit limit is bounded by the
+// lane budget. Both the claim response and the plugin sync use this so the
+// gate and what the borrower was told can't diverge.
+function effectiveKeyCap(share, lane) {
+  const policy = share.policy || {};
+  if (policy.keyMaxTokensAuto) {
+    return Math.max(1, Math.floor((lane.budgetTokens || 1) / Math.max(1, lane.maxClaims || 1)));
+  }
+  return Math.min(Number(policy.keyMaxTokens) || 1, lane.budgetTokens || 1);
 }
 
 function weekStartTs(ts, offsetMinutes = serverOffsetMinutes()) {
@@ -464,11 +484,31 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     };
   }
 
+  // Lane identity rides on every claim view: borrowers must see which lane
+  // of which owner a key belongs to, even for claims stored before the lane
+  // fields existed (resolved from the share, not trusted from the client).
+  // Quota fields (F02/§6.1) ride too: the borrower's "how much can I use"
+  // must come from the server view, not from a stale claim-time snapshot.
   function claimView(claim, { withToken = false } = {}) {
+    const share = db.shares[claim.shareId];
+    const lane = share
+      ? effectiveLanes(share).find((l) => l.id === (claim.laneId || "default")) || null
+      : null;
+    const ts = now();
+    const tz = share ? tzOf(share) : serverOffsetMinutes();
+    const window = lane ? laneWindowOf(lane, ts, tz) : null;
+    const ledger = lane ? laneLedgerOf(share, lane.id) : null;
+    const keyCharged = window && ledger && ledger.windowKey === window.key
+      ? (ledger.byKey || {})[claim.keyId] || 0
+      : 0;
     const view = {
       keyId: claim.keyId,
       shareId: claim.shareId,
       laneId: claim.laneId || "default",
+      laneTitle: lane ? lane.title : "",
+      laneState: lane ? lane.state : "",
+      models: lane ? lane.models : [],
+      tzLabel: share ? tzLabelOf(tz) : "",
       shareTitle: claim.shareTitle,
       borrower: claim.borrower,
       participantId: claim.participantId || "",
@@ -480,7 +520,25 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       requests: claim.requests,
       failedRequests: claim.failedRequests || 0,
       lastUsedAt: claim.lastUsedAt || 0,
+      revokedBy: claim.revokedBy || "",
+      revokedAt: claim.revokedAt || 0,
+      revokeReason: claim.revokeReason || "",
     };
+    if (lane && share && window) {
+      view.window = lane.window;
+      view.windowEndsAtMs = window.endMs;
+      view.keyMaxTokens = effectiveKeyCap(share, lane);
+      view.keyConcurrency = share.policy.keyConcurrency;
+      view.laneBudgetTokens = lane.budgetTokens;
+      view.laneAvailableTokens = Math.max(0, lane.budgetTokens - (ledger && ledger.windowKey === window.key ? ledger.tokens : 0));
+      // charged = budget-side units (peak-multiplied at event time under
+      // protocol 2, arrival time under legacy); usedTokens stays raw lifetime
+      view.keyChargedTokens = keyCharged;
+      view.peak = {
+        windows: lane.peakWindows.map((w) => ({ start: hhmmOf(w.startM), end: hhmmOf(w.endM) })),
+        multiplier: lane.peakMultiplier,
+      };
+    }
     if (withToken) view.token = claim.token;
     return view;
   }
@@ -491,14 +549,21 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     return share || null;
   }
 
-  function heartbeatResponse(share) {
+  function heartbeatResponse(share, { protocol = 1 } = {}) {
     const windowDay = rollShareWindow(share);
     pruneExpiredClaims();
     const ts = now();
     const lanes = effectiveLanes(share);
+    const active = activeClaimsOf(share.shareId);
     // Legacy settledByKey stays a flat keyId→tokens map (merged across lane
     // ledgers' current windows) so pre-lane plugins keep working unchanged.
     const settledByKey = {};
+    // Protocol 2 additions (CS-06/D1): the per-key charged counter follows the
+    // LANE window grid (not the server day), and each key's last accepted
+    // usage seq rides back so a restarted plugin resumes the counter without
+    // double-settling.
+    const keyLedger = {};
+    const lastSeqByKey = {};
     for (const lane of lanes) {
       const window = laneWindowOf(lane, ts, tzOf(share));
       const ledger = laneLedgerOf(share, lane.id);
@@ -507,25 +572,51 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         settledByKey[keyId] = (settledByKey[keyId] || 0) + tokens;
       }
     }
-    return {
+    for (const claim of active) {
+      const lane = lanes.find((l) => l.id === (claim.laneId || "default"));
+      if (!lane) continue;
+      const window = laneWindowOf(lane, ts, tzOf(share));
+      const ledger = laneLedgerOf(share, lane.id);
+      if (ledger.windowKey === window.key) {
+        keyLedger[claim.keyId] = { windowKey: window.key, charged: (ledger.byKey || {})[claim.keyId] || 0 };
+      } else {
+        keyLedger[claim.keyId] = { windowKey: window.key, charged: 0 };
+      }
+      // R2-01: every active key reports its seq, 0 included — a fresh key
+      // otherwise deadlocks (backend waits for a seq, plugin waits for a
+      // counter) and its first bucket ships legacy-shaped forever
+      lastSeqByKey[claim.keyId] = claim.lastSeq || 0;
+    }
+    const response = {
       state: share.state,
       windowDay,
+      policyRev: share.policyRev || 1,
       policy: {
         budget: share.policy.budget,
         keyMaxTokens: share.policy.keyMaxTokens,
         keyConcurrency: share.policy.keyConcurrency,
         ttlHours: share.policy.ttlHours,
       },
-      keys: activeClaimsOf(share.shareId).map((c) => ({
-        keyId: c.keyId,
-        token: c.token,
-        keyMaxTokens: share.policy.keyMaxTokens,
-        expiresAtMs: c.expiresAt,
-        laneId: c.laneId || "default",
-      })),
+      keys: active.map((c) => {
+        const lane = lanes.find((l) => l.id === (c.laneId || "default"));
+        return {
+          keyId: c.keyId,
+          token: c.token,
+          // lane-aware effective cap (D1): auto splits inside the lane
+          keyMaxTokens: lane ? effectiveKeyCap(share, lane) : share.policy.keyMaxTokens,
+          expiresAtMs: c.expiresAt,
+          laneId: c.laneId || "default",
+        };
+      }),
       settledByKey,
       lanes: lanes.map((lane) => laneSyncView(share, lane, ts)),
     };
+    if (protocol >= 2) {
+      response.protocol = 2;
+      response.keyLedger = keyLedger;
+      response.lastSeqByKey = lastSeqByKey;
+    }
+    return response;
   }
 
   // ── request plumbing ─────────────────────────────────────────────────────
@@ -629,6 +720,8 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         settled: {},
         lifetimeSettled: 0,
         claimsIssued: 0,
+        policyRev: 1,
+        policyAckedRev: 0,
       };
       db.shares[share.shareId] = share;
     } else if (share.state === "stopped") {
@@ -681,18 +774,87 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     const windowDay = rollShareWindow(share);
     share.settled = share.settled || {};
 
+    // Protocol declaration (CS-06): 2 = seq'd per-window usage buckets; the
+    // plugin also acks the policy revision it has applied so the owner card
+    // can show "pending sync" instead of guessing from heartbeat age.
+    const protocol = Math.min(2, Math.max(1, Number(body.protocol) || 1));
+    share.lastProtocol = protocol;
+    const ackedRev = Number(body.appliedPolicyRev) || 0;
+    if (ackedRev > 0) {
+      share.policyAckedRev = Math.max(share.policyAckedRev || 0, Math.min(ackedRev, share.policyRev || 1));
+    }
+
     let applied = 0;
+    let skippedStale = 0;
     let orphaned = 0;
     const lanes = effectiveLanes(share);
     const ts = now();
-    for (const delta of Array.isArray(body.usage) ? body.usage : []) {
+    // Round-level seq picture (CS-06): one heartbeat drains a per-key batch
+    // that may contain several window buckets sharing the batch seq. Dedup is
+    // per (key, batch): the round applies buckets whose seq is newer than the
+    // last APPLIED batch, and advances lastSeq once at the end — otherwise a
+    // multi-bucket batch would eat itself after its first bucket.
+    const usageEntries = Array.isArray(body.usage) ? body.usage : [];
+    const roundMaxSeq = new Map();
+    if (protocol >= 2) {
+      for (const delta of usageEntries) {
+        const seq = Number(delta.seq);
+        const keyId = String(delta.keyId || "");
+        if (Number.isFinite(seq) && keyId) {
+          roundMaxSeq.set(keyId, Math.max(roundMaxSeq.get(keyId) || 0, seq));
+        }
+      }
+    }
+    for (const delta of usageEntries) {
       const keyId = String(delta.keyId || "");
       const tokens = Math.max(0, Number(delta.tokens) || 0);
+      const rawTokens = Math.max(0, Number(delta.rawTokens) || 0);
       const requests = Math.max(0, Number(delta.requests) || 0);
       const failed = Math.max(0, Number(delta.failed) || 0);
       const claim = db.claims[keyId];
       if (!claim || claim.shareId !== share.shareId) {
         orphaned += 1;
+        continue;
+      }
+      if (roundMaxSeq.has(keyId)) {
+        // protocol 2: at-most-once per (key, batch) — a retried heartbeat
+        // after a lost response must not settle the same batch twice
+        const seq = Number(delta.seq);
+        if (seq <= (claim.lastSeq || 0)) {
+          skippedStale += 1;
+          continue;
+        }
+        const laneId = claim.laneId || "default";
+        const lane = lanes.find((l) => l.id === laneId);
+        // Raw totals are lifetime facts and always apply…
+        claim.usedTokens = (claim.usedTokens || 0) + rawTokens;
+        share.lifetimeSettled = (share.lifetimeSettled || 0) + rawTokens;
+        // …budget-side charged units settle into the bucket's OWN window:
+        // the plugin stamps the lane windowKey at event time, so midnight /
+        // 5h-grid / week boundaries never charge the wrong window and peak
+        // multipliers are the event-time ones, not arrival-time.
+        if (lane) {
+          const current = laneWindowOf(lane, ts, tzOf(share));
+          const bucketWindowKey = String(delta.windowKey || "");
+          if (bucketWindowKey && bucketWindowKey === current.key) {
+            const ledger = laneLedgerOf(share, lane.id);
+            if (ledger.windowKey !== bucketWindowKey) {
+              ledger.windowKey = bucketWindowKey;
+              ledger.tokens = 0;
+              ledger.byKey = {};
+            }
+            const charged = Math.max(0, Number(delta.chargedTokens) || 0);
+            ledger.tokens += charged;
+            ledger.byKey[keyId] = (ledger.byKey[keyId] || 0) + charged;
+            share.laneSettled[lane.id] = ledger;
+          }
+          // a stale bucket (its window already closed) contributes raw
+          // lifetime only — a closed window must not absorb late charges
+        }
+        claim.requests = (claim.requests || 0) + requests;
+        claim.failedRequests = (claim.failedRequests || 0) + failed;
+        claim.lastUsedAt = ts;
+        applied += 1;
         continue;
       }
       claim.usedTokens = (claim.usedTokens || 0) + tokens;
@@ -706,6 +868,12 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       if (lane) settleLaneUsage(share, lane, keyId, tokens, ts);
       applied += 1;
     }
+    for (const [keyId, seq] of roundMaxSeq) {
+      const claim = db.claims[keyId];
+      if (claim && claim.shareId === share.shareId && seq > (claim.lastSeq || 0)) {
+        claim.lastSeq = seq;
+      }
+    }
     // Wall signal (advisory): owner-side failures observed by the plugin. No
     // automatic action — the owner card surfaces it as a one-click lane pause.
     const wallFailed = Math.max(0, Number(body.wallSignals && body.wallSignals.ownerFailed) || 0);
@@ -717,7 +885,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     }
     pruneExpiredClaims();
     persist();
-    sendJson(res, 200, { ...heartbeatResponse(share), applied, orphaned, windowDay });
+    sendJson(res, 200, { ...heartbeatResponse(share, { protocol }), applied, skippedStale, orphaned, windowDay });
   }
 
   async function handleUnregister(req, res) {
@@ -751,6 +919,15 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       share: {
         ...publicShareView(share),
         baseURL: share.baseURL,
+        // F02/CS-02: the policy form backfills from the real stored values —
+        // a placeholder-only form shows nothing after a save.
+        policy: share.policy,
+        // policyRev is what the backend has; policyAckedRev is what the CPA
+        // node confirmed applying (§8: "accepted" vs "applied"). The owner
+        // card renders pending-sync while they differ.
+        policyRev: share.policyRev || 1,
+        policyAckedRev: share.policyAckedRev || 0,
+        lastProtocol: share.lastProtocol || 1,
         plugin: { online: now() - (share.lastHeartbeatAt || 0) < HEARTBEAT_ONLINE_MS, version: share.lastPluginVersion || null, lastHeartbeatAt: share.lastHeartbeatAt || 0 },
         lifetimeSettled: share.lifetimeSettled || 0,
         claimsIssued: share.claimsIssued || 0,
@@ -761,28 +938,51 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     });
   }
 
-  // Replace/patch the lane set. A lane flipped away from "active" suspends:
-  // its valid claims are revoked (same cascade semantics as share suspend).
-  // A lane REMOVED from the set cascades the same way — the card's delete
-  // dialog promises "revoke its claim keys" — and its settled ledger is
-  // dropped so a same-id recreation starts from a clean window. Applying a
-  // lanes update also clears the wall signal: the owner just acted on it.
+  // Replace/patch the lane set. State semantics (D2):
+  //   - A lane flipped to "suspended" (or removed from the set) terminates:
+  //     its valid claims are revoked — the cascade the delete dialog promises
+  //     — and a removed lane's settled ledger is dropped so a same-id
+  //     recreation starts from a clean window.
+  //   - A lane in "paused" keeps its valid keys (TTL keeps running); a full
+  //     save that doesn't explicitly set a state must not silently activate a
+  //     paused lane either — the incoming state is honored, and a lane saved
+  //     without an explicit state inherits its persisted state.
+  // Applying a lanes update also clears the wall signal (the owner just
+  // acted) and bumps policyRev so the card can show pending node sync.
   function applyLanesUpdate(share, input) {
     const lanes = clampLanes(input);
     if (!lanes) return { ok: false, error: "invalid_lanes" };
     const ts = now();
+    const prevState = new Map((share.lanes || []).map((lane) => [lane.id, lane.state || "active"]));
+    const explicitState = new Map(
+      (Array.isArray(input) ? input : [])
+        .filter((raw) => raw && typeof raw === "object" && typeof raw.state === "string")
+        .map((raw) => [laneSlug(raw.id || raw.title, 0), raw.state]),
+    );
+    for (const lane of lanes) {
+      if (explicitState.has(lane.id)) continue;
+      const kept = prevState.get(lane.id);
+      if (kept === "paused" || kept === "suspended") lane.state = kept;
+    }
     const keptIds = new Set(lanes.map((lane) => lane.id));
     for (const lane of lanes) {
       if (lane.state === "active") continue;
+      if (lane.state === "paused") continue; // keys stay; gate rejects traffic
       for (const claim of Object.values(db.claims)) {
         if (claim.shareId === share.shareId && (claim.laneId || "default") === lane.id && claim.state === "valid") {
           claim.state = "revoked";
+          claim.revokedBy = "owner";
+          claim.revokedAt = ts;
+          claim.revokeReason = "lane_terminated";
         }
       }
     }
     for (const claim of Object.values(db.claims)) {
       if (claim.shareId === share.shareId && claim.state === "valid" && !keptIds.has(claim.laneId || "default")) {
         claim.state = "revoked";
+        claim.revokedBy = "owner";
+        claim.revokedAt = ts;
+        claim.revokeReason = "lane_removed";
       }
     }
     if (share.laneSettled) {
@@ -792,6 +992,7 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     }
     share.wallSignal = null;
     share.lanes = lanes;
+    share.policyRev = (share.policyRev || 1) + 1;
     share.updatedAt = ts;
     return { ok: true };
   }
@@ -810,9 +1011,10 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       }
     }
     share.policy = clampPolicy({ ...share.policy, ...(body.policy || body) });
+    share.policyRev = (share.policyRev || 1) + 1;
     share.updatedAt = now();
     persist();
-    sendJson(res, 200, { policy: share.policy, lanes: effectiveLanes(share).map((lane) => lanePublicView(share, lane)) });
+    sendJson(res, 200, { policy: share.policy, policyRev: share.policyRev, lanes: effectiveLanes(share).map((lane) => lanePublicView(share, lane)) });
   }
 
   async function handleOwnerResume(req, res) {
@@ -830,6 +1032,99 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
     share.updatedAt = now();
     persist();
     sendJson(res, 200, { shareId: share.shareId, state: share.state });
+  }
+
+  // CS-07: revoke ONE claim key from the owner console. Scoped to the
+  // caller's own share (a foreign keyId is indistinguishable from a missing
+  // one), idempotent on repeat, and the audit trail (who/when/why) rides on
+  // the claim record for the admin view.
+  async function handleOwnerRevokeClaim(req, res, body) {
+    const share = findShareBySecret(req.headers["x-atl-share-secret"]);
+    if (!share) {
+      sendJson(res, 404, { error: "share_not_found" });
+      return;
+    }
+    const claim = db.claims[String(body.keyId || "")];
+    if (!claim || claim.shareId !== share.shareId) {
+      sendJson(res, 404, { error: "claim_not_found" });
+      return;
+    }
+    if (claim.state === "valid") {
+      claim.state = "revoked";
+      claim.revokedBy = "owner";
+      claim.revokedAt = now();
+      claim.revokeReason = String(body.reason || "owner_action").slice(0, 80);
+      persist();
+    }
+    sendJson(res, 200, { revoked: claim.keyId, state: claim.state });
+  }
+
+  // CS-07/D2: per-lane lifecycle without touching the rest of the lane set.
+  //   pause     active → paused   : gate rejects traffic + new claims, keys
+  //                                keep their TTL (no implicit slot-hoarding
+  //                                extension), ledger untouched
+  //   resume    paused → active   : unexpired, unrevoked keys work again
+  //   terminate → suspended       : cascade-revoke the lane's valid claims
+  //                                (same semantics as a save-time suspension)
+  async function handleOwnerLaneAction(req, res, body) {
+    const share = findShareBySecret(req.headers["x-atl-share-secret"]);
+    if (!share) {
+      sendJson(res, 404, { error: "share_not_found" });
+      return;
+    }
+    const action = String(body.action || "");
+    const laneId = String(body.laneId || "");
+    const lanes = effectiveLanes(share);
+    const lane = lanes.find((l) => l.id === laneId);
+    if (!lane) {
+      sendJson(res, 404, { error: "lane_not_found" });
+      return;
+    }
+    const ts = now();
+    if (action === "pause") {
+      if (lane.state !== "active") {
+        sendJson(res, 409, { error: lane.state === "paused" ? "lane_already_paused" : "lane_terminated" });
+        return;
+      }
+      lane.state = "paused";
+    } else if (action === "resume") {
+      if (lane.state === "suspended") {
+        // terminated lanes don't resurrect — their keys were cascade-revoked
+        sendJson(res, 409, { error: "lane_terminated" });
+        return;
+      }
+      if (lane.state === "active") {
+        sendJson(res, 409, { error: "lane_already_active" });
+        return;
+      }
+      lane.state = "active";
+    } else if (action === "terminate") {
+      if (lane.state !== "suspended") {
+        lane.state = "suspended";
+        for (const claim of Object.values(db.claims)) {
+          if (claim.shareId === share.shareId && (claim.laneId || "default") === lane.id && claim.state === "valid") {
+            claim.state = "revoked";
+            claim.revokedBy = "owner";
+            claim.revokedAt = ts;
+            claim.revokeReason = "lane_terminated";
+          }
+        }
+      }
+    } else {
+      sendJson(res, 400, { error: "invalid_lane_action" });
+      return;
+    }
+    share.lanes = lanes;
+    share.policyRev = (share.policyRev || 1) + 1;
+    share.wallSignal = null;
+    share.updatedAt = ts;
+    persist();
+    sendJson(res, 200, {
+      laneId: lane.id,
+      state: lane.state,
+      policyRev: share.policyRev,
+      lanes: lanes.map((l) => lanePublicView(share, l)),
+    });
   }
 
   async function handleListShares(req, res) {
@@ -907,8 +1202,13 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       sendJson(res, 409, { error: "lane_required", lanes: laneOptions });
       return;
     }
-    if (lane.state !== "active") {
+    if (lane.state === "suspended") {
       sendJson(res, 409, { error: "lane_suspended", laneId: lane.id });
+      return;
+    }
+    if (lane.state === "paused") {
+      // distinct from terminated: keys still exist, the lane is coming back
+      sendJson(res, 409, { error: "lane_paused", laneId: lane.id });
       return;
     }
     const schedule = scheduleStateAt(lane, nowTs, tzOf(share));
@@ -962,7 +1262,8 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       laneBudgetTokens: lane.budgetTokens,
       expiresAt: claim.expiresAt,
       shareTitle: share.title,
-      keyMaxTokens: Math.min(share.policy.keyMaxTokens, lane.budgetTokens),
+      keyMaxTokens: effectiveKeyCap(share, lane),
+      keyConcurrency: share.policy.keyConcurrency,
       borrower: claim.borrower,
       displayId: claim.displayId,
     });
@@ -1142,6 +1443,8 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
       if (p === "/api/shares/owner/status" && req.method === "GET") return void await handleOwnerStatus(req, res, url);
       if (p === "/api/shares/owner/policy" && req.method === "POST") return void await handleOwnerPolicy(req, res, await readBody(req));
       if (p === "/api/shares/owner/resume" && req.method === "POST") return void await handleOwnerResume(req, res);
+      if (p === "/api/shares/owner/claims/revoke" && req.method === "POST") return void await handleOwnerRevokeClaim(req, res, await readBody(req));
+      if (p === "/api/shares/owner/lane-action" && req.method === "POST") return void await handleOwnerLaneAction(req, res, await readBody(req));
       if (p === "/api/shares" && req.method === "GET") return void await handleListShares(req, res);
       if (p === "/api/shares/claim" && req.method === "POST") return void await handleClaim(req, res, await readBody(req));
       if (p === "/api/shares/claims/revoke" && req.method === "POST") return void await handleRevokeClaim(req, res, await readBody(req));

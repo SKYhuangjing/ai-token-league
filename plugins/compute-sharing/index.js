@@ -1,8 +1,9 @@
-// 算力共享插件（compute-sharing 0.2.0 车道版）。
-// 一张卡两个区：
-//   「我的分享」 owner 控制台：车道（订阅切片：预算周期+开放时段+模型范围+名额）、
-//               高级策略、停止/重新开启——未注册时整区隐藏；share secret 经 sidecar 代发。
-//   「算力借用」 在线节点车道目录 + 实名签名按车道认领 + 我的认领。
+// 算力共享插件（compute-sharing 0.1.0 可用性重构版）。
+// 借用优先布局：默认「共享资源」目录 + 我的认领（工具配置生成/模型发现/协议测试）；
+// 未注册者见一行「我要分享」准备入口。owner 控制台：车道（暂停/恢复/终止）、
+// 单 Key 撤销、策略回显与节点同步状态、停止/重新开启。
+// 文案走插件自带双语字典（STRINGS，repin 即生效）；借用/owner 动作统一经 sidecar
+// Rust flow（与 CLI 同一路径，跨进程存储加锁）。
 // 车道绑定认领 Key（CPA 拦截点无 model 字段的 ABI 约束下按 key→lane 硬执行时段/预算）。
 // 平台能力经 ctx（t / invoke(守门) / escapeHtml / apiBase / notify）。
 
@@ -54,6 +55,7 @@ const STYLE = `
 .cs-claim-mini { padding: 2px 8px; font-size: 11px; white-space: nowrap; }
 .cs-claim-row .outline-button { white-space: nowrap; }
 .cs-claim-section { margin: 10px 0 4px; font-size: 11px; letter-spacing: .06em; color: var(--muted, #888); border-bottom: 1px solid var(--border-subtle, #e3e3e0); padding-bottom: 2px; }
+.cs-claim-config-head { display: flex; align-items: center; justify-content: space-between; }
 .cs-claim-meta { line-height: 1.5; }
 .cs-test-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cs-test-row .grow { flex: 1 1 160px; min-width: 0; }
@@ -75,6 +77,25 @@ const STYLE = `
 .cs-tpl-del { border: 0; background: transparent; color: var(--muted, #888); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
 .cs-tpl-del:hover { color: var(--red, #c0392b); }
 .cs-suggest [data-cs-family] { margin-left: 6px; padding: 2px 10px; font-size: 12px; }
+.cs-dimstrip { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; }
+.cs-dim { font-size: 11.5px; border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 999px; padding: 2px 10px; color: var(--muted, #888); }
+.cs-dim.ok { color: var(--green, #2f9e79); border-color: var(--green, #2f9e79); }
+.cs-dim.warn { color: var(--gold, #c90); border-color: var(--gold, #c90); }
+.cs-trust { font-size: 11.5px; color: var(--muted, #888); line-height: 1.5; margin: 0 0 8px; padding: 6px 10px; border: 1px dashed var(--border-subtle, #e3e3e0); border-radius: 10px; }
+.cs-entry strong { font-size: 12.5px; }
+.cs-receipt { font-size: 11.5px; color: var(--muted, #888); margin: 4px 0; }
+.cs-quota { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted, #888); margin: 4px 0; }
+.cs-quota b { color: inherit; font-weight: 650; }
+.cs-tool-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
+.cs-tool-bar label { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted, #888); }
+.cs-tool-bar select { max-width: 180px; }
+.cs-pending { font-size: 11.5px; color: var(--gold, #c90); }
+.cs-flash { outline: 2px solid var(--gold, #c90); outline-offset: 2px; transition: outline .2s; }
+.cs-entry-items { display: grid; gap: 3px; margin-top: 4px; }
+.cs-entry-item { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.cs-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--gold, #c90); border-radius: 10px; margin: 0 0 6px; font-size: 12.5px; }
+.cs-confirm-text { flex: 1 1 240px; min-width: 0; }
+.cs-confirm .cs-grow { flex: 0 0 auto; }
 `;
 
 function compact(value) {
@@ -105,10 +126,205 @@ function clockText(ms) {
 // personal templates (module config laneTemplates) are user-saved presets.
 // Every prefilled number stays adjustable before saving.
 
+// ── 插件自治 i18n（0.1.0）───────────────────────────────────────────────
+// 文案变更不再依赖宿主 App 重编：插件字典优先，宿主 t() 兜底，最后回退 key
+// 本身（缺键可见，不静默）。所有 0.1.0 新增/改写的文案只住在这里——远端
+// repin 即生效。旧键继续走宿主（已在 App 内），需要改写时把它搬进来。
+const STRINGS = {
+  "zh-CN": {
+    "cs.entry.share": "我要分享",
+    "cs.entry.shareHint": "准备你的 CPA 节点并配置共享资源",
+    "cs.entry.steps": "准备步骤：① 本机安装并运行 CLIProxyAPI（CPA）；② 安装 atl-share 执行插件（scripts/install-cpa-plugin.sh）；③ 在 CPA 配置好 api 地址后本卡会自动检测并显示「我的分享」控制台。",
+    "cs.entry.check": "检查",
+    "cs.entry.item.identity": "共享节点身份",
+    "cs.entry.item.ownerConfig": "CPA 共享配置",
+    "cs.entry.item.apiBase": "后端地址",
+    "cs.entry.item.node": "节点心跳",
+    "cs.entry.missingIdentity": "尚未注册共享节点，请在 CPA 安装并启用 atl-share。",
+    "cs.entry.missingConfig": "缺少 CPA 共享配置，请配置后端地址并启动节点。",
+    "cs.entry.missingApi": "App 尚未配置后端地址。",
+    "cs.entry.apiMismatch": "CPA 后端 {cpaApi} 与 App 后端 {appApi} 不一致，请将两者配置到同一后端。",
+    "cs.entry.apiUnknown": "无法确认运行中 CPA 的后端地址，请等待节点心跳或检查 CPA 配置。",
+    "cs.entry.nodeAge": "上次成功心跳：{ageSeconds} 秒前",
+    "cs.entry.node.online": "在线",
+    "cs.entry.node.stale": "心跳陈旧",
+    "cs.entry.node.unknown": "状态未知",
+    "cs.entry.nodeStale": "最近成功心跳已过期，请检查 CPA 是否运行及后端是否可达。",
+    "cs.entry.nodeUnknown": "尚无有效心跳记录，请启动 CPA 并检查后端连接。",
+    "cs.claim.testPaused": "测试已暂停：卡片当前不可见，返回后可重新测试。",
+    "cs.claim.syncing": "等待节点同步（新 Key 随下一次心跳生效，约 8 秒）…",
+    "cs.status.controlPlane": "控制面",
+    "cs.status.heartbeat": "节点心跳",
+    "cs.status.resource": "资源状态",
+    "cs.status.myKey": "我的 Key",
+    "cs.status.fresh": "刚刚更新",
+    "cs.status.stale": "暂时无法更新",
+    "cs.sync.pending": "策略待节点同步",
+    "cs.sync.synced": "节点已应用",
+    "cs.owner.stale": "暂时无法更新（{error}）· 已保留上次视图",
+    "cs.owner.retry": "重试",
+    "cs.owner.pendingSync": "有策略变更尚未被节点应用，最长 10 分钟内生效",
+    "cs.lane.pause": "暂停",
+    "cs.lane.resume": "恢复",
+    "cs.lane.terminate": "终止",
+    "cs.lane.pausedBadge": "已暂停（Key 保留）",
+    "cs.lane.pauseConfirm": "暂停期间该车道拒绝新请求与新认领，已发 Key 保留且有效期继续。确定暂停？",
+    "cs.lane.pauseSaved": "车道已暂停（Key 保留，随时可恢复）",
+    "cs.lane.resumed": "车道已恢复",
+    "cs.lane.terminateConfirm": "终止将级联撤销该车道 {count} 个有效认领且不可恢复（与暂停不同）。确定终止？",
+    "cs.lane.terminated": "车道已终止",
+    "cs.claim.revoke": "撤销",
+    "cs.claim.revokeConfirm": "仅撤销这一个 Key，其他人不受影响。确定？",
+    "cs.claim.revokedOk": "已撤销该 Key",
+    "cs.policy.auto": "自动（车道内均分）",
+    "cs.suggest.reference": "参考比例",
+    "cs.suggest.referenceHint": "建议预算 = 近 7 天用量 × 参考比例，仅用于创建草稿，不保证自用额度，也不代表供应商剩余额度；创建后每个数都可改。",
+    "cs.error.lanePaused": "车道已暂停（Key 保留，等待恢复）",
+    "cs.claim.existing": "本机已有该资源有效 Key",
+    "cs.claim.viewConfig": "查看配置",
+    "cs.claim.claiming": "认领中…",
+    "cs.trust.note": "模型请求会经过分享者的 CPA 服务，分享者可能接触请求和响应内容；ATL 平台只接收共享管理与用量元数据。请只使用你信任的分享者。",
+    "cs.dim.fresh": "控制面刚刚更新",
+    "cs.dim.stale": "控制面暂时无法更新",
+    "cs.dim.nodesUnknown": "节点状态未知",
+    "cs.dim.claimableUnknown": "可认领资源待更新",
+    "cs.dim.nodes": "节点 {n} 在线 / {total}",
+    "cs.dim.claimable": "{n} 条车道可认领",
+    "cs.dim.keys": "我的 Key {n} 个有效",
+    "cs.receipt.removed": "已清理 {n} 条失效认领：{list}",
+    "cs.models.loading": "正在获取模型目录…",
+    "cs.models.unavailable": "模型目录不可用（{error}）——请手动填写模型名",
+    "cs.models.empty": "该车道范围在目录中无具体模型——请手动填写",
+    "cs.models.pick": "模型",
+    "cs.models.manual": "手动输入…",
+    "cs.tool.title": "接入配置",
+    "cs.tool.select": "目标工具",
+    "cs.tool.claude": "Claude Code",
+    "cs.tool.codex": "Codex CLI",
+    "cs.tool.openai": "通用 OpenAI 兼容",
+    "cs.tool.anthropic": "通用 Anthropic 兼容",
+    "cs.tool.shell": "Shell",
+    "cs.tool.copyAll": "复制全部",
+    "cs.tool.copied": "已复制",
+    "cs.tool.note": "以上变量仅当前终端会话生效（重启工具后失效）；不会写入你的配置文件。",
+    "cs.tool.codexToml": "Codex 持久配置（粘贴到 ~/.codex/config.toml 后重启 Codex）",
+    "cs.tool.codexNote": "Codex 0.14x 仅靠环境变量不会离开 ChatGPT 账号路径——需要下面的 provider 配置才会走共享端点；上面的环境变量仍供其他 OpenAI 兼容工具使用。粘贴后重启 Codex 生效。",
+    "cs.quota.title": "额度",
+    "cs.quota.keyCap": "单 Key 上限",
+    "cs.quota.charged": "本窗口已计费",
+    "cs.quota.raw": "累计原始用量",
+    "cs.quota.laneAvail": "车道剩余",
+    "cs.quota.auto": "自动均分",
+    "cs.confirm.ok": "确认",
+    "cs.confirm.cancel": "取消",
+    cs_placeholder: null,
+  },
+  en: {
+    "cs.entry.share": "I want to share",
+    "cs.entry.shareHint": "Prepare your CPA node and configure shared resources",
+    "cs.entry.steps": "Steps: ① install and run CLIProxyAPI (CPA) on this machine; ② install the atl-share execution plugin (scripts/install-cpa-plugin.sh); ③ once the api address is configured in CPA, this card detects it and shows the My Shares console.",
+    "cs.entry.check": "Check",
+    "cs.entry.item.identity": "Share node identity",
+    "cs.entry.item.ownerConfig": "CPA share config",
+    "cs.entry.item.apiBase": "Backend address",
+    "cs.entry.item.node": "Node heartbeat",
+    "cs.entry.missingIdentity": "No share node is registered. Install and enable atl-share in CPA.",
+    "cs.entry.missingConfig": "CPA share config is missing. Configure the backend address and start the node.",
+    "cs.entry.missingApi": "The app has no backend address configured.",
+    "cs.entry.apiMismatch": "CPA uses {cpaApi}, but the app uses {appApi}. Configure both to use the same backend.",
+    "cs.entry.apiUnknown": "The running CPA backend address is unknown. Wait for a heartbeat or check CPA configuration.",
+    "cs.entry.nodeAge": "Last successful heartbeat: {ageSeconds}s ago",
+    "cs.entry.node.online": "Online",
+    "cs.entry.node.stale": "Stale heartbeat",
+    "cs.entry.node.unknown": "Unknown status",
+    "cs.entry.nodeStale": "The last successful heartbeat is stale. Check that CPA is running and the backend is reachable.",
+    "cs.entry.nodeUnknown": "No valid heartbeat is available. Start CPA and check its backend connection.",
+    "cs.claim.testPaused": "Test paused because this card is hidden. Run Test again when you return.",
+    "cs.claim.syncing": "Waiting for node sync (the new key activates with the next heartbeat, ~8s)…",
+    "cs.confirm.ok": "Confirm",
+    "cs.confirm.cancel": "Cancel",
+    "cs.status.controlPlane": "Control plane",
+    "cs.status.heartbeat": "Node heartbeat",
+    "cs.status.resource": "Resource",
+    "cs.status.myKey": "My key",
+    "cs.status.fresh": "just updated",
+    "cs.status.stale": "update failed",
+    "cs.sync.pending": "policy pending node sync",
+    "cs.sync.synced": "node applied",
+    "cs.owner.stale": "Temporarily unable to update ({error}) · last view kept",
+    "cs.owner.retry": "Retry",
+    "cs.owner.pendingSync": "Policy changes not applied by the node yet; effective within ~10 minutes",
+    "cs.lane.pause": "Pause",
+    "cs.lane.resume": "Resume",
+    "cs.lane.terminate": "Terminate",
+    "cs.lane.pausedBadge": "Paused (keys kept)",
+    "cs.lane.pauseConfirm": "While paused the lane rejects requests and new claims; issued keys are kept with TTL running. Pause?",
+    "cs.lane.pauseSaved": "Lane paused (keys kept, resumable anytime)",
+    "cs.lane.resumed": "Lane resumed",
+    "cs.lane.terminateConfirm": "Terminating cascade-revokes {count} valid claim(s) on this lane and cannot be undone (unlike pause). Terminate?",
+    "cs.lane.terminated": "Lane terminated",
+    "cs.claim.revoke": "Revoke",
+    "cs.claim.revokeConfirm": "Revokes only this key; other borrowers are unaffected. Continue?",
+    "cs.claim.revokedOk": "Key revoked",
+    "cs.policy.auto": "Auto (fair split inside the lane)",
+    "cs.suggest.reference": "Reference ratio",
+    "cs.suggest.referenceHint": "Suggested budget = last 7 days of usage × reference ratio. Draft-only: it does not reserve your own quota and does not reflect provider balance; every number is editable after creation.",
+    "cs.error.lanePaused": "Lane paused (keys kept, waiting for resume)",
+    "cs.claim.existing": "You already hold a valid key for this resource",
+    "cs.claim.viewConfig": "View config",
+    "cs.claim.claiming": "Claiming…",
+    "cs.trust.note": "Model requests pass through the sharer's CPA service; the sharer may see request and response content. The ATL platform only receives sharing-management and usage metadata. Use sharers you trust.",
+    "cs.dim.fresh": "control plane just updated",
+    "cs.dim.stale": "control plane update failed",
+    "cs.dim.nodesUnknown": "node status unknown",
+    "cs.dim.claimableUnknown": "claimable resources unknown",
+    "cs.dim.nodes": "{n}/{total} nodes online",
+    "cs.dim.claimable": "{n} lanes claimable",
+    "cs.dim.keys": "{n} valid keys of mine",
+    "cs.receipt.removed": "Removed {n} dead claims: {list}",
+    "cs.models.loading": "Loading model catalog…",
+    "cs.models.unavailable": "Model catalog unavailable ({error}) — enter the model name manually",
+    "cs.models.empty": "No concrete model in this lane's scope — enter the model name manually",
+    "cs.models.pick": "Model",
+    "cs.models.manual": "Manual entry…",
+    "cs.tool.title": "Connect a tool",
+    "cs.tool.select": "Target tool",
+    "cs.tool.claude": "Claude Code",
+    "cs.tool.codex": "Codex CLI",
+    "cs.tool.openai": "Generic OpenAI-compatible",
+    "cs.tool.anthropic": "Generic Anthropic-compatible",
+    "cs.tool.shell": "Shell",
+    "cs.tool.copyAll": "Copy all",
+    "cs.tool.copied": "Copied",
+    "cs.tool.note": "These variables apply to the current terminal session only (gone after restarting the tool); nothing is written to your config files.",
+    "cs.tool.codexToml": "Persistent Codex config (paste into ~/.codex/config.toml, then restart Codex)",
+    "cs.tool.codexNote": "Codex 0.14x ignores bare env vars and stays on its ChatGPT account path — the provider config below is what routes it to the shared endpoint; the env vars above still serve other OpenAI-compatible tools. Restart Codex after pasting.",
+    "cs.quota.title": "Quota",
+    "cs.quota.keyCap": "Per-key cap",
+    "cs.quota.charged": "Charged this window",
+    "cs.quota.raw": "Raw lifetime usage",
+    "cs.quota.laneAvail": "Lane remaining",
+    "cs.quota.auto": "auto fair split",
+    cs_placeholder: null,
+  },
+};
+
 export default {
   async mount(el, ctx) {
     const esc = ctx.escapeHtml;
-    const t = ctx.t;
+    // 语言来自宿主通用能力 lang()（旧宿主退回 <html lang>/浏览器语言）。
+    // tt 查找顺序：插件字典 → 宿主 t() → key 本身。
+    const langOf = () => {
+      const raw = (ctx.lang ? ctx.lang() : "") || document.documentElement.lang || navigator.language || "";
+      return String(raw).toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+    };
+    const interpolate = (text, params) => String(text).replace(/\{(\w+)\}/g, (_, name) => (params && name in params ? String(params[name]) : `{${name}}`));
+    const t = (key, params) => {
+      const dict = STRINGS[langOf()] || STRINGS["zh-CN"];
+      if (dict && Object.prototype.hasOwnProperty.call(dict, key)) return interpolate(dict[key], params);
+      if (typeof ctx.t === "function") return ctx.t(key, params);
+      return key;
+    };
 
     let style = document.getElementById("compute-sharing-style");
     if (!style) {
@@ -133,6 +349,9 @@ export default {
       <div class="cs-board" data-cs="board" hidden>
         <section>
           <div class="modules-section-title" style="margin:2px 0 6px">${esc(t("desktop.sharing.borrow.section"))}</div>
+          <div class="cs-dimstrip" data-cs="dimstrip"></div>
+          <div class="cs-trust" data-cs="trust">${esc(t("cs.trust.note"))}</div>
+          <div data-cs="entry" hidden></div>
           <div data-cs="directory" aria-live="polite"></div>
         </section>
         <section>
@@ -149,10 +368,36 @@ export default {
       board: el.querySelector('[data-cs="board"]'),
       owner: el.querySelector('[data-cs="owner"]'),
       ownerBody: el.querySelector('[data-cs="owner-body"]'),
+      dimstrip: el.querySelector('[data-cs="dimstrip"]'),
+      trust: el.querySelector('[data-cs="trust"]'),
+      entry: el.querySelector('[data-cs="entry"]'),
       directory: el.querySelector('[data-cs="directory"]'),
       mine: el.querySelector('[data-cs="mine"]'),
       status: el.querySelector('[data-cs="status"]'),
     };
+
+    // wry（Tauri webview）不渲染 JS 对话框：window.confirm 静默返回 false，
+    // 所有确认门控动作在真机上都是无声 no-op（2026-09-20 真机复验发现）。
+    // 统一改为卡内确认条：消息 + 确认/取消，返回 Promise<boolean>。
+    let confirmBar = null;
+    const askConfirm = (text) => new Promise((resolve) => {
+      if (confirmBar) confirmBar.remove();
+      confirmBar = document.createElement("div");
+      confirmBar.className = "cs-confirm";
+      confirmBar.innerHTML = `<span class="cs-confirm-text"></span>
+        <span class="cs-grow"></span>
+        <button class="outline-button" type="button" data-cs-confirm-no></button>
+        <button class="primary-pill" type="button" data-cs-confirm-yes></button>`;
+      confirmBar.querySelector(".cs-confirm-text").textContent = text;
+      const no = confirmBar.querySelector("[data-cs-confirm-no]");
+      const yes = confirmBar.querySelector("[data-cs-confirm-yes]");
+      no.textContent = t("cs.confirm.cancel");
+      yes.textContent = t("cs.confirm.ok");
+      const done = (answer) => { confirmBar.remove(); confirmBar = null; resolve(answer); };
+      no.addEventListener("click", () => done(false));
+      yes.addEventListener("click", () => done(true));
+      (els.owner.hidden ? els.board : els.owner).prepend(confirmBar);
+    });
 
     const busy = (on) => {
       const button = el.querySelector('[data-cs="refresh"]');
@@ -163,48 +408,18 @@ export default {
     // older hosts; errors keep the persistent in-card status line.
     const notify = (text) => (ctx.notify ? ctx.notify(text, { duration: 4000 }) : message(text));
     const guard = async (fn) => {
+      const focused = document.activeElement;
       busy(true);
-      try { await fn(); } catch (error) { message(String(error.message || error)); } finally { busy(false); }
+      try { await fn(); } catch (error) { message(String(error.message || error)); } finally {
+        busy(false);
+        // Disabling the initiating button blurs it in Chromium/WebKit. Restore
+        // only if nothing else gained focus while the operation was running.
+        if (document.activeElement === document.body && focused?.isConnected && focused.offsetParent !== null) {
+          focused.focus({ preventScroll: true });
+        }
+      }
     };
 
-    async function apiPost(path, body) {
-      const base = ctx.apiBase && ctx.apiBase();
-      if (!base) throw new Error(t("desktop.sharing.borrow.noCloud"));
-      const response = await fetch(`${base}${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(8000),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const errorKey = {
-          share_offline: "web.sharing.offline",
-          budget_exhausted: "web.sharing.exhausted",
-          lane_exhausted: "desktop.sharing.borrow.laneExhausted",
-          lane_closed: "desktop.sharing.borrow.laneClosed",
-          lane_suspended: "desktop.sharing.borrow.laneSuspended",
-          lane_required: "desktop.sharing.borrow.laneRequired",
-          lane_not_found: "desktop.sharing.borrow.laneRequired",
-          no_claim_slots: "web.sharing.claimFull",
-          rate_limited: "desktop.sharing.borrow.rateLimited",
-          identity_required: "desktop.sharing.borrow.identityFailed",
-          participant_not_registered: "desktop.sharing.borrow.identityFailed",
-          invalid_signature: "desktop.sharing.borrow.identityFailed",
-          claim_not_found: "desktop.sharing.borrow.claimGone",
-          share_not_active: "web.sharing.paused",
-          too_many_active_claims: "desktop.sharing.borrow.tooManyClaims",
-        }[data.error];
-        if (data.error === "too_many_active_claims") {
-          throw new Error(t("desktop.sharing.borrow.tooManyClaims", { active: String(data.active ?? "?"), max: String(data.max ?? "?") }));
-        }
-        const detail = data.retryAfterMs
-          ? t("desktop.sharing.borrow.retryAt", { time: clockText(Date.now() + data.retryAfterMs) })
-          : "";
-        throw new Error(errorKey ? (detail ? `${t(errorKey)} · ${detail}` : t(errorKey)) : (data.error || `HTTP ${response.status}`));
-      }
-      return data;
-    }
 
     // ── 我的分享（owner 控制台；未注册整区隐藏） ─────────────────────────
     // Share-level knobs kept after lanes moved budget/maxClaims into lanes.
@@ -227,10 +442,13 @@ export default {
 
     // lane edit state: null = closed; {isNew, index, draft fields}
     let laneEditor = null;
-    let showAllClaims = false;
+    // R2-06A: focused lane-editor field across refresh rebuilds
+    let laneFocus = null;
     // Tab categorization: owners get 我的分享/算力借用; pure borrowers keep a
     // single-column card (no tab bar). Selection survives refreshes.
-    let activeTab = "owner";
+    // §4.1: borrow is the default surface — sharing is opt-in, and a pure
+    // borrower should never land inside an owner console first.
+    let activeTab = "borrow";
     // "pending" until the first owner-status settles — the tab bar's
     // data-owner attribute is the test/UX contract that removes the
     // board-temporarily-visible race for pure borrowers
@@ -276,13 +494,14 @@ export default {
     };
 
     function laneDot(lane) {
-      if (lane.state === "suspended") return "paused";
+      if (lane.state === "suspended" || lane.state === "paused") return "paused";
       if (!lane.open) return "off";
       if (lane.exhausted) return "paused";
       return "on";
     }
     const laneStatusText = (lane) => {
       if (lane.state === "suspended") return `<span class="cs-state">${esc(t("desktop.sharing.lane.paused"))}</span>`;
+      if (lane.state === "paused") return `<span class="cs-state">${esc(t("cs.lane.pausedBadge"))}</span>`;
       if (!lane.open) return `${esc(t("desktop.sharing.lane.closedUntil"))} · ${esc(clockText(Date.now() + (lane.retryAfterMs || 0)))}`;
       if (lane.exhausted) return `<span class="cs-state">${esc(t("desktop.sharing.lane.exhausted"))}</span> ${esc(t("desktop.sharing.lane.resetAt", { time: clockText(lane.windowEndsAtMs || Date.now()) }))}`;
       return esc(t("web.sharing.online"));
@@ -313,7 +532,12 @@ export default {
             <span class="cs-muted">${esc(t("desktop.sharing.lane.slots"))}: ${esc(String(lane.slotsLeft))}/${esc(String(lane.maxClaims))}</span>
             <span class="cs-grow"></span>
             <button class="outline-button" type="button" data-cs-lane-edit="${index}">${esc(t("desktop.sharing.lane.edit"))}</button>
-            <button class="outline-button" type="button" data-cs-lane-toggle="${index}">${esc(t(lane.state === "suspended" ? "desktop.sharing.lane.resumeLane" : "desktop.sharing.lane.pause"))}</button>
+            ${lane.state === "paused"
+              ? `<button class="outline-button" type="button" data-cs-lane-resume2="${index}">${esc(t("cs.lane.resume"))}</button>`
+              : lane.state === "suspended"
+                ? `<span class="cs-state">${esc(t("desktop.sharing.lane.paused"))}</span>`
+                : `<button class="outline-button" type="button" data-cs-lane-pause="${index}">${esc(t("cs.lane.pause"))}</button>`}
+            ${lane.state !== "suspended" ? `<button class="cs-tpl-del" type="button" data-cs-lane-terminate="${index}" title="${esc(t("cs.lane.terminate"))}">${esc(t("cs.lane.terminate"))}</button>` : ""}
           </div>
         </div>`;
     }
@@ -368,6 +592,19 @@ export default {
         if (live) Object.assign(laneEditor.draft, live);
       }
       skipFormReadback = false;
+      // QA-06/R2-06: keep unsaved policy edits + focus across the rebuild,
+      // and the lane editor's focused field + selection too (values already
+      // ride via readLaneForm → draft)
+      capturePolicyEdits(els.ownerBody);
+      laneFocus = null;
+      const focusedLaneField = els.ownerBody.querySelector('[data-cs="lane-form"] [data-cs-f]:focus');
+      if (focusedLaneField) {
+        laneFocus = {
+          name: focusedLaneField.dataset.csF,
+          selStart: focusedLaneField.selectionStart,
+          selEnd: focusedLaneField.selectionEnd,
+        };
+      }
       applyTabs();
       if (!share.shareId) {
         els.ownerBody.innerHTML = "";
@@ -388,12 +625,23 @@ export default {
         els.ownerBody.querySelector('[data-cs="resume"]').addEventListener("click", () => guard(async () => {
           await ctx.invoke("compute-sharing:owner-resume", {});
           notify(t("desktop.sharing.owner.resumed"));
-          await refresh();
+          await refresh({ forceShares: true });
         }));
         return;
       }
       const lanes = share.lanes || [];
       const wall = share.wallSignal;
+      // §5.3: transient owner-status failures keep the view and say so; the
+      // definitive not_registered already collapsed the section upstream
+      const staleBanner = ownerStaleError
+        ? `<div class="cs-wall"><span>⚠️</span><span>${esc(t("cs.owner.stale", { error: ownerStaleError }))}</span>
+            <button class="outline-button" type="button" data-cs="retryOwner">${esc(t("cs.owner.retry"))}</button></div>`
+        : "";
+      // §8: accepted vs applied — the backend bumped policyRev but the node
+      // hasn't acked yet (fail-closed staleness bounds this at ~10 minutes)
+      const pendingSync = (share.policyRev || 1) > (share.policyAckedRev || 0)
+        ? `<div class="cs-pending">${esc(t("cs.owner.pendingSync"))} (${share.policyAckedRev || 0}/${share.policyRev || 1})</div>`
+        : "";
       // R53-1: advisory endpoint misconfiguration (LAN baseURL + loopback
       // CPA bind) — loud from day one, right where the owner looks
       const endpointWarn = data.pluginStatus && data.pluginStatus.endpointWarning
@@ -407,22 +655,20 @@ export default {
       const claimRow = (c) => `
         <div class="cs-kv" style="${c.state !== "valid" ? "opacity:.55" : ""}">
           <span>${esc(c.borrower || c.keyId)}${c.displayId ? ` <span class="cs-muted" title="${esc(c.displayId)}">${esc(shortId(c.displayId))}</span>` : ""}${c.laneId ? ` <span class="cs-lane-tag">${esc(laneLabelOf(c.laneId))}</span>` : ""} · <span class="num">${esc(String(c.keyId).slice(0, 11))}…</span></span>
-          <span class="num">${esc(compact(c.usedTokens))} · ${esc(claimStateText(c.state))}</span>
+          <span class="cs-actions">
+            <span class="num">${esc(compact(c.usedTokens))} · ${esc(claimStateText(c.state))}</span>
+            ${c.state === "valid" ? `<button class="cs-tpl-del" type="button" data-cs-claim-revoke="${esc(c.keyId)}" title="${esc(t("cs.claim.revoke"))}">${esc(t("cs.claim.revoke"))}</button>` : ""}
+          </span>
         </div>`;
-      // valid claims always show; the ended tail collapses to a recent slice so
-      // the console stays readable as history accumulates
-      const ENDED_SHOWN = 4;
-      const ended = claims.filter((c) => c.state !== "valid");
-      let endedShown = 0;
+      // dead claims carry no console value (user decision): only valid,
+      // unexpired claims are listed — the backend and admin view keep the
+      // full audit trail
       const rows = claims
-        .filter((c) => c.state === "valid" || showAllClaims || endedShown++ < ENDED_SHOWN)
+        .filter((c) => c.state === "valid" && c.expiresAt > Date.now())
         .map(claimRow)
         .join("");
-      const claimsToggle = ended.length > ENDED_SHOWN
-        ? `<button class="outline-button" type="button" data-cs="claimsToggle">${esc(t(showAllClaims ? "desktop.sharing.owner.claimsCollapse" : "desktop.sharing.owner.claimsShowAll", { n: String(ended.length) }))}</button>`
-        : "";
       els.ownerBody.innerHTML = `
-        ${endpointWarn}${wallBanner}
+        ${staleBanner}${endpointWarn}${wallBanner}${pendingSync}
         <div class="cs-row">
           <div class="cs-kv"><strong>${esc(share.title || share.shareId)}</strong>
             <span>${esc(t("web.sharing.online"))}${share.plugin && share.plugin.online ? "" : ` · ${esc(t("desktop.sharing.owner.pluginOffline"))}${pluginOfflineReason(data)}`}</span></div>
@@ -431,18 +677,30 @@ export default {
           ${renderLaneEditor(lanes)}
           ${laneEditor ? "" : templateBlock()}
           ${suggestBlock()}
-          ${rows ? `<div class="cs-muted">${esc(t("desktop.sharing.owner.claims"))}</div>${rows}${claimsToggle}` : `<div class="cs-muted">${esc(t("desktop.sharing.owner.noClaims"))}</div>`}
+          ${rows ? `<div class="cs-muted">${esc(t("desktop.sharing.owner.claims"))}</div>${rows}` : `<div class="cs-muted">${esc(t("desktop.sharing.owner.noClaims"))}</div>`}
+          <div class="cs-actions">
+            <span class="cs-grow"></span>
+            <button class="outline-button" type="button" data-cs="stop">${esc(t("desktop.sharing.owner.stop"))}</button>
+          </div>
         </div>
         <div class="cs-row">
           <div class="cs-muted">${esc(t("desktop.sharing.owner.advanced"))}</div>
           <div class="cs-fields">${ownerFieldDefs.map(([key, labelKey]) => `
-            <label>${esc(t(labelKey))}<input data-cs-policy="${key}" type="number" step="1" placeholder="${esc(String((share.policy && share.policy[key]) ?? ""))}" /></label>`).join("")}
+            <label>${esc(t(labelKey))}<input data-cs-policy="${key}" type="number" step="1" value="${esc(String((share.policy && share.policy[key]) ?? ""))}" /></label>`).join("")}
           </div>
           <div class="cs-actions">
+            <span class="cs-grow"></span>
             <button class="outline-button" type="button" data-cs="savePolicy">${esc(t("desktop.sharing.owner.savePolicy"))}</button>
-            <button class="outline-button" type="button" data-cs="stop">${esc(t("desktop.sharing.owner.stop"))}</button>
           </div>
         </div>`;
+      applyPolicyEdits(els.ownerBody);
+      if (laneFocus) {
+        const field = els.ownerBody.querySelector(`[data-cs="lane-form"] [data-cs-f="${laneFocus.name}"]`);
+        if (field) {
+          field.focus();
+          try { field.setSelectionRange(laneFocus.selStart, laneFocus.selEnd); } catch { /* selects have no ranges */ }
+        }
+      }
       applyTabs();
       wireOwnerEvents(lanes);
     }
@@ -488,19 +746,27 @@ export default {
       await ctx.invoke("compute-sharing:owner-policy", { lanes });
       notify(t(successKey));
       laneEditor = null;
-      await refresh();
+      // lane/policy writes change what the borrower directory shows — force
+      // the shares refetch or the directory keeps stale lanes until a manual
+      // refresh
+      await refresh({ forceShares: true });
     }
 
     // lanes wire format: budget/schedule/peak nests; id/title/models flat.
     // Accepts view-shaped lanes (models array, schedule/peak view) — the only
     // shape owner-status and the editor produce.
     function toWireLane(lane) {
+      // Draft lanes carry windowUnit/windowN; pass-through lanes (untouched
+      // owner-status views) carry window:{unit,n}. Read both or every save
+      // silently degrades the unedited lanes' budget window to day/1.
+      const windowUnit = lane.windowUnit || (lane.window && lane.window.unit) || "day";
+      const windowN = lane.windowN != null ? lane.windowN : (lane.window && lane.window.n);
       const wire = {
         id: lane.id,
         title: lane.title,
         models: Array.isArray(lane.models) ? lane.models : String(lane.models).split(",").map((m) => m.trim()).filter(Boolean),
         budget: { tokens: lane.budgetTokens },
-        window: { unit: lane.windowUnit || "day", n: Math.max(1, Math.round(Number(lane.windowN) || 1)) },
+        window: { unit: windowUnit, n: Math.max(1, Math.round(Number(windowN) || 1)) },
         maxClaims: lane.maxClaims,
         state: lane.state,
       };
@@ -514,6 +780,9 @@ export default {
     }
 
     function wireOwnerEvents(lanes) {
+      for (const input of els.ownerBody.querySelectorAll("[data-cs-policy]")) {
+        input.addEventListener("input", () => policyDirty.add(input.dataset.csPolicy));
+      }
       const savePolicy = els.ownerBody.querySelector('[data-cs="savePolicy"]');
       if (savePolicy) savePolicy.addEventListener("click", () => guard(async () => {
         const policy = {};
@@ -526,15 +795,20 @@ export default {
         }
         if (!Object.keys(policy).length) throw new Error(t("desktop.sharing.owner.policyEmpty"));
         await ctx.invoke("compute-sharing:owner-policy", { policy });
+        for (const key of Object.keys(policy)) {
+          policyDraft.delete(key);
+          policyDirty.delete(key);
+        }
+        policyFocus = null;
         notify(t("desktop.sharing.owner.policySaved"));
-        await refresh();
+        await refresh({ forceShares: true });
       }));
       const stop = els.ownerBody.querySelector('[data-cs="stop"]');
       if (stop) stop.addEventListener("click", () => guard(async () => {
-        if (!window.confirm(t("desktop.sharing.owner.stopConfirm"))) return;
+        if (!(await askConfirm(t("desktop.sharing.owner.stopConfirm")))) return;
         await ctx.invoke("compute-sharing:owner-unregister", {});
         notify(t("desktop.sharing.owner.stopped"));
-        await refresh();
+        await refresh({ forceShares: true });
       }));
 
       for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-edit]")) {
@@ -612,10 +886,10 @@ export default {
       }
       const reserveInput = els.ownerBody.querySelector('[data-cs="reserve"]');
       if (reserveInput) reserveInput.addEventListener("change", () => guard(async () => {
-        const value = Math.min(95, Math.max(5, Math.round(Number(reserveInput.value) || 25)));
+        const value = Math.min(95, Math.max(5, Math.round(Number(reserveInput.value) || 75)));
         reserveInput.value = String(value);
-        cardConfig.reservePct = value;
-        await saveCardConfig({ reservePct: value });
+        cardConfig.referencePct = value;
+        await saveCardConfig({ referencePct: value });
         renderOwnerLast();
       }));
       const laneSaveTpl = els.ownerBody.querySelector('[data-cs="laneSaveTpl"]');
@@ -635,30 +909,53 @@ export default {
         await saveCardConfig({ laneTemplates: list });
         notify(t("desktop.sharing.lane.templateSaved"));
       }));
-      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-toggle]")) {
+      // CS-07/D2: per-lane lifecycle over the dedicated lane-action API —
+      // pause keeps keys (TTL running), resume brings the same keys back,
+      // terminate cascades and is confirmed like 停止分享.
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-pause]")) {
         button.addEventListener("click", () => guard(async () => {
-          const index = Number(button.dataset.csLaneToggle);
-          const lane = lanes[index];
-          const suspending = lane.state !== "suspended";
-          // Pausing revokes every borrower key on this lane (review B5):
-          // same destructive weight as 停止分享, so it confirms first.
-          if (suspending && !window.confirm(t("desktop.sharing.lane.pauseConfirm", { count: String(lanes ? laneSlotsUsedOf(lanes, lane.id) : 0) }))) return;
-          const next = lanes.map((l, i) => (i === index ? { ...l, state: l.state === "suspended" ? "active" : "suspended" } : l));
-          await saveLanes(next.map(toWireLane), {
-            successKey: suspending ? "desktop.sharing.lane.pausedSaved" : "desktop.sharing.lane.resumed",
-          });
+          const lane = lanes[Number(button.dataset.csLanePause)];
+          if (!(await askConfirm(t("cs.lane.pauseConfirm")))) return;
+          await ctx.invoke("compute-sharing:owner-lane-action", { laneId: lane.id, action: "pause" });
+          notify(t("cs.lane.pauseSaved"));
+          await refresh({ forceShares: true });
         }));
       }
-      const claimsToggle = els.ownerBody.querySelector('[data-cs="claimsToggle"]');
-      if (claimsToggle) claimsToggle.addEventListener("click", () => {
-        showAllClaims = !showAllClaims;
-        renderOwnerLast();
-      });
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-resume2]")) {
+        button.addEventListener("click", () => guard(async () => {
+          const lane = lanes[Number(button.dataset.csLaneResume2)];
+          await ctx.invoke("compute-sharing:owner-lane-action", { laneId: lane.id, action: "resume" });
+          notify(t("cs.lane.resumed"));
+          await refresh({ forceShares: true });
+        }));
+      }
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-lane-terminate]")) {
+        button.addEventListener("click", () => guard(async () => {
+          const lane = lanes[Number(button.dataset.csLaneTerminate)];
+          if (!(await askConfirm(t("cs.lane.terminateConfirm", { count: String(laneSlotsUsedOf(lanes, lane.id)) })))) return;
+          await ctx.invoke("compute-sharing:owner-lane-action", { laneId: lane.id, action: "terminate" });
+          notify(t("cs.lane.terminated"));
+          await refresh({ forceShares: true });
+        }));
+      }
+      // CS-07: single-key revoke from the owner console — scoped to this
+      // share, idempotent, other borrowers untouched
+      for (const button of els.ownerBody.querySelectorAll("[data-cs-claim-revoke]")) {
+        button.addEventListener("click", () => guard(async () => {
+          const keyId = button.dataset.csClaimRevoke;
+          if (!(await askConfirm(t("cs.claim.revokeConfirm")))) return;
+          await ctx.invoke("compute-sharing:owner-revoke-claim", { keyId, reason: "owner_console" });
+          notify(t("cs.claim.revokedOk"));
+          await refresh({ forceShares: true });
+        }));
+      }
+      const retryOwner = els.ownerBody.querySelector('[data-cs="retryOwner"]');
+      if (retryOwner) retryOwner.addEventListener("click", () => guard(() => refresh({ forceShares: true })));
       const laneCancel = els.ownerBody.querySelector('[data-cs="laneCancel"]');
       if (laneCancel) laneCancel.addEventListener("click", () => { laneEditor = null; renderOwnerLast(); });
       const laneDelete = els.ownerBody.querySelector('[data-cs="laneDelete"]');
       if (laneDelete) laneDelete.addEventListener("click", () => guard(async () => {
-        if (!window.confirm(t("desktop.sharing.lane.deleteConfirm"))) return;
+        if (!(await askConfirm(t("desktop.sharing.lane.deleteConfirm")))) return;
         const id = laneEditor.draft.id;
         await saveLanes(lanes.filter((l) => l.id !== id).map(toWireLane), { successKey: "desktop.sharing.lane.deleted" });
       }));
@@ -713,6 +1010,36 @@ export default {
 
     let lastOwnerData = {};
     const renderOwnerLast = () => renderOwner(lastOwnerData);
+    // QA-06: 未保存的策略草稿与服务端快照分离——15s 合并刷新重建 owner 区时，
+    // 已输入未保存的值、焦点和选区都必须原样保留；保存成功或用户清空才回落
+    const policyDraft = new Map(); // key -> string (ONLY user-dirty fields)
+    const policyDirty = new Set(); // keys the user actually typed into
+    let policyFocus = null; // { key, selStart, selEnd }
+    const capturePolicyEdits = (root) => {
+      // Focus belongs only to this render's active element, never a past edit.
+      policyFocus = null;
+      for (const input of root.querySelectorAll("[data-cs-policy]")) {
+        const key = input.dataset.csPolicy;
+        // R2-06B: only USER-MODIFIED fields persist as drafts — untouched
+        // fields follow the authoritative server snapshot on refresh
+        if (policyDirty.has(key)) policyDraft.set(key, String(input.value ?? ""));
+        if (input === document.activeElement) {
+          policyFocus = { key, selStart: input.selectionStart, selEnd: input.selectionEnd };
+        }
+      }
+    };
+    const applyPolicyEdits = (root) => {
+      for (const input of root.querySelectorAll("[data-cs-policy]")) {
+        const key = input.dataset.csPolicy;
+        if (policyDirty.has(key) && policyDraft.has(key)) input.value = policyDraft.get(key);
+        if (policyFocus && policyFocus.key === key && document.activeElement !== input) {
+          input.focus();
+          try {
+            input.setSelectionRange(policyFocus.selStart, policyFocus.selEnd);
+          } catch { /* number inputs may not support ranges */ }
+        }
+      }
+    };
 
     // Lane budget suggestions (R49 productized): the sidecar derives usage
     // families + busy windows from the owner's own CPA usage; the card turns
@@ -727,12 +1054,22 @@ export default {
 
     // card-side config: reserve ratio + personal lane templates, persisted in
     // the module config store (same channel the zhipu-plan card uses)
-    let cardConfig = { reservePct: 25, laneTemplates: [] };
+    let cardConfig = { referencePct: 75, laneTemplates: [] };
     ctx.invoke("modules:get", {}).then((state) => {
       const entry = ((state || {}).modules || {})["compute-sharing"] || {};
       const config = entry.config || {};
+      // F03 migration: 旧「自留率」(reservePct, 建议预算 = 用量 × (1 − 自留))
+      // 是对不存在的额度预留的承诺；改为「参考比例」(referencePct, 建议
+      // 预算 = 用量 × 参考比例)。一次迁移：reference = 100 − reserve，
+      // 写新字段，不改已发布车道的预算。
+      const reference = Number(config.referencePct);
       const reserve = Number(config.reservePct);
-      if (Number.isFinite(reserve)) cardConfig.reservePct = Math.min(95, Math.max(5, Math.round(reserve)));
+      if (Number.isFinite(reference)) {
+        cardConfig.referencePct = Math.min(95, Math.max(5, Math.round(reference)));
+      } else if (Number.isFinite(reserve)) {
+        cardConfig.referencePct = Math.min(95, Math.max(5, Math.round(100 - reserve)));
+        saveCardConfig({ referencePct: cardConfig.referencePct });
+      }
       if (Array.isArray(config.laneTemplates)) {
         cardConfig.laneTemplates = config.laneTemplates.filter((tpl) => tpl && tpl.models && Number.isFinite(Number(tpl.budget))).slice(0, 6);
       }
@@ -741,7 +1078,7 @@ export default {
     const saveCardConfig = (patch) => ctx.invoke("modules:set", { id: "compute-sharing", config: patch })
       .catch(() => { /* keep UI state even if persistence fails */ });
 
-    const suggestedBudget = (weeklyTokens) => Math.max(1000, Math.round(weeklyTokens * (1 - cardConfig.reservePct / 100)));
+    const suggestedBudget = (weeklyTokens) => Math.max(1000, Math.round(weeklyTokens * (cardConfig.referencePct / 100)));
 
     function suggestBlock() {
       const families = (suggestData && suggestData.families) || [];
@@ -762,11 +1099,11 @@ export default {
       return `<div class="cs-suggest">
         <div class="cs-suggest-head">
           <strong>${esc(t("desktop.sharing.suggest.title"))}</strong>
-          <label class="cs-reserve">${esc(t("desktop.sharing.suggest.reserve"))} <input data-cs="reserve" type="number" min="5" max="95" step="1" value="${esc(String(cardConfig.reservePct))}" />%</label>
+          <label class="cs-reserve">${esc(t("cs.suggest.reference"))} <input data-cs="reserve" type="number" min="5" max="95" step="1" value="${esc(String(cardConfig.referencePct))}" />%</label>
         </div>
         ${familyLines.map((line) => `<div>${line}</div>`).join("")}
         ${zhipuParts.length ? `<div class="cs-muted">· ${esc(t("desktop.sharing.suggest.zhipu", { list: zhipuParts.join(" · ") }))}</div>` : ""}
-        <div class="cs-muted">${esc(t("desktop.sharing.suggest.reserveHint"))}</div>
+        <div class="cs-muted">${esc(t("cs.suggest.referenceHint"))}</div>
       </div>`;
     }
 
@@ -785,42 +1122,183 @@ export default {
     }
 
     // ── 算力借用（车道目录 + 我的认领） ────────────────────────────────────
-    // 认领卡「接入配置」：标签/值/操作三列网格。值单行省略号截断（悬停看全量），
-    // 复制始终给完整可执行行（B11）——可读性来自不折行，不是靠缩短内容。
-    function configBlock(claim) {
-      const base = String(claim.baseURL || "").replace(/\/+$/, "");
-      const block = document.createElement("div");
-      block.className = "cs-claim-config";
-      const maskOf = (value) => (value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : "…");
-      for (const [id, labelKey, name, value, secret] of [
-        ["openai-url", "desktop.sharing.borrow.label.openaiUrl", "OPENAI_BASE_URL", `${base}/v1`, false],
-        ["openai-key", "desktop.sharing.borrow.label.openaiKey", "OPENAI_API_KEY", claim.token, true],
-        ["anthropic-url", "desktop.sharing.borrow.label.anthropicUrl", "ANTHROPIC_BASE_URL", base, false],
-        ["anthropic-token", "desktop.sharing.borrow.label.anthropicToken", "ANTHROPIC_AUTH_TOKEN", claim.token, true],
-      ]) {
-        const label = document.createElement("span");
-        label.className = "cs-claim-label";
-        label.textContent = t(labelKey);
-        const code = document.createElement("code");
-        code.className = "cs-claim-value";
-        code.dataset.csConfig = id;
-        code.title = `export ${name}=${value}`;
-        const line = () => `export ${name}=${value}`;
-        const copy = document.createElement("button");
-        copy.className = "outline-button cs-claim-mini";
-        copy.type = "button";
-        copy.textContent = t("desktop.sharing.borrow.copy");
-        copy.addEventListener("click", () => {
-          navigator.clipboard?.writeText(line()).then(() => {
-            copy.textContent = t("desktop.sharing.borrow.copied");
-            setTimeout(() => { copy.textContent = t("desktop.sharing.borrow.copy"); }, 1200);
-          });
+    // 认领卡「接入配置」(0.1.0 / CS-03)：目标工具 × 具体模型 × shell 方言
+    // 生成可复制命令。模型来自借用 Key 经 sidecar 请求的 CPA 模型目录并与
+    // 车道白名单求交；目录不可用时降级为带说明的手动输入，绝不猜测模型名。
+    const TOOLS = [
+      { id: "claude", labelKey: "cs.tool.claude", protocol: "anthropic", env: (c, model) => [
+        ["ANTHROPIC_BASE_URL", String(c.baseURL || "").replace(/\/+$/, "")],
+        ["ANTHROPIC_AUTH_TOKEN", c.token],
+        ...(model ? [["ANTHROPIC_MODEL", model]] : []),
+      ] },
+      { id: "codex", labelKey: "cs.tool.codex", protocol: "responses", env: (c, model) => [
+        ["OPENAI_BASE_URL", `${String(c.baseURL || "").replace(/\/+$/, "")}/v1`],
+        ["OPENAI_API_KEY", c.token],
+        ...(model ? [["OPENAI_MODEL", model]] : []),
+      ] },
+      { id: "openai", labelKey: "cs.tool.openai", protocol: "chat", env: (c) => [
+        ["OPENAI_BASE_URL", `${String(c.baseURL || "").replace(/\/+$/, "")}/v1`],
+        ["OPENAI_API_KEY", c.token],
+      ] },
+      { id: "anthropic", labelKey: "cs.tool.anthropic", protocol: "anthropic", env: (c) => [
+        ["ANTHROPIC_BASE_URL", String(c.baseURL || "").replace(/\/+$/, "")],
+        ["ANTHROPIC_AUTH_TOKEN", c.token],
+      ] },
+    ];
+    const isWindowsShell = () => /win/i.test(navigator.platform || navigator.userAgent || "");
+    // 认领卡 UI 状态（keyId → {tool, model, manualModel, models, modelsError, shell}）
+    const toolState = new Map();
+    // 最近一次连通测试结果（keyId → {text, ok}）：15s 合并刷新会整列重渲染，
+    // 结果必须住进状态而不是只写 DOM 节点，否则轮询一跳就把它抹掉（§7.1
+    // 自动刷新不打断用户正在看的内容）
+    const testResults = new Map();
+    const toolStateOf = (claim) => {
+      if (!toolState.has(claim.keyId)) {
+        const exact = (claim.models || []).find((m) => m && !m.includes("*"));
+        toolState.set(claim.keyId, {
+          tool: "claude",
+          model: exact || "",
+          manualModel: "",
+          models: null, // null = 目录未加载; [] = 已加载但为空; [...] = 列表
+          modelsError: "",
+          shell: isWindowsShell() ? "powershell" : "posix",
         });
+      }
+      return toolState.get(claim.keyId);
+    };
+    const envLine = (shell, name, value) => (shell === "powershell"
+      ? `$env:${name} = "${String(value).replace(/"/g, "`\"")}"`
+      : `export ${name}=${value}`);
+    const secretNames = new Set(["OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+
+    // 模型发现：借用 Key 请求 CPA 模型目录（sidecar 中转，无 CORS 问题），
+    // 结果与车道范围求交——通配符永远不会被当作可发送的模型 ID。
+    async function loadModels(claim) {
+      const state = toolStateOf(claim);
+      if (state.models) return;
+      try {
+        const data = await ctx.invoke("compute-sharing:models", { keyId: claim.keyId });
+        state.models = (data && Array.isArray(data.models)) ? data.models : [];
+        // default-select the first concrete model once the catalog lands:
+        // the select visibly shows it, so state must agree or the test input
+        // and the generated env block silently miss the model
+        if (!state.model && state.models.length) state.model = state.models[0];
+      } catch (error) {
+        state.models = [];
+        state.modelsError = String((error && error.message) || error).slice(0, 120);
+      }
+      renderMineLast();
+    }
+
+    function quotaLine(claim, live) {
+      const cap = (live && live.keyMaxTokens) || claim.keyMaxTokens || 0;
+      const charged = (live && live.keyChargedTokens) || 0;
+      const raw = (live && live.usedTokens) || 0;
+      const laneAvail = live && live.laneAvailableTokens != null ? live.laneAvailableTokens : 0;
+      const item = (labelKey, value, hint) => `<span title="${esc(hint || "")}">${esc(t(labelKey))}: <b class="num">${esc(value)}</b></span>`;
+      return `<div class="cs-quota">
+        ${item("cs.quota.keyCap", cap > 0 ? compact(cap) : t("cs.quota.auto"), cap > 0 ? "" : t("cs.policy.auto"))}
+        ${item("cs.quota.charged", compact(charged))}
+        ${item("cs.quota.raw", compact(raw))}
+        ${item("cs.quota.laneAvail", compact(laneAvail))}
+      </div>`;
+    }
+
+    function toolConfigSection(claim) {
+      const state = toolStateOf(claim);
+      const tool = TOOLS.find((x) => x.id === state.tool) || TOOLS[0];
+      const model = state.model === "__manual" ? state.manualModel : state.model;
+      const rows = tool.env(claim, model);
+      const section = document.createElement("div");
+      section.className = "cs-claim-config";
+
+      const bar = document.createElement("div");
+      bar.className = "cs-tool-bar";
+      const toolSelect = document.createElement("select");
+      toolSelect.dataset.csTool = claim.keyId;
+      for (const entry of TOOLS) {
+        const option = document.createElement("option");
+        option.value = entry.id;
+        option.textContent = t(entry.labelKey);
+        option.selected = entry.id === state.tool;
+        toolSelect.appendChild(option);
+      }
+      const modelSelect = document.createElement("select");
+      modelSelect.dataset.csModel = claim.keyId;
+      const modelLabel = document.createElement("label");
+      if (Array.isArray(state.models) && state.models.length) {
+        for (const name of state.models) {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          option.selected = name === state.model;
+          modelSelect.appendChild(option);
+        }
+        const manual = document.createElement("option");
+        manual.value = "__manual";
+        manual.textContent = t("cs.models.manual");
+        manual.selected = state.model === "__manual";
+        modelSelect.appendChild(manual);
+        modelLabel.append(`${t("cs.models.pick")} `, modelSelect);
+      } else {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = t("cs.models.pick");
+        input.value = state.model === "__manual" ? state.manualModel : state.model;
+        input.dataset.csModelInput = claim.keyId;
+        modelLabel.append(`${t("cs.models.pick")} `, input);
+        if (state.modelsError) {
+          const err = document.createElement("span");
+          err.className = "cs-state";
+          err.textContent = t("cs.models.unavailable", { error: state.modelsError });
+          modelLabel.appendChild(err);
+        } else if (Array.isArray(state.models) && !state.models.length) {
+          const empty = document.createElement("span");
+          empty.className = "cs-state";
+          empty.textContent = t("cs.models.empty");
+          modelLabel.appendChild(empty);
+        }
+      }
+      const shellSelect = document.createElement("select");
+      shellSelect.dataset.csShell = claim.keyId;
+      for (const [value, label] of [["posix", "Bash / Zsh"], ["powershell", "PowerShell"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        option.selected = value === state.shell;
+        shellSelect.appendChild(option);
+      }
+      const copyAll = document.createElement("button");
+      copyAll.className = "outline-button cs-claim-mini";
+      copyAll.type = "button";
+      copyAll.textContent = t("cs.tool.copyAll");
+      const lines = rows.map(([name, value]) => envLine(state.shell, name, value)).join("\n");
+      copyAll.addEventListener("click", () => {
+        navigator.clipboard?.writeText(lines).then(() => {
+          copyAll.textContent = t("cs.tool.copied");
+          setTimeout(() => { copyAll.textContent = t("cs.tool.copyAll"); }, 1200);
+        });
+      });
+      bar.append(
+        Object.assign(document.createElement("label"), { textContent: t("cs.tool.select") }),
+        toolSelect,
+        modelLabel,
+        Object.assign(document.createElement("label"), { textContent: t("cs.tool.shell") }),
+        shellSelect,
+        copyAll,
+      );
+      section.appendChild(bar);
+
+      for (const [name, value] of rows) {
         const row = document.createElement("div");
         row.className = "cs-claim-row";
-        if (!secret) code.textContent = value;
-        row.append(label, code);
-        if (secret) {
+        const label = document.createElement("span");
+        label.className = "cs-claim-label";
+        label.textContent = name;
+        const code = document.createElement("code");
+        code.className = "cs-claim-value";
+        if (secretNames.has(name)) {
+          const maskOf = (v) => (String(v).length > 12 ? `${String(v).slice(0, 8)}…${String(v).slice(-4)}` : "…");
           let revealed = false;
           const render = () => { code.textContent = revealed ? value : maskOf(value); };
           render();
@@ -833,26 +1311,74 @@ export default {
             render();
             reveal.textContent = t(revealed ? "desktop.sharing.borrow.hide" : "desktop.sharing.borrow.reveal");
           });
-          row.append(reveal);
+          row.append(label, code, reveal);
+        } else {
+          code.textContent = value;
+          code.title = value;
+          row.append(label, code);
         }
-        row.append(copy);
-        block.append(row);
+        section.appendChild(row);
       }
-      return block;
+
+      const note = document.createElement("div");
+      note.className = "cs-muted";
+      note.textContent = t(tool.id === "codex" ? "cs.tool.codexNote" : "cs.tool.note");
+      section.appendChild(note);
+
+      if (tool.id === "codex") {
+        // Codex 0.14x ignores bare env vars (falls back to its ChatGPT
+        // account path) — the provider snippet is the working entry, so it
+        // renders inline, not folded away (verified live 2026-09-20)
+        const pre = document.createElement("pre");
+        const base = String(claim.baseURL || "").replace(/\/+$/, "");
+        pre.textContent = `# ~/.codex/config.toml\nmodel = "${model || "glm-5.3"}"\nmodel_provider = "atl-share"\n\n[model_providers.atl-share]\nname = "ATL Share"\nbase_url = "${base}/v1"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"`;
+        section.appendChild(pre);
+      }
+      return section;
+    }
+
+    // 工具/模型/shell 变更时重渲染当前认领卡（只重画这一张，避免整列闪动）
+    function bindToolEvents(row, claim) {
+      const state = toolStateOf(claim);
+      row.querySelector(`[data-cs-tool="${CSS.escape(claim.keyId)}"]`)?.addEventListener("change", (event) => {
+        state.tool = event.target.value;
+        renderMineLast();
+      });
+      row.querySelector(`[data-cs-model="${CSS.escape(claim.keyId)}"]`)?.addEventListener("change", (event) => {
+        state.model = event.target.value;
+        renderMineLast();
+      });
+      row.querySelector(`[data-cs-model-input="${CSS.escape(claim.keyId)}"]`)?.addEventListener("change", (event) => {
+        state.manualModel = event.target.value.trim();
+        state.model = "__manual";
+      });
+      row.querySelector(`[data-cs-shell="${CSS.escape(claim.keyId)}"]`)?.addEventListener("change", (event) => {
+        state.shell = event.target.value;
+        renderMineLast();
+      });
     }
 
     function laneClaimRow(share, lane) {
       const total = lane.budgetTokens || 0;
       const used = lane.settledTokens || 0;
       const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0;
-      const claimable = lane.open && !lane.exhausted && lane.slotsLeft > 0;
+      const claimable = lane.state === "active" && lane.open && !lane.exhausted && lane.slotsLeft > 0;
       const status = lane.state === "suspended"
         ? `<span class="cs-state">${esc(t("desktop.sharing.lane.paused"))}</span>`
-        : lane.open
-          ? (lane.exhausted
-            ? `<span class="cs-state">${esc(t("desktop.sharing.lane.exhausted"))}</span> ${esc(t("desktop.sharing.lane.resetAt", { time: clockText(lane.windowEndsAtMs || Date.now()) }))}`
-            : esc(t("web.sharing.online")))
-          : `${esc(t("desktop.sharing.lane.closedUntil"))} · ${esc(clockText(Date.now() + (lane.retryAfterMs || 0)))}`;
+        : lane.state === "paused"
+          ? `<span class="cs-state">${esc(t("cs.lane.pausedBadge"))}</span>`
+          : lane.open
+            ? (lane.exhausted
+              ? `<span class="cs-state">${esc(t("desktop.sharing.lane.exhausted"))}</span> ${esc(t("desktop.sharing.lane.resetAt", { time: clockText(lane.windowEndsAtMs || Date.now()) }))}`
+              : esc(t("web.sharing.online")))
+            : `${esc(t("desktop.sharing.lane.closedUntil"))} · ${esc(clockText(Date.now() + (lane.retryAfterMs || 0)))}`;
+      // §4.3: an owned valid key for THIS share+lane replaces the claim CTA
+      // with 查看配置 — repeated claiming only burns slots
+      const owned = ownedKeysByShareLane.has(ownedLaneKey(share.shareId, lane.id));
+      const busy = claimInFlight;
+      const action = owned
+        ? `<button class="outline-button" data-cs-view-config type="button">${esc(t("cs.claim.viewConfig"))}</button>`
+        : `<button class="primary-pill" data-cs-claim="${esc(share.shareId)}" data-cs-claim-lane="${esc(lane.id)}" type="button"${claimable && !busy ? "" : " disabled"}>${esc(busy ? t("cs.claim.claiming") : t("desktop.sharing.borrow.claim"))}</button>`;
       return `<div class="cs-lane">
         <div class="cs-kv">
           <span><span class="cs-dot cs-dot-${laneDot(lane)}"></span> <strong>${esc(lane.title)}</strong>
@@ -865,7 +1391,8 @@ export default {
         <div class="cs-actions">
           <span class="cs-muted">${esc(t("web.sharing.slots"))}: ${lane.slotsLeft > 0 ? lane.slotsLeft : esc(t("web.sharing.claimFull"))}</span>
           <span class="cs-grow"></span>
-          <button class="primary-pill" data-cs-claim="${esc(share.shareId)}" data-cs-claim-lane="${esc(lane.id)}" type="button"${claimable ? "" : " disabled"}>${esc(t("desktop.sharing.borrow.claim"))}</button>
+          ${owned ? `<span class="cs-lane-tag">${esc(t("cs.claim.existing"))}</span>` : ""}
+          ${action}
         </div>
       </div>`;
     }
@@ -882,16 +1409,6 @@ export default {
     const laneClaimable = (lane) => lane.state !== "suspended" && lane.open && !lane.exhausted
       && (lane.slotsLeft ?? 0) > 0 && (lane.availableTokens ?? lane.budgetTokens ?? 1) > 0;
     // T1 可认领 / T2 等待开放（时段未开但有名额有量）/ T3 其余（耗尽·满员·暂停）
-    const shareTierOf = (share) => {
-      const lanes = share.lanes || [];
-      if (lanes.length) {
-        if (lanes.some(laneClaimable)) return 1;
-        if (lanes.some((l) => l.state !== "suspended" && !l.open && (l.slotsLeft ?? 0) > 0 && !l.exhausted)) return 2;
-        return 3;
-      }
-      if (share.state === "active" && (share.slotsLeft ?? 0) > 0 && !share.exhausted) return 1;
-      return share.state === "active" ? 2 : 3;
-    };
     const shareRemainingRatio = (share) => {
       const lanes = share.lanes || [];
       const ratio = (budget, available) => (budget > 0 ? Math.min(1, (available ?? budget) / budget) : 0);
@@ -911,6 +1428,21 @@ export default {
     let borrowOnlyAvailable = true;
     const borrowExpandedLanes = new Set();
     let borrowT3Open = false;
+    // 最近一次目录数据（shareId → share）：回填旧认领的车道身份用——
+    // 认领响应带 lane 字段之前的存量认领，靠 live laneId + 目录车道表还原
+    let sharesById = new Map();
+    // 同资源防重复认领（§4.3）：最近一次 alive 认领列表 + 请求中标志。
+    // 认领按钮显示「查看配置」而不是再发一次认领；请求期间全目录认领
+    // 按钮禁用（双击只占一个名额）。
+    let ownedKeysCache = [];
+    let claimInFlight = false;
+    const ownedLaneKey = (shareId, laneId) => `${shareId}:${laneId || "default"}`;
+    let ownedKeysByShareLane = new Set();
+    const rebuildOwnedKeys = () => {
+      ownedKeysByShareLane = new Set((ownedKeysCache || [])
+        .filter((c) => !c.expiresAt || c.expiresAt > Date.now())
+        .map((c) => ownedLaneKey(c.shareId, c.laneId)));
+    };
 
     function renderDirectory(shares, noBase) {
       if (noBase) {
@@ -922,9 +1454,21 @@ export default {
         els.directory.innerHTML = `<div class="cs-muted">${esc(t("web.sharing.empty"))}</div>`;
         return;
       }
-      // M1: tier → remaining ratio → heartbeat freshness → title（稳定排序）
+      // §7.1 计算顺序：模型过滤 → 在匹配车道上计算可认领状态 → 可用性
+      // 过滤 → 排序 → 折叠。层级必须基于筛选后的车道集合——否则「筛 GPT +
+      // 只看可用」会被同节点的 Gemini 活车道带活（F07）。
+      const filteredTierOf = (share) => {
+        const lanes = borrowFilterFamily ? (share.lanes || []).filter((l) => laneMatchesFamily(l, borrowFilterFamily)) : (share.lanes || []);
+        if (lanes.length) {
+          if (lanes.some(laneClaimable)) return 1;
+          if (lanes.some((l) => l.state !== "suspended" && !l.open && (l.slotsLeft ?? 0) > 0 && !l.exhausted)) return 2;
+          return 3;
+        }
+        if (share.state === "active" && (share.slotsLeft ?? 0) > 0 && !share.exhausted) return 1;
+        return share.state === "active" ? 2 : 3;
+      };
       const ranked = online
-        .map((share) => ({ share, tier: shareTierOf(share) }))
+        .map((share) => ({ share, tier: filteredTierOf(share) }))
         .sort((a, b) => (a.tier - b.tier)
           || (shareRemainingRatio(b.share) - shareRemainingRatio(a.share))
           || (hbAgeOf(a.share) - hbAgeOf(b.share))
@@ -1015,19 +1559,120 @@ export default {
       for (const button of els.directory.querySelectorAll("[data-cs-claim]")) {
         button.addEventListener("click", () => guard(() => claimShare(button.dataset.csClaim, button.dataset.csClaimLane || null)));
       }
+      for (const button of els.directory.querySelectorAll("[data-cs-view-config]")) {
+        button.addEventListener("click", () => {
+          // jump to my claims and flash the matching row
+          if (els.mine.scrollIntoView) els.mine.scrollIntoView({ behavior: "smooth", block: "center" });
+          const rows = els.mine.querySelectorAll(".cs-row");
+          for (const row of rows) row.classList.remove("cs-flash");
+          if (rows.length) { rows[0].classList.add("cs-flash"); setTimeout(() => rows[0].classList.remove("cs-flash"), 1600); }
+        });
+      }
+    }
+
+    let renderMineArgs = null;
+    const renderMineLast = () => {
+      if (renderMineArgs) renderMine(renderMineArgs[0], renderMineArgs[1]);
+    };
+
+    function cancelClaimTest(keyId) {
+      const run = syncRetries.get(keyId);
+      if (run?.timer) clearTimeout(run.timer);
+      syncRetries.delete(keyId);
+    }
+
+    function rememberClaimTest(keyId, text, ok) {
+      testResults.set(keyId, { text, ok });
+      // Refresh can replace the row while the sidecar request is in flight.
+      const result = el.querySelector(`[data-cs-test-result="${CSS.escape(keyId)}"]`);
+      if (result) {
+        result.textContent = text;
+        result.className = `cs-status${ok ? "" : " cs-state"}`;
+        if (!syncWait.has(keyId)) result.closest(".cs-row")?.querySelector(".cs-pending")?.remove();
+      }
+    }
+
+    async function runClaimTest(claim, model, protocol, run) {
+      const keyId = claim.keyId;
+      if (syncRetries.get(keyId) !== run) return;
+      if (!el.isConnected || !cardVisible() || document.visibilityState !== "visible") {
+        cancelClaimTest(keyId);
+        syncWait.delete(keyId);
+        rememberClaimTest(keyId, t("cs.claim.testPaused"), false);
+        return;
+      }
+      rememberClaimTest(keyId, t("desktop.sharing.borrow.testing"), true);
+      let result;
+      try {
+        result = await ctx.invoke("compute-sharing:borrow-test", {
+          token: claim.token, baseURL: claim.baseURL, model, protocol,
+        });
+      } catch (error) {
+        result = { ok: false, status: 0, error: String((error && error.message) || error).slice(0, 120) };
+      }
+      // A later manual test, revoked claim, or destroyed card supersedes this result.
+      if (syncRetries.get(keyId) !== run || !el.isConnected) return;
+      if (!result.ok && (syncWait.get(keyId) || 0) > Date.now() && run.attempts < 3) {
+        run.attempts += 1;
+        rememberClaimTest(keyId, t("cs.claim.syncing"), true);
+        run.timer = setTimeout(() => {
+          run.timer = null;
+          // Invoke the saved request directly: clicking a disabled or rebuilt
+          // button can silently drop a retry or select a different protocol.
+          guard(() => runClaimTest(claim, model, protocol, run));
+        }, 5_000);
+        return;
+      }
+      cancelClaimTest(keyId);
+      syncWait.delete(keyId);
+      rememberClaimTest(keyId, result.ok
+        ? t("desktop.sharing.borrow.testOk", { model })
+        : t("desktop.sharing.borrow.testFail", { status: String(result.status), reason: result.error || "" }), Boolean(result.ok));
     }
 
     function renderMine(claims, liveById) {
+      renderMineArgs = [claims, liveById];
+      els.mine.innerHTML = "";
+      // 清理回执（§5.3）：失效认领从本机删除时留一条不含凭证的原因说明，
+      // 每条只显示一次（存最近 5 条，刷新后自然消失）
+      if (lastRemovedReceipts.length) {
+        const receipt = document.createElement("div");
+        receipt.className = "cs-receipt";
+        const list = lastRemovedReceipts
+          .map((r) => `${r.shareTitle || r.keyId}${r.laneTitle ? `/${r.laneTitle}` : ""}(${r.reason})`)
+          .join(" · ");
+        receipt.textContent = t("cs.receipt.removed", { n: String(lastRemovedReceipts.length), list });
+        els.mine.appendChild(receipt);
+        lastRemovedReceipts = [];
+      }
       if (!claims.length) {
-        els.mine.innerHTML = `<div class="cs-muted">${esc(t("desktop.sharing.borrow.myClaimsEmpty"))}</div>`;
+        const empty = document.createElement("div");
+        empty.className = "cs-muted";
+        empty.textContent = t("desktop.sharing.borrow.myClaimsEmpty");
+        els.mine.appendChild(empty);
         return;
       }
-      els.mine.innerHTML = "";
       for (const claim of claims) {
         const live = liveById && liveById.get(claim.keyId);
         const state = live && live.state
           ? live.state
           : (claim.expiresAt && claim.expiresAt <= Date.now() ? "expired" : "valid");
+        // 车道身份三级回填：存量认领（无 lane 字段）靠 live laneId + 目录车道表
+        // 还原——认领卡必须始终说明「谁的车道」
+        const dirShare = sharesById.get(claim.shareId);
+        const dirLane = dirShare
+          ? (dirShare.lanes || []).find((l) => l.id === ((live && live.laneId) || claim.laneId || "default"))
+          : null;
+        const laneTitle = claim.laneTitle || (live && live.laneTitle) || (dirLane && dirLane.title) || "";
+        const models = (claim.models && claim.models.length)
+          ? claim.models
+          : ((live && live.models && live.models.length) ? live.models : (dirLane ? dirLane.models || [] : []));
+        const tzLabel = claim.tzLabel || (live && live.tzLabel) || "";
+        const tags = [
+          laneTitle ? `<span class="cs-lane-tag">${esc(laneTitle)}</span>` : "",
+          models.length ? `<span class="cs-lane-tag">${esc(models.join(", "))}</span>` : "",
+          tzLabel ? `<span class="cs-lane-tag">${esc(tzLabel)}</span>` : "",
+        ].filter(Boolean).join(" ");
         const row = document.createElement("div");
         row.className = "cs-row";
         row.innerHTML = `
@@ -1035,45 +1680,48 @@ export default {
             <strong>${esc(claim.shareTitle || claim.shareId)}</strong>
             <span class="cs-muted">${esc(String(claim.keyId).slice(0, 11))}…</span>
           </div>
-          <div class="cs-muted cs-claim-meta">${claim.laneTitle ? `<span class="cs-lane-tag">${esc(claim.laneTitle)}</span>${claim.models && claim.models.length ? ` <span class="cs-lane-tag">${esc(claim.models.join(", "))}</span>` : ""}${claim.tzLabel ? ` <span class="cs-lane-tag">${esc(claim.tzLabel)}</span>` : ""}` : ""}</div>
-          <div class="cs-muted cs-claim-meta">${esc(t("desktop.sharing.borrow.expires"))}: ${esc(fmtDateTime(claim.expiresAt))}${live ? ` · ${esc(t("desktop.sharing.borrow.used"))}: ${esc(compact(live.usedTokens))}` : ""}${state !== "valid" ? ` · <span class="cs-state">${esc(t(state === "revoked" ? "desktop.sharing.borrow.stateRevoked" : "desktop.sharing.borrow.stateExpired"))}</span>` : ""}</div>
-          <div class="cs-claim-section">${esc(t("desktop.sharing.borrow.sectionConfig"))}</div>`;
+          ${tags ? `<div class="cs-muted cs-claim-meta">${tags}</div>` : ""}
+          <div class="cs-muted cs-claim-meta">${esc(t("desktop.sharing.borrow.expires"))}: ${esc(fmtDateTime(claim.expiresAt))}${state !== "valid" ? ` · <span class="cs-state">${esc(t(state === "revoked" ? "desktop.sharing.borrow.stateRevoked" : "desktop.sharing.borrow.stateExpired"))}</span>` : ""}</div>`;
+        const syncing = (syncWait.get(claim.keyId) || 0) > Date.now();
         if (state === "valid") {
-          row.appendChild(configBlock(claim));
+          if (syncing) {
+            row.insertAdjacentHTML("beforeend", `<div class="cs-pending">${esc(t("cs.claim.syncing"))}</div>`);
+          }
+          row.insertAdjacentHTML("beforeend", quotaLine(claim, live));
+          const configHead = document.createElement("div");
+          configHead.className = "cs-claim-section";
+          configHead.textContent = t("cs.tool.title");
+          row.appendChild(configHead);
+          row.appendChild(toolConfigSection(claim));
+          bindToolEvents(row, claim);
+          loadModels(claim);
           const testHead = document.createElement("div");
           testHead.className = "cs-claim-section";
           testHead.textContent = t("desktop.sharing.borrow.sectionTest");
           row.appendChild(testHead);
-          // connectivity test (G3): one minimal generation through the owner's
-          // CPA — the sidecar relays it (no CORS on CPA). The model input
-          // defaults to the lane's exact model; wildcards need a real name.
+          // §4.3 按协议测试：工具决定协议（Claude Code→Messages、Codex→Responses、
+          // OpenAI 兼容→Chat Completions）；某一种协议通过不代表其他协议通过。
+          const toolState = toolStateOf(claim);
+          const tool = TOOLS.find((x) => x.id === toolState.tool) || TOOLS[0];
           const exactModel = (claim.models || []).find((m) => m && !m.includes("*"));
           const test = document.createElement("div");
           test.className = "cs-fields cs-test-row";
           test.innerHTML = `
-            <input class="grow" data-cs-test-model="${esc(claim.keyId)}" type="text" placeholder="${esc(t("desktop.sharing.borrow.testModel"))}: ${esc(exactModel || "gemini-3.8-flash-high")}" />
+            <span class="cs-lane-tag">${esc(tool.labelKey ? t(tool.labelKey) : "")} · ${esc(tool.protocol)}</span>
+            <input class="grow" data-cs-test-model="${esc(claim.keyId)}" type="text" placeholder="${esc(t("desktop.sharing.borrow.testModel"))}: ${esc(exactModel || "")}" value="${esc(toolState.model === "__manual" ? toolState.manualModel : toolState.model)}" />
             <button class="outline-button" type="button" data-cs-test="${esc(claim.keyId)}">${esc(t("desktop.sharing.borrow.test"))}</button>
-            <span class="cs-status" data-cs-test-result="${esc(claim.keyId)}"></span>`;
+            <span class="cs-status${(testResults.get(claim.keyId) || {}).ok === false ? " cs-state" : ""}" data-cs-test-result="${esc(claim.keyId)}">${esc((testResults.get(claim.keyId) || {}).text || "")}</span>`;
           row.appendChild(test);
           row.querySelector(`[data-cs-test="${CSS.escape(claim.keyId)}"]`).addEventListener("click", () => guard(async () => {
             const model = String(row.querySelector(`[data-cs-test-model="${CSS.escape(claim.keyId)}"]`).value || exactModel || "").trim();
-            const resultEl = row.querySelector(`[data-cs-test-result="${CSS.escape(claim.keyId)}"]`);
+            cancelClaimTest(claim.keyId);
             if (!model) {
-              resultEl.textContent = t("desktop.sharing.borrow.testModelRequired");
-              resultEl.className = "cs-status cs-state";
+              rememberClaimTest(claim.keyId, t("desktop.sharing.borrow.testModelRequired"), false);
               return;
             }
-            resultEl.textContent = t("desktop.sharing.borrow.testing");
-            try {
-              const result = await ctx.invoke("compute-sharing:borrow-test", { token: claim.token, baseURL: claim.baseURL, model });
-              resultEl.textContent = result.ok
-                ? t("desktop.sharing.borrow.testOk", { model })
-                : t("desktop.sharing.borrow.testFail", { status: String(result.status), reason: result.error || "" });
-              resultEl.className = `cs-status ${result.ok ? "" : "cs-state"}`;
-            } catch (error) {
-              resultEl.textContent = t("desktop.sharing.borrow.testFail", { status: "-", reason: String(error).slice(0, 120) });
-              resultEl.className = "cs-status cs-state";
-            }
+            const run = { attempts: 0, timer: null };
+            syncRetries.set(claim.keyId, run);
+            await runClaimTest(claim, model, tool.protocol, run);
           }));
           const actions = document.createElement("div");
           actions.className = "cs-actions cs-claim-footer";
@@ -1100,126 +1748,339 @@ export default {
       }
     }
 
+    // §8 借用动作统一走 Rust flow：签名、POST、本机存储合并和跨进程锁
+    // 全在 sidecar 一条命令里完成（与 CLI 同一路径），webview 不再自行
+    // fetch 认领/续期/撤销。错误码沿用后端原样，上方 errorKey 表负责文案。
+    // 后端错误码 → 文案（与旧 apiPost 表一致 + lane_paused）；未知码原样显示
+    const claimErrorText = (error) => {
+      const code = String((error && error.message) || error);
+      const key = {
+        share_offline: "web.sharing.offline",
+        budget_exhausted: "web.sharing.exhausted",
+        lane_exhausted: "desktop.sharing.borrow.laneExhausted",
+        lane_closed: "desktop.sharing.borrow.laneClosed",
+        lane_suspended: "desktop.sharing.borrow.laneSuspended",
+        lane_paused: "cs.error.lanePaused",
+        lane_required: "desktop.sharing.borrow.laneRequired",
+        lane_not_found: "desktop.sharing.borrow.laneRequired",
+        no_claim_slots: "web.sharing.claimFull",
+        rate_limited: "desktop.sharing.borrow.rateLimited",
+        identity_required: "desktop.sharing.borrow.identityFailed",
+        participant_not_registered: "desktop.sharing.borrow.identityFailed",
+        invalid_signature: "desktop.sharing.borrow.identityFailed",
+        claim_not_found: "desktop.sharing.borrow.claimGone",
+        share_not_active: "web.sharing.paused",
+        too_many_active_claims: "desktop.sharing.borrow.tooManyClaims",
+      }[code.split(":")[0]];
+      if (code.startsWith("too_many_active_claims")) return t("desktop.sharing.borrow.tooManyClaims", { active: "?", max: "?" });
+      return key ? t(key) : code;
+    };
     async function claimShare(shareId, laneId) {
-      notify(t("desktop.sharing.borrow.claiming"));
-      const ts = Date.now();
-      const signed = await ctx.invoke("compute-sharing:claim-sign", { shareId, ts });
-      const data = await apiPost("/api/shares/claim", {
-        shareId,
-        laneId: laneId || undefined,
-        participantId: signed.participantId,
-        ts: signed.ts ?? ts,
-        signature: signed.signature,
-      });
-      const store = await ctx.invoke("compute-sharing:borrow-get");
-      const claims = Array.isArray(store && store.claims) ? store.claims : [];
-      const record = {
-        keyId: data.keyId,
-        token: data.token,
-        baseURL: data.baseURL,
-        shareId,
-        laneId: data.laneId || null,
-        laneTitle: data.laneTitle || "",
-        tzLabel: data.tzLabel || "",
-        shareTitle: data.shareTitle,
-        models: data.models || [],
-        expiresAt: data.expiresAt,
-      };
-      await ctx.invoke("compute-sharing:borrow-set", { claims: [record, ...claims.filter((c) => c.keyId !== record.keyId)] });
-      notify(t("desktop.sharing.borrow.claimed"));
-      await refresh({ forceShares: true });
+      if (claimInFlight) return;
+      claimInFlight = true;
+      try {
+        notify(t("cs.claim.claiming"));
+        const data = await ctx.invoke("compute-sharing:claim", { shareId, laneId: laneId || undefined });
+        if (data && data.keyId) syncWait.set(data.keyId, Date.now() + SYNC_WAIT_MS);
+        notify(t("desktop.sharing.borrow.claimed"));
+        await refresh({ forceShares: true });
+      } catch (error) {
+        throw new Error(claimErrorText(error));
+      } finally {
+        claimInFlight = false;
+      }
     }
 
     async function renewClaim(claim) {
-      const data = await apiPost("/api/shares/claims/renew", { token: claim.token });
-      const store = await ctx.invoke("compute-sharing:borrow-get");
-      const claims = (Array.isArray(store && store.claims) ? store.claims : [])
-        .map((c) => (c.keyId === claim.keyId ? { ...c, expiresAt: data.expiresAt } : c));
-      await ctx.invoke("compute-sharing:borrow-set", { claims });
+      await ctx.invoke("compute-sharing:renew", { keyId: claim.keyId });
       notify(t("desktop.sharing.borrow.renewed"));
       await refresh({ forceShares: true });
     }
 
     async function revokeClaim(claim) {
-      await apiPost("/api/shares/claims/revoke", { token: claim.token });
-      const store = await ctx.invoke("compute-sharing:borrow-get");
-      const claims = (Array.isArray(store && store.claims) ? store.claims : []).filter((c) => c.keyId !== claim.keyId);
-      await ctx.invoke("compute-sharing:borrow-set", { claims });
+      await ctx.invoke("compute-sharing:revoke", { keyId: claim.keyId });
       notify(t("desktop.sharing.borrow.revoked"));
       await refresh({ forceShares: true });
     }
 
     // ── 统一刷新 ──────────────────────────────────────────────────────────
+    // 世代守卫：并发的旧 refresh（如认领前启动、目录拉取慢的那次）不得
+    // 在新 refresh 之后落地渲染——否则会拿过期数据抹掉认领结果
+    let refreshSeq = 0;
+    // §5.3: owner 状态失败时保留已有视图并标记"暂时无法更新"，只有
+    // 确定性的 not_registered（从未注册/已注销）才收起控制台。
+    let ownerStaleError = "";
+    let controlPlaneFreshAt = 0;
+    let lastRemovedReceipts = [];
     async function refresh({ forceShares = false } = {}) {
-      // owner: not_registered (never registered, or unregistered) collapses
-      // the section; any other error collapses it too — owner data never
-      // blocks the borrow flow below.
+      const seq = ++refreshSeq;
       try {
         lastOwnerData = await ctx.invoke("compute-sharing:owner-status", {});
+        ownerStaleError = "";
       } catch (error) {
-        // A transient failure must not freeze the card into the borrower-only
-        // layout: retry briefly before settling the definitive "no owner".
-        lastOwnerData = {};
-        for (let attempt = 0; attempt < 2 && !lastOwnerData.share; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 800));
-          try {
-            lastOwnerData = await ctx.invoke("compute-sharing:owner-status", {});
-          } catch { /* keep retrying */ }
+        const code = String((error && error.message) || error);
+        if (code.includes("not_registered")) {
+          lastOwnerData = {};
+          ownerStaleError = "";
+        } else {
+          ownerStaleError = code.slice(0, 80);
+          // keep the last good owner view — a transient backend failure must
+          // not tear down the owner console (F05)
+          if (!lastOwnerData || !lastOwnerData.share) lastOwnerData = {};
         }
       }
       ownerSettled = true;
-      renderOwner(lastOwnerData);
-      // borrow: local claims + live usage
+      if (seq === refreshSeq) renderOwner(lastOwnerData);
+      // borrow: local claims + live usage; borrow-get reports dead-claim
+      // removals (CS-04) so the cleanup has a receipt, not a silent drop
       const store = await ctx.invoke("compute-sharing:borrow-get");
       const claims = Array.isArray(store && store.claims) ? store.claims : [];
+      const removed = Array.isArray(store && store.removed) ? store.removed : [];
+      if (removed.length) {
+        const seen = new Map(lastRemovedReceipts.map((r) => [r.keyId + ":" + r.reason, r]));
+        for (const r of removed) seen.set(r.keyId + ":" + r.reason, r);
+        lastRemovedReceipts = [...seen.values()].slice(-5);
+      }
       let liveById = null;
       if (claims.length) {
         try {
-          const base = ctx.apiBase && ctx.apiBase();
-          if (base) {
-            const response = await fetch(`${base}/api/shares/claims/mine`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ tokens: claims.map((c) => c.token) }),
-              signal: AbortSignal.timeout(8000),
-            });
-            if (response.ok) {
-              const data = await response.json();
-              liveById = new Map((data.claims || []).map((c) => [c.keyId, c]));
-            }
+          const data = await ctx.invoke("compute-sharing:live", {});
+          if (data && Array.isArray(data.claims)) {
+            liveById = new Map(data.claims.map((c) => [c.keyId, c]));
           }
         } catch { /* keep last known usage */ }
       }
-      renderMine(claims, liveById);
+      // dead claims are deleted locally (user decision): revoked (confirmed
+      // by the live view) and expired claims carry no value — rewrite the
+      // store without them instead of rendering zombie rows; revocations get
+      // a receipt too so the disappearance is explainable (CS-04)
+      const nowMs = Date.now();
+      let alive = claims.filter((c) => {
+        const live = liveById && liveById.get(c.keyId);
+        if (live && live.state === "revoked") return false;
+        return !(c.expiresAt && c.expiresAt <= nowMs);
+      });
+      if (alive.length !== claims.length) {
+        for (const gone of claims.filter((c) => !alive.includes(c))) {
+          const live = liveById && liveById.get(gone.keyId);
+          lastRemovedReceipts.push({
+            keyId: gone.keyId,
+            shareTitle: gone.shareTitle || (live && live.shareTitle) || "",
+            laneTitle: gone.laneTitle || (live && live.laneTitle) || "",
+            reason: live && live.state === "revoked" ? "revoked" : "expired",
+          });
+        }
+        lastRemovedReceipts = lastRemovedReceipts.slice(-5);
+        // QA-05: pass only the confirmed-dead KEY IDs — the sidecar re-reads
+        // the store inside its lock, so a key another process claimed while
+        // this snapshot was in flight always survives the cleanup
+        try {
+          const deadIds = claims.filter((c) => !alive.includes(c)).map((c) => c.keyId);
+          const pruned = await ctx.invoke("compute-sharing:borrow-prune", { revoke: deadIds });
+          if (pruned && Array.isArray(pruned.claims)) alive = pruned.claims;
+        } catch { /* keep rendering what we have */ }
+      }
+      // §4.3: the same-resource guard must see the fresh claim set BEFORE the
+      // directory re-renders, or the just-claimed lane keeps its claim CTA
+      for (const [keyId, until] of syncWait) {
+        if (Date.now() >= until) syncWait.delete(keyId); // the wait window is purely time-based: the backend knows the key at mint time, the CPA node learns it on its next heartbeat
+      }
+      const aliveIds = new Set(alive.map((claim) => claim.keyId));
+      for (const keyId of syncRetries.keys()) {
+        if (!aliveIds.has(keyId)) cancelClaimTest(keyId);
+      }
+      ownedKeysCache = alive;
+      rebuildOwnedKeys();
+      // directory first: the lane map backfills claim identities below, so a
+      // claim row must not paint before the freshest shares data lands; the
+      // fetch rides the sidecar directory flow (same path as the CLI, §8)
       if (forceShares || !els.directory.childElementCount) {
         try {
           const base = ctx.apiBase && ctx.apiBase();
           if (!base) {
-            renderDirectory([], true);
+            if (seq === refreshSeq) {
+              controlPlaneFreshAt = 0;
+              renderDirectory([], true);
+            }
           } else {
-            const response = await fetch(`${base}/api/shares`, { signal: AbortSignal.timeout(8000) });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            renderDirectory(((await response.json()).shares) || []);
+            const data = await ctx.invoke("compute-sharing:directory", {});
+            const shares = (data && data.shares) || [];
+            if (seq === refreshSeq) {
+              sharesById = new Map(shares.map((s) => [s.shareId, s]));
+              controlPlaneFreshAt = Date.now();
+              renderDirectory(shares);
+            }
           }
         } catch (error) {
-          els.directory.innerHTML = `<div class="cs-muted">${esc(t("desktop.sharing.borrow.directoryFailed", { error: String(error.message || error) }))}</div>`;
+          if (seq === refreshSeq) {
+            controlPlaneFreshAt = 0;
+            els.directory.innerHTML = `<div class="cs-muted">${esc(t("desktop.sharing.borrow.directoryFailed", { error: String(error.message || error) }))}</div>`;
+          }
         }
       }
+      if (seq !== refreshSeq) return;
+      renderDimStrip(Array.from(sharesById.values()), alive, liveById);
+      renderEntryRow();
+      renderMine(alive, liveById);
+    }
+
+    // §5.3 四维状态条：控制面连接、节点心跳（目录在线数）、资源可认领、
+    // 自己的 Key——不用一个绿点代替全部事实。数据新鲜度用文字表达。
+    function renderDimStrip(shares, aliveClaims, liveById) {
+      if (!els.dimstrip) return;
+      const fresh = controlPlaneFreshAt && Date.now() - controlPlaneFreshAt < 60_000;
+      const online = (shares || []).filter((s) => s.online);
+      let claimable = 0;
+      for (const share of online) {
+        for (const lane of share.lanes || []) {
+          if (lane.state === "active" && lane.open && !lane.exhausted && (lane.slotsLeft ?? 0) > 0) claimable += 1;
+        }
+      }
+      const validKeys = (aliveClaims || []).filter((c) => {
+        const live = liveById && liveById.get(c.keyId);
+        const state = live && live.state ? live.state : "valid";
+        return state === "valid";
+      }).length;
+      const chip = (cls, text, title) => `<span class="cs-dim ${cls}" title="${esc(title || "")}">${esc(text)}</span>`;
+      els.dimstrip.innerHTML = [
+        chip(fresh ? "ok" : "warn", t(fresh ? "cs.dim.fresh" : "cs.dim.stale")),
+        chip(fresh && online.length ? "ok" : "warn", fresh ? t("cs.dim.nodes", { n: String(online.length), total: String((shares || []).length) }) : t("cs.dim.nodesUnknown")),
+        chip(fresh && claimable ? "ok" : "warn", fresh ? t("cs.dim.claimable", { n: String(claimable) }) : t("cs.dim.claimableUnknown")),
+        chip(validKeys ? "ok" : "", t("cs.dim.keys", { n: String(validKeys) })),
+      ].join("");
+    }
+
+    // §4.1 未注册分享者的一行入口：纯借用者不必看到整个 owner 控制台，
+    // 但「我要分享」的准备工作必须始终可达
+    // V02: 分项检测结果（身份 / CPA 配置 / 后端地址 / 节点心跳）——不再把
+    // 所有缺项折叠成一句「未注册」
+    let doctorItems = null;
+    let doctorError = "";
+    async function runDoctor() {
+      doctorError = "";
+      try {
+        const data = await ctx.invoke("compute-sharing:doctor", {});
+        doctorItems = (data && data.items) || [];
+      } catch (error) {
+        doctorItems = [];
+        doctorError = String((error && error.message) || error).slice(0, 120);
+      }
+      renderEntryRow();
+    }
+    const doctorHintKey = (id) => ({
+      identity: "cs.entry.item.identity",
+      ownerConfig: "cs.entry.item.ownerConfig",
+      apiBase: "cs.entry.item.apiBase",
+      node: "cs.entry.item.node",
+    }[id] || id);
+    const doctorItemHint = (item) => {
+      if (item.ok) return "";
+      const key = {
+        identity_missing: "cs.entry.missingIdentity",
+        config_missing: "cs.entry.missingConfig",
+        api_missing: "cs.entry.missingApi",
+        api_unknown: "cs.entry.apiUnknown",
+        api_mismatch: "cs.entry.apiMismatch",
+        node_stale: "cs.entry.nodeStale",
+        node_unknown: "cs.entry.nodeUnknown",
+      }[item.code] || {
+        identity: "cs.entry.missingIdentity",
+        ownerConfig: "cs.entry.missingConfig",
+        apiBase: item.value ? "cs.entry.apiMismatch" : "cs.entry.missingApi",
+        node: item.value === "stale" ? "cs.entry.nodeStale" : "cs.entry.nodeUnknown",
+      }[item.id];
+      const params = { cpaApi: "?", appApi: item.value || "?", ...item.params };
+      const hint = key ? t(key, params) : (item.hint || "");
+      return item.id === "node" && Number.isFinite(params.ageSeconds)
+        ? `${hint} ${t("cs.entry.nodeAge", { ageSeconds: String(params.ageSeconds) })}`
+        : hint;
+    };
+    const doctorItemValue = (item) => item.id === "node"
+      ? t(`cs.entry.node.${["online", "stale"].includes(item.value) ? item.value : "unknown"}`)
+      : String(item.value || "");
+    function renderEntryRow() {
+      if (!els.entry) return;
+      const hasOwner = hasOwnerConsole();
+      els.entry.hidden = hasOwner;
+      if (hasOwner) return;
+      let itemsHtml = "";
+      if (doctorItems) {
+        itemsHtml = `<div class="cs-entry-items">${doctorItems.map((item) => `
+          <div class="cs-entry-item">
+            <span class="cs-dot cs-dot-${item.ok ? "on" : "off"}"></span>
+            <span>${esc(t(doctorHintKey(item.id)))}</span>
+            ${item.value ? `<span class="cs-lane-tag">${esc(doctorItemValue(item))}</span>` : ""}
+            ${item.ok ? "" : `<span class="cs-state">${esc(doctorItemHint(item))}</span>`}
+          </div>`).join("")}
+        ${doctorError ? `<div class="cs-state">${esc(doctorError)}</div>` : ""}
+        </div>`;
+      }
+      els.entry.innerHTML = `<div class="cs-row cs-entry">
+        <div class="cs-actions">
+          <strong>${esc(t("cs.entry.share"))}</strong>
+          <span class="cs-muted">${esc(t("cs.entry.shareHint"))}</span>
+          <span class="cs-grow"></span>
+          <button class="outline-button" type="button" data-cs-doctor>${esc(t("cs.entry.check"))}</button>
+        </div>
+        <div class="cs-muted">${esc(t("cs.entry.steps"))}</div>
+        ${itemsHtml}
+      </div>`;
+      els.entry.querySelector("[data-cs-doctor]")?.addEventListener("click", () => guard(() => runDoctor()));
     }
 
     el.querySelector('[data-cs="refresh"]').addEventListener("click", () => guard(() => refresh({ forceShares: true })));
 
+    // §5.3 轮询：页面可见时最多每 15 秒一轮合并刷新，隐藏即停；回到页面
+    // 立即刷。计时器在卡片脱离 DOM 后自清，不泄漏（20 次切页不增长）。
+    // QA-07: 轮询只在本卡可见时运行——文档可见 + 卡片仍在 DOM + 面板未被
+    // 隐藏（offsetParent 为 null 说明整页或插件开关把它藏了）。全部句柄在
+    // 卡片脱离 DOM 时自清：timer 停、监听解绑、observer disconnect，销毁
+    // 后的 visibility 事件不再触发任何 invoke。
+    // V10: 新 Key 在 owner CPA 的下一次心跳（8s）之前不可用——认领后进入
+    // 「等待节点同步」窗口；期间测试请求不做永久性失败判定
+    const syncWait = new Map(); // keyId -> untilMs
+    const syncRetries = new Map(); // keyId -> current probe chain { attempts, timer }
+    const SYNC_WAIT_MS = 14_000;
+    let lastFetchMs = Date.now();
+    const cardVisible = () => el.isConnected && el.offsetParent !== null;
+    let pollTimer = null;
+    let visibilityHandler = null;
+    let intersectionObserver = null;
+    const stopLifecycle = () => {
+      for (const keyId of syncRetries.keys()) cancelClaimTest(keyId);
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (visibilityHandler) { document.removeEventListener("visibilitychange", visibilityHandler); visibilityHandler = null; }
+      if (intersectionObserver) { intersectionObserver.disconnect(); intersectionObserver = null; }
+    };
+    const startPolling = () => {
+      if (pollTimer) return;
+      pollTimer = setInterval(() => {
+        if (!cardVisible()) {
+          if (!el.isConnected) stopLifecycle();
+          return;
+        }
+        if (document.visibilityState !== "visible") return;
+        guard(() => refresh({ forceShares: true }));
+      }, 15_000);
+    };
+    visibilityHandler = () => {
+      if (!el.isConnected) { stopLifecycle(); return; }
+      if (document.visibilityState === "visible" && cardVisible()) guard(() => refresh({ forceShares: true }));
+    };
+    document.addEventListener("visibilitychange", visibilityHandler);
+    startPolling();
+
     // Re-entering view re-fetches (throttled) so an early network failure
     // doesn't freeze the error message until a manual refresh.
-    let lastFetchMs = Date.now();
     if (typeof IntersectionObserver === "function") {
-      const observer = new IntersectionObserver((entries) => {
+      intersectionObserver = new IntersectionObserver((entries) => {
+        if (!el.isConnected) { stopLifecycle(); return; }
         if (entries.some((entry) => entry.isIntersecting) && Date.now() - lastFetchMs > 15_000) {
           lastFetchMs = Date.now();
           guard(() => refresh({ forceShares: true }));
         }
       }, { threshold: 0.2 });
-      observer.observe(el);
+      intersectionObserver.observe(el);
     }
 
     await guard(() => refresh({ forceShares: true }));

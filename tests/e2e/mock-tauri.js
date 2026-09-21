@@ -670,11 +670,126 @@
         if (cfg.claimSignError) return Promise.reject(new Error(cfg.claimSignError));
         return Promise.resolve({ participantId: "p_e2e_borrower", ts: (args && args.ts) || Date.now(), signature: "e2e-sig" });
       }
-      if (command === "compute-sharing:borrow-get") return Promise.resolve(clone(window.__ATL_E2E_STATE__.borrowStore));
+      if (command === "compute-sharing:borrow-get") {
+        // v2 shape: alive claims + removal receipts (expired ones drop with a reason)
+        const store = clone(window.__ATL_E2E_STATE__.borrowStore || { claims: [] });
+        store.removed = store.removed || [];
+        return Promise.resolve(store);
+      }
+      // unified borrow flows (0.1.0 §8): the card rides the same sidecar
+      // commands as the CLI — directory/live/claim/renew/revoke/models
+      if (command === "compute-sharing:directory") {
+        window.__ATL_E2E_STATE__.directoryFetches = (window.__ATL_E2E_STATE__.directoryFetches || 0) + 1;
+        if (window.__ATL_E2E_STATE__.failDirectory ?? cfg.failDirectory) return Promise.reject(new Error("backend_unreachable:connection refused"));
+        return Promise.resolve(clone({ shares: window.__ATL_E2E_STATE__.shares || [] }));
+      }
+      if (command === "compute-sharing:live") {
+        return Promise.resolve({ claims: clone(window.__ATL_E2E_STATE__.liveClaims || []) });
+      }
+      if (command === "compute-sharing:claim") {
+        const error = window.__ATL_E2E_STATE__.claimError;
+        if (error) return Promise.reject(new Error(error));
+        const share = (window.__ATL_E2E_STATE__.shares || []).find((s) => s.shareId === args.shareId);
+        const lane = share && (share.lanes || []).find((l) => l.id === args.laneId);
+        const record = {
+          keyId: 'csk_e2e99', token: 'atl_sk_e2e_secret', baseURL: 'http://192.168.1.4:8317',
+          shareId: args.shareId, laneId: args.laneId || (lane && lane.id) || 'default',
+          laneTitle: (lane && lane.title) || '', models: (lane && lane.models) || ['*'],
+          tzLabel: 'UTC+8', shareTitle: share ? share.title : 'E2E CPA',
+          window: (lane && lane.window) || { unit: 'day', n: 1 },
+          keyMaxTokens: 200000, keyConcurrency: 3, laneBudgetTokens: (lane && lane.budgetTokens) || 0,
+          expiresAt: Date.now() + 3600000,
+        };
+        window.__ATL_E2E_STATE__.borrowStore = {
+          claims: [record, ...(window.__ATL_E2E_STATE__.borrowStore?.claims || []).filter((c) => c.keyId !== record.keyId)],
+        };
+        return Promise.resolve(clone(record));
+      }
+      if (command === "compute-sharing:renew") {
+        const claims = (window.__ATL_E2E_STATE__.borrowStore?.claims || [])
+          .map((c) => (c.keyId === args.keyId ? { ...c, expiresAt: Date.now() + 7 * 86400000 } : c));
+        window.__ATL_E2E_STATE__.borrowStore = { claims };
+        return Promise.resolve({ keyId: args.keyId, expiresAt: Date.now() + 7 * 86400000 });
+      }
+      if (command === "compute-sharing:revoke") {
+        const claims = (window.__ATL_E2E_STATE__.borrowStore?.claims || []).filter((c) => c.keyId !== args.keyId);
+        window.__ATL_E2E_STATE__.borrowStore = { claims };
+        return Promise.resolve({ keyId: args.keyId, revoked: true });
+      }
+      if (command === "compute-sharing:models") {
+        // canned CPA catalog (what the /v1/models probe returned), intersected
+        // with the claim's lane scope by the real sidecar — here pre-scoped
+        const catalog = window.__ATL_E2E_STATE__.modelCatalog || ['gemini-3.8-flash-high', 'gemini-3.7-pro', 'glm-5.3', 'gpt-5.6-terra'];
+        const claim = (window.__ATL_E2E_STATE__.borrowStore?.claims || []).find((c) => c.keyId === args.keyId);
+        const scope = (claim && claim.models) || ['*'];
+        const admits = (pattern, model) => pattern === '*' || pattern === model || (pattern.endsWith('*') && model.startsWith(pattern.slice(0, -1)));
+        const scoped = scope.some((p) => p === '*' || p.endsWith('*'))
+          ? catalog.filter((m) => scope.some((p) => admits(p, m)))
+          : scope;
+        return Promise.resolve({ keyId: args.keyId, models: scoped });
+      }
+      if (command === "compute-sharing:doctor") {
+        if (window.__ATL_E2E_STATE__.doctor === undefined && window.__ATL_E2E_STATE__.doctorStatusFile) {
+          return Promise.resolve(clone(window.__ATL_E2E_STATE__.doctorStatusFile));
+        }
+        return Promise.resolve(clone(window.__ATL_E2E_STATE__.doctor || {
+          ready: true,
+          items: [
+            { id: 'identity', ok: true },
+            { id: 'ownerConfig', ok: true },
+            { id: 'apiBase', ok: true, value: 'http://backend.test' },
+            { id: 'node', ok: true, value: 'beating' },
+          ],
+        }));
+      }
+      if (command === "compute-sharing:borrow-prune") {
+        // atomic cleanup (QA-05): drop expired + the confirmed-dead ids; a
+        // key another process added in between survives because we operate
+        // on the CURRENT store, not the caller's snapshot
+        const store = window.__ATL_E2E_STATE__.borrowStore || { claims: [] };
+        const revoke = new Set(Array.isArray(args.revoke) ? args.revoke : []);
+        const now = Date.now();
+        store.claims = (store.claims || []).filter((c) => {
+          const expired = c.expiresAt > 0 && c.expiresAt <= now;
+          return !expired && !revoke.has(c.keyId);
+        });
+        store.removed = store.removed || [];
+        return Promise.resolve(clone(store));
+      }
+      if (command === "compute-sharing:owner-revoke-claim") {
+        for (const c of window.__ATL_E2E_STATE__.ownerShare?.claims || []) {
+          if (c.keyId === args.keyId && c.state === 'valid') {
+            c.state = 'revoked';
+            c.revokedBy = 'owner';
+            c.revokeReason = args.reason || 'owner_action';
+          }
+        }
+        return Promise.resolve({ revoked: args.keyId, state: 'revoked' });
+      }
+      if (command === "compute-sharing:owner-lane-action") {
+        window.__ATL_E2E_STATE__.ownerCalls.laneActions = window.__ATL_E2E_STATE__.ownerCalls.laneActions || [];
+        window.__ATL_E2E_STATE__.ownerCalls.laneActions.push(clone(args || {}));
+        const lanes = window.__ATL_E2E_STATE__.ownerShare?.share?.lanes || [];
+        const lane = lanes.find((l) => l.id === args.laneId);
+        if (lane) {
+          if (args.action === 'pause') lane.state = 'paused';
+          if (args.action === 'resume') lane.state = 'active';
+          if (args.action === 'terminate') {
+            lane.state = 'suspended';
+            for (const c of window.__ATL_E2E_STATE__.ownerShare.claims || []) {
+              if ((c.laneId || 'default') === lane.id && c.state === 'valid') c.state = 'revoked';
+            }
+          }
+        }
+        return Promise.resolve({ laneId: args.laneId, state: lane ? lane.state : '', lanes: clone(lanes) });
+      }
       // owner console commands (A.2): scenario-driven sample or not_registered
       if (command === "compute-sharing:owner-status") {
         window.__ATL_E2E_STATE__.ownerCalls.status = (window.__ATL_E2E_STATE__.ownerCalls.status || 0) + 1;
         if (cfg.ownerNotRegistered || !window.__ATL_E2E_STATE__.ownerShare) return Promise.reject(new Error("not_registered"));
+        // scenario knob: a TRANSIENT failure (network/backend) must read as
+        // stale, not as not_registered — the card keeps the last view
+        if (window.__ATL_E2E_STATE__.failOwnerStatus) return Promise.reject(new Error("backend_unreachable:connection refused"));
         // mirror the sidecar merge (R51-4): plugin status file rides along
         const owner = clone(window.__ATL_E2E_STATE__.ownerShare);
         if (owner.share) owner.pluginStatus = window.__ATL_E2E_STATE__.pluginStatus || { phase: 'beating', lastError: null, endpointWarning: null };
@@ -700,17 +815,30 @@
               window: wire.window || { unit: "day", n: 1 },
               budgetTokens: (wire.budget && wire.budget.tokens) || 0,
               maxClaims: wire.maxClaims || 2,
-              state: wire.state || "active",
+              state: wire.state || before.state || "active",
               schedule: (wire.schedule && wire.schedule.windows) || [],
               peak: { windows: (wire.peak && wire.peak.windows) || [], multiplier: (wire.peak && wire.peak.multiplier) || 1 },
             };
           });
           const keptIds = new Set(args.lanes.map((l) => l.id));
+          const wireStateOf = (laneId) => {
+            const wire = args.lanes.find((l) => l.id === laneId);
+            if (wire && wire.state) return wire.state;
+            const before = prev.find((l) => l.id === laneId);
+            return before ? before.state : "active";
+          };
           for (const claim of window.__ATL_E2E_STATE__.ownerShare.claims || []) {
-            const suspended = args.lanes.some((l) => l.id === (claim.laneId || "default") && l.state !== "active");
+            // D2: only a TERMINATED (suspended) or removed lane revokes keys;
+            // a paused lane keeps them
+            const suspended = wireStateOf(claim.laneId || "default") === "suspended";
             const removed = claim.state === "valid" && !keptIds.has(claim.laneId || "default");
             if (suspended || removed) claim.state = "revoked";
           }
+        }
+        // mirror the real backend: the saved policy becomes the stored
+        // policy, so owner-status serves the normalized values back
+        if (window.__ATL_E2E_STATE__.ownerShare?.share && args && args.policy) {
+          Object.assign(window.__ATL_E2E_STATE__.ownerShare.share.policy, args.policy);
         }
         return Promise.resolve({
           policy: { ...(window.__ATL_E2E_STATE__.ownerShare?.share?.policy || {}), ...((args || {}).policy || {}) },
@@ -747,9 +875,19 @@
         });
       }
       if (command === "compute-sharing:borrow-test") {
-        // scenario knob: __ATL_E2E_STATE__.borrowTestResult forces a failure
-        const forced = window.__ATL_E2E_STATE__.borrowTestResult;
-        return Promise.resolve(forced || { ok: true, status: 200, error: null });
+        // scenario knobs: borrowTestResult forces a persistent failure;
+        // borrowTestFirstFail fails only the FIRST call (sync-window retry
+        // probe, R2-07) and counts every invocation
+        const state = window.__ATL_E2E_STATE__;
+        state.borrowTestCalls = (state.borrowTestCalls || 0) + 1;
+        if (state.borrowTestFirstFail && state.borrowTestCalls === 1) {
+          return Promise.resolve({ ok: false, status: 401, error: "key not synced yet" });
+        }
+        const forced = state.borrowTestResult;
+        const result = clone(forced || { ok: true, status: 200, error: null, protocol: "anthropic", model: "glm-5.3", latencyMs: 12 });
+        return state.borrowTestDelayMs
+          ? new Promise((resolve) => setTimeout(() => resolve(result), state.borrowTestDelayMs))
+          : Promise.resolve(result);
       }
       if (command === "compute-sharing:borrow-set") {
         window.__ATL_E2E_STATE__.borrowCalls.sets += 1;
@@ -763,6 +901,10 @@
     // Identity-bound compute borrowing (R28b): state backing the generic
     // sidecar commands above; seeded from cfg.borrowClaims for card specs.
     window.__ATL_E2E_STATE__.borrowCalls = { signs: [], sets: 0 };
+    window.__ATL_E2E_STATE__.shares = clone(Array.isArray(cfg.shares) ? cfg.shares : []);
+    window.__ATL_E2E_STATE__.directoryFetches = 0;
+    window.__ATL_E2E_STATE__.liveClaims = clone(Array.isArray(cfg.liveClaims) ? cfg.liveClaims : []);
+    window.__ATL_E2E_STATE__.claimError = cfg.claimError || null;
     window.__ATL_E2E_STATE__.ownerCalls = { policy: [], lanes: [], status: 0, unregistered: false, resumed: false };
     window.__ATL_E2E_STATE__.ownerShare = cfg.ownerNotRegistered ? null : {
       share: {
@@ -771,6 +913,7 @@
         baseURL: 'http://192.168.1.4:8317', lifetimeSettled: 5600, claimsIssued: 3,
         plugin: { online: true, version: '0.1.0', lastHeartbeatAt: Date.now() },
         policy: { budget: 1000000, keyMaxTokens: 200000, keyConcurrency: 3, ttlHours: 168 },
+        policyRev: 3, policyAckedRev: 3, lastProtocol: 2,
         wallSignal: { at: Date.now(), ownerFailed: 3 },
         lanes: [
           {

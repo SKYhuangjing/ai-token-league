@@ -114,13 +114,28 @@ fn last_n(value: &str, n: usize) -> String {
 /// 接入配置 block. OpenAI-compatible clients want base + "/v1"; Anthropic
 /// clients want the bare base.
 pub(crate) fn export_lines(base_url: &str, token: &str) -> Vec<String> {
+    export_lines_with_model(base_url, token, None)
+}
+
+/// `model` (a concrete id from the lane's scope) rides along as
+/// ANTHROPIC_MODEL / OPENAI_MODEL — without it the tool's DEFAULT model is
+/// sent, which the lane almost certainly does not serve ("unknown provider"
+/// on first use was the top blind-eval complaint).
+pub(crate) fn export_lines_with_model(base_url: &str, token: &str, model: Option<&str>) -> Vec<String> {
     let base = base_url.trim_end_matches('/');
-    vec![
+    let mut lines = vec![
         format!("export OPENAI_BASE_URL={}/v1", base),
         format!("export OPENAI_API_KEY={}", token),
-        format!("export ANTHROPIC_BASE_URL={}", base),
-        format!("export ANTHROPIC_AUTH_TOKEN={}", token),
-    ]
+    ];
+    if let Some(model) = model {
+        lines.push(format!("export OPENAI_MODEL={}", model));
+    }
+    lines.push(format!("export ANTHROPIC_BASE_URL={}", base));
+    lines.push(format!("export ANTHROPIC_AUTH_TOKEN={}", token));
+    if let Some(model) = model {
+        lines.push(format!("export ANTHROPIC_MODEL={}", model));
+    }
+    lines
 }
 
 #[cfg(test)]

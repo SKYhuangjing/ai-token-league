@@ -4978,10 +4978,17 @@ let activePluginId = "";
 function moduleToggleHtml(mod, on) {
   const title = mod.remote ? (mod.title || mod.id) : t(mod.titleKey);
   const state = on ? "true" : "false";
+  // External-service plugins (usability design §5.1): the switch manages the
+  // PANEL, not the service — the label says so and never reads as "sharing
+  // on/off". Copy comes from declarative metadata, no id-specific branch.
+  const external = Boolean(mod.externalService);
+  const labelKey = external
+    ? (on ? "desktop.modules.panelShown" : "desktop.modules.panelHidden")
+    : (on ? "desktop.modules.enabled" : "desktop.modules.disabled");
   return `<div class="modules-card-toggle">
-    <span class="modules-toggle-label">${on ? t("desktop.modules.enabled") : t("desktop.modules.disabled")}</span>
+    <span class="modules-toggle-label">${t(labelKey)}</span>
     <button class="source-switch ${on ? "is-on" : "is-off"}" data-module-toggle="${escapeHtml(mod.id)}" type="button" role="switch" aria-checked="${state}" aria-pressed="${state}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"></button>
-  </div>`;
+  </div>${external ? `<div class="modules-external-note">${t("desktop.modules.externalToggleNote")}</div>` : ""}`;
 }
 
 // Click handler for the switch; on failure the visual state reverts because
@@ -5007,6 +5014,74 @@ function bindModuleToggle(card, mod) {
   });
 }
 
+// Shipped declarations let first-party plugins run from their downloaded
+// packages before the online catalog responds. Other plugins must wait for
+// their permission metadata instead of mounting once with an empty guard.
+function remoteModuleMetadataAvailable(id) {
+  return Boolean(FIRST_PARTY_PLUGINS[id] || modulesHost.online.byId?.[id]);
+}
+
+function pendingModuleCatalogText() {
+  if (!modulesHost.online.loaded) return t("desktop.modules.onlineLoading");
+  return t(modulesHost.online.noBase ? "desktop.modules.onlineNoCloud" : "desktop.modules.onlineUnavailable");
+}
+
+function updateRemoteUpgradeControl(card, mod) {
+  const latest = modulesHost.online.byId?.[mod.id];
+  const hasUpgrade = Boolean(latest && mod.version && _compareVersionStrings(mod.version, latest.version) < 0);
+  let button = card.querySelector("[data-remote-upgrade]");
+  if (!hasUpgrade) {
+    button?.remove();
+    return;
+  }
+  if (!button) {
+    const meta = card.querySelector(".modules-card-meta");
+    if (!meta) return;
+    button = document.createElement("button");
+    button.className = "primary-pill row-inline-action";
+    button.type = "button";
+    button.dataset.remoteUpgrade = mod.id;
+    button.addEventListener("click", () => {
+      run(async () => {
+        const entry = modulesHost.online.byId?.[mod.id];
+        if (!entry) return;
+        try {
+          await installRemoteModule(entry);
+          modulesNotice(t("desktop.modules.onlineInstallDone", { name: remoteEntryName(entry), version: entry.version }));
+          rerenderModules();
+        } catch (error) {
+          modulesError(String(error.message || error));
+        }
+      });
+    });
+    meta.insertBefore(button, meta.querySelector("[data-remote-uninstall]"));
+  }
+  button.textContent = t("desktop.modules.upgradeTo", { version: latest.version });
+}
+
+// Catalog completion only replaces unmounted placeholders. Existing cards
+// keep their component state, input drafts, listeners, and in-flight work.
+function refreshCatalogDependentCards() {
+  for (const mod of listRemoteInstalledModules()) {
+    let card = document.querySelector(`[data-module-card="${cssEscape(mod.id)}"]`);
+    if (!card) continue;
+    if (card.dataset.catalogPending === "1") {
+      if (remoteModuleMetadataAvailable(mod.id)) {
+        const replacement = moduleEnabled(modulesHost.state, mod.id) ? buildModuleCard(mod) : buildDisabledPluginPane(mod);
+        card.replaceWith(replacement);
+        card = replacement;
+        const tab = document.querySelector(`[data-plugin-tab="${cssEscape(mod.id)}"]`);
+        if (tab) tab.textContent = moduleLabel(mod);
+      } else {
+        const mount = card.querySelector("[data-remote-mount]");
+        if (mount) mount.textContent = pendingModuleCatalogText();
+      }
+    }
+    updateRemoteUpgradeControl(card, mod);
+  }
+  applyPluginTabVisibility();
+}
+
 // Renders the module cards once. Rebuilding innerHTML afterwards would drop
 // the cloned detail listeners, so state changes go through
 // updateModuleCardStates() instead.
@@ -5015,16 +5090,14 @@ function buildModuleCard(mod) {
   const card = document.createElement("div");
   card.className = "modules-module-card" + (mod.type === "serving" ? " modules-module-card-serving" : "") + (on ? "" : " modules-module-card-off");
   card.dataset.moduleCard = mod.id;
+  if (mod.externalService) card.dataset.externalService = "1";
   // Remote modules carry pre-translated catalog copy; built-ins use i18n keys.
   const headCopy = mod.titleKey
     ? `<strong>${t(mod.titleKey)}</strong><div class="muted">${t(mod.descKey)}</div>`
     : `<strong>${escapeHtml(mod.title || mod.id)}</strong><div class="muted">${escapeHtml(mod.desc || "")}</div>`;
-  const latest = mod.remote ? (modulesHost.online.byId || {})[mod.id] : null;
-  const hasUpgrade = Boolean(latest && mod.version && _compareVersionStrings(mod.version, latest.version) < 0);
   const meta = mod.remote
     ? `<div class="module-inline-actions modules-card-meta">
         <span class="muted mono">v${escapeHtml(mod.version || "?")}</span>
-        ${hasUpgrade ? `<button class="primary-pill row-inline-action" data-remote-upgrade="${escapeHtml(mod.id)}" type="button">${escapeHtml(t("desktop.modules.upgradeTo", { version: latest.version }))}</button>` : ""}
         <button class="outline-button row-inline-action" data-remote-uninstall="${escapeHtml(mod.id)}" type="button">${t("desktop.modules.uninstall")}</button>
       </div>`
     : "";
@@ -5044,38 +5117,59 @@ function buildModuleCard(mod) {
   if (mod.remote) {
     detail.innerHTML = `<div data-remote-mount="${escapeHtml(mod.id)}"></div>`;
     bindRemoteUninstall(card, mod);
-    detail.querySelector(`[data-remote-upgrade="${cssEscape(mod.id)}"]`)?.addEventListener("click", () => {
-      run(async () => {
-        try {
-          await installRemoteModule(latest);
-          modulesNotice(t("desktop.modules.onlineInstallDone", { name: remoteEntryName(latest), version: latest.version }));
-          rerenderModules();
-        } catch (error) {
-          modulesError(String(error.message || error));
-        }
-      });
-    });
+    updateRemoteUpgradeControl(card, mod);
     const mountPoint = detail.querySelector(`[data-remote-mount="${cssEscape(mod.id)}"]`);
-    if (on && mountPoint) mountRemoteModuleInto(mountPoint, mod);
+    if (!remoteModuleMetadataAvailable(mod.id)) {
+      card.dataset.catalogPending = "1";
+      if (mountPoint) mountPoint.textContent = pendingModuleCatalogText();
+    } else if (on && mountPoint) {
+      mountRemoteModuleInto(mountPoint, mod);
+    }
   }
   bindModuleToggle(card, mod);
   return card;
 }
 
 // Shared uninstall control for installed remote plugins (version row).
+// External-service plugins get an inline two-step confirm (usability design
+// §5.1): the first click explains that the CPA service and issued keys keep
+// running and offers 返回管理 / 仅卸载面板 — never a one-click removal that
+// silently strands the management entry while the service lives on.
 function bindRemoteUninstall(detail, mod) {
-  detail.querySelector(`[data-remote-uninstall="${cssEscape(mod.id)}"]`)?.addEventListener("click", () => {
+  const button = detail.querySelector(`[data-remote-uninstall="${cssEscape(mod.id)}"]`);
+  if (!button) return;
+  const doUninstall = () => {
     run(async () => {
       try {
         const removed = await uninstallRemoteModule(mod.id);
         rerenderModules();
         modulesNotice(removed
-          ? t("desktop.modules.onlineUninstalled", { name: remoteEntryName(mod) })
+          ? t(mod.externalService ? "desktop.modules.externalUninstalled" : "desktop.modules.onlineUninstalled", { name: remoteEntryName(mod) })
           : t("desktop.modules.packageDeleteFail"));
       } catch (error) {
         modulesError(String(error.message || error));
       }
     });
+  };
+  if (!mod.externalService) {
+    button.addEventListener("click", doUninstall);
+    return;
+  }
+  button.addEventListener("click", () => {
+    const metaRow = button.closest(".modules-card-meta") || button.parentElement;
+    if (!metaRow || metaRow.querySelector("[data-external-uninstall-confirm]")) return;
+    const confirmRow = document.createElement("div");
+    confirmRow.className = "modules-inline-confirm";
+    confirmRow.dataset.externalUninstallConfirm = "1";
+    confirmRow.innerHTML = `
+      <span class="muted">${t("desktop.modules.externalUninstallNote")}</span>
+      <span class="modules-inline-confirm-actions">
+        <button class="outline-button row-inline-action" data-external-uninstall-back type="button">${t("desktop.modules.uninstallBack")}</button>
+        <button class="outline-button row-inline-action" data-external-uninstall-confirm-yes type="button">${t("desktop.modules.uninstallPanelOnly")}</button>
+      </span>`;
+    metaRow.appendChild(confirmRow);
+    confirmRow.querySelector("[data-external-uninstall-back]")?.addEventListener("click", () => confirmRow.remove());
+    confirmRow.querySelector("[data-external-uninstall-confirm-yes]")?.addEventListener("click", doUninstall);
   });
 }
 
@@ -5153,8 +5247,8 @@ async function refreshModulesState() {
   modulesHost.state = normalizeModulesState(saved && saved.modules);
 }
 
-// Called by refreshModulesPanel before rendering; a failed catalog fetch only
-// degrades the online section, never the local module cards.
+// Refreshed independently of first-party card mounting; remote-only metadata
+// is applied to the pending cards after this request settles.
 async function refreshRemoteCatalog() {
   const base = remoteModulesBase();
   if (!base) {
@@ -5173,9 +5267,19 @@ function listRemoteInstalledModules() {
   return Object.entries(modulesHost.state || {})
     .filter(([id, entry]) => id && entry && entry.installedVersion && !findModule(id))
     .map(([id, entry]) => {
-      // first-party metadata wins over the catalog copy so an offline
-      // catalog never degrades the card to a bare id
-      const meta = byId[id] || FIRST_PARTY_PLUGINS[id] || {};
+      // Field-level merge with first-party priority (QA-01): the online
+      // catalog entry replaces the WHOLE object, so a catalog published
+      // before a manifest field existed (e.g. externalService) used to
+      // shadow the first-party declaration. Copy fields now fall back
+      // per-field; the externalService marker takes the first-party value
+      // whenever the catalog entry doesn't carry one.
+      const catalogMeta = byId[id] || {};
+      const firstParty = FIRST_PARTY_PLUGINS[id] || {};
+      const meta = { ...catalogMeta };
+      for (const [key, value] of Object.entries(firstParty)) {
+        if (meta[key] === undefined) meta[key] = value;
+      }
+      if (meta.externalService === undefined && firstParty.externalService) meta.externalService = firstParty.externalService;
       return {
         id,
         remote: true,
@@ -5186,6 +5290,7 @@ function listRemoteInstalledModules() {
         descKey: meta.descKey || null,
         title: meta.title || id,
         desc: meta.desc || "",
+        externalService: meta.externalService || null,
       };
     });
 }
@@ -5245,6 +5350,7 @@ async function mountRemoteModuleInto(detailEl, mod) {
       escapeHtml,
       apiBase: remoteModulesBase,
       notify: (text, opts) => showToast(String(text || ""), opts),
+      lang: () => getCurrentLang(),
     }));
   } catch (error) {
     if (error && error.code === "offline") {
@@ -5505,6 +5611,7 @@ function buildDisabledPluginPane(mod) {
   const row = document.createElement("div");
   row.className = "modules-module-card modules-module-card-off";
   row.dataset.moduleCard = mod.id;
+  if (mod.remote && !remoteModuleMetadataAvailable(mod.id)) row.dataset.catalogPending = "1";
   const headCopy = mod.titleKey
     ? `<strong>${t(mod.titleKey)}</strong><div class="muted">${t(mod.descKey)}</div>`
     : `<strong>${escapeHtml(mod.title || mod.id)}</strong><div class="muted">${escapeHtml(mod.desc || "")}</div>`;
@@ -5533,7 +5640,12 @@ function updateModuleCardStates() {
         toggle.setAttribute("aria-pressed", String(on));
       }
       const label = card.querySelector(".modules-toggle-label");
-      if (label) label.textContent = on ? t("desktop.modules.enabled") : t("desktop.modules.disabled");
+      if (label) {
+        const external = card.dataset.externalService === "1";
+        label.textContent = on
+          ? (external ? t("desktop.modules.panelShown") : t("desktop.modules.enabled"))
+          : (external ? t("desktop.modules.panelHidden") : t("desktop.modules.disabled"));
+      }
     }
     const detail = document.querySelector(`[data-module-detail="${cssEscape(id)}"]`);
     if (detail) detail.hidden = !on;
@@ -5682,9 +5794,13 @@ async function refreshModulesPanel() {
       return;
     }
   }
-  try { await refreshRemoteCatalog(); } catch { modulesHost.online = { loaded: true, noBase: false, failed: true, byId: {} }; /* 目录不可达不阻塞本地模块 */ }
+  // Local state and shipped metadata are sufficient for the first-party
+  // cards. Do not put an up-to-eight-second network request before mounting.
   renderModuleCards();
   updateModuleCardStates();
+  try { await refreshRemoteCatalog(); } catch { modulesHost.online = { loaded: true, noBase: false, failed: true, byId: {} }; }
+  refreshCatalogDependentCards();
+  renderOnlinePane();
 }
 
 // 启动应用（boot 内完成配置加载/语言/扫描）。模块屏必须等 getConfig 写入

@@ -343,6 +343,53 @@ enum ShareAction {
         #[arg(short = 'j', long)]
         json: bool,
     },
+    /// Pause one lane (rejects traffic + new claims; borrower keys are KEPT)
+    LanePause {
+        /// Lane id from 'share owner'
+        lane_id: String,
+        /// Confirm the pause
+        #[arg(long)]
+        yes: bool,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Resume a paused lane (same keys work again)
+    LaneResume {
+        /// Lane id from 'share owner'
+        lane_id: String,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Terminate one lane (cascade-revokes its borrower keys; not reversible)
+    LaneTerminate {
+        /// Lane id from 'share owner'
+        lane_id: String,
+        /// Confirm the destructive termination
+        #[arg(long)]
+        yes: bool,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// Owner: revoke ONE borrower's claim key (others unaffected)
+    OwnerRevoke {
+        /// Claim key id from 'share owner' (full or unique prefix)
+        key_id: String,
+        /// Confirm the revocation
+        #[arg(long)]
+        yes: bool,
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
+    /// First-share readiness: identity, config, address, node freshness
+    Doctor {
+        /// Output machine-readable JSON
+        #[arg(short = 'j', long)]
+        json: bool,
+    },
 }
 
 /// Whether the invoked command asked for `--json` — decided once here, so
@@ -379,7 +426,12 @@ fn wants_json(cmd: &Commands) -> bool {
             | ShareAction::Owner { json }
             | ShareAction::Suggest { json }
             | ShareAction::Stop { json, .. }
-            | ShareAction::Resume { json } => *json,
+            | ShareAction::Resume { json }
+            | ShareAction::LanePause { json, .. }
+            | ShareAction::LaneResume { json, .. }
+            | ShareAction::LaneTerminate { json, .. }
+            | ShareAction::OwnerRevoke { json, .. }
+            | ShareAction::Doctor { json } => *json,
         },
         _ => false,
     }
@@ -414,10 +466,25 @@ async fn main() {
                 prog
             ))
         });
+    // Parser failures happen before wants_json can inspect a parsed command.
+    // Honor an explicitly requested JSON envelope on that boundary too.
+    let json_requested = std::env::args_os().skip(1)
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--json" || arg == "-j");
     let cli = <Cli as clap::FromArgMatches>::from_arg_matches(
-        &command
-            .try_get_matches()
-            .unwrap_or_else(|e| e.exit()),
+        &command.try_get_matches().unwrap_or_else(|error| {
+            if json_requested && error.exit_code() != 0 {
+                let message = error.render().to_string();
+                let (first, rest) = message.split_once('\n').unwrap_or((&message, ""));
+                println!("{}", serde_json::json!({
+                    "ok": false,
+                    "error": first.trim().trim_start_matches("error: "),
+                    "hint": if rest.trim().is_empty() { format!("Run '{} --help' for usage.", prog) } else { rest.trim().to_string() },
+                }));
+                std::process::exit(error.exit_code());
+            }
+            error.exit()
+        }),
     )
     .expect("matches produced by the same derived command");
 

@@ -17,6 +17,9 @@ function scenarioTest(config) {
     page: async ({ page }, use) => {
       await page.addInitScript(`window.__ATL_E2E_CONFIG__ = ${JSON.stringify(config)};`);
       await page.addInitScript(mockScript);
+      // Local module workflows must not depend on the external test hostname.
+      await page.route('**/api/modules/remote/catalog', (route) => route.fulfill({ json: { catalog: [] } }));
+      await page.route('**/api/modules/remote/file/**', (route) => route.abort());
       await page.route(`**/api/modules/remote/file/zhipu-plan/${ZHIPU_VERSION}/index.js`, (route) =>
         route.fulfill({ status: 200, contentType: 'text/javascript', body: zhipuSource }));
       await page.goto('/');
@@ -215,4 +218,95 @@ disabled.describe('Modules screen (disabled, en)', () => {
     await expect(page.locator('[data-settings-tab="modules"]')).toHaveCount(0);
     await expect(page.locator('[data-settings-tab="sharing"]')).toHaveCount(0);
   });
+});
+
+const THIRD_PARTY_ID = 'catalog-permission-example';
+const thirdPartySource = `export default { async mount(el, ctx) {
+  window.__thirdPartyMountCount = (window.__thirdPartyMountCount || 0) + 1;
+  await ctx.invoke('zhipu-plan:usage', { force: false, keys: [] });
+  el.textContent = 'Third-party permission ready';
+} };`;
+const readinessCatalog = { catalog: [
+  { id: 'zhipu-plan', version: '1.1.6', permissions: ['sidecar:zhipu-plan:usage'] },
+  { id: THIRD_PARTY_ID, version: '1.0.0', title: 'Permission example', permissions: ['sidecar:zhipu-plan:usage'] },
+] };
+
+async function setupCachedModules(page) {
+  await page.addInitScript({ content: `window.__ATL_E2E_CONFIG__ = ${JSON.stringify({
+    desktopAutoInitialized: false, language: 'en', apiBaseUrl: 'http://backend.test',
+    modules: {
+      'zhipu-plan': { enabled: true, config: {}, installedVersion: ZHIPU_VERSION },
+      [THIRD_PARTY_ID]: { enabled: true, config: {}, installedVersion: '1.0.0' },
+    },
+  })};` });
+  await page.addInitScript(mockScript);
+  await page.addInitScript((packages) => {
+    // The mock resets its package store when the bridge installs tokenLeague.
+    // Seed only after that setter has initialized the sidecar-backed methods.
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'tokenLeague');
+    Object.defineProperty(window, 'tokenLeague', {
+      ...descriptor,
+      set(api) {
+        descriptor.set.call(window, api);
+        Object.assign(window.__ATL_E2E_STATE__.pluginPackages, packages);
+      },
+    });
+  }, {
+    [`zhipu-plan/${ZHIPU_VERSION}`]: zhipuSource,
+    [`${THIRD_PARTY_ID}/1.0.0`]: thirdPartySource,
+  });
+}
+
+base('R3: a slow catalog never blocks cached first-party cards or mounts third parties without permissions', async ({ page }) => {
+  await setupCachedModules(page);
+  let releaseCatalog;
+  const catalogGate = new Promise((resolve) => { releaseCatalog = resolve; });
+  let requests = 0;
+  await page.route('**/api/modules/remote/catalog', async (route) => {
+    requests += 1;
+    await catalogGate;
+    await route.fulfill({ json: readinessCatalog });
+  });
+  await page.route('**/api/modules/remote/file/**', (route) => route.abort());
+  try {
+    await page.goto('/');
+    await navigateTo(page, 'modules');
+    await expect.poll(() => requests).toBeGreaterThan(0);
+    const input = page.locator('#zhipu-key-label');
+    await expect(input).toBeVisible({ timeout: 1000 });
+    await input.fill('Draft while catalog is pending');
+    expect(await page.evaluate(() => window.__thirdPartyMountCount || 0)).toBe(0);
+    releaseCatalog();
+    await expect(page.locator(`[data-module-card="${THIRD_PARTY_ID}"]`)).toContainText('Third-party permission ready');
+    await expect(page.locator('[data-plugin-tab="catalog-permission-example"]')).toHaveText('Permission example');
+    await expect(input).toHaveValue('Draft while catalog is pending');
+    await expect(page.locator('[data-remote-upgrade="zhipu-plan"]')).toHaveText('Upgrade v1.1.6');
+    expect(await page.evaluate(() => window.__thirdPartyMountCount)).toBe(1);
+    await page.route('**/api/modules/remote/file/zhipu-plan/1.1.6/index.js', (route) =>
+      route.fulfill({ status: 200, contentType: 'text/javascript', body: zhipuSource }));
+    await page.locator('[data-remote-upgrade="zhipu-plan"]').click();
+    await expect.poll(() => page.evaluate(() => window.__ATL_E2E_STATE__.modulesState.modules['zhipu-plan'].installedVersion)).toBe('1.1.6');
+    await expect(page.locator('#zhipu-key-label')).toBeVisible();
+  } finally { releaseCatalog(); }
+});
+
+base('R3: third-party permission metadata recovers after catalog failure without remounting local drafts', async ({ page }) => {
+  await setupCachedModules(page);
+  let available = false;
+  await page.route('**/api/modules/remote/catalog', (route) => available ? route.fulfill({ json: readinessCatalog }) : route.abort());
+  await page.route('**/api/modules/remote/file/**', (route) => route.abort());
+  await page.goto('/');
+  await navigateTo(page, 'modules');
+  const input = page.locator('#zhipu-key-label');
+  await expect(input).toBeVisible();
+  await input.fill('Draft through catalog recovery');
+  const thirdParty = page.locator(`[data-module-card="${THIRD_PARTY_ID}"]`);
+  await expect(thirdParty).toContainText('The online catalog is temporarily unavailable.');
+  expect(await page.evaluate(() => window.__thirdPartyMountCount || 0)).toBe(0);
+  available = true;
+  await navigateTo(page, 'overview');
+  await navigateTo(page, 'modules');
+  await expect(thirdParty).toContainText('Third-party permission ready');
+  await expect(input).toHaveValue('Draft through catalog recovery');
+  expect(await page.evaluate(() => window.__thirdPartyMountCount)).toBe(1);
 });

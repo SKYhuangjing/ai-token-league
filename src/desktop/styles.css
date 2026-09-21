@@ -4407,3 +4407,27 @@ label {
 .module-meter i[data-over="1"] {
   background: var(--red);
 }
+
+/* External-service panel plugins (usability design §5.1): the switch note
+   and the inline uninstall confirm row. */
+.modules-external-note {
+  font-size: 11.5px;
+  color: var(--muted, #8a8f98);
+  margin-top: 2px;
+}
+
+.modules-inline-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+}
+
+.modules-inline-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

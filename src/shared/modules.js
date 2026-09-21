@@ -27,16 +27,31 @@ export const FIRST_PARTY_PLUGINS = {
     type: "query",
     titleKey: "desktop.sharing.plugin.title",
     descKey: "desktop.sharing.plugin.desc",
+    // Declarative external-service metadata (usability design §5.1): the
+    // sharing engine runs inside the owner's CPA process, so disabling or
+    // uninstalling this panel never stops the service. Generic platform
+    // capability — the host renders the copy, no id-specific branches.
+    externalService: { kind: "cpa", stopPolicy: "independent" },
     permissions: [
       "sidecar:compute-sharing:claim-sign",
       "sidecar:compute-sharing:borrow-get",
       "sidecar:compute-sharing:borrow-set",
-        "sidecar:compute-sharing:borrow-test",
+      "sidecar:compute-sharing:borrow-prune",
+      "sidecar:compute-sharing:doctor",
+      "sidecar:compute-sharing:borrow-test",
+      "sidecar:compute-sharing:directory",
+      "sidecar:compute-sharing:claim",
+      "sidecar:compute-sharing:renew",
+      "sidecar:compute-sharing:revoke",
+      "sidecar:compute-sharing:live",
+      "sidecar:compute-sharing:models",
       "sidecar:compute-sharing:owner-status",
       "sidecar:compute-sharing:owner-policy",
       "sidecar:compute-sharing:owner-resume",
       "sidecar:compute-sharing:owner-suggest",
       "sidecar:compute-sharing:owner-unregister",
+      "sidecar:compute-sharing:owner-revoke-claim",
+      "sidecar:compute-sharing:owner-lane-action",
     ],
   },
 };

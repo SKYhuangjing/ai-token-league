@@ -14,7 +14,9 @@ use crate::now_ms;
 use crate::bootstrap::{self, OwnerConfig};
 use crate::with_runtime;
 use crate::{PLUGIN_VERSION, Runtime};
-use crate::core_state::{merge_delta, restore_lane_settled, restore_settled, LaneEntry, SyncState, UsageDelta, WindowMark};
+use crate::core_state::{effective_lane_window, merge_bucket, merge_delta, restore_key_charged, restore_lane_settled, restore_settled, LaneEntry, SyncState, UsageBucket, WindowMark};
+#[cfg(test)]
+use crate::core_state::UsageDelta;
 
 fn str_of(v: &Value, key: &str) -> String {
     v.get(key).and_then(|x| x.as_str()).unwrap_or("").trim().to_string()
@@ -146,11 +148,46 @@ pub(crate) fn parse_sync_response(resp: &Value, now_ms: i64) -> SyncState {
         lanes: lanes_of(resp),
         last_sync_ms: now_ms,
         configured: true,
+        policy_rev: resp.get("policyRev").and_then(|v| v.as_u64()).unwrap_or(0),
+        // the backend echoes the protocol it settled with; a response without
+        // the field is a pre-v2 backend (QA-04)
+        protocol: resp.get("protocol").and_then(|v| v.as_u64()).unwrap_or(1).min(2) as u8,
+        tz_offset_minutes: crate::tz_offset_minutes(),
     }
 }
 
 fn settled_map_of(resp: &Value) -> HashMap<String, u64> {
     resp.get("settledByKey")
+        .and_then(|v| v.as_object())
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| v.as_u64().map(|n| (k.clone(), n)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Protocol-2 per-key window charge: { keyId: { windowKey, charged } }.
+fn key_ledger_of(resp: &Value) -> HashMap<String, (String, u64)> {
+    resp.get("keyLedger")
+        .and_then(|v| v.as_object())
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| {
+                    let window_key = str_of(v, "windowKey");
+                    let charged = v.get("charged").and_then(|x| x.as_u64()).unwrap_or(0);
+                    Some((k.clone(), (window_key, charged)))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Protocol-2 per-key last accepted batch seq: { keyId: seq }. A restarted
+/// plugin resumes counters from here — renumbering from 1 would make the
+/// backend's dedup silently drop all post-restart usage.
+fn last_seq_map_of(resp: &Value) -> HashMap<String, u64> {
+    resp.get("lastSeqByKey")
         .and_then(|v| v.as_object())
         .map(|map| {
             map.iter()
@@ -246,20 +283,51 @@ pub(crate) fn tick() {
         bootstrap::discover_cpa_bind().as_deref(),
     );
 
-    let mut usage: Vec<UsageDelta> = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.pending_usage))
-        .unwrap_or_default();
-    let owner_failures = with_runtime(|rt: &mut Runtime| std::mem::take(&mut rt.owner_failures))
-        .unwrap_or(0);
+    // One lock owns drain, numbering and the durable in-flight snapshot.
+    // Usage callbacks can subsequently append without erasing the sent batch.
+    let prepared = with_runtime(|rt| {
+        let mut buckets = std::mem::take(&mut rt.pending_buckets);
+        rt.inflight_usage = std::mem::take(&mut rt.pending_usage);
+        if let Err(error) = stamp_and_persist_in(rt, &mut buckets, &crate::pending_state_path()) {
+            requeue_inflight(rt);
+            return Err(error);
+        }
+        Ok((rt.inflight_usage.clone(), buckets, rt.applied_policy_rev, std::mem::take(&mut rt.owner_failures)))
+    });
+    let (usage, buckets, applied_policy_rev, owner_failures) = match prepared {
+        Some(Ok(batch)) => batch,
+        Some(Err(error)) => {
+            status.phase = "error".into();
+            status.last_error = Some(error);
+            bootstrap::write_status(&status);
+            return;
+        }
+        None => return,
+    };
     let usage_json: Vec<Value> = usage
         .iter()
         .map(|d| json!({ "keyId": d.key_id, "tokens": d.tokens, "requests": d.requests, "failed": d.failed }))
+        .chain(buckets.iter().map(|b| {
+            if b.seq > 0 {
+                // v2 bucket: seq + event-time windowKey + raw/charged split.
+                // `tokens` stays = raw so a pre-v2 backend still settles v1.
+                json!({
+                    "keyId": b.key_id, "seq": b.seq, "laneId": b.lane_id,
+                    "windowKey": b.window_key, "multiplier": b.multiplier,
+                    "rawTokens": b.raw_tokens, "chargedTokens": b.charged_tokens,
+                    "tokens": b.raw_tokens,
+                    "requests": b.requests, "failed": b.failed,
+                })
+            } else {
+                json!({ "keyId": b.key_id, "tokens": b.raw_tokens, "requests": b.requests, "failed": b.failed })
+            }
+        }))
         .collect();
 
     let Some(client) = http_client() else {
         // same invariant as the Err branches below: the wall counter goes
         // back too, or a lost signal window would silently swallow failures
-        with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
-        return_requeue(std::mem::take(&mut usage));
+        retry_batch(owner_failures);
         status.phase = "error".into();
         status.last_error = Some("http client unavailable".into());
         bootstrap::write_status(&status);
@@ -274,8 +342,7 @@ pub(crate) fn tick() {
         // No credentials this tick: nothing can be acknowledged, so the
         // deltas must survive until a register + successful heartbeat clears
         // them (same invariant as the transport-failure paths).
-        with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
-        return_requeue(std::mem::take(&mut usage));
+        retry_batch(owner_failures);
     }
     if let Some(id) = &identity {
         let result = client
@@ -284,6 +351,8 @@ pub(crate) fn tick() {
             .json(&json!({
                 "shareId": id.share_id,
                 "pluginVersion": PLUGIN_VERSION,
+                "protocol": 2,
+                "appliedPolicyRev": applied_policy_rev,
                 "baseURL": bootstrap::current_base_url(&config),
                 "usage": usage_json,
                 "wallSignals": { "ownerFailed": owner_failures },
@@ -295,27 +364,88 @@ pub(crate) fn tick() {
                 Ok(body) => {
                     let now = now_ms();
                     let settled = settled_map_of(&body);
-                    with_runtime(move |rt: &mut Runtime| {
+                    let mut key_ledger = key_ledger_of(&body);
+                    let last_seq = last_seq_map_of(&body);
+                    let protocol = body.get("protocol").and_then(|v| v.as_u64()).unwrap_or(1).min(2) as u8;
+                    let stored = with_runtime(move |rt: &mut Runtime| {
+                        rt.inflight_buckets.clear();
+                        rt.inflight_usage.clear();
                         let window_day = str_of(&body, "windowDay");
                         rt.sync = parse_sync_response(&body, now);
+                        // this response IS applied — ack its revision next beat
+                        rt.applied_policy_rev = rt.sync.policy_rev;
+                        let tz = rt.sync.tz_offset_minutes;
+                        // QA-02: usage completed while the response was in
+                        // flight is un-acked — it must ADD onto the backend
+                        // snapshot, not be overwritten by it
+                        let mut lane_pending: HashMap<(String, String), u64> = HashMap::new();
+                        let mut key_pending: HashMap<String, (String, u64)> = HashMap::new();
+                        for b in &rt.pending_buckets {
+                            *lane_pending.entry((b.lane_id.clone(), b.window_key.clone())).or_insert(0) += b.charged_tokens;
+                            // A heartbeat can span multiple windows for the same
+                            // Key. Only current-window events belong in its gate.
+                            if rt.sync.lanes.iter().any(|lane| lane.id == b.lane_id
+                                && effective_lane_window(lane, now, tz).0 == b.window_key) {
+                                let e = key_pending.entry(b.key_id.clone()).or_insert((b.window_key.clone(), 0));
+                                e.1 += b.charged_tokens;
+                            }
+                        }
+                        let mut legacy_pending: HashMap<String, u64> = HashMap::new();
+                        for d in &rt.pending_usage {
+                            *legacy_pending.entry(d.key_id.clone()).or_insert(0) += d.tokens;
+                        }
                         restore_settled(&mut rt.ledger, &window_day, &settled);
-                        restore_lane_settled(&mut rt.ledger, &rt.sync.lanes);
+                        if protocol < 2 {
+                            // Legacy totals are absolute confirmed baselines,
+                            // not growth deltas or unacknowledged local usage.
+                            // Preserve the backend window mark so a late response
+                            // cannot seed a fresh window with yesterday's total.
+                            for k in &rt.sync.keys {
+                                if let Some(lane) = rt.sync.lanes.iter().find(|l| l.id == k.lane_id) {
+                                    key_ledger.insert(k.key_id.clone(),
+                                        (lane.window_key.clone(), settled.get(&k.key_id).copied().unwrap_or(0)));
+                                }
+                            }
+                        }
+                        restore_lane_settled(&mut rt.ledger, &rt.sync.lanes, now, tz, &lane_pending);
+                        restore_key_charged(&mut rt.ledger, &rt.sync.lanes, &rt.sync.keys, &key_ledger, now, tz, &key_pending);
+                        // legacy per-key day mirror gains the in-flight deltas too
+                        if protocol < 2 {
+                            for (key_id, tokens) in &legacy_pending {
+                                *rt.ledger.settled_by_key.entry(key_id.clone()).or_insert(0) += tokens;
+                            }
+                        }
+                        // resume batch counters after a restart: renumbering
+                        // from 1 would make the backend dedup drop usage
+                        for (key_id, seq) in last_seq {
+                            let entry = rt.usage_seq.entry(key_id).or_insert(0);
+                            if seq > *entry {
+                                *entry = seq;
+                            }
+                        }
+                        crate::save_pending_state(rt)
                     });
-                    status.phase = "beating".into();
                     status.last_success_at = status.last_tick_at;
-                    status.last_error = None;
+                    match stored {
+                        Some(Err(error)) => {
+                            status.phase = "error".into();
+                            status.last_error = Some(error);
+                        }
+                        _ => {
+                            status.phase = "beating".into();
+                            status.last_error = None;
+                        }
+                    }
                 }
                 Err(error) => {
-                    with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
-                    return_requeue(std::mem::take(&mut usage));
+                    retry_batch(owner_failures);
                     status.phase = "error".into();
                     status.last_error = Some(format!("heartbeat decode: {error}"));
                 }
             },
             Ok(resp) => {
                 let rejected = matches!(beat_outcome(resp.status().as_u16()), BeatOutcome::Rejected);
-                with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
-                return_requeue(std::mem::take(&mut usage));
+                retry_batch(owner_failures);
                 status.phase = "error".into();
                 if rejected {
                     // definitive: this backend does not know the stored
@@ -331,8 +461,7 @@ pub(crate) fn tick() {
                 }
             }
             Err(error) => {
-                with_runtime(|rt: &mut Runtime| rt.owner_failures += owner_failures);
-                return_requeue(std::mem::take(&mut usage));
+                retry_batch(owner_failures);
                 status.phase = "error".into();
                 status.last_error = Some(format!("heartbeat transport: {error}"));
             }
@@ -363,16 +492,35 @@ pub(crate) fn tick() {
     bootstrap::write_status(&status);
 }
 
-/// Heartbeat failed: nothing is acknowledged — merge the deltas back so the
-/// next successful round reports the full backlog.
-fn return_requeue(usage: Vec<UsageDelta>) {
-    if usage.is_empty() {
-        return;
-    }
-    with_runtime(|rt: &mut Runtime| {
-        for delta in usage {
-            merge_delta(&mut rt.pending_usage, delta);
+/// Number only fresh buckets. Retries keep their original batch identity.
+/// Runtime owns the in-flight batch before anything can persist or send it.
+pub(crate) fn stamp_and_persist_in(rt: &mut Runtime, buckets: &mut [UsageBucket], path: &std::path::Path) -> Result<(), String> {
+    for bucket in buckets.iter_mut() {
+        if bucket.seq == 0 {
+            if let Some(last) = rt.usage_seq.get(&bucket.key_id).copied() {
+                bucket.seq = last + 1;
+                rt.usage_seq.insert(bucket.key_id.clone(), bucket.seq);
+            }
         }
+    }
+    rt.inflight_buckets = buckets.to_vec();
+    crate::persist_pending_at(rt, path)
+}
+
+fn requeue_inflight(rt: &mut Runtime) {
+    for delta in std::mem::take(&mut rt.inflight_usage) {
+        merge_delta(&mut rt.pending_usage, delta);
+    }
+    for bucket in std::mem::take(&mut rt.inflight_buckets) {
+        merge_bucket(&mut rt.pending_buckets, bucket);
+    }
+    let _ = crate::save_pending_state(rt);
+}
+
+fn retry_batch(owner_failures: u64) {
+    with_runtime(|rt| {
+        rt.owner_failures += owner_failures;
+        requeue_inflight(rt);
     });
 }
 
@@ -434,5 +582,33 @@ mod tests {
         merge_delta(&mut list, UsageDelta { key_id: "b".into(), tokens: 1, requests: 1, failed: 0 });
         assert_eq!(list.len(), 2);
         assert_eq!((list[0].tokens, list[0].requests, list[0].failed), (12, 3, 1));
+    }
+
+    #[test]
+    fn parse_sync_response_extracts_protocol2_fields() {
+        let resp = json!({
+            "state": "active",
+            "windowDay": "2026-09-13",
+            "policyRev": 7,
+            "protocol": 2,
+            "policy": { "budget": 1000000, "keyConcurrency": 3 },
+            "keys": [
+                { "keyId": "csk_1", "token": "atl_sk_a", "keyMaxTokens": 500, "expiresAtMs": 123, "laneId": "gem" }
+            ],
+            "keyLedger": { "csk_1": { "windowKey": "day:2026-09-13", "charged": 4321 } },
+            "lastSeqByKey": { "csk_1": 9 }
+        });
+        let sync = parse_sync_response(&resp, 777);
+        assert_eq!(sync.policy_rev, 7);
+        assert_eq!(sync.keys[0].lane_id, "gem");
+        let ledger_entries = key_ledger_of(&resp);
+        assert_eq!(ledger_entries.get("csk_1"), Some(&("day:2026-09-13".to_string(), 4321u64)));
+        assert_eq!(last_seq_map_of(&resp).get("csk_1"), Some(&9u64));
+        // a v1 response (no protocol-2 fields) parses to empty maps — the
+        // restore paths then no-op instead of zeroing local state
+        let v1 = json!({ "state": "active", "windowDay": "d", "policy": {}, "keys": [], "settledByKey": {} });
+        assert!(key_ledger_of(&v1).is_empty());
+        assert!(last_seq_map_of(&v1).is_empty());
+        assert_eq!(parse_sync_response(&v1, 1).policy_rev, 0);
     }
 }

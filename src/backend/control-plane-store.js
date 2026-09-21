@@ -63,6 +63,11 @@ export function shareToRow(share) {
     windowDay: share.windowDay || "",
     lastHeartbeatAt: Number(share.lastHeartbeatAt) || 0,
     lastPluginVersion: String(share.lastPluginVersion || "").slice(0, 64),
+    // CS-06/CS-07: policy revision tracking (backend truth vs node-confirmed)
+    // and the usage protocol version the node last declared
+    policyRev: Number(share.policyRev) || 1,
+    policyAckedRev: Number(share.policyAckedRev) || 0,
+    lastProtocol: Number(share.lastProtocol) || 1,
     createdAt: Number(share.createdAt) || 0,
     updatedAt: Number(share.updatedAt) || 0,
   };
@@ -86,6 +91,9 @@ export function rowToShare(row) {
     windowDay: row.windowDay || "",
     lastHeartbeatAt: Number(row.lastHeartbeatAt) || 0,
     lastPluginVersion: row.lastPluginVersion || "",
+    policyRev: Number(row.policyRev) || 1,
+    policyAckedRev: Number(row.policyAckedRev) || 0,
+    lastProtocol: Number(row.lastProtocol) || 1,
     createdAt: Number(row.createdAt) || 0,
     updatedAt: Number(row.updatedAt) || 0,
   };
@@ -115,6 +123,12 @@ export function claimToRow(claim) {
     createdAt: Number(claim.createdAt) || 0,
     expiresAt: Number(claim.expiresAt) || 0,
     lastUsedAt: Number(claim.lastUsedAt) || 0,
+    // CS-06: last accepted usage seq (protocol 2 at-most-once settlement)
+    lastSeq: Number(claim.lastSeq) || 0,
+    // CS-07: owner-revoke audit trail
+    revokedBy: claim.revokedBy || "",
+    revokedAt: Number(claim.revokedAt) || 0,
+    revokeReason: String(claim.revokeReason || "").slice(0, 80),
   };
 }
 
@@ -135,6 +149,10 @@ export function rowToClaim(row) {
     createdAt: Number(row.createdAt) || 0,
     expiresAt: Number(row.expiresAt) || 0,
     lastUsedAt: Number(row.lastUsedAt) || 0,
+    lastSeq: Number(row.lastSeq) || 0,
+    revokedBy: row.revokedBy || "",
+    revokedAt: Number(row.revokedAt) || 0,
+    revokeReason: row.revokeReason || "",
   };
 }
 
@@ -193,7 +211,7 @@ const SHARE_COLUMNS = [
   "shareId", "shareSecret", "state", "title", "baseURL", "modelsJson", "policyJson", "settledJson",
   "lanesJson", "laneSettledJson", "wallSignalJson",
   "lifetimeSettled", "claimsIssued", "participantId", "ownerDisplayId", "ownerNickname",
-  "windowDay", "lastHeartbeatAt", "lastPluginVersion", "createdAt", "updatedAt",
+  "windowDay", "lastHeartbeatAt", "lastPluginVersion", "policyRev", "policyAckedRev", "lastProtocol", "createdAt", "updatedAt",
 ];
 const CLAIM_COLUMNS = [
   "keyId", "shareId", "laneId", "shareTitle", "token", "borrower", "participantId", "displayId", "state",

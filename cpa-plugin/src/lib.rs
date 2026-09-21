@@ -33,7 +33,8 @@ mod core_state;
 mod sync;
 
 use core_state::{
-    decide_auth, merge_delta, roll_window, AuthDecision, Gate, Ledger, SyncState, UsageDelta,
+    decide_auth, merge_bucket, merge_delta, roll_window, settle_key_usage, AuthDecision, Gate,
+    Ledger, SyncState, UsageBucket, UsageDelta,
 };
 
 const PLUGIN_ID: &str = "atl-share";
@@ -81,8 +82,23 @@ pub(crate) struct Runtime {
     scopes: HashMap<String, String>,
     /// In-flight request bookkeeping: request_id -> keyId (intercept -> complete).
     inflight_requests: HashMap<String, String>,
-    /// Accumulated usage deltas not yet acknowledged by the backend.
+    /// Accumulated usage not yet acknowledged by the backend. Lanes shares
+    /// accumulate protocol-2 window buckets (pending_buckets); pre-lanes
+    /// backends/shares keep the legacy flat deltas (pending_usage).
+    pub(crate) pending_buckets: Vec<UsageBucket>,
     pub(crate) pending_usage: Vec<UsageDelta>,
+    /// Per-key heartbeat batch counter (protocol 2): stamped at drain time,
+    /// surviving failed sends so a retry keeps its batch number — the backend
+    /// dedups per (key, seq) and would double-settle a renumbered retry.
+    pub(crate) usage_seq: HashMap<String, u64>,
+    /// Sent usage remains owned by Runtime until the response is accepted.
+    /// Every callback snapshot includes it, together with new pending usage.
+    pub(crate) inflight_buckets: Vec<UsageBucket>,
+    pub(crate) inflight_usage: Vec<UsageDelta>,
+    pub(crate) storage_error: Option<String>,
+    /// Policy revision applied from the last heartbeat response; acked on the
+    /// next beat so the owner card can show pending node sync.
+    pub(crate) applied_policy_rev: u64,
     /// Owner-side failed requests observed since the last heartbeat (the
     /// wall signal: advisory input for the owner card, not auto-actioned).
     pub(crate) owner_failures: u64,
@@ -95,13 +111,66 @@ impl Runtime {
             ledger: Ledger::default(),
             scopes: HashMap::new(),
             inflight_requests: HashMap::new(),
+            pending_buckets: Vec::new(),
             pending_usage: Vec::new(),
+            usage_seq: HashMap::new(),
+            inflight_buckets: Vec::new(),
+            inflight_usage: Vec::new(),
+            storage_error: None,
+            applied_policy_rev: 0,
             owner_failures: 0,
         }
     }
 }
 
 static RUNTIME: Mutex<Option<Runtime>> = Mutex::new(None);
+
+/// The journal always contains every unacknowledged event, whether waiting
+/// for a heartbeat or already in flight. Only an accepted response removes it.
+pub(crate) fn pending_state_path() -> std::path::PathBuf {
+    data_dir().join("pending-usage.json")
+}
+
+pub(crate) fn save_pending_state(rt: &mut Runtime) -> Result<(), String> {
+    persist_pending_at(rt, &pending_state_path())
+}
+
+pub(crate) fn persist_pending_at(rt: &mut Runtime, path: &std::path::Path) -> Result<(), String> {
+    let result = write_pending_snapshot(path, rt).map_err(|e| format!("pending usage storage: {e}"));
+    rt.storage_error = result.as_ref().err().cloned();
+    result
+}
+
+fn write_pending_snapshot(path: &std::path::Path, rt: &Runtime) -> std::io::Result<()> {
+    use std::io::Write;
+    let buckets: Vec<&UsageBucket> = rt.inflight_buckets.iter().chain(&rt.pending_buckets).collect();
+    let legacy: Vec<&UsageDelta> = rt.inflight_usage.iter().chain(&rt.pending_usage).collect();
+    let body = json!({ "buckets": buckets, "seq": rt.usage_seq, "legacy": legacy });
+    let tmp = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(body.to_string().as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Path-injected parsing is shared by production recovery and tests.
+pub(crate) fn load_pending_snapshot(path: &std::path::Path) -> (Vec<UsageBucket>, HashMap<String, u64>, Vec<UsageDelta>) {
+    let read = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .unwrap_or(Value::Null);
+    let buckets = serde_json::from_value::<Vec<UsageBucket>>(read.get("buckets").cloned().unwrap_or(Value::Null))
+        .unwrap_or_default();
+    let legacy = serde_json::from_value::<Vec<UsageDelta>>(read.get("legacy").cloned().unwrap_or(Value::Null))
+        .unwrap_or_default();
+    let seq = serde_json::from_value::<HashMap<String, u64>>(read.get("seq").cloned().unwrap_or(Value::Null))
+        .unwrap_or_default();
+    (buckets, seq, legacy)
+}
+
+fn load_pending_state(rt: &mut Runtime) {
+    (rt.pending_buckets, rt.usage_seq, rt.pending_usage) = load_pending_snapshot(&pending_state_path());
+}
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 fn with_runtime<T>(f: impl FnOnce(&mut Runtime) -> T) -> Option<T> {
@@ -212,6 +281,7 @@ fn handle_authenticate(req: &Value) -> Value {
     let token = bearer_of(req.get("Headers").unwrap_or(&Value::Null)).unwrap_or_default();
     let decision = with_runtime(|rt| {
         roll_window(&mut rt.ledger, &rt.sync.window_day.clone());
+        if rt.storage_error.is_some() { return AuthDecision::NotHandled; }
         decide_auth(&rt.sync, &token, now_ms())
     })
     .unwrap_or(AuthDecision::NotHandled);
@@ -338,6 +408,9 @@ fn handle_intercept_before(req: &Value) -> Value {
         // gets no complete event to release its slot, and comparing the
         // pre-reservation count means `key_concurrency` admits exactly that
         // many in-flight requests.
+        if rt.storage_error.is_some() {
+            return Gate::TerminateBudget("usage storage unavailable; retry after node recovery".into());
+        }
         let gate = core_state::gate_request(&rt.ledger, &rt.sync, &key_id, key_cap, now, minute, requested_model.as_deref());
         if matches!(gate, Gate::Pass) && !request_id.is_empty() {
             rt.inflight_requests.insert(request_id.clone(), key_id.clone());
@@ -410,17 +483,53 @@ fn handle_usage(req: &Value) -> Value {
     let minute = local_minute_of_day();
     with_runtime(|rt| {
         roll_window(&mut rt.ledger, &rt.sync.window_day.clone());
-        let mut delta = core_state::apply_usage(&mut rt.ledger.settled_by_key, &key_id, tokens);
-        if failed {
-            delta.failed = 1;
-        }
         // Lane settlement (peak multiplier applies at the event minute)
-        if let Some(entry) = rt.sync.keys.iter().find(|k| k.key_id == key_id) {
-            if let Some(lane) = rt.sync.lanes.iter().find(|l| l.id == entry.lane_id) {
-                core_state::settle_lane_usage(lane, &mut rt.ledger.lane_settled, tokens, now, minute);
-            }
+        let key_lane = rt
+            .sync
+            .keys
+            .iter()
+            .find(|k| k.key_id == key_id)
+            .and_then(|entry| rt.sync.lanes.iter().find(|l| l.id == entry.lane_id))
+            .cloned();
+        let tz = rt.sync.tz_offset_minutes;
+        if let Some(lane) = &key_lane {
+            core_state::settle_lane_usage(lane, &mut rt.ledger.lane_settled, tokens, now, minute, tz);
         }
-        merge_delta(&mut rt.pending_usage, delta);
+        if rt.sync.lanes.is_empty() {
+            // pre-lanes backend/share: legacy flat delta (v1 wire)
+            let mut delta = core_state::apply_usage(&mut rt.ledger.settled_by_key, &key_id, tokens);
+            if failed {
+                delta.failed = 1;
+            }
+            merge_delta(&mut rt.pending_usage, delta);
+        } else {
+            // protocol 2 (CS-06/D1): charge the key inside its lane window at
+            // the event-time multiplier; the pending bucket carries windowKey
+            // + multiplier so the backend settles into the same window even
+            // when the heartbeat races a grid roll.
+            let (window_key, multiplier, charged) = if let Some(lane) = &key_lane {
+                settle_key_usage(&mut rt.ledger, lane, &key_id, tokens, now, minute, tz)
+            } else {
+                (rt.sync.window_day.clone(), 1, tokens)
+            };
+            merge_bucket(
+                &mut rt.pending_buckets,
+                UsageBucket {
+                    key_id: key_id.clone(),
+                    lane_id: key_lane.as_ref().map(|l| l.id.clone()).unwrap_or_default(),
+                    window_key,
+                    multiplier,
+                    raw_tokens: tokens,
+                    charged_tokens: charged,
+                    requests: 1,
+                    failed: u64::from(failed),
+                    seq: 0,
+                },
+            );
+        }
+        // A callback arriving during HTTP flight must preserve both queues.
+        // A failed write blocks further shared traffic until storage recovers.
+        let _ = save_pending_state(rt);
     });
     json!({})
 }
@@ -526,7 +635,9 @@ pub unsafe extern "C" fn cliproxy_plugin_init(_host: *const HostApi, plugin: *mu
     {
         let mut guard = RUNTIME.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
-            *guard = Some(Runtime::new());
+            let mut rt = Runtime::new();
+            load_pending_state(&mut rt);
+            *guard = Some(rt);
         }
     }
     (*plugin).abi_version = 1;
@@ -575,6 +686,37 @@ mod tests {
         with_runtime(|rt| rt.ledger.inflight_by_key.get("k1").copied()).flatten()
     }
 
+
+    #[test]
+    fn first_bucket_of_a_reported_key_ships_v2_wire_and_survives_inflight() {
+        use crate::core_state::UsageBucket;
+        // fully hermetic: temp PATH injection, no env/global mutation
+        let tmp = std::env::temp_dir().join(format!(
+            "atl-cpa-pending-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let mut rt = Runtime::new();
+        rt.usage_seq.insert("k_new".into(), 0);
+        let mut buckets = vec![UsageBucket {
+            key_id: "k_new".into(), lane_id: "default".into(),
+            window_key: "h5:0".into(), multiplier: 1,
+            raw_tokens: 40, charged_tokens: 40, requests: 1, failed: 0, seq: 0,
+        }];
+        sync::stamp_and_persist_in(&mut rt, &mut buckets, &tmp).unwrap();
+        // R2-01: cold-start key numbers its first batch 1
+        assert_eq!(buckets[0].seq, 1);
+        // R2-02: the in-flight batch is on disk BEFORE the ack — reading it
+        // through a fresh parse recovers the 40
+        let (recovered, seq, _legacy) = load_pending_snapshot(&tmp);
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].raw_tokens, 40);
+        assert_eq!(recovered[0].seq, 1, "batch identity survives");
+        assert_eq!(seq.get("k_new"), Some(&1));
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     #[test]
     fn concurrency_gate_admits_exactly_the_cap_and_terminated_requests_leak_no_slot() {
         install_test_runtime(2);
@@ -592,3 +734,6 @@ mod tests {
         assert_eq!(inflight_for_key(), Some(2));
     }
 }
+
+#[cfg(test)]
+mod sync_tests;

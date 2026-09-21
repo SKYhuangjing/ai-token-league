@@ -18,7 +18,6 @@ use collector_core::plugin::{PluginCtx, SidecarPlugin};
 use serde_json::{json, Value};
 
 pub mod flow;
-
 pub struct SharingPlugin;
 
 fn installed(ctx: &PluginCtx<'_>) -> bool {
@@ -47,22 +46,115 @@ impl SidecarPlugin for SharingPlugin {
             "claim-sign" => Some(claim_sign(args)),
             "borrow-get" => Some(borrow_get()),
             "borrow-set" => Some(borrow_set(args)),
+            // QA-05: the card passes only the CONFIRMED-dead key ids; the
+            // mutation re-reads the store under the lock so a key another
+            // process claimed in between always survives
+            "borrow-prune" => Some(borrow_prune(args)),
             "borrow-test" => Some(borrow_test(args)),
             // borrower backend flows (crate = single implementation; the
-            // terminal CLI routes here, the card migrates in a later version)
+            // terminal CLI routes here, the card rides the same commands)
             "directory" => Some(flow::run_directory()),
             "claim" => Some(flow::run_claim(args)),
             "renew" => Some(flow::run_renew(args)),
             "revoke" => Some(flow::run_revoke(args)),
             "live" => Some(flow::run_live()),
+            "models" => Some(flow::run_models(args)),
             "owner-status" => Some(owner_call(OwnerCall::Status, args)),
             "owner-policy" => Some(owner_call(OwnerCall::Policy, args)),
             "owner-unregister" => Some(owner_call(OwnerCall::Unregister, args)),
             "owner-resume" => Some(owner_call(OwnerCall::Resume, args)),
+            "owner-revoke-claim" => Some(owner_call(OwnerCall::RevokeClaim, args)),
+            "owner-lane-action" => Some(owner_call(OwnerCall::LaneAction, args)),
             "owner-suggest" => Some(owner_suggest(ctx)),
+            // V02: itemized first-share readiness — each gate reports its own
+            // result instead of one generic "未注册"
+            "doctor" => Some(doctor()),
             _ => None,
         }
     }
+}
+
+/// First-share readiness checks (V02). Distinguishes what the old flow
+/// collapsed into "未注册": no league identity, no CPA-side share config,
+/// no backend address, and a node that IS configured but failing.
+fn doctor() -> Result<Value, String> {
+    Ok(doctor_at(
+        &collector_core::config::app_dir(),
+        &flow::api_base().unwrap_or_default(),
+        now_millis(),
+    ))
+}
+
+// Explicit inputs keep diagnostics tests isolated from the user's config and
+// make the freshness decision deterministic. status.api is the effective
+// runtime address, including configuration delivered directly by the CPA host.
+fn doctor_at(home: &std::path::Path, api_base: &str, now: i64) -> Value {
+    let identity = home.join("cpa-plugin/identity.json").exists();
+    let owner_config = home.join("cpa-plugin/config.json").exists();
+    let status: Value = std::fs::read_to_string(home.join("cpa-plugin/status.json"))
+        .ok()
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(Value::Null);
+    let phase = status["phase"].as_str().unwrap_or("");
+    let last_success = status["lastSuccessAt"].as_i64().unwrap_or(0);
+    let age = (last_success > 0).then(|| now.checked_sub(last_success)).flatten()
+        .filter(|age| *age >= 0);
+    let node_state = if phase != "beating" && phase != "registered" {
+        "unknown"
+    } else if last_success <= 0 || !matches!(age, Some(0..=60_000)) {
+        "stale"
+    } else {
+        "online"
+    };
+    let cpa_api = status["api"].as_str().unwrap_or("").trim().trim_end_matches('/');
+    let app_api = api_base.trim().trim_end_matches('/');
+    let api_code = if app_api.is_empty() {
+        Some("api_missing")
+    } else if cpa_api.is_empty() {
+        Some("api_unknown")
+    } else if cpa_api != app_api {
+        Some("api_mismatch")
+    } else {
+        None
+    };
+    let configured = owner_config || !cpa_api.is_empty();
+    let api_hint = match api_code {
+        Some("api_missing") => Some("App backend address is missing; set apiBaseUrl with the config command.".to_string()),
+        Some("api_unknown") => Some("CPA has not reported its active backend address; start or restart CPA, then run share doctor again.".to_string()),
+        Some("api_mismatch") => Some(format!("CPA backend {cpa_api} differs from App backend {app_api}; align the addresses and restart CPA.")),
+        _ => None,
+    };
+    let node_code = match node_state {
+        "online" => None,
+        "stale" => Some("node_stale"),
+        _ => Some("node_unknown"),
+    };
+    let node_hint = match node_state {
+        "online" => None,
+        "stale" => Some("No recent successful heartbeat; check that CPA is running, its clock is correct, and the backend is reachable."),
+        _ => Some("No successful node status; start CPA with atl-share enabled and run share doctor again."),
+    };
+    let items = vec![
+        json!({
+            "id": "identity", "ok": identity,
+            "code": if identity { None } else { Some("identity_missing") },
+            "hint": if identity { None } else { Some("Share identity is missing; enable atl-share in CPA and start CPA to register this node.") },
+        }),
+        json!({
+            "id": "ownerConfig", "ok": configured,
+            "code": if configured { None } else { Some("config_missing") },
+            "hint": if configured { None } else { Some("Configure atl-share's backend address in CPA and start CPA.") },
+        }),
+        json!({
+            "id": "apiBase", "ok": api_code.is_none(), "value": app_api,
+            "code": api_code, "params": { "cpaApi": cpa_api, "appApi": app_api }, "hint": api_hint,
+        }),
+        json!({
+            "id": "node", "ok": node_state == "online", "value": node_state,
+            "code": node_code, "params": { "ageSeconds": age.map(|age| age / 1000), "phase": phase }, "hint": node_hint,
+        }),
+    ];
+    json!({ "ready": items.iter().all(|i| i["ok"] == true), "items": items })
 }
 
 // ── borrower flows ──────────────────────────────────────────────────────────
@@ -91,12 +183,72 @@ pub(crate) fn claim_sign(args: &Value) -> Result<Value, String> {
     Ok(json!({ "participantId": cfg.participant_id, "ts": ts, "signature": signature }))
 }
 
+/// Dead claims carry no value (user decision): expired ones drop on every
+/// read and write so the store and every consumer (card, CLI) stay clean.
+/// Revocation is only knowable from the backend live view — the card prunes
+/// those after the claims/mine merge.
+fn claim_alive(claim: &Value) -> bool {
+    claim_alive_at(claim, now_millis())
+}
+
+fn claim_alive_at(claim: &Value, now: i64) -> bool {
+    match claim.get("expiresAt").and_then(|v| v.as_i64()) {
+        Some(at) if at > 0 => at > now,
+        _ => true,
+    }
+}
+
 pub(crate) fn borrow_get() -> Result<Value, String> {
-    let claims: Value = std::fs::read_to_string(collector_core::config::app_dir().join("sharing-borrow.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(json!({ "claims": [] }));
-    Ok(claims)
+    // R2-05: the read-side cleanup used to read WITHOUT the lock, filter the
+    // stale snapshot, and hand the whole list to borrow_set — deleting a
+    // claim another process had written in between. The cleanup now runs as
+    // one locked read-modify-write over the freshest on-disk state.
+    let (alive, receipts) = borrow_mutate(|claims| {
+        let now = now_millis();
+        let receipts: Vec<Value> = claims
+            .iter()
+            .filter(|c| !claim_alive_at(c, now))
+            .map(|c| {
+                json!({
+                    "keyId": c.get("keyId").cloned().unwrap_or(Value::Null),
+                    "shareTitle": c.get("shareTitle").cloned().unwrap_or(Value::Null),
+                    "laneTitle": c.get("laneTitle").cloned().unwrap_or(Value::Null),
+                    "reason": "expired",
+                })
+            })
+            .collect();
+        claims.retain(|c| claim_alive_at(c, now));
+        (claims.clone(), receipts)
+    })?;
+    Ok(json!({ "claims": alive, "removed": receipts }))
+}
+
+/// Atomic cleanup: drop expired claims plus the explicitly revoked ids the
+/// caller confirmed against the live view. Returns the surviving claims so
+/// the caller renders authoritative data instead of its stale snapshot.
+pub(crate) fn borrow_prune(args: &Value) -> Result<Value, String> {
+    let revoke: Vec<String> = args
+        .get("revoke")
+        .and_then(|v| v.as_array())
+        .map(|list| list.iter().filter_map(|k| k.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let surviving = borrow_mutate(|claims| {
+        let now = now_millis();
+        claims.retain(|c| {
+            let expired = match c.get("expiresAt").and_then(|v| v.as_i64()) {
+                Some(at) if at > 0 => at <= now,
+                _ => false,
+            };
+            let revoked = c
+                .get("keyId")
+                .and_then(|v| v.as_str())
+                .map(|k| revoke.iter().any(|r| r == k))
+                .unwrap_or(false);
+            !(expired || revoked)
+        });
+        claims.clone()
+    })?;
+    Ok(json!({ "claims": surviving }))
 }
 
 pub(crate) fn borrow_set(args: &Value) -> Result<Value, String> {
@@ -108,8 +260,41 @@ pub(crate) fn borrow_set(args: &Value) -> Result<Value, String> {
         .get("claims")
         .and_then(|v| v.as_array())
         .ok_or_else(|| "borrow-set requires claims array".to_string())?;
-    let sanitized: Vec<Value> = claims
+    let sanitized = sanitize_claims(claims);
+    write_claims(&sanitized)?;
+    Ok(json!({ "claims": sanitized }))
+}
+
+/// QA-05: read-modify-write under ONE lock hold. The card's dead-claim
+/// cleanup used to read a stale snapshot, filter, and overwrite the whole
+/// array — deleting a key another process had claimed in between. Mutating
+/// commands (prune / merge / renew / revoke) go through here: the closure
+/// sees the freshest on-disk state inside the lock.
+pub(crate) fn borrow_mutate<T>(f: impl FnOnce(&mut Vec<Value>) -> T) -> Result<T, String> {
+    let _guard = collector_core::store_lock::acquire("sharing-borrow", collector_core::store_lock::WRITE_WAIT)?;
+    let mut claims = read_claims_raw();
+    let result = f(&mut claims);
+    let sanitized = sanitize_claims(&claims);
+    write_claims(&sanitized)?;
+    Ok(result)
+}
+
+fn borrow_path() -> std::path::PathBuf {
+    collector_core::config::app_dir().join("sharing-borrow.json")
+}
+
+fn read_claims_raw() -> Vec<Value> {
+    std::fs::read_to_string(borrow_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("claims").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default()
+}
+
+fn sanitize_claims(claims: &[Value]) -> Vec<Value> {
+    claims
         .iter()
+        .filter(|c| claim_alive(c))
         .filter_map(|c| {
             let key_id = c.get("keyId").and_then(|v| v.as_str())?;
             let token = c.get("token").and_then(|v| v.as_str())?;
@@ -117,29 +302,47 @@ pub(crate) fn borrow_set(args: &Value) -> Result<Value, String> {
                 return None;
             }
             let cap = |value: &str, max: usize| -> String { value.chars().take(max).collect() };
+            let i64_of = |key: &str| c.get(key).and_then(|v| v.as_i64()).unwrap_or(0);
             Some(json!({
                 "keyId": cap(key_id, 64),
                 "token": cap(token, 200),
                 "baseURL": cap(c.get("baseURL").and_then(|v| v.as_str()).unwrap_or(""), 200),
                 "shareId": cap(c.get("shareId").and_then(|v| v.as_str()).unwrap_or(""), 64),
                 "shareTitle": cap(c.get("shareTitle").and_then(|v| v.as_str()).unwrap_or(""), 60),
+                // lane identity rides along or "my claims" can't tell which
+                // lane of which owner a key belongs to (the claim response
+                // carries all three)
+                "laneId": cap(c.get("laneId").and_then(|v| v.as_str()).unwrap_or(""), 64),
+                "laneTitle": cap(c.get("laneTitle").and_then(|v| v.as_str()).unwrap_or(""), 60),
+                "tzLabel": cap(c.get("tzLabel").and_then(|v| v.as_str()).unwrap_or(""), 16),
+                // quota fields (F02/CS-02): the borrower's "how much can I
+                // use" survives the store roundtrip; 0 = unknown/legacy record
+                "keyMaxTokens": i64_of("keyMaxTokens"),
+                "keyConcurrency": i64_of("keyConcurrency"),
+                "laneBudgetTokens": i64_of("laneBudgetTokens"),
+                "window": c.get("window").filter(|v| v.is_object()).cloned().unwrap_or(json!({ "unit": "day", "n": 1 })),
+                // model IDs ride FULL (CS-02): the old 20-char cap silently
+                // truncated real ids ("gemini-3.8-flash-high" is 21) and the
+                // generated tool config then shipped a broken model name
                 "models": c.get("models").and_then(|v| v.as_array()).map(|list| {
-                    json!(list.iter().take(50).filter_map(|m| m.as_str().map(|s| cap(s, 20))).collect::<Vec<_>>())
+                    json!(list.iter().take(50).filter_map(|m| m.as_str().map(|s| cap(s, 120))).collect::<Vec<_>>())
                 }).unwrap_or(json!([])),
                 "expiresAt": c.get("expiresAt").and_then(|v| v.as_i64()).unwrap_or(0),
             }))
         })
         .take(50)
-        .collect();
+        .collect()
+}
+
+fn write_claims(sanitized: &[Value]) -> Result<(), String> {
     let dir = collector_core::config::app_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // tmp + rename: a crash mid-write must not truncate the claim list
-    let borrow_path = dir.join("sharing-borrow.json");
     let tmp_path = dir.join("sharing-borrow.json.tmp");
     std::fs::write(&tmp_path, serde_json::to_string_pretty(&json!({ "claims": sanitized })).unwrap_or_default())
         .map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp_path, &borrow_path).map_err(|e| e.to_string())?;
-    Ok(json!({ "claims": sanitized }))
+    std::fs::rename(&tmp_path, borrow_path()).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ── borrower connectivity test (G3) ──────────────────────────────────────────
@@ -176,14 +379,40 @@ fn borrow_test(args: &Value) -> Result<Value, String> {
     if !owned {
         return Err("borrow-test target is not one of your claims".into());
     }
+    // CS-03: the probe must ride the protocol the target tool will use —
+    // one protocol answering does not certify another. "chat" keeps the
+    // legacy default so existing callers stay compatible.
+    let protocol = args.get("protocol").and_then(|v| v.as_str()).unwrap_or("chat").trim().to_string();
     let client = reqwest::blocking::Client::builder()
+        // direct connections only: these are deliberate calls to the owner's
+        // CPA / the league backend — a system HTTP proxy (common on dev
+        // machines) black-holes LAN endpoints like 10.x.x.x
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
+    let started = std::time::Instant::now();
+    let (url, body) = match protocol.as_str() {
+        "chat" => (
+            format!("{}/v1/chat/completions", base),
+            json!({ "model": model, "max_tokens": 4, "messages": [{ "role": "user", "content": "ping" }] }),
+        ),
+        "responses" => (
+            format!("{}/v1/responses", base),
+            json!({ "model": model, "max_output_tokens": 16, "input": "ping" }),
+        ),
+        "anthropic" => (
+            // CPA fronts Anthropic shape under /v1/messages with the bearer
+            // token (the claim token is the only credential in play)
+            format!("{}/v1/messages", base),
+            json!({ "model": model, "max_tokens": 4, "messages": [{ "role": "user", "content": "ping" }] }),
+        ),
+        other => return Err(format!("borrow-test unknown protocol: {}", other)),
+    };
     let response = client
-        .post(format!("{}/v1/chat/completions", base))
+        .post(url)
         .header("authorization", format!("Bearer {}", token))
-        .json(&json!({ "model": model, "max_tokens": 4, "messages": [{ "role": "user", "content": "ping" }] }))
+        .json(&body)
         .send()
         .map_err(|e| {
             // R53-2: a LAN endpoint that cannot even connect, on a machine
@@ -199,13 +428,15 @@ fn borrow_test(args: &Value) -> Result<Value, String> {
                 format!("transport:{} — endpoint {} unreachable; if CPA listens on 127.0.0.1 only, set host: 0.0.0.0 in the CPA config", e, host)
             }
         })?;
+    let latency_ms = started.elapsed().as_millis() as u64;
     let status = response.status().as_u16();
     let body: Value = response.json().unwrap_or(Value::Null);
     let error = body
         .pointer("/error/message")
+        .or_else(|| body.pointer("/error"))
         .and_then(|v| v.as_str())
         .map(|s| s.chars().take(200).collect::<String>());
-    Ok(json!({ "ok": (200..=299).contains(&status), "status": status, "error": error }))
+    Ok(json!({ "ok": (200..=299).contains(&status), "status": status, "protocol": protocol, "model": model, "latencyMs": latency_ms, "error": error }))
 }
 
 // ── owner console proxy ─────────────────────────────────────────────────────
@@ -215,6 +446,8 @@ enum OwnerCall {
     Policy,
     Unregister,
     Resume,
+    RevokeClaim,
+    LaneAction,
 }
 
 fn owner_identity() -> Result<(String, String, String), String> {
@@ -252,19 +485,42 @@ fn plugin_status_value() -> Option<Value> {
     }))
 }
 
+/// Owner-policy wire body: forwards both knobs the card sends. `lanes` must
+/// ride along or the backend (which replaces lanes only when the array is
+/// present) silently ignores every lane add/edit/delete.
+fn owner_policy_body(args: &Value) -> Value {
+    json!({
+        "policy": args.get("policy").cloned().unwrap_or(Value::Null),
+        "lanes": args.get("lanes").cloned().unwrap_or(Value::Null),
+    })
+}
+
 fn owner_call(call: OwnerCall, args: &Value) -> Result<Value, String> {
     let (api, _share_id, secret) = owner_identity()?;
     let client = reqwest::blocking::Client::builder()
+        // direct connections only: these are deliberate calls to the owner's
+        // CPA / the league backend — a system HTTP proxy (common on dev
+        // machines) black-holes LAN endpoints like 10.x.x.x
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(6))
         .build()
         .map_err(|e| e.to_string())?;
     let mut request = match call {
         OwnerCall::Unregister => client.post(format!("{}/api/shares/unregister", api)),
         OwnerCall::Resume => client.post(format!("{}/api/shares/owner/resume", api)),
-        OwnerCall::Policy => client.post(format!("{}/api/shares/owner/policy", api)).json(&json!({
-            "policy": args.get("policy").cloned().unwrap_or(Value::Null),
-        })),
+        OwnerCall::Policy => client.post(format!("{}/api/shares/owner/policy", api)).json(&owner_policy_body(args)),
         OwnerCall::Status => client.get(format!("{}/api/shares/owner/status", api)),
+        // CS-07: single-key revoke and per-lane pause/resume/terminate ride
+        // the same owner-secret channel; bodies are forwarded verbatim so
+        // the backend's validation stays the single authority.
+        OwnerCall::RevokeClaim => client.post(format!("{}/api/shares/owner/claims/revoke", api)).json(&json!({
+            "keyId": args.get("keyId").cloned().unwrap_or(Value::Null),
+            "reason": args.get("reason").cloned().unwrap_or(Value::Null),
+        })),
+        OwnerCall::LaneAction => client.post(format!("{}/api/shares/owner/lane-action", api)).json(&json!({
+            "laneId": args.get("laneId").cloned().unwrap_or(Value::Null),
+            "action": args.get("action").cloned().unwrap_or(Value::Null),
+        })),
     };
     request = request.header("x-atl-share-secret", &secret);
     let response = request.send().map_err(|e| format!("backend_unreachable:{}", e))?;
@@ -551,8 +807,14 @@ mod tests {
             &[Box::new(SharingPlugin)],
             "compute-sharing:borrow-set",
             &json!({ "claims": [
-                { "keyId": "csk_1", "token": "atl_sk_x", "shareId": "shr_1", "expiresAt": 5 },
+                { "keyId": "csk_1", "token": "atl_sk_x", "shareId": "shr_1", "expiresAt": 9_000_000_000_000i64,
+                  "laneId": "glm-5h", "laneTitle": "智谱 5h 窗", "tzLabel": "UTC+8",
+                  "keyMaxTokens": 30000000i64, "keyConcurrency": 4, "laneBudgetTokens": 90000000i64,
+                  "window": { "unit": "hour", "n": 5 },
+                  "models": ["glm-*", "gemini-3.8-flash-high"] },
                 { "keyId": "", "token": "broken" },
+                // expired claims drop on write — dead keys never persist
+                { "keyId": "csk_dead", "token": "atl_sk_old", "expiresAt": 1 },
             ]}),
             &state(true),
         )
@@ -568,6 +830,241 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(read_back["claims"][0]["keyId"], "csk_1");
+        // lane identity must survive the store roundtrip or "my claims"
+        // cannot tell which lane of which owner a key belongs to
+        assert_eq!(read_back["claims"][0]["laneId"], "glm-5h");
+        assert_eq!(read_back["claims"][0]["laneTitle"], "智谱 5h 窗");
+        assert_eq!(read_back["claims"][0]["tzLabel"], "UTC+8");
+        // quota fields survive too (CS-02), and model ids keep their full
+        // length — the old 20-char cap truncated "gemini-3.8-flash-high"
+        assert_eq!(read_back["claims"][0]["keyMaxTokens"], 30000000i64);
+        assert_eq!(read_back["claims"][0]["keyConcurrency"], 4);
+        assert_eq!(read_back["claims"][0]["laneBudgetTokens"], 90000000i64);
+        assert_eq!(read_back["claims"][0]["window"]["unit"], "hour");
+        assert_eq!(read_back["claims"][0]["window"]["n"], 5);
+        assert_eq!(read_back["claims"][0]["models"][1], "gemini-3.8-flash-high");
+        });
+    }
+
+#[test]
+    fn borrow_prune_keeps_claims_added_by_another_process() {
+        // QA-05 acceptance probe: the UI computed its cleanup list from a
+        // stale snapshot while a CLI claim landed in between. The atomic
+        // prune (key-id list + lock-held re-read) must keep the new claim.
+        sandboxed(|| {
+            route_plugin_command(
+                &[Box::new(SharingPlugin)],
+                "compute-sharing:borrow-set",
+                &json!({ "claims": [
+                    { "keyId": "old", "token": "atl_sk_old", "expiresAt": 9_000_000_000_000i64 },
+                ]}),
+                &state(true),
+            )
+            .unwrap()
+            .unwrap();
+            // interleave: another process claims "new" (the flow merge rides
+            // borrow_mutate under the same lock)
+            flow::merge_claim_record_for_probe(&json!({
+                "keyId": "new", "token": "atl_sk_new", "expiresAt": 9_000_000_000_000i64,
+            }))
+            .unwrap();
+            // the UI's prune names only the key it CONFIRMED dead
+            let out = route_plugin_command(
+                &[Box::new(SharingPlugin)],
+                "compute-sharing:borrow-prune",
+                &json!({ "revoke": ["old"] }),
+                &state(true),
+            )
+            .unwrap()
+            .unwrap();
+            let ids: Vec<&str> = out["claims"].as_array().unwrap()
+                .iter().map(|c| c["keyId"].as_str().unwrap()).collect();
+            assert_eq!(ids, vec!["new"], "the interloper claim must survive");
+            // and expired-only pruning works without any revoke list
+            std::fs::write(
+                std::path::PathBuf::from(std::env::var("ATL_HOME").unwrap_or_default()).join("sharing-borrow.json"),
+                r#"{ "claims": [
+                    { "keyId": "fresh", "token": "atl_sk_f", "expiresAt": 9000000000000 },
+                    { "keyId": "stale", "token": "atl_sk_s", "expiresAt": 1 }
+                ] }"#,
+            )
+            .unwrap();
+            let out2 = route_plugin_command(
+                &[Box::new(SharingPlugin)],
+                "compute-sharing:borrow-prune",
+                &json!({}),
+                &state(true),
+            )
+            .unwrap()
+            .unwrap();
+            let ids2: Vec<&str> = out2["claims"].as_array().unwrap()
+                .iter().map(|c| c["keyId"].as_str().unwrap()).collect();
+            assert_eq!(ids2, vec!["fresh"]);
+        });
+    }
+
+
+    fn unique_test_home(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let home = std::env::temp_dir().join(format!("atl-sharing-{label}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(home.join("cpa-plugin")).unwrap();
+        home
+    }
+
+    fn wait_for_marker(path: &std::path::Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !path.exists() {
+            assert!(std::time::Instant::now() < deadline, "missing marker {}", path.display());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    #[ignore = "child entry point invoked by borrow_get_cleanup_never_drops_cross_process_writes"]
+    fn borrow_get_cross_process_child() {
+        let home = std::path::PathBuf::from(std::env::var("ATL_HOME").expect("isolated child home"));
+        match std::env::var("ATL_SHARING_TEST_ROLE").unwrap().as_str() {
+            "writer" => {
+                let _lock = collector_core::store_lock::acquire("sharing-borrow", collector_core::store_lock::WRITE_WAIT).unwrap();
+                std::fs::write(home.join("writer-held"), "").unwrap();
+                wait_for_marker(&home.join("release-writer"));
+                borrow_set(&json!({ "claims": [{ "keyId": "new", "token": "fixture-token", "expiresAt": 9_000_000_000_000i64 }] })).unwrap();
+            }
+            "reader" => {
+                std::fs::write(home.join("reader-started"), "").unwrap();
+                let result = borrow_get().unwrap();
+                assert_eq!(result["claims"][0]["keyId"], "new");
+                assert!(result["removed"].as_array().unwrap().is_empty());
+                std::fs::write(home.join("reader-done"), "").unwrap();
+            }
+            _ => panic!("invalid child role"),
+        }
+    }
+
+    #[test]
+    fn borrow_get_cleanup_never_drops_cross_process_writes() {
+        // Two real child processes share one isolated store. The writer
+        // holds the production flock while the reader enters borrow_get;
+        // cleanup must read only AFTER the writer publishes the new claim.
+        let home = unique_test_home("cleanup");
+        std::fs::write(home.join("sharing-borrow.json"), r#"{"claims":[{"keyId":"expired","token":"fixture-expired","expiresAt":1}]}"#).unwrap();
+        let spawn = |role: &str| std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "tests::borrow_get_cross_process_child", "--nocapture"])
+            .env("ATL_HOME", &home)
+            .env("ATL_SHARING_TEST_ROLE", role)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn().unwrap();
+        let writer = spawn("writer");
+        wait_for_marker(&home.join("writer-held"));
+        let mut reader = spawn("reader");
+        wait_for_marker(&home.join("reader-started"));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(reader.try_wait().unwrap().is_none(), "reader must wait for the writer's flock");
+        assert!(!home.join("reader-done").exists());
+        std::fs::write(home.join("release-writer"), "").unwrap();
+        for child in [writer, reader] {
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "child failed: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        }
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(home.join("sharing-borrow.json")).unwrap()).unwrap();
+        assert_eq!(saved["claims"].as_array().unwrap().len(), 1);
+        assert_eq!(saved["claims"][0]["keyId"], "new");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn doctor_uses_host_runtime_api_without_config_file() {
+        let home = unique_test_home("doctor");
+        std::fs::write(home.join("cpa-plugin/identity.json"), "{}").unwrap();
+        let now = 120_000;
+        let missing = doctor_at(&home, "https://app.example", now);
+        assert_eq!(missing["items"][3]["code"], "node_unknown");
+        assert!(missing["items"][3]["params"]["ageSeconds"].is_null());
+        let write_status = |api: &str| std::fs::write(home.join("cpa-plugin/status.json"), json!({ "phase": "beating", "api": api, "lastSuccessAt": now }).to_string()).unwrap();
+        write_status("https://host.example");
+        let out = doctor_at(&home, "https://app.example", now);
+        assert_eq!(out["ready"], false);
+        assert_eq!(out["items"][1]["ok"], true, "host-delivered config is supported");
+        assert_eq!(out["items"][2]["code"], "api_mismatch");
+        assert_eq!(out["items"][2]["params"]["cpaApi"], "https://host.example");
+        assert_eq!(out["items"][3]["value"], "online");
+        // A stale fallback file must not override the active runtime address.
+        std::fs::write(home.join("cpa-plugin/config.json"), r#"{"api":"https://old.example"}"#).unwrap();
+        write_status("https://app.example/");
+        assert_eq!(doctor_at(&home, "https://app.example", now)["ready"], true);
+        write_status("");
+        assert_eq!(doctor_at(&home, "https://app.example", now)["items"][2]["code"], "api_unknown");
+        assert_eq!(doctor_at(&home, "https://app.example", now)["ready"], false);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn doctor_rejects_stale_and_future_heartbeats() {
+        let home = unique_test_home("freshness");
+        std::fs::write(home.join("cpa-plugin/identity.json"), "{}").unwrap();
+        let now = 120_000;
+        for (last_success, expected) in [(now, "online"), (now - 60_000, "online"), (now - 60_001, "stale"), (now + 1, "stale"), (0, "stale")] {
+            std::fs::write(home.join("cpa-plugin/status.json"), json!({ "phase": "beating", "api": "https://app.example", "lastSuccessAt": last_success }).to_string()).unwrap();
+            let out = doctor_at(&home, "https://app.example", now);
+            assert_eq!(out["items"][3]["value"], expected);
+            assert_eq!(out["ready"], expected == "online");
+            if last_success <= 0 || last_success > now {
+                assert!(out["items"][3]["params"]["ageSeconds"].is_null());
+            }
+        }
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn borrow_get_drops_expired_from_store_file() {
+        sandboxed(|| {
+            // a store file written before the filter (or by an older build)
+            // still yields only alive claims to every consumer
+            let home = std::env::var("ATL_HOME").unwrap_or_default();
+            std::fs::create_dir_all(std::path::PathBuf::from(&home)).unwrap();
+            std::fs::write(
+                std::path::PathBuf::from(&home).join("sharing-borrow.json"),
+                r#"{ "claims": [
+                    { "keyId": "csk_old", "token": "atl_sk_old", "expiresAt": 1 },
+                    { "keyId": "csk_live", "token": "atl_sk_live", "expiresAt": 9000000000000 }
+                ] }"#,
+            )
+            .unwrap();
+            let out = route_plugin_command(
+                &[Box::new(SharingPlugin)],
+                "compute-sharing:borrow-get",
+                &json!({}),
+                &state(true),
+            )
+            .unwrap()
+            .unwrap();
+            let list = out["claims"].as_array().unwrap();
+            assert_eq!(list.len(), 1);
+            assert_eq!(list[0]["keyId"], "csk_live");
+            // cleanup receipt (CS-04): the dropped claim is explained, not silent
+            let removed = out["removed"].as_array().unwrap();
+            assert_eq!(removed.len(), 1);
+            assert_eq!(removed[0]["keyId"], "csk_old");
+            assert_eq!(removed[0]["reason"], "expired");
+            // the store on disk no longer carries the dead claim
+            let stored: Value = std::fs::read_to_string(
+                std::path::PathBuf::from(&home).join("sharing-borrow.json"),
+            )
+            .unwrap()
+            .parse()
+            .unwrap();
+            assert_eq!(stored["claims"].as_array().unwrap().len(), 1);
+            // a clean read reports no removals
+            let again = route_plugin_command(
+                &[Box::new(SharingPlugin)],
+                "compute-sharing:borrow-get",
+                &json!({}),
+                &state(true),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(again["removed"].as_array().unwrap().len(), 0);
         });
     }
 
@@ -640,5 +1137,21 @@ mod tests {
         // a single-hour spike is a peak: min window length widens it to 2h
         assert_eq!(list[1]["busy"]["start"], "11:00");
         assert_eq!(list[1]["busy"]["end"], "13:00");
+    }
+
+    #[test]
+    fn owner_policy_body_forwards_lanes() {
+        // regression: the sidecar used to forward policy only, so every card
+        // lane save silently no-oped (backend updates lanes only when the
+        // array is present on the wire)
+        let lanes = json!([{ "id": "glm", "title": "GLM", "models": ["glm-*"], "budget": { "tokens": 1000 } }]);
+        let body = owner_policy_body(&json!({ "lanes": lanes, "policy": { "keyMaxTokens": 5 } }));
+        assert_eq!(body["lanes"], lanes);
+        assert_eq!(body["policy"]["keyMaxTokens"], 5);
+        // policy-only saves keep working: lanes rides as null, which the
+        // backend skips (not an array)
+        let policy_only = owner_policy_body(&json!({ "policy": { "ttlHours": 24 } }));
+        assert!(policy_only.get("lanes").unwrap().is_null());
+        assert_eq!(policy_only["policy"]["ttlHours"], 24);
     }
 }

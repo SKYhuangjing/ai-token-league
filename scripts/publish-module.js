@@ -173,6 +173,9 @@ async function main() {
     desc: manifest.desc,
     ...(manifest.titleKey ? { titleKey: manifest.titleKey } : {}),
     ...(manifest.descKey ? { descKey: manifest.descKey } : {}),
+    // declarative capability metadata must ride the catalog or the host
+    // renders plain on/off semantics for external-service plugins (QA-01)
+    ...(manifest.externalService ? { externalService: manifest.externalService } : {}),
     ...(Array.isArray(manifest.permissions) ? { permissions: manifest.permissions } : {}),
     entry: `${baseKey}/index.js`,
     sha256: entrySha,

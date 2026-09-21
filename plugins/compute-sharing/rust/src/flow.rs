@@ -27,7 +27,9 @@ fn now_millis() -> i64 {
 
 fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
-        // the card's fetches run under AbortSignal.timeout(8000)
+        // the card's fetches run under AbortSignal.timeout(8000); direct
+        // connections only — a system proxy black-holes LAN CPA endpoints
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| e.to_string())
@@ -95,13 +97,23 @@ pub fn claim(api: &str, share_id: &str, lane_id: Option<&str>) -> Result<Value, 
         body["laneId"] = json!(lane.trim());
     }
     let data = post_json(api, "/api/shares/claim", &body)?;
+    // Quota + lane identity ride into the local store (CS-02): the borrower
+    // must see what the key can do without another round trip, and the card's
+    // tool-config generator reads the lane window from here.
     let record = json!({
         "keyId": data.get("keyId").cloned().unwrap_or(Value::Null),
         "token": data.get("token").cloned().unwrap_or(Value::Null),
         "baseURL": data.get("baseURL").cloned().unwrap_or(Value::Null),
         "shareId": share_id,
         "shareTitle": data.get("shareTitle").cloned().unwrap_or(Value::Null),
+        "laneId": data.get("laneId").cloned().unwrap_or(Value::Null),
+        "laneTitle": data.get("laneTitle").cloned().unwrap_or(Value::Null),
+        "tzLabel": data.get("tzLabel").cloned().unwrap_or(Value::Null),
         "models": data.get("models").cloned().unwrap_or(json!([])),
+        "window": data.get("window").filter(|v| v.is_object()).cloned().unwrap_or(json!({ "unit": "day", "n": 1 })),
+        "keyMaxTokens": data.get("keyMaxTokens").cloned().unwrap_or(Value::Null),
+        "keyConcurrency": data.get("keyConcurrency").cloned().unwrap_or(Value::Null),
+        "laneBudgetTokens": data.get("laneBudgetTokens").cloned().unwrap_or(Value::Null),
         "expiresAt": data.get("expiresAt").cloned().unwrap_or(Value::Null),
     });
     merge_claim_record(&record)?;
@@ -114,13 +126,13 @@ pub fn renew(api: &str, key_id: &str) -> Result<Value, String> {
     let claim = find_claim(key_id)?;
     let data = post_json(api, "/api/shares/claims/renew", &json!({ "token": claim["token"] }))?;
     let expires_at = data.get("expiresAt").cloned().unwrap_or(Value::Null);
-    let mut claims = store_claims()?;
-    for entry in claims.iter_mut() {
-        if entry.get("keyId").and_then(|v| v.as_str()) == Some(key_id) {
-            entry["expiresAt"] = expires_at.clone();
+    super::borrow_mutate(|claims| {
+        for entry in claims.iter_mut() {
+            if entry.get("keyId").and_then(|v| v.as_str()) == Some(key_id) {
+                entry["expiresAt"] = expires_at.clone();
+            }
         }
-    }
-    super::borrow_set(&json!({ "claims": claims }))?;
+    })?;
     Ok(json!({ "keyId": key_id, "expiresAt": expires_at }))
 }
 
@@ -128,11 +140,9 @@ pub fn renew(api: &str, key_id: &str) -> Result<Value, String> {
 pub fn revoke(api: &str, key_id: &str) -> Result<Value, String> {
     let claim = find_claim(key_id)?;
     post_json(api, "/api/shares/claims/revoke", &json!({ "token": claim["token"] }))?;
-    let claims = store_claims()?
-        .into_iter()
-        .filter(|entry| entry.get("keyId").and_then(|v| v.as_str()) != Some(key_id))
-        .collect::<Vec<_>>();
-    super::borrow_set(&json!({ "claims": claims }))?;
+    super::borrow_mutate(|claims| {
+        claims.retain(|entry| entry.get("keyId").and_then(|v| v.as_str()) != Some(key_id));
+    })?;
     Ok(json!({ "keyId": key_id, "revoked": true }))
 }
 
@@ -149,6 +159,12 @@ pub fn live(api: &str) -> Result<Value, String> {
     post_json(api, "/api/shares/claims/mine", &json!({ "tokens": tokens }))
 }
 
+/// Probe bridge (lib tests): the atomic merge path without a mock backend.
+#[cfg(test)]
+pub(crate) fn merge_claim_record_for_probe(record: &Value) -> Result<(), String> {
+    merge_claim_record(record)
+}
+
 fn store_claims() -> Result<Vec<Value>, String> {
     let store = super::borrow_get()?;
     Ok(store.get("claims").and_then(|v| v.as_array()).cloned().unwrap_or_default())
@@ -162,14 +178,15 @@ fn find_claim(key_id: &str) -> Result<Value, String> {
 }
 
 fn merge_claim_record(record: &Value) -> Result<(), String> {
-    let claims = store_claims()?;
-    let merged: Vec<Value> = std::iter::once(record.clone())
-        .chain(claims.into_iter().filter(|entry| {
+    // QA-05: merge inside one lock hold — a concurrent CLI claim between the
+    // read and the write used to be overwritten by the stale merge
+    super::borrow_mutate(|claims| {
+        claims.retain(|entry| {
             entry.get("keyId").and_then(|v| v.as_str())
                 != record.get("keyId").and_then(|v| v.as_str())
-        }))
-        .collect();
-    super::borrow_set(&json!({ "claims": merged }))?;
+        });
+        claims.insert(0, record.clone());
+    })?;
     Ok(())
 }
 
@@ -203,6 +220,92 @@ pub fn run_revoke(args: &Value) -> Result<Value, String> {
 
 pub fn run_live() -> Result<Value, String> {
     live(&api_base()?)
+}
+
+/// Model discovery (CS-03): list the CPA catalog through the claim's own key
+/// and intersect it with the lane's model scope. The request rides the
+/// sidecar because the webview cannot reach the owner's CPA directly (no
+/// CORS); wildcards from the lane never leak through as usable model ids —
+/// only concrete catalog entries the lane actually admits.
+pub fn models(key_id: &str) -> Result<Value, String> {
+    let claim = find_claim(key_id)?;
+    let token = claim.get("token").and_then(|v| v.as_str()).ok_or("claim_missing_token")?;
+    let base = claim
+        .get("baseURL")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim_end_matches('/')
+        .to_string();
+    if token.is_empty() || base.is_empty() {
+        return Err("claim_missing_endpoint".into());
+    }
+    let response = client()?
+        .get(format!("{}/v1/models", base))
+        .header("authorization", format!("Bearer {}", token))
+        .send()
+        .map_err(|e| format!("model_catalog_unreachable:{}", e))?;
+    let status = response.status();
+    let data: Value = response.json().unwrap_or_default();
+    if !status.is_success() {
+        let code = data.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        return Err(if code.is_empty() {
+            format!("http_{}", status.as_u16())
+        } else {
+            code.to_string()
+        });
+    }
+    let scope = claim.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let scoped: Vec<String> = data
+        .get("data")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
+                .filter(|id| lane_admits(&scope, id))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(json!({ "keyId": key_id, "models": scoped }))
+}
+
+/// Lane model scoping for concrete ids: exact match, `*` wildcard patterns
+/// (prefix/suffix/infix), empty scope or a lone `*` admits everything.
+fn lane_admits(scope: &[Value], model: &str) -> bool {
+    let patterns: Vec<&str> = scope.iter().filter_map(|v| v.as_str()).collect();
+    if patterns.is_empty() || patterns.iter().any(|p| *p == "*") {
+        return true;
+    }
+    patterns.iter().any(|pattern| {
+        let stars = pattern.matches('*').count();
+        if stars == 0 {
+            pattern == &model
+        } else if stars == 1 {
+            let (head, tail) = pattern.split_once('*').unwrap();
+            model.starts_with(head) && model.ends_with(tail) && model.len() >= head.len() + tail.len()
+        } else {
+            let mut rest = model;
+            let mut parts = pattern.split('*').collect::<Vec<_>>();
+            let tail = parts.pop().unwrap_or("");
+            let head = parts.remove(0);
+            if !rest.starts_with(head) || !rest.ends_with(tail) {
+                return false;
+            }
+            rest = &rest[head.len()..rest.len() - tail.len()];
+            for chunk in parts {
+                match rest.find(chunk) {
+                    Some(at) => rest = &rest[at + chunk.len()..],
+                    None => return false,
+                }
+            }
+            true
+        }
+    })
+}
+
+pub fn run_models(args: &Value) -> Result<Value, String> {
+    let key_id = required_key_id(args, "models")?;
+    models(&key_id)
 }
 
 fn required_key_id(args: &Value, command: &str) -> Result<String, String> {
@@ -298,7 +401,7 @@ mod tests {
             let backend = MockBackend::spawn(vec![(
                 "x",
                 200,
-                r#"{ "keyId": "csk_new", "token": "atl_sk_t", "baseURL": "http://cpa:8317", "shareTitle": "sky-cpa", "models": ["gemini-*"], "expiresAt": 1789700000000, "laneId": "gem", "laneTitle": "gem lane" }"#,
+                r#"{ "keyId": "csk_new", "token": "atl_sk_t", "baseURL": "http://cpa:8317", "shareTitle": "sky-cpa", "models": ["gemini-*"], "expiresAt": 9000000000000, "laneId": "gem", "laneTitle": "gem lane" }"#,
             )]);
             let api = format!("http://{}", backend.addr);
             let data = claim(&api, "shr_1", Some("gem")).unwrap();
@@ -338,23 +441,23 @@ mod tests {
         sandboxed(|| {
             init_identity_sandbox();
             super::super::borrow_set(&json!({ "claims": [
-                { "keyId": "csk_a", "token": "tok_a", "baseURL": "http://x", "shareId": "s1", "shareTitle": "A", "models": [], "expiresAt": 1 },
-                { "keyId": "csk_b", "token": "tok_b", "baseURL": "http://x", "shareId": "s2", "shareTitle": "B", "models": [], "expiresAt": 2 },
+                { "keyId": "csk_a", "token": "tok_a", "baseURL": "http://x", "shareId": "s1", "shareTitle": "A", "models": [], "expiresAt": 9_000_000_000_000i64 },
+                { "keyId": "csk_b", "token": "tok_b", "baseURL": "http://x", "shareId": "s2", "shareTitle": "B", "models": [], "expiresAt": 9_000_000_000_001i64 },
             ]}))
             .unwrap();
             let backend = MockBackend::spawn(vec![
-                ("x", 200, r#"{ "expiresAt": 999 }"#),
+                ("x", 200, r#"{ "expiresAt": 9000000000000 }"#),
                 ("x", 200, r#"{ "ok": true }"#),
             ]);
             let api = format!("http://{}", backend.addr);
 
             let renewed = renew(&api, "csk_a").unwrap();
-            assert_eq!(renewed["expiresAt"], 999);
+            assert_eq!(renewed["expiresAt"], 9_000_000_000_000i64);
             let stored = super::super::borrow_get().unwrap();
             let claims = stored["claims"].as_array().unwrap();
             assert_eq!(claims.len(), 2);
             let a = claims.iter().find(|c| c["keyId"] == "csk_a").unwrap();
-            assert_eq!(a["expiresAt"], 999);
+            assert_eq!(a["expiresAt"], 9_000_000_000_000i64);
 
             revoke(&api, "csk_a").unwrap();
             let stored = super::super::borrow_get().unwrap();
@@ -382,7 +485,7 @@ mod tests {
         sandboxed(|| {
             init_identity_sandbox();
             super::super::borrow_set(&json!({ "claims": [
-                { "keyId": "csk_a", "token": "tok_a", "baseURL": "http://x", "shareId": "s1", "shareTitle": "A", "models": [], "expiresAt": 1 },
+                { "keyId": "csk_a", "token": "tok_a", "baseURL": "http://x", "shareId": "s1", "shareTitle": "A", "models": [], "expiresAt": 9_000_000_000_000i64 },
             ]}))
             .unwrap();
             let backend = MockBackend::spawn(vec![(
@@ -416,4 +519,23 @@ mod tests {
         let err = directory(&format!("http://{}", backend.addr)).unwrap_err();
         assert_eq!(err, "http_500");
     }
+
+    #[test]
+    fn lane_admits_implements_wildcard_scope() {
+        let scope = |patterns: &[&str]| patterns.iter().map(|p| json!(p)).collect::<Vec<_>>();
+        // empty / lone-* scopes admit everything
+        assert!(lane_admits(&scope(&[]), "anything"));
+        assert!(lane_admits(&scope(&["*"]), "anything"));
+        // prefix / suffix / exact / multi-star
+        assert!(lane_admits(&scope(&["gemini-*"]), "gemini-3.8-flash-high"));
+        assert!(!lane_admits(&scope(&["gemini-*"]), "gpt-5.6"));
+        assert!(lane_admits(&scope(&["*-flash"]), "glm-5.3-flash"));
+        assert!(lane_admits(&scope(&["glm-5.3"]), "glm-5.3"));
+        assert!(!lane_admits(&scope(&["glm-5.3"]), "glm-5.3-flash"));
+        assert!(lane_admits(&scope(&["g*high"]), "gemini-3.8-flash-high"));
+        assert!(!lane_admits(&scope(&["g*high"]), "gemini-3.8-flash-low"));
+        // a concrete id outside every pattern is rejected
+        assert!(!lane_admits(&scope(&["glm-*", "gpt-5*"]), "claude-opus-4-6"));
+    }
+
 }

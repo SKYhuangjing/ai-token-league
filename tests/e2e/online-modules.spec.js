@@ -112,8 +112,11 @@ online.describe('Online plugins tab', () => {
     await expect(toast).not.toHaveClass(/show/, { timeout: 6_000 });
     // uninstall clears the card and the persisted record
     await page.locator('[data-remote-uninstall="compute-sharing"]').click();
+    // external-service panel (QA-01): first click explains, second confirms
+    await expect(page.locator('[data-external-uninstall-confirm-yes]')).toBeVisible({ timeout: 5_000 });
+    await page.locator('[data-external-uninstall-confirm-yes]').click();
     await expect(page.locator('[data-module-card="compute-sharing"]')).toHaveCount(0);
-    await expect(page.locator('#toast')).toContainText('Uninstalled Compute sharing', { timeout: 4_000 });
+    await expect(page.locator('#toast')).toContainText('panel uninstalled', { timeout: 4_000 });
     const after = await page.evaluate(() => window.__ATL_E2E_STATE__.modulesState.modules['compute-sharing']);
     expect(after.installedVersion).toBeUndefined();
     const leftover = await page.evaluate(() => window.__ATL_E2E_STATE__.pluginPackages['compute-sharing/0.1.2']);
@@ -149,6 +152,9 @@ online.describe('Online plugins tab', () => {
       window.tokenLeague.modulesPackageDelete = () => Promise.reject(new Error('eperm'));
     });
     await page.locator('[data-remote-uninstall="compute-sharing"]').click();
+    // external-service panel (QA-01): first click explains, second confirms
+    await expect(page.locator('[data-external-uninstall-confirm-yes]')).toBeVisible({ timeout: 5_000 });
+    await page.locator('[data-external-uninstall-confirm-yes]').click();
     await expect(page.locator('[data-module-card="compute-sharing"]')).toHaveCount(0);
     await expect(page.locator('#toast')).toContainText('local plugin copy could not be removed');
   });

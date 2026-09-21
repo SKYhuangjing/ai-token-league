@@ -284,7 +284,7 @@ pub fn menu_items(lang: &str) -> Vec<Value> {
         }
         let pct = pct_shown.unwrap_or(key_max.max(0.0));
         let reset_text = reset_shown.and_then(|ms| tray_state::compact_reset(ms, now));
-        let (template, mut params) = match &reset_text {
+        let (template, params) = match &reset_text {
             Some(reset) => (
                 "tray.zhipuKeyReset",
                 vec![

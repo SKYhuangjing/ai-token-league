@@ -68,13 +68,17 @@ export async function importModuleFromSource(source) {
   return import(url);
 }
 
-export function buildModuleContext({ t, invoke, escapeHtml, apiBase, notify } = {}) {
+export function buildModuleContext({ t, invoke, escapeHtml, apiBase, notify, lang } = {}) {
   // apiBase: () => string — live backend API root getter for plugins that
   // talk to cloud HTTP endpoints; absent in stripped hosts.
   // notify: (text, { duration }?) => void — the app-wide toast (same
   // presentation as the overview scan hint). Presentation-only, plain text,
   // no permission needed; it cannot touch data or the DOM outside the toast.
-  return { t, invoke, escapeHtml, apiBase, notify };
+  // lang: () => string — the app's current UI language ("zh-CN" | "en").
+  // Generic capability so plugins can ship their OWN bilingual dictionaries
+  // and update text without an app release (a plugin-side tt() falls back to
+  // t() for keys that still live in the host bundle).
+  return { t, invoke, escapeHtml, apiBase, notify, lang };
 }
 
 // Platform commands every plugin may call without declaring them, scoped to

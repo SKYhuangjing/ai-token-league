@@ -10184,6 +10184,202 @@ async function testSharingCpaLanesLegacyCompat() {
   });
 }
 
+// Usability v2 contracts (CS-02/CS-06/CS-07): policy backfill in owner
+// status, lane-aware auto key caps, protocol-2 usage buckets with seq dedup
+// and event-time windows, paused lane semantics, owner per-key revoke, and
+// policy revision acking.
+async function testSharingCpaUsabilityV2() {
+  await withCpaServer({}, async (base, dir, identity) => {
+    const wireLanes = (withState = false) => ([
+      { id: "gem", title: "Gem lane", models: ["gemini-*"], budget: { tokens: 10_000 }, window: { unit: "day", n: 1 }, maxClaims: 4, ...(withState ? {} : {}) },
+      { id: "glm", title: "GLM lane", models: ["glm-*"], budget: { tokens: 20_000 }, window: { unit: "hour", n: 5 }, maxClaims: 2 },
+    ]);
+    const reg = await (await cpaFetch(base, "/api/shares/register", {
+      method: "POST",
+      body: {
+        title: "v2 share", baseURL: "http://x:1",
+        policy: { budget: 5_000, maxClaims: 2, keyConcurrency: 5, ttlHours: 24 },
+        lanes: wireLanes(),
+        ...signedRegisterBody(identity),
+      },
+    })).json();
+    const secret = reg.shareSecret;
+
+    // owner-status now backfills the stored policy (F02): real values, not
+    // placeholders, plus revision tracking fields
+    const status1 = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    assert.equal(status1.share.policy.budget, 5_000);
+    assert.equal(status1.share.policy.keyConcurrency, 5);
+    assert.equal(status1.share.policy.keyMaxTokensAuto, true);
+    assert.equal(status1.share.policyRev, 1);
+    assert.equal(status1.share.policyAckedRev, 0);
+
+    // protocol-2 heartbeat declares the protocol and acks nothing yet
+    const hb1 = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: { protocol: 2, pluginVersion: "0.5.0" } })).json();
+    assert.equal(hb1.protocol, 2);
+    assert.equal(hb1.policyRev, 1);
+    assert.deepEqual(hb1.keyLedger, {});
+    assert.deepEqual(hb1.lastSeqByKey, {});
+
+    // claim on the gem lane: auto key cap derives INSIDE the lane
+    // (floor(10000/4) = 2500), not from the share-level fair split
+    const claim = await (await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { ...signedClaimBody(reg.shareId, identity), laneId: "gem" } })).json();
+    assert.equal(claim.laneId, "gem");
+    assert.equal(claim.keyMaxTokens, 2500);
+    assert.equal(claim.keyConcurrency, 5);
+
+    // the key rides the next heartbeat with its lane window charged ledger
+    const hb2 = await (await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: { protocol: 2, appliedPolicyRev: 1 } })).json();
+    assert.equal(hb2.keys.length, 1);
+    assert.equal(hb2.keys[0].keyMaxTokens, 2500);
+    assert.equal(hb2.keyLedger[claim.keyId].charged, 0);
+    assert.ok(hb2.keyLedger[claim.keyId].windowKey.length > 0);
+    // R2-01: a FRESH key (no usage yet) still reports seq 0 — the plugin's
+    // cold start depends on the counter being present, 0 included
+    assert.strictEqual(hb2.lastSeqByKey[claim.keyId], 0);
+
+    // protocol-2 usage settles raw + charged separately, bucketed by the
+    // event-time window key
+    const gemWindow = laneWindowOf({ window: { unit: "day", n: 1 } }, Date.now()).key;
+    const hb3 = await (await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST", secret,
+      body: { protocol: 2, usage: [{ keyId: claim.keyId, seq: 1, rawTokens: 100, chargedTokens: 100, requests: 2, failed: 0, laneId: "gem", windowKey: gemWindow }] },
+    })).json();
+    assert.equal(hb3.applied, 1);
+    assert.equal(hb3.skippedStale, 0);
+    assert.equal(hb3.keyLedger[claim.keyId].charged, 100);
+    assert.equal(hb3.lastSeqByKey[claim.keyId], 1);
+
+    // retrying the same seq after a lost response must not settle twice
+    const hb4 = await (await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST", secret,
+      body: { protocol: 2, usage: [{ keyId: claim.keyId, seq: 1, rawTokens: 100, chargedTokens: 100, requests: 2, failed: 0, laneId: "gem", windowKey: gemWindow }] },
+    })).json();
+    assert.equal(hb4.skippedStale, 1);
+    assert.equal(hb4.keyLedger[claim.keyId].charged, 100);
+
+    // a higher seq advances; live view carries the quota fields (F02)
+    const hb5 = await (await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST", secret,
+      body: { protocol: 2, usage: [{ keyId: claim.keyId, seq: 2, rawTokens: 60, chargedTokens: 120, requests: 1, failed: 0, laneId: "gem", windowKey: gemWindow, multiplier: 2 }] },
+    })).json();
+    assert.equal(hb5.keyLedger[claim.keyId].charged, 220);
+    const mine1 = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claim.token] } })).json();
+    assert.equal(mine1.claims[0].usedTokens, 160);       // raw lifetime
+    assert.equal(mine1.claims[0].keyChargedTokens, 220); // charged this window
+    assert.equal(mine1.claims[0].keyMaxTokens, 2500);
+    assert.equal(mine1.claims[0].laneAvailableTokens, 10_000 - 220);
+    assert.equal(mine1.claims[0].window.unit, "day");
+    assert.ok(mine1.claims[0].windowEndsAtMs > Date.now());
+
+    // stale-window buckets count raw only (a closed window must not absorb
+    // late charges)
+    const hb6 = await (await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST", secret,
+      body: { protocol: 2, usage: [{ keyId: claim.keyId, seq: 3, rawTokens: 10, chargedTokens: 10, requests: 0, failed: 0, laneId: "gem", windowKey: "day:2000-01-01" }] },
+    })).json();
+    assert.equal(hb6.applied, 1);
+    assert.equal(hb6.keyLedger[claim.keyId].charged, 220);
+    const mine2 = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claim.token] } })).json();
+    assert.equal(mine2.claims[0].usedTokens, 170);
+
+    // one round may carry several window buckets sharing the batch seq —
+    // the second bucket is NOT a duplicate of the first
+    const hb6b = await (await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST", secret,
+      body: {
+        protocol: 2,
+        usage: [
+          { keyId: claim.keyId, seq: 4, rawTokens: 30, chargedTokens: 30, requests: 1, failed: 0, laneId: "gem", windowKey: gemWindow },
+          { keyId: claim.keyId, seq: 4, rawTokens: 5, chargedTokens: 5, requests: 0, failed: 0, laneId: "gem", windowKey: "day:2000-01-01" },
+        ],
+      },
+    })).json();
+    assert.equal(hb6b.applied, 2);
+    assert.equal(hb6b.skippedStale, 0);
+    assert.equal(hb6b.keyLedger[claim.keyId].charged, 250);
+    assert.equal(hb6b.lastSeqByKey[claim.keyId], 4);
+    // and a later round below seq 4 is still a duplicate
+    const hb6c = await (await cpaFetch(base, "/api/shares/heartbeat", {
+      method: "POST", secret,
+      body: { protocol: 2, usage: [{ keyId: claim.keyId, seq: 4, rawTokens: 30, chargedTokens: 30, requests: 1, failed: 0, laneId: "gem", windowKey: gemWindow }] },
+    })).json();
+    assert.equal(hb6c.skippedStale, 1);
+    assert.equal(hb6c.keyLedger[claim.keyId].charged, 250);
+
+    // lane-action pause: claims rejected with the paused code, keys kept
+    const pause = await cpaFetch(base, "/api/shares/owner/lane-action", { method: "POST", secret, body: { laneId: "gem", action: "pause" } });
+    assert.equal(pause.status, 200);
+    const pausedClaim = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { ...signedClaimBody(reg.shareId, identity), laneId: "gem" } });
+    assert.equal(pausedClaim.status, 409);
+    assert.equal((await pausedClaim.json()).error, "lane_paused");
+    const mine3 = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claim.token] } })).json();
+    assert.equal(mine3.claims[0].state, "valid"); // pause keeps keys (D2)
+    assert.equal(mine3.claims[0].laneState, "paused");
+    // double-pause is a conflict, not a silent ok
+    const pauseAgain = await cpaFetch(base, "/api/shares/owner/lane-action", { method: "POST", secret, body: { laneId: "gem", action: "pause" } });
+    assert.equal(pauseAgain.status, 409);
+
+    // a full lanes save without explicit state must NOT silently activate
+    // the paused lane (§8 lane-action constraint)
+    const savePaused = await cpaFetch(base, "/api/shares/owner/policy", { method: "POST", secret, body: { lanes: wireLanes() } });
+    const savedLanes = (await savePaused.json()).lanes;
+    assert.equal(savedLanes.find((l) => l.id === "gem").state, "paused");
+
+    // resume restores claiming; the surviving key is still the same one
+    await cpaFetch(base, "/api/shares/owner/lane-action", { method: "POST", secret, body: { laneId: "gem", action: "resume" } });
+    const reClaim = await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { ...signedClaimBody(reg.shareId, identity), laneId: "gem" } });
+    assert.equal(reClaim.status, 200);
+    const reClaimBody = await reClaim.json();
+    assert.notEqual(reClaimBody.keyId, claim.keyId);
+
+    // owner per-key revoke (CS-07): scoped, idempotent, audited
+    const revoke = await cpaFetch(base, "/api/shares/owner/claims/revoke", { method: "POST", secret, body: { keyId: reClaimBody.keyId, reason: "test revoke" } });
+    assert.equal(revoke.status, 200);
+    const revokeBody = await revoke.json();
+    assert.equal(revokeBody.state, "revoked");
+    const revokeAgain = await cpaFetch(base, "/api/shares/owner/claims/revoke", { method: "POST", secret, body: { keyId: reClaimBody.keyId } });
+    assert.equal(revokeAgain.status, 200);
+    const mine4 = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [reClaimBody.token] } })).json();
+    assert.equal(mine4.claims[0].state, "revoked");
+    assert.equal(mine4.claims[0].revokedBy, "owner");
+    assert.ok(mine4.claims[0].revokedAt > 0);
+
+    // terminate: cascade-revokes the lane's valid claims (terminal, D2)
+    await cpaFetch(base, "/api/shares/owner/lane-action", { method: "POST", secret, body: { laneId: "gem", action: "terminate" } });
+    const mine5 = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claim.token] } })).json();
+    assert.equal(mine5.claims[0].state, "revoked");
+    assert.equal(mine5.claims[0].revokeReason, "lane_terminated");
+    const deadResume = await cpaFetch(base, "/api/shares/owner/lane-action", { method: "POST", secret, body: { laneId: "gem", action: "resume" } });
+    assert.equal(deadResume.status, 409);
+    assert.equal((await deadResume.json()).error, "lane_terminated");
+
+    // policy acking: heartbeat appliedPolicyRev advances policyAckedRev
+    const status2 = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    const targetRev = status2.share.policyRev;
+    await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: { protocol: 2, appliedPolicyRev: targetRev } });
+    const status3 = await (await cpaFetch(base, "/api/shares/owner/status", { secret })).json();
+    assert.equal(status3.share.policyAckedRev, targetRev);
+    assert.equal(status3.share.lastProtocol, 2);
+
+    // explicit key cap: min(configured, lane budget) — not a fair split
+    await cpaFetch(base, "/api/shares/owner/policy", { method: "POST", secret, body: { policy: { keyMaxTokens: 3_000 } } });
+    const glmClaim = await (await cpaFetch(base, "/api/shares/claim", { method: "POST", body: { ...signedClaimBody(reg.shareId, identity), laneId: "glm" } })).json();
+    assert.equal(glmClaim.keyMaxTokens, 3_000);
+
+    // cross-owner revoke learns nothing: a foreign keyId is a 404
+    const stranger = generateIdentity();
+    const participants2 = {};
+    // register a second share from another participant is impossible without
+    // a registry entry, so reuse this server's guard: register with the same
+    // identity creates the same share. Instead, a bogus keyId must 404.
+    const bogus = await cpaFetch(base, "/api/shares/owner/claims/revoke", { method: "POST", secret, body: { keyId: "csk_missing" } });
+    assert.equal(bogus.status, 404);
+    assert.equal((await bogus.json()).error, "claim_not_found");
+  });
+}
+
+
 async function testSharingCpaAdminGuardAndPolicy() {
   await withCpaServer({}, async (base, dir, identity) => {
     // Admin views follow the page gate: this helper has no extra lock.
@@ -10211,6 +10407,7 @@ await testSharingCpaUnregisterAndAdmin();
 await testSharingCpaAdminGuardAndPolicy();
 await testSharingCpaLanes();
 await testSharingCpaLanesLegacyCompat();
+await testSharingCpaUsabilityV2();
 await testSharingLaneUnits();
 
 function testSharingLaneUnits() {
