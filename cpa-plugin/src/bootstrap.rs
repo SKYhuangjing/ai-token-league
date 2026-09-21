@@ -273,7 +273,7 @@ pub(crate) fn endpoint_bind_warning(base_url: &str, cpa_bind: Option<&str>) -> O
     }
     let bind = cpa_bind?;
     let bind_all = bind.trim().is_empty() || bind == "0.0.0.0" || bind == "::";
-    if bind_all {
+    if bind_all || bind.trim().trim_matches(['[', ']']).eq_ignore_ascii_case(&host) {
         return None;
     }
     Some(format!(
@@ -465,6 +465,8 @@ mod tests {
         // all-interfaces and empty binds are fine; loopback targets never warn
         assert!(endpoint_bind_warning("http://192.168.1.4:8317", Some("0.0.0.0")).is_none());
         assert!(endpoint_bind_warning("http://192.168.1.4:8317", Some("")).is_none());
+        assert!(endpoint_bind_warning("http://192.168.1.4:8317", Some("192.168.1.4")).is_none());
+        assert!(endpoint_bind_warning("http://192.168.1.4:8317", Some("192.168.1.5")).is_some());
         assert!(endpoint_bind_warning("http://127.0.0.1:8317", Some("127.0.0.1")).is_none());
         assert!(endpoint_bind_warning("http://localhost:8317", Some("localhost")).is_none());
         // unreadable config -> no opinion (never blocks heartbeats)

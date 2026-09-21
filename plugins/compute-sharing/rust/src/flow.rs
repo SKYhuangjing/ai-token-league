@@ -156,7 +156,27 @@ pub fn live(api: &str) -> Result<Value, String> {
     if tokens.is_empty() {
         return Ok(json!({ "claims": [] }));
     }
-    post_json(api, "/api/shares/claims/mine", &json!({ "tokens": tokens }))
+    let data = post_json(api, "/api/shares/claims/mine", &json!({ "tokens": tokens }))?;
+    refresh_claim_endpoints(&data)?;
+    Ok(data)
+}
+
+fn refresh_claim_endpoints(data: &Value) -> Result<(), String> {
+    let Some(remote) = data.get("claims").and_then(Value::as_array) else { return Ok(()) };
+    super::borrow_mutate(|claims| {
+        // Re-read under the lock: an in-flight refresh must neither resurrect
+        // a deleted key nor overwrite a replacement credential.
+        for claim in claims {
+            if let Some(entry) = remote.iter().find(|entry| {
+                entry["keyId"] == claim["keyId"] && entry["token"] == claim["token"]
+                    && entry["shareId"] == claim["shareId"]
+            }) {
+                if let Some(base) = entry.get("baseURL").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+                    claim["baseURL"] = json!(base);
+                }
+            }
+        }
+    })
 }
 
 /// Probe bridge (lib tests): the atomic merge path without a mock backend.
@@ -491,7 +511,7 @@ mod tests {
             let backend = MockBackend::spawn(vec![(
                 "x",
                 200,
-                r#"{ "claims": [{ "keyId": "csk_a", "state": "valid", "usedTokens": 123 }] }"#,
+                r#"{ "claims": [{ "keyId": "csk_a", "shareId": "s1", "token": "tok_a", "baseURL": "http://new:8317", "state": "valid", "usedTokens": 123 }] }"#,
             )]);
             let data = live(&format!("http://{}", backend.addr)).unwrap();
             assert_eq!(data["claims"][0]["keyId"], "csk_a");
@@ -499,6 +519,32 @@ mod tests {
             assert!(request_line.contains("POST /api/shares/claims/mine"), "{request_line}");
             let sent: Value = serde_json::from_str(body).unwrap();
             assert_eq!(sent["tokens"][0], "tok_a");
+            let stored = store_claims().unwrap();
+            assert_eq!(stored[0]["baseURL"], "http://new:8317");
+            assert_eq!(stored[0]["token"], "tok_a");
+            assert_eq!(stored[0]["expiresAt"], 9_000_000_000_000i64);
+        });
+    }
+
+    #[test]
+    fn endpoint_refresh_preserves_concurrent_deletion_and_new_credentials() {
+        sandboxed(|| {
+            init_identity_sandbox();
+            // State written by another process while the live HTTP request
+            // was in flight: A removed, B replaced, C newly claimed.
+            super::super::borrow_set(&json!({ "claims": [
+                {"keyId":"b", "shareId":"s", "token":"new-b", "baseURL":"http://b", "expiresAt":9_000_000_000_000i64},
+                {"keyId":"c", "shareId":"s", "token":"c", "baseURL":"http://c", "expiresAt":9_000_000_000_000i64}
+            ]})).unwrap();
+            refresh_claim_endpoints(&json!({"claims":[
+                {"keyId":"a", "shareId":"s", "token":"a", "baseURL":"http://new"},
+                {"keyId":"b", "shareId":"s", "token":"old-b", "baseURL":"http://new"},
+                {"keyId":"c", "shareId":"different", "token":"c", "baseURL":"http://new"}
+            ]})).unwrap();
+            let stored = store_claims().unwrap();
+            assert_eq!(stored.len(), 2);
+            assert_eq!(stored[0]["baseURL"], "http://b");
+            assert_eq!(stored[1]["baseURL"], "http://c");
         });
     }
 

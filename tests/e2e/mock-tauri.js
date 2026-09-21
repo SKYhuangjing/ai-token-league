@@ -717,6 +717,8 @@
         return Promise.resolve({ keyId: args.keyId, revoked: true });
       }
       if (command === "compute-sharing:models") {
+        const modelError = window.__ATL_E2E_STATE__.modelError ?? cfg.modelError;
+        const modelDelay = window.__ATL_E2E_STATE__.modelDelay || 0;
         // canned CPA catalog (what the /v1/models probe returned), intersected
         // with the claim's lane scope by the real sidecar — here pre-scoped
         const catalog = window.__ATL_E2E_STATE__.modelCatalog || ['gemini-3.8-flash-high', 'gemini-3.7-pro', 'glm-5.3', 'gpt-5.6-terra'];
@@ -726,7 +728,8 @@
         const scoped = scope.some((p) => p === '*' || p.endsWith('*'))
           ? catalog.filter((m) => scope.some((p) => admits(p, m)))
           : scope;
-        return Promise.resolve({ keyId: args.keyId, models: scoped });
+        return new Promise((resolve, reject) => setTimeout(() => modelError
+          ? reject(new Error(modelError)) : resolve({ keyId: args.keyId, models: scoped }), modelDelay));
       }
       if (command === "compute-sharing:doctor") {
         if (window.__ATL_E2E_STATE__.doctor === undefined && window.__ATL_E2E_STATE__.doctorStatusFile) {

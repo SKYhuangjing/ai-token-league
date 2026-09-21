@@ -105,3 +105,7 @@ node --check src/desktop/renderer.js
 node --check plugins/compute-sharing/index.js
 git diff --check
 ```
+
+## 7. 后续发布状态（2026-09-21）
+
+用户随后部署了后端，并授权更新本机组件。共享卡片 `0.1.3` 已在线发布并在 App 中升级，CPA `0.5.3` 已实际加载并确认线上心跳，App/CLI `0.7.17` 已完成本机 arm64 构建安装。原报告各节保留当次验收边界；本次重跑门禁、上线哈希、状态保留、额外网络切换缺陷和回滚记录统一见 [R3 发布记录](compute-sharing-rollout-20260921-r3.md)。

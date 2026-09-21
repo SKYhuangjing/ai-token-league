@@ -1153,15 +1153,24 @@ export default {
     // 自动刷新不打断用户正在看的内容）
     const testResults = new Map();
     const toolStateOf = (claim) => {
-      if (!toolState.has(claim.keyId)) {
+      const previous = toolState.get(claim.keyId);
+      const endpoint = JSON.stringify([claim.baseURL, claim.token]);
+      if (!previous || previous.endpoint !== endpoint) {
+        if (previous) {
+          cancelClaimTest(claim.keyId);
+          testResults.delete(claim.keyId);
+          syncWait.delete(claim.keyId);
+        }
         const exact = (claim.models || []).find((m) => m && !m.includes("*"));
         toolState.set(claim.keyId, {
-          tool: "claude",
+          endpoint,
+          loading: false,
+          tool: previous ? previous.tool : "claude",
           model: exact || "",
           manualModel: "",
           models: null, // null = 目录未加载; [] = 已加载但为空; [...] = 列表
           modelsError: "",
-          shell: isWindowsShell() ? "powershell" : "posix",
+          shell: previous ? previous.shell : (isWindowsShell() ? "powershell" : "posix"),
         });
       }
       return toolState.get(claim.keyId);
@@ -1175,18 +1184,23 @@ export default {
     // 结果与车道范围求交——通配符永远不会被当作可发送的模型 ID。
     async function loadModels(claim) {
       const state = toolStateOf(claim);
-      if (state.models) return;
+      if (state.models || state.loading) return;
+      state.loading = true;
       try {
         const data = await ctx.invoke("compute-sharing:models", { keyId: claim.keyId });
+        if (toolState.get(claim.keyId) !== state || !el.isConnected) return;
         state.models = (data && Array.isArray(data.models)) ? data.models : [];
+        state.modelsError = "";
         // default-select the first concrete model once the catalog lands:
         // the select visibly shows it, so state must agree or the test input
         // and the generated env block silently miss the model
         if (!state.model && state.models.length) state.model = state.models[0];
       } catch (error) {
+        if (toolState.get(claim.keyId) !== state || !el.isConnected) return;
         state.models = [];
         state.modelsError = String((error && error.message) || error).slice(0, 120);
       }
+      state.loading = false;
       renderMineLast();
     }
 
@@ -1849,6 +1863,17 @@ export default {
             liveById = new Map(data.claims.map((c) => [c.keyId, c]));
           }
         } catch { /* keep last known usage */ }
+      }
+      if (seq !== refreshSeq) return;
+      for (const claim of claims) {
+        const live = liveById && liveById.get(claim.keyId);
+        if (live && live.token === claim.token && live.shareId === claim.shareId && live.baseURL) {
+          claim.baseURL = live.baseURL;
+        }
+        const state = toolStateOf(claim);
+        // A refresh retries a failed catalog once; rendering alone never
+        // loops requests. Replacing the state invalidates old async results.
+        if (state.modelsError) toolState.set(claim.keyId, { ...state, models: null, modelsError: "", loading: false });
       }
       // dead claims are deleted locally (user decision): revoked (confirmed
       // by the live view) and expired claims carry no value — rewrite the

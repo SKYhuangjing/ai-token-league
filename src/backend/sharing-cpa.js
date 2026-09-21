@@ -539,7 +539,11 @@ export function createSharingCpa({ dataDir, initial, persistState, verifyIdentit
         multiplier: lane.peakMultiplier,
       };
     }
-    if (withToken) view.token = claim.token;
+    if (withToken) {
+      view.token = claim.token;
+      // Only the authenticated borrower view exposes the current endpoint.
+      view.baseURL = share ? share.baseURL : "";
+    }
     return view;
   }
 

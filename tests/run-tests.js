@@ -9887,6 +9887,15 @@ async function testSharingCpaRegisterHeartbeatClaim() {
     const mine = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claimBody.token] } })).json();
     assert.equal(mine.claims.length, 1);
     assert.equal(mine.claims[0].usedTokens, 5200);
+    assert.equal(mine.claims[0].baseURL, "http://192.168.1.9:8317");
+    await cpaFetch(base, "/api/shares/heartbeat", { method: "POST", secret, body: { baseURL: "http://192.168.1.10:8317" } });
+    const moved = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: [claimBody.token] } })).json();
+    assert.equal(moved.claims[0].baseURL, "http://192.168.1.10:8317");
+    assert.equal(moved.claims[0].token, claimBody.token);
+    const publicMoved = await (await cpaFetch(base, "/api/shares")).json();
+    assert.equal("baseURL" in publicMoved.shares[0], false);
+    const unauthMoved = await (await cpaFetch(base, "/api/shares/claims/mine", { method: "POST", body: { tokens: ["invalid"] } })).json();
+    assert.deepEqual(unauthMoved.claims, []);
 
     // renewal keeps the same key and extends expiry; the next heartbeat
     // carries the pushed-out expiresAtMs to the owner plugin (G3)
@@ -10789,6 +10798,7 @@ async function testControlPlaneMysqlRoundTrip() {
     const claim = {
       keyId: "csk_t1", shareId: "shr_t1", laneId: "gemini-week", token: "atl_sk_test", borrower: "sky", state: "valid",
       usedTokens: 12, createdAt: 10, expiresAt: 20,
+      lastSeq: 7, revokedBy: "owner", revokedAt: 19, revokeReason: "acceptance",
     };
     await plane.sharing.save({ shares: { shr_t1: share }, claims: { csk_t1: claim } });
     await plane.listings.save({ "demo-mod": { listed: false, updatedAt: "t" } });
@@ -10802,12 +10812,23 @@ async function testControlPlaneMysqlRoundTrip() {
     assert.equal(reloaded.shares.shr_t1.laneSettled["gemini-week"].tokens, 77);
     assert.equal(reloaded.shares.shr_t1.wallSignal.ownerFailed, 3);
     assert.equal(reloaded.claims.csk_t1.laneId, "gemini-week");
+    assert.equal(reloaded.claims.csk_t1.lastSeq, 7);
+    assert.equal(reloaded.claims.csk_t1.revokedBy, "owner");
+    assert.equal(reloaded.claims.csk_t1.revokedAt, 19);
+    assert.equal(reloaded.claims.csk_t1.revokeReason, "acceptance");
     const listings = await plane.listings.load();
     assert.equal(listings.modules["demo-mod"].listed, false);
     // row-level update path: one claim upsert, share untouched
     await plane.sharing.save({ shares: { shr_t1: share }, claims: { csk_t1: { ...claim, usedTokens: 99 } } });
     const after = await plane.sharing.load();
     assert.equal(after.claims.csk_t1.usedTokens, 99);
+    // Sequence/audit-only changes must reach SQL too, even when usage is
+    // unchanged. Reload through a fresh adapter as a restarted server does.
+    await plane.sharing.save({ shares: { shr_t1: share }, claims: { csk_t1: { ...claim, usedTokens: 99, lastSeq: 8, revokedAt: 21, revokeReason: "updated" } } });
+    const restarted = await createControlPlaneStore(store).sharing.load();
+    assert.equal(restarted.claims.csk_t1.lastSeq, 8);
+    assert.equal(restarted.claims.csk_t1.revokedAt, 21);
+    assert.equal(restarted.claims.csk_t1.revokeReason, "updated");
     // removal deletes rows
     await plane.sharing.save({ shares: {}, claims: {} });
     const emptied = await plane.sharing.load();

@@ -794,3 +794,84 @@ for (const language of ['en', 'zh-CN']) {
     if (language === 'en') await expect(items).not.toContainText(/[\u3400-\u9fff]/);
   });
 }
+
+for (const language of ['en', 'zh-CN']) {
+  const movedEndpoint = scenarioTest({
+    desktopAutoInitialized: false, language, apiBaseUrl: 'http://backend.test',
+    routes: baseRoutes, shares: SHARES, modelError: 'http_401',
+    modules: { 'compute-sharing': { enabled: true, config: {}, installedVersion: VERSION } },
+    borrowClaims: [{ keyId: 'csk_move', token: 'atl_sk_move', shareId: 'shr_e2e1',
+      shareTitle: 'Moving node', laneId: 'gemini-week', models: ['gemini-*'],
+      baseURL: 'http://192.168.1.4:8317', expiresAt: Date.now() + 3_600_000 }],
+  });
+  movedEndpoint(`T87: ${language} existing claim follows endpoint and retries catalog failures`, async ({ page }) => {
+    await openCard(page, 'borrow');
+    await expect(page.locator('[data-cs="mine"]')).toContainText('http_401');
+    await page.evaluate(() => {
+      const state = window.__ATL_E2E_STATE__;
+      state.modelError = '';
+      state.modelCatalog = ['gemini-new'];
+    });
+    await page.locator('[data-cs="refresh"]').click();
+    await expect(page.locator('[data-cs-model="csk_move"]')).toHaveValue('gemini-new');
+    await page.evaluate(() => {
+      const state = window.__ATL_E2E_STATE__;
+      state.liveClaims = [{ ...state.borrowStore.claims[0], baseURL: 'http://192.168.1.10:8317', state: 'valid' }];
+    });
+    await page.locator('[data-cs="refresh"]').click();
+    await expect(page.locator('[data-cs="mine"]')).toContainText('http://192.168.1.10:8317');
+    await expect(page.locator('[data-cs="mine"]')).not.toContainText('http_401');
+    await expect(page.locator('[data-cs-model="csk_move"]')).toHaveValue('gemini-new');
+    await expect(page.locator('[data-cs="mine"]')).not.toContainText('http://192.168.1.4:8317');
+  });
+  movedEndpoint(`T87: ${language} obsolete model response cannot overwrite moved endpoint`, async ({ page }) => {
+    await openCard(page, 'borrow');
+    await expect(page.locator('[data-cs="mine"]')).toContainText('http_401');
+    const before = await page.evaluate(() => window.__ATL_E2E_STATE__.sidecarCalls.filter(c => c.command === 'compute-sharing:models').length);
+    await page.evaluate(() => {
+      window.__ATL_E2E_STATE__.modelError = '';
+      window.__ATL_E2E_STATE__.modelDelay = 1800;
+      window.__ATL_E2E_STATE__.modelCatalog = ['gemini-old'];
+    });
+    await page.locator('[data-cs="refresh"]').click();
+    await expect.poll(() => page.evaluate(() => window.__ATL_E2E_STATE__.sidecarCalls.filter(c => c.command === 'compute-sharing:models').length)).toBeGreaterThan(before);
+    await page.evaluate(() => {
+      const state = window.__ATL_E2E_STATE__;
+      state.modelDelay = 0;
+      state.modelCatalog = ['gemini-new'];
+      state.liveClaims = [{ ...state.borrowStore.claims[0], baseURL: 'http://192.168.1.10:8317', state: 'valid' }];
+    });
+    await page.locator('[data-cs="refresh"]').click();
+    await expect(page.locator('[data-cs-model="csk_move"]')).toHaveValue('gemini-new');
+    await page.waitForTimeout(2000);
+    await expect(page.locator('[data-cs-model="csk_move"]')).toHaveValue('gemini-new');
+    await expect(page.locator('[data-cs-model="csk_move"] option')).not.toContainText(['gemini-old']);
+  });
+  movedEndpoint(`T87: ${language} a moved endpoint cancels the old connection probe`, async ({ page }) => {
+    await openCard(page, 'borrow');
+    await page.evaluate(() => {
+      window.__ATL_E2E_STATE__.borrowTestDelayMs = 1500;
+      window.__ATL_E2E_STATE__.borrowTestResult = { ok: false, status: 401, error: 'old endpoint failed' };
+    });
+    await page.locator('[data-cs-model-input="csk_move"]').fill('gemini-new');
+    await page.locator('[data-cs-test="csk_move"]').click();
+    await page.evaluate(() => {
+      const state = window.__ATL_E2E_STATE__;
+      state.liveClaims = [{ ...state.borrowStore.claims[0], baseURL: 'http://192.168.1.10:8317', state: 'valid' }];
+      state.modelError = '';
+      state.modelCatalog = ['gemini-new'];
+      state.borrowTestDelayMs = 0;
+      state.borrowTestResult = null;
+    });
+    await page.locator('[data-cs="refresh"]').click();
+    await expect(page.locator('[data-cs-model="csk_move"]')).toHaveValue('gemini-new');
+    await page.locator('[data-cs-test="csk_move"]').click();
+    const result = page.locator('[data-cs-test-result="csk_move"]');
+    await expect(result).toContainText(language === 'en' ? 'reachable' : '连通');
+    await page.waitForTimeout(1800);
+    await expect(result).not.toContainText('old endpoint failed');
+    const calls = await page.evaluate(() => window.__ATL_E2E_STATE__.sidecarCalls.filter(c => c.command === 'compute-sharing:borrow-test'));
+    expect(calls.at(-1).args.baseURL).toBe('http://192.168.1.10:8317');
+  });
+
+}

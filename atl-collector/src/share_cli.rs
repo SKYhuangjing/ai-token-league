@@ -453,6 +453,11 @@ fn merge_claims(claims: &[Value], live: Option<&Value>, now: i64) -> Vec<Value> 
                         merged["state"] = json!(state);
                     }
                     merged["usedTokens"] = entry.get("usedTokens").cloned().unwrap_or(json!(0));
+                    if entry["token"] == claim["token"] && entry["shareId"] == claim["shareId"] {
+                        if let Some(base) = entry.get("baseURL").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+                            merged["baseURL"] = json!(base);
+                        }
+                    }
                     // lane identity backfill: claims stored before the lane
                     // fields existed get them from the live backend view
                     for field in ["laneId", "laneTitle", "models", "tzLabel"] {
@@ -653,6 +658,9 @@ async fn find_claim(key_id: &str) -> Result<Value, CliError> {
 }
 
 async fn cmd_test(key_id: &str, model: Option<&str>, json_out: bool) -> Result<(), CliError> {
+    // Refresh the authenticated endpoint before probing a saved key. A
+    // control-plane outage still permits using the last confirmed endpoint.
+    let _ = sidecar_call(&format!("{}:live", PLUGIN_ID), json!({})).await;
     let claim = find_claim(key_id).await?;
     // model default mirrors the card: the lane's exact model; wildcards need
     // a real name
@@ -946,6 +954,17 @@ mod tests {
             "lanes": lanes,
             "plugin": { "lastHeartbeatAt": now_ms() },
         })
+    }
+
+    #[test]
+    fn merge_claims_refreshes_only_the_authenticated_endpoint() {
+        let stored = vec![json!({"keyId":"a", "shareId":"s", "token":"t", "baseURL":"http://old", "expiresAt":999})];
+        let mut live = json!({"claims":[{"keyId":"a", "shareId":"s", "token":"t", "baseURL":"http://new", "state":"valid"}]});
+        let merged = merge_claims(&stored, Some(&live), 0);
+        assert_eq!(merged[0]["baseURL"], "http://new");
+        assert_eq!(merged[0]["expiresAt"], 999);
+        live["claims"][0]["token"] = json!("replacement");
+        assert_eq!(merge_claims(&stored, Some(&live), 0)[0]["baseURL"], "http://old");
     }
 
     #[test]

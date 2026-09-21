@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.18] - 2026-09-22
+
+### Fixed
+
+- [Desktop] Existing compute-sharing claims now refresh the owner's current endpoint without changing their keys or expiry. Card 0.1.4 retries failed model discovery on refresh and discards connection tests and model responses from an old endpoint; CLI exports and tests use the refreshed address.
+- [Desktop] CPA plugin 0.5.4 no longer reports an unreachable endpoint when CPA binds directly to the advertised LAN address.
+
+### Changed
+
+- The authenticated borrower view includes the current endpoint; public directory responses continue to omit it. Deploy the backend before updating clients to enable address migration.
+- MySQL sharing records now persist deduplication sequence numbers and owner-revocation audit fields, preventing the deduplication baseline from resetting on a backend restart.
+- Added endpoint migration and bilingual asynchronous regressions, plus real CPA forwarding, accounting, restart, and MySQL persistence acceptance evidence.
+
+## [0.7.17] - 2026-09-21
+
+### Added
+
+- [Desktop] Compute-sharing now explains node availability, claim capacity, remaining quota, and connection readiness separately; borrowers can discover models and copy configuration for their chosen tool. Owners can pause, resume, or terminate individual lanes and revoke individual claim keys from the card or CLI, with node policy acknowledgment shown explicitly.
+- [Web] The sharing directory displays lane-level availability and quota, with model filtering before claiming.
+
+### Fixed
+
+- [Desktop] Sharing quota survives retries and restarts without duplicate charging or lost pending usage. CPA plugin 0.5.3 persists callback, in-flight, and acknowledged batches, keeps window baselines separate, and refuses new shared traffic if its journal cannot be saved.
+- [Desktop] Compute-sharing card 0.1.3 preserves edited drafts and current focus during refresh, cancels superseded connection-test retries, and reports stale, offline, or mismatched nodes accurately in both languages.
+- [Desktop] Cached first-party plugin cards open promptly when the catalog is slow or offline, and card-header upgrade buttons work after a delayed catalog response.
+- [Desktop] CLI argument errors respect the JSON envelope; sharing setup hints and quota suggestions match the card. Shared local JSON writes remain mutually exclusive across threads and processes.
+
+### Changed
+
+- Sharing protocol v2 adds per-key batch sequence deduplication and policy acknowledgments. MySQL deployments apply the control-plane v2 migration automatically; backend owner routes must be deployed before upgrading the sharing clients.
+- Added regression coverage for journal recovery, cross-window accounting, asynchronous card interactions, plugin upgrades, and native packaged behavior.
+
 ## [0.7.16] - 2026-09-19
 
 ### Added

@@ -216,6 +216,7 @@ const SHARE_COLUMNS = [
 const CLAIM_COLUMNS = [
   "keyId", "shareId", "laneId", "shareTitle", "token", "borrower", "participantId", "displayId", "state",
   "usedTokens", "requests", "failedRequests", "createdAt", "expiresAt", "lastUsedAt",
+  "lastSeq", "revokedBy", "revokedAt", "revokeReason",
 ];
 
 function upsertSql(table, columns) {
