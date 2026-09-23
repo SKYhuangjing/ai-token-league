@@ -1,5 +1,6 @@
 use crate::config::AppConfig;
 use crate::provider::common::*;
+use crate::crypto::sha256_hex;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -119,6 +120,9 @@ impl ZCodeLocalProvider {
         .map_err(|e| e.to_string())?;
 
         let source = source_metadata(db_path, PROVIDER_ID, VERSION);
+        // Unlike the scan-cache fingerprint, this identity must survive WAL
+        // changes and source-side retention. It contains no path or request ID.
+        let stable_source = sha256_hex(&format!("zcode-source|{}", db_path));
         let mut stmt = conn
             .prepare(
                 "SELECT m.logical_request_id,
@@ -213,6 +217,7 @@ impl ZCodeLocalProvider {
             });
 
             events.push(json!({
+                "_localRequestId": sha256_hex(&format!("zcode-request|{}|{}", stable_source, row.logical_request_id)),
                 "providerId": PROVIDER_ID,
                 "providerVersion": VERSION,
                 "toolCode": TOOL_CODE,
@@ -230,7 +235,7 @@ impl ZCodeLocalProvider {
                 "reasoningTokens": row.reasoning_tokens.max(0),
                 "totalTokens": total,
                 "rawSourceRef": source.raw_source_ref,
-                "sourceFingerprint": source.source_fingerprint,
+                "sourceFingerprint": stable_source,
                 "parserVersion": source.parser_version,
             }));
         }
@@ -281,6 +286,7 @@ mod tests {
         assert_eq!(events.len(), 6, "should have 6 valid events");
 
         for event in &events {
+            assert!(event["_localRequestId"].as_str().is_some_and(|id| !id.is_empty()));
             assert_eq!(event["providerId"], PROVIDER_ID);
             assert_eq!(event["toolCode"], TOOL_CODE);
             assert_eq!(event["sourceKind"], "local_db");

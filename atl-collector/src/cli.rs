@@ -223,22 +223,18 @@ pub async fn run(cmd: crate::Commands) -> Result<(), CliError> {
                 &cfg.api_base_url,
                 collector_core::reconcile::FullReconcileTrigger::ApiBaseUrlChanged,
             );
-            let cache = HashMap::new();
-            let result = scanner::scan_usage_async(&cfg, cache).await;
-            if !result.provider_errors.is_empty() {
-                return Err(format!(
-                    "scan incomplete; refusing reconcile: {:?}",
-                    result.provider_errors
-                )
-                .into());
+            let (_, persisted) = scan_and_persist(&cfg, true).await?;
+            if !persisted {
+                return Err("local ledger unavailable; refusing reconcile".into());
             }
             let options = collector_core::reconcile::FullReconcileOptions {
                 resume: true,
                 ..Default::default()
             };
+            let ledger_items = LocalUsageStore::open_readonly_default()?.all_usage_items()?;
             let reconcile_result = collector_core::reconcile::full_reconcile_usage(
                 &cfg,
-                &result.items,
+                &ledger_items,
                 &cfg.api_base_url,
                 options,
             )
@@ -320,7 +316,10 @@ async fn scan_and_persist(cfg: &AppConfig, full: bool) -> Result<(scanner::ScanR
     if let Some(store) = store.as_mut() {
         let scanned_at = now_iso();
         store.replace_source_cache(&result.source_index, &scanned_at)?;
-        store.merge_usage_facts(&result.items, &scanned_at)?;
+        store.merge_non_zcode_facts(&result.items, &scanned_at)?;
+        if !result.zcode_requests.is_empty() {
+            store.ingest_zcode_requests(&result.zcode_requests, &scanned_at)?;
+        }
         persisted = true;
     }
     Ok((result, persisted))
@@ -403,10 +402,14 @@ async fn cmd_sync(full_resync: bool, json_out: bool) -> Result<(), CliError> {
     }
     let started = std::time::Instant::now();
     eprintln!("Scanning local sources ...");
-    let (result, _) = scan_and_persist(&cfg, false).await?;
+    let (result, persisted) = scan_and_persist(&cfg, false).await?;
+    if !persisted {
+        return Err("local ledger unavailable; refusing sync".into());
+    }
+    let ledger_items = LocalUsageStore::open_readonly_default()?.all_usage_items()?;
     eprintln!("Uploading to {} ...", cfg.api_base_url);
     let sync_result =
-        collector_core::sync::sync_usage(&cfg, &result.items, &cfg.api_base_url).await?;
+        collector_core::sync::sync_usage(&cfg, &ledger_items, &cfg.api_base_url).await?;
     let duration = started.elapsed().as_secs_f64();
     if json_out {
         print_json_out(

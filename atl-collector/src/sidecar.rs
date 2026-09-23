@@ -612,6 +612,13 @@ async fn handle_command(
         Command::LocalBackupRunDueAuto => collector_core::local_backup::run_due_auto_backup(),
         Command::LocalBackupInspect => collector_core::local_backup::inspect_backup(&request.args),
         Command::LocalBackupRestoreApply => {
+            let scan_status = read_scan_status(&runtime.last_scan_status);
+            if scan_status["running"].as_bool() == Some(true)
+                || read_bool_state(&runtime.sync_running)
+                || read_bool_state(&runtime.full_reconcile_running)
+            {
+                return Err("Wait for scan, sync, and reconcile to finish before restoring data".to_string());
+            }
             let result = collector_core::local_backup::restore_local_backup(request.args)?;
             let cfg = config::ensure_desktop_config();
             if !cfg.api_base_url.trim().is_empty() {
@@ -1393,41 +1400,15 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
             .cloned()
             .unwrap_or_default();
         store.replace_source_cache(&result.source_index, scanned_at)?;
-        store.merge_usage_facts(&items, scanned_at)?;
-        // Renderer views (trend chart, provider overview, share cards) compute
-        // from snapshot items, not store queries. Append ledger rows whose
-        // scopes the scan no longer covers — history pruned upstream — so
-        // preserved data still renders. Bounded: only source-side retention
-        // adds rows here, a few per day, not the whole ledger on every scan.
-        let scan_scopes: std::collections::HashSet<(String, i64, String)> = items
-            .iter()
-            .filter_map(|item| {
-                Some((
-                    item.get("day").and_then(|v| v.as_str())?.to_string(),
-                    item.get("hour").and_then(|v| v.as_i64())?,
-                    item.get("providerId").and_then(|v| v.as_str())?.to_string(),
-                ))
-            })
-            .collect();
-        let mut snapshot_items = items;
-        if let Ok(ledger_items) = store.all_usage_items() {
-            let preserved: Vec<serde_json::Value> = ledger_items
-                .into_iter()
-                .filter(|item| {
-                    let scope = (
-                        item.get("day").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        item.get("hour").and_then(|v| v.as_i64()).unwrap_or(-1),
-                        item.get("providerId").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    );
-                    !scan_scopes.contains(&scope)
-                })
-                .collect();
-            if !preserved.is_empty() {
-                snapshot["rowCount"] = serde_json::json!(snapshot_items.len() + preserved.len());
-                snapshot_items.extend(preserved);
-                snapshot["items"] = serde_json::Value::Array(snapshot_items);
-            }
+        store.merge_non_zcode_facts(&items, scanned_at)?;
+        if !provider_errors.contains_key("zcode_local") && !result.zcode_requests.is_empty() {
+            store.ingest_zcode_requests(&result.zcode_requests, scanned_at)?;
         }
+        // The ledger is the sole source for rendering and sync. A scan is
+        // merely an observation and may omit history retained locally.
+        let ledger_items = store.all_usage_items()?;
+        snapshot["rowCount"] = serde_json::json!(ledger_items.len());
+        snapshot["items"] = serde_json::Value::Array(ledger_items);
         clear_json_source_index_cache();
     } else {
         write_source_index_cache(&result.source_index, &snapshot)?;

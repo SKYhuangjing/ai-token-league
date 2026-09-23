@@ -1,10 +1,14 @@
 use crate::config;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use base64::Engine;
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use rusqlite::{Connection, DatabaseName};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-const BACKUP_VERSION: u32 = 1;
+const BACKUP_VERSION: u32 = 2;
 
 struct BackupFile {
     key: &'static str,
@@ -109,6 +113,24 @@ pub fn export_local_backup() -> Result<Value, String> {
         }));
     }
 
+    let db_path = config::local_usage_db_path();
+    if db_path.exists() {
+        let image = sqlite_backup_image()?;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&image).map_err(|e| e.to_string())?;
+        let compressed = encoder.finish().map_err(|e| e.to_string())?;
+        let content = base64::engine::general_purpose::STANDARD.encode(&compressed);
+        entries.push(json!({
+            "key": "usageDatabase",
+            "encoding": "gzip+base64",
+            "content": content,
+            "sha256": sha256_hex(&content),
+            "bytes": image.len()
+        }));
+    } else {
+        missing.push("usageDatabase");
+    }
+
     Ok(json!({
         "backupVersion": BACKUP_VERSION,
         "createdAt": now_iso(),
@@ -120,6 +142,17 @@ pub fn export_local_backup() -> Result<Value, String> {
         "entries": entries,
         "missing": missing
     }))
+}
+
+fn sqlite_backup_image() -> Result<Vec<u8>, String> {
+    let source = Connection::open(config::local_usage_db_path()).map_err(|e| e.to_string())?;
+    let path = std::env::temp_dir().join(format!("atl-usage-backup-{}.sqlite3", timestamp_slug()));
+    let result = (|| {
+        source.backup(DatabaseName::Main, &path, None).map_err(|e| e.to_string())?;
+        fs::read(&path).map_err(|e| e.to_string())
+    })();
+    let _ = fs::remove_file(&path);
+    result
 }
 
 pub fn default_backup_directory() -> String {
@@ -235,7 +268,15 @@ pub fn inspect_backup(backup: &Value) -> Result<Value, String> {
 }
 
 pub fn restore_local_backup(backup: Value) -> Result<Value, String> {
-    validate_backup(&backup)?;
+    // Reject damaged entries before changing either the database or local files.
+    inspect_backup(&backup)?;
+    for entry in backup["entries"].as_array().unwrap() {
+        let key = entry["key"].as_str().unwrap();
+        if backup_files().iter().any(|item| item.key == key && item.required_json) {
+            serde_json::from_str::<Value>(entry["content"].as_str().unwrap())
+                .map_err(|e| format!("Invalid backup entry {} JSON: {}", key, e))?;
+        }
+    }
     config::ensure_app_dir();
 
     let restore_snapshot_dir = config::config_path()
@@ -254,10 +295,43 @@ pub fn restore_local_backup(backup: Value) -> Result<Value, String> {
         }
     }
 
+    if config::local_usage_db_path().exists() {
+        fs::write(restore_snapshot_dir.join("usageDatabase.bak"), sqlite_backup_image()?)
+            .map_err(|e| format!("Cannot snapshot current usage database: {}", e))?;
+    }
+
     let mut restored = 0_u64;
     let entries = backup["entries"]
         .as_array()
         .ok_or("Invalid backup: entries must be an array")?;
+
+    if backup["backupVersion"].as_u64() == Some(2) {
+        if let Some(entry) = entries.iter().find(|entry| entry["key"] == "usageDatabase") {
+            let content = entry["content"].as_str().ok_or("Invalid usage database backup")?;
+            if sha256_hex(content) != entry["sha256"].as_str().unwrap_or("") {
+                return Err("Invalid usage database backup: sha256 mismatch".to_string());
+            }
+            if entry["encoding"] != "gzip+base64" {
+                return Err("Invalid usage database backup encoding".to_string());
+            }
+            let compressed = base64::engine::general_purpose::STANDARD.decode(content)
+                .map_err(|e| format!("Invalid usage database encoding: {}", e))?;
+            let mut decoder = GzDecoder::new(compressed.as_slice());
+            let mut image = Vec::new();
+            decoder.read_to_end(&mut image).map_err(|e| e.to_string())?;
+            let temp_path = restore_snapshot_dir.join("usageDatabase.restore.sqlite3");
+            fs::write(&temp_path, image).map_err(|e| e.to_string())?;
+            let source = Connection::open(&temp_path).map_err(|e| e.to_string())?;
+            let check: String = source.query_row("PRAGMA quick_check", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            if check != "ok" { return Err(format!("Invalid usage database: {}", check)); }
+            drop(source);
+            let mut target = Connection::open(config::local_usage_db_path()).map_err(|e| e.to_string())?;
+            target.restore(DatabaseName::Main, &temp_path, None::<fn(rusqlite::backup::Progress)>)
+                .map_err(|e| e.to_string())?;
+            fs::remove_file(&temp_path).map_err(|e| e.to_string())?;
+        }
+    }
 
     for item in &files {
         if let Some(entry) = entries
@@ -289,6 +363,18 @@ pub fn restore_local_backup(backup: Value) -> Result<Value, String> {
         }
     }
 
+    // v1 backups had only the display cache. Import it into the durable store
+    // so a restored snapshot is not immediately replaced by stale SQLite data.
+    if !entries.iter().any(|entry| entry["key"] == "usageDatabase") {
+        if let Some(cache_entry) = entries.iter().find(|entry| entry["key"] == "usageCache") {
+            let cache: Value = serde_json::from_str(cache_entry["content"].as_str().unwrap_or(""))
+                .map_err(|e| format!("Invalid legacy usage cache: {}", e))?;
+            let items = cache["items"].as_array().cloned().unwrap_or_default();
+            let mut store = crate::local_usage_store::LocalUsageStore::open_default()?;
+            store.restore_legacy_snapshot(&items, cache["scannedAt"].as_str().unwrap_or("restore"))?;
+        }
+    }
+
     let restored_device_id = backup["entries"]
         .as_array()
         .and_then(|entries| entries.iter().find(|e| e["key"] == "config"))
@@ -310,7 +396,7 @@ pub fn restore_local_backup(backup: Value) -> Result<Value, String> {
 }
 
 fn validate_backup(backup: &Value) -> Result<(), String> {
-    if backup["backupVersion"].as_u64() != Some(BACKUP_VERSION as u64) {
+    if !matches!(backup["backupVersion"].as_u64(), Some(1 | 2)) {
         return Err("Unsupported local backup version".to_string());
     }
     if backup["scope"].as_str() != Some("client-local-data") {
@@ -319,7 +405,8 @@ fn validate_backup(backup: &Value) -> Result<(), String> {
     let entries = backup["entries"]
         .as_array()
         .ok_or("Invalid backup: entries must be an array")?;
-    let allowed: Vec<&str> = backup_files().into_iter().map(|item| item.key).collect();
+    let mut allowed: Vec<&str> = backup_files().into_iter().map(|item| item.key).collect();
+    if backup["backupVersion"].as_u64() == Some(2) { allowed.push("usageDatabase"); }
     for entry in entries {
         let key = entry["key"]
             .as_str()
@@ -631,18 +718,30 @@ mod tests {
         let _guard = config::TEST_ENV_LOCK.lock().unwrap();
         let home = temp_home();
         let _atl = AtlHomeGuard::new(&home);
+        config::ensure_app_dir();
+        fs::write(config::config_path(), "{\"original\":true}\n").unwrap();
+
+        let valid_config = "{\"replacement\":true}\n";
 
         let backup = json!({
             "backupVersion": BACKUP_VERSION,
             "scope": "client-local-data",
-            "entries": [{
-                "key": "config",
-                "content": "{}\n",
-                "sha256": "bad"
-            }]
+            "entries": [
+                {
+                    "key": "config",
+                    "content": valid_config,
+                    "sha256": sha256_hex(valid_config)
+                },
+                {
+                    "key": "usageCache",
+                    "content": "{}\n",
+                    "sha256": "bad"
+                }
+            ]
         });
         let err = restore_local_backup(backup).unwrap_err();
         assert!(err.contains("sha256 mismatch"));
+        assert_eq!(fs::read_to_string(config::config_path()).unwrap(), "{\"original\":true}\n");
     }
 
     #[test]
@@ -703,5 +802,54 @@ mod tests {
         enforce_retention_by_days(&dir, 7).unwrap();
         assert!(!old_path.exists());
         assert!(recent_path.exists());
+    }
+
+    #[test]
+    fn database_backup_restores_the_durable_ledger() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+        let item = json!({
+            "day":"2026-08-22", "hour":11, "toolCode":"zcode",
+            "providerId":"zcode_local", "workdirHash":"h", "model":"glm",
+            "inputTokens":700, "outputTokens":300, "totalTokens":1000
+        });
+        {
+            let mut store = crate::local_usage_store::LocalUsageStore::open_default().unwrap();
+            store.merge_usage_facts(&[item.clone()], "before").unwrap();
+        }
+        let backup = export_local_backup().unwrap();
+        assert!(backup["entries"].as_array().unwrap().iter().any(|e| e["key"] == "usageDatabase"));
+        {
+            let mut store = crate::local_usage_store::LocalUsageStore::open_default().unwrap();
+            let mut smaller = item;
+            smaller["inputTokens"] = json!(7);
+            smaller["outputTokens"] = json!(3);
+            smaller["totalTokens"] = json!(10);
+            store.merge_usage_facts(&[smaller], "after").unwrap();
+        }
+        restore_local_backup(backup).unwrap();
+        let store = crate::local_usage_store::LocalUsageStore::open_readonly_default().unwrap();
+        assert_eq!(store.all_usage_items().unwrap()[0]["totalTokens"], 1000);
+    }
+
+    #[test]
+    fn v1_cache_backup_imports_rows_into_sqlite() {
+        let _guard = config::TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _atl = AtlHomeGuard::new(&home);
+        let item = json!({
+            "day":"2026-08-22", "hour":11, "toolCode":"zcode",
+            "providerId":"zcode_local", "workdirHash":"h", "model":"glm",
+            "inputTokens":70, "outputTokens":30, "totalTokens":100
+        });
+        let content = json!({"items":[item],"scannedAt":"2026-09-11T00:00:00Z"}).to_string();
+        let backup = json!({
+            "backupVersion":1, "scope":"client-local-data",
+            "entries":[{"key":"usageCache","content":content,"sha256":sha256_hex(&content)}]
+        });
+        restore_local_backup(backup).unwrap();
+        let store = crate::local_usage_store::LocalUsageStore::open_readonly_default().unwrap();
+        assert_eq!(store.all_usage_items().unwrap()[0]["totalTokens"], 100);
     }
 }

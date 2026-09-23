@@ -19,6 +19,8 @@ use std::path::Path;
 
 pub struct ScanResult {
     pub items: Vec<Value>,
+    /// Local-only request facts for durable providers; never uploaded.
+    pub zcode_requests: Vec<Value>,
     pub health: Vec<Value>,
     pub source_index: HashMap<String, Vec<Value>>,
     pub provider_errors: HashMap<String, String>,
@@ -151,6 +153,7 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
 ) -> ScanResult {
     let mut health = Vec::new();
     let mut source_index: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut zcode_requests = Vec::new();
     let mut provider_errors = HashMap::new();
 
     // Codex
@@ -373,14 +376,19 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
             crate::provider::common::source_metadata(db_path, zcode.id(), zcode.version());
         let items = if let Some(cached) = source_cache
             .take_cached_source(&source_meta.source_fingerprint)
-            .filter(|items| cached_items_have_hour(items))
+            .filter(|items| cached_items_have_hour(items) && items.iter().all(|item| item.get("_localRequestId").and_then(Value::as_str).is_some()))
         {
             cached
         } else {
             match zcode.try_parse_usage(db_path) {
                 Ok(events) => events
                     .into_iter()
-                    .map(|event| finalize_event(event, config))
+                    .map(|event| {
+                        let id = event["_localRequestId"].clone();
+                        let mut item = finalize_event(event, config);
+                        item["_localRequestId"] = id;
+                        item
+                    })
                     .collect::<Vec<_>>(),
                 Err(error) => {
                     zcode_error = Some(format!("{}: {}", db_path, error));
@@ -388,6 +396,7 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
                 }
             }
         };
+        zcode_requests.extend(items.iter().cloned());
         zcode_sources.insert(source_meta.source_fingerprint, items);
     }
     if let Some(error) = zcode_error {
@@ -570,6 +579,7 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
 
     ScanResult {
         items: aggregated,
+        zcode_requests,
         health,
         source_index,
         provider_errors,

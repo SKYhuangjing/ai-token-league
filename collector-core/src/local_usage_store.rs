@@ -94,6 +94,17 @@ impl LocalUsageStore {
                 CREATE INDEX IF NOT EXISTS idx_usage_fact_workdir_day ON usage_fact(workdirHash, day);
                 CREATE INDEX IF NOT EXISTS idx_usage_fact_model_day ON usage_fact(model, day);
                 CREATE INDEX IF NOT EXISTS idx_usage_fact_day_hour ON usage_fact(day, hour);
+
+                -- ZCode removes individual requests from its source database.
+                -- These local-only facts survive that retention policy.
+                CREATE TABLE IF NOT EXISTS zcode_request_fact (
+                  requestId TEXT PRIMARY KEY,
+                  itemJson TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS zcode_legacy_residual (
+                  usageKey TEXT PRIMARY KEY,
+                  itemJson TEXT NOT NULL
+                );
                 "#,
             )
             .map_err(|e| e.to_string())?;
@@ -238,6 +249,149 @@ impl LocalUsageStore {
 
         self.note_preserved_scopes(preserved);
         Ok(())
+    }
+
+    /// Other providers still use the aggregate merge. ZCode is rebuilt from
+    /// its request ledger, so a source-side deletion can never replace it.
+    pub fn merge_non_zcode_facts(&mut self, items: &[Value], scanned_at: &str) -> Result<(), String> {
+        let non_zcode = items.iter().filter(|item| str_field(item, "providerId") != "zcode_local")
+            .cloned().collect::<Vec<_>>();
+        self.merge_usage_facts(&non_zcode, scanned_at)
+    }
+
+    /// Upsert observed requests without deleting requests absent from a scan.
+    /// On the first run, split existing aggregate rows into live requests and
+    /// a residual for requests already pruned from ZCode's database.
+    pub fn ingest_zcode_requests(&mut self, requests: &[Value], scanned_at: &str) -> Result<(), String> {
+        let initialized = self.conn.query_row(
+            "SELECT value FROM meta WHERE key = 'zcodeRequestLedgerInitialized'", [],
+            |row| row.get::<_, String>(0),
+        ).optional().map_err(|e| e.to_string())?.is_some();
+        let old_rows = if initialized { Vec::new() } else {
+            self.all_usage_items()?.into_iter()
+                .filter(|item| str_field(item, "providerId") == "zcode_local")
+                .collect::<Vec<_>>()
+        };
+        let live = aggregate_local_items(requests.iter());
+        if !initialized && !old_rows.is_empty() && !live.is_empty() {
+            let old_scopes = old_rows.iter().map(|item| (str_field(item, "day"), i64_field(item, "hour")))
+                .collect::<std::collections::HashSet<_>>();
+            let overlap = requests.iter().filter(|item| old_scopes.contains(&(str_field(item, "day"), i64_field(item, "hour"))))
+                .count();
+            let matching_keys = old_rows.iter().filter(|item| live.contains_key(&usage_key(item))).count();
+            if overlap >= 10 && matching_keys == 0 {
+                return Err("ZCode ledger migration rejected: source attribution does not match existing local data".to_string());
+            }
+        }
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        if !initialized {
+            let mut residual_stmt = tx.prepare(
+                "INSERT INTO zcode_legacy_residual (usageKey, itemJson) VALUES (?1, ?2)"
+            ).map_err(|e| e.to_string())?;
+            for mut old in old_rows {
+                let key = usage_key(&old);
+                if let Some(now) = live.get(&key) {
+                    // A larger live component means this group has received a
+                    // correction or new usage since the previous aggregate.
+                    // Its old aggregate cannot be safely split into residual
+                    // requests, so the current source is authoritative here.
+                    let complete_overlap = TOKEN_FIELDS.iter()
+                        .all(|field| i64_field(&old, field) >= i64_field(now, field));
+                    for field in TOKEN_FIELDS {
+                        old[field] = json!(if complete_overlap {
+                            i64_field(&old, field) - i64_field(now, field)
+                        } else { 0 });
+                    }
+                }
+                if i64_field(&old, "totalTokens") > 0 {
+                    residual_stmt.execute(params![key, old.to_string()]).map_err(|e| e.to_string())?;
+                }
+            }
+            drop(residual_stmt);
+            tx.execute("INSERT INTO meta (key, value) VALUES ('zcodeRequestLedgerInitialized', '1')", [])
+                .map_err(|e| e.to_string())?;
+        }
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO zcode_request_fact (requestId, itemJson) VALUES (?1, ?2)
+                 ON CONFLICT(requestId) DO UPDATE SET itemJson = excluded.itemJson"
+            ).map_err(|e| e.to_string())?;
+            for request in requests {
+                let id = request.get("_localRequestId").and_then(Value::as_str)
+                    .filter(|id| !id.is_empty()).ok_or("ZCode request missing stable ID")?;
+                let mut item = request.clone();
+                item.as_object_mut().ok_or("Invalid ZCode request")?.remove("_localRequestId");
+                stmt.execute(params![id, item.to_string()]).map_err(|e| e.to_string())?;
+            }
+        }
+        let mut values = Vec::new();
+        for table in ["zcode_legacy_residual", "zcode_request_fact"] {
+            let mut stmt = tx.prepare(&format!("SELECT itemJson FROM {}", table)).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+            for row in rows {
+                let item: Value = serde_json::from_str(&row.map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+                values.push(item);
+            }
+        }
+        let aggregate = aggregate_local_items(values.iter());
+        tx.execute("DELETE FROM usage_fact WHERE providerId = 'zcode_local'", [])
+            .map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO usage_fact (usageKey, day, hour, toolCode, providerId, workdirHash,
+                 workdirDisplayName, model, inputTokens, outputTokens, cacheReadTokens,
+                 cacheWriteTokens, reasoningTokens, totalTokens, sourceQuality, rawSourceRef,
+                 providerVersion, parserVersion, sourceFingerprint, scannedAt)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"
+            ).map_err(|e| e.to_string())?;
+            for (key, item) in aggregate {
+                stmt.execute(params![key, str_field(&item,"day"), i64_field(&item,"hour"),
+                    str_field(&item,"toolCode"), str_field(&item,"providerId"),
+                    str_field(&item,"workdirHash"), str_field(&item,"workdirDisplayName"),
+                    str_field(&item,"model"), i64_field(&item,"inputTokens"),
+                    i64_field(&item,"outputTokens"), i64_field(&item,"cacheReadTokens"),
+                    i64_field(&item,"cacheWriteTokens"), i64_field(&item,"reasoningTokens"),
+                    i64_field(&item,"totalTokens"), str_field(&item,"sourceQuality"),
+                    str_field(&item,"rawSourceRef"), str_field(&item,"providerVersion"),
+                    str_field(&item,"parserVersion"), str_field(&item,"sourceFingerprint"), scanned_at])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Import a v1 backup snapshot as a new aggregate baseline. Its request
+    /// ledger did not exist yet; the next ZCode scan derives a residual.
+    pub fn restore_legacy_snapshot(&mut self, items: &[Value], scanned_at: &str) -> Result<(), String> {
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM usage_fact", []).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM zcode_request_fact", []).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM zcode_legacy_residual", []).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM meta WHERE key = 'zcodeRequestLedgerInitialized'", [])
+            .map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO usage_fact (usageKey, day, hour, toolCode, providerId, workdirHash,
+                 workdirDisplayName, model, inputTokens, outputTokens, cacheReadTokens,
+                 cacheWriteTokens, reasoningTokens, totalTokens, sourceQuality, rawSourceRef,
+                 providerVersion, parserVersion, sourceFingerprint, scannedAt)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"
+            ).map_err(|e| e.to_string())?;
+            for item in items {
+                stmt.execute(params![usage_key(item), str_field(item,"day"), i64_field(item,"hour"),
+                    str_field(item,"toolCode"), str_field(item,"providerId"),
+                    str_field(item,"workdirHash"), str_field(item,"workdirDisplayName"),
+                    str_field(item,"model"), i64_field(item,"inputTokens"),
+                    i64_field(item,"outputTokens"), i64_field(item,"cacheReadTokens"),
+                    i64_field(item,"cacheWriteTokens"), i64_field(item,"reasoningTokens"),
+                    i64_field(item,"totalTokens"), str_field(item,"sourceQuality"),
+                    str_field(item,"rawSourceRef"), str_field(item,"providerVersion"),
+                    str_field(item,"parserVersion"), str_field(item,"sourceFingerprint"), scanned_at])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
     }
 
     /// Per-provider aggregate of usage rows whose (day, hour, providerId)
@@ -718,6 +872,35 @@ fn usage_key(item: &Value) -> String {
         str_field(item, "model"),
     ]
     .join("|")
+}
+
+const TOKEN_FIELDS: [&str; 6] = [
+    "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
+    "reasoningTokens", "totalTokens",
+];
+
+fn aggregate_local_items<'a>(items: impl IntoIterator<Item = &'a Value>) -> HashMap<String, Value> {
+    let mut groups: HashMap<String, Value> = HashMap::new();
+    for item in items {
+        let key = usage_key(item);
+        if let Some(existing) = groups.get_mut(&key) {
+            for field in TOKEN_FIELDS {
+                existing[field] = json!(i64_field(existing, field).saturating_add(i64_field(item, field)));
+            }
+            // A newly observed request carries current workdir display metadata.
+            if !str_field(item, "workdirDisplayName").is_empty() {
+                existing["workdirDisplayName"] = item["workdirDisplayName"].clone();
+            }
+            for field in ["sourceFingerprint", "rawSourceRef", "providerVersion", "parserVersion"] {
+                if !str_field(item, field).is_empty() {
+                    existing[field] = item[field].clone();
+                }
+            }
+        } else {
+            groups.insert(key, item.clone());
+        }
+    }
+    groups
 }
 
 /// Deterministic digest of the sorted scope keys; DefaultHasher is seeded with
@@ -1346,6 +1529,64 @@ mod tests {
         };
         let summary = store.summary("all", &by_provider).unwrap();
         assert_eq!(summary["totals"]["totalTokens"], json!(700));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zcode_ledger_preserves_requests_pruned_inside_an_active_hour() {
+        let (mut store, path) = temp_db();
+        let day = "2026-08-22";
+        let old = make_item(day, 11, "zcode", "zcode_local", "glm", 1000);
+        store.merge_usage_facts(&[old], "before").unwrap();
+        let mut surviving = make_item(day, 11, "zcode", "zcode_local", "glm", 400);
+        surviving["_localRequestId"] = json!("survivor");
+
+        // 600 tokens were pruned before migration. The residual keeps them.
+        store.ingest_zcode_requests(&[surviving.clone()], "first").unwrap();
+        assert_eq!(store.summary("all", &UsageFilters::default()).unwrap()["totals"]["totalTokens"], 1000);
+        store.ingest_zcode_requests(&[surviving.clone()], "second").unwrap();
+        assert_eq!(store.summary("all", &UsageFilters::default()).unwrap()["totals"]["totalTokens"], 1000);
+
+        surviving["totalTokens"] = json!(450);
+        surviving["inputTokens"] = json!(250);
+        surviving["outputTokens"] = json!(100);
+        surviving["cacheReadTokens"] = json!(50);
+        surviving["cacheWriteTokens"] = json!(50);
+        store.ingest_zcode_requests(&[surviving], "corrected").unwrap();
+        assert_eq!(store.summary("all", &UsageFilters::default()).unwrap()["totals"]["totalTokens"], 1050);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zcode_ledger_reattributes_a_known_request_without_double_counting() {
+        let (mut store, path) = temp_db();
+        let mut request = make_item("2026-09-22", 12, "zcode", "zcode_local", "old", 300);
+        request["_localRequestId"] = json!("request-1");
+        store.ingest_zcode_requests(&[request.clone()], "first").unwrap();
+        request["model"] = json!("new");
+        store.ingest_zcode_requests(&[request], "second").unwrap();
+        let all = store.all_usage_items().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0]["model"], "new");
+        assert_eq!(all[0]["totalTokens"], 300);
+        store.ingest_zcode_requests(&[], "third").unwrap();
+        assert_eq!(store.all_usage_items().unwrap()[0]["totalTokens"], 300);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zcode_migration_refuses_unrelated_workdir_identity() {
+        let (mut store, path) = temp_db();
+        let old = make_item("2026-08-22", 11, "zcode", "zcode_local", "glm", 1000);
+        store.merge_usage_facts(&[old], "before").unwrap();
+        let requests = (0..10).map(|index| {
+            let mut item = make_item("2026-08-22", 11, "zcode", "zcode_local", "glm", 10);
+            item["workdirHash"] = json!("different-identity");
+            item["_localRequestId"] = json!(format!("r{}", index));
+            item
+        }).collect::<Vec<_>>();
+        assert!(store.ingest_zcode_requests(&requests, "now").unwrap_err().contains("migration rejected"));
+        assert_eq!(store.all_usage_items().unwrap()[0]["totalTokens"], 1000);
         let _ = std::fs::remove_file(path);
     }
 
