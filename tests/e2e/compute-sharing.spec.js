@@ -12,7 +12,7 @@ import { navigateTo } from './helpers.js';
 const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), 'utf8');
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
-const VERSION = '0.1.2';
+const VERSION = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/manifest.json'), 'utf8')).version;
 const CATALOG = {
   version: 1,
   catalog: [
@@ -221,13 +221,18 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     const quota = page.locator('[data-cs="mine"] .cs-quota').first();
     await expect(quota).toContainText('Per-key cap');
     await expect(quota).toContainText('200K');
-    // tool config: default Claude Code generates Anthropic env rows
-    await expect(page.locator('[data-cs="mine"]')).toContainText('Connect a tool');
+    // API access puts the masked key and protocol URLs ahead of tool commands.
+    const access = page.locator('[data-cs-access="csk_e2e99"]');
+    await expect(access).toContainText('API access');
+    await expect(access).toContainText('Tool setup');
+    await expect(access.locator('[data-cs-endpoint="openai"] code')).toHaveText('http://192.168.1.4:8317/v1');
+    await expect(access.locator('[data-cs-endpoint="claude"] code')).toHaveText('http://192.168.1.4:8317');
     const toolSelect = page.locator('[data-cs-tool="csk_e2e99"]');
     await expect(toolSelect).toHaveValue('claude');
     await expect(page.locator('[data-cs="mine"]')).toContainText('ANTHROPIC_BASE_URL');
     // secrets stay masked in the DOM until revealed (C5)
     await expect(page.locator('[data-cs="mine"]')).not.toContainText('atl_sk_e2e_secret');
+    await expect(access.locator('[data-cs-api-key]')).toHaveText('atl_sk_e…cret');
     // model discovery populates the picker with the lane-scoped catalog
     const modelSelect = page.locator('[data-cs-model="csk_e2e99"]');
     await expect(modelSelect).toBeVisible({ timeout: 5_000 });
@@ -239,6 +244,12 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     await expect(page.locator('[data-cs-test-result="csk_e2e99"]')).toContainText('gemini-3.8-flash-high reachable', { timeout: 5_000 });
     // copy-all emits the tool-scoped block with the chosen model
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await access.locator('[data-cs-copy-key]').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('atl_sk_e2e_secret');
+    await access.locator('[data-cs-endpoint="openai"] [data-cs-copy-endpoint]').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://192.168.1.4:8317/v1');
+    await access.locator('[data-cs-endpoint="claude"] [data-cs-copy-endpoint]').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://192.168.1.4:8317');
     await page.locator('[data-cs="mine"] button', { hasText: 'Copy all' }).click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe([
@@ -285,7 +296,26 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
         '$env:OPENAI_MODEL = "gemini-3.8-flash-high"',
       ].join('\n'));
     // the persistent config snippet renders inline (env-only does not route Codex)
-    await expect(page.locator('[data-cs="mine"] pre')).toContainText('[model_providers.atl-share]');
+    await expect(page.locator('[data-cs-codex-config="csk_e2e99"]')).toContainText('[model_providers.atl-share]');
+  });
+
+  installed('manual model choice updates the copied tool command', async ({ page }) => {
+    await openCard(page, 'borrow');
+    await page.locator('[data-cs-claim-lane="gemini-week"]').click();
+    const key = 'csk_e2e99';
+    const picker = page.locator(`[data-cs-model="${key}"]`);
+    await expect(picker).toBeVisible();
+    await picker.selectOption('__manual');
+    const input = page.locator(`[data-cs-model-input="${key}"]`);
+    await expect(input).toBeVisible();
+    await input.fill('gemini-3.7-pro');
+    await input.press('Tab');
+    await expect(page.locator(`[data-cs-access="${key}"] .cs-env-preview`).first())
+      .toContainText('ANTHROPIC_MODEL=gemini-3.7-pro');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.locator(`[data-cs-access="${key}"] button`, { hasText: 'Copy all' }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toContain('export ANTHROPIC_MODEL=gemini-3.7-pro');
   });
 
   const seeded = scenarioTest({
@@ -687,6 +717,35 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     await manyCard.locator('[data-cs-lanes-more]').click();
     await expect(manyCard.locator('.cs-lane')).toHaveCount(5);
   });
+});
+
+const zhAccess = scenarioTest({
+  desktopAutoInitialized: false,
+  language: 'zh-CN',
+  apiBaseUrl: 'http://backend.test',
+  routes: baseRoutes,
+  shares: SHARES,
+  modules: { 'compute-sharing': { enabled: true, config: {}, installedVersion: VERSION } },
+  borrowClaims: [{
+    keyId: 'csk_zh_access', token: 'atl_sk_zh_secret',
+    shareId: 'shr_e2e1', shareTitle: 'E2E CPA', laneId: 'gemini-week',
+    laneTitle: 'Gemini weekly', models: ['gemini-*'], tzLabel: 'UTC+8',
+    baseURL: 'http://192.168.1.4:8317', expiresAt: Date.now() + 3_600_000,
+  }],
+});
+
+zhAccess('API access stays readable in Chinese and a narrow window', async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 850 });
+  await openCard(page, 'borrow');
+  const access = page.locator('[data-cs-access="csk_zh_access"]');
+  await expect(access).toContainText('API 接入');
+  await expect(access).toContainText('Key 有效');
+  await expect(access).toContainText('OpenAI 兼容');
+  await expect(access).toContainText('Claude / Anthropic');
+  await expect(access).toContainText('工具配置');
+  await expect(access.locator('[data-cs-api-key]')).not.toHaveText('atl_sk_zh_secret');
+  const fit = await access.evaluate((el) => ({ width: el.clientWidth, content: el.scrollWidth }));
+  expect(fit.content).toBeLessThanOrEqual(fit.width + 1);
 });
 
 const borrowerOnly = scenarioTest({

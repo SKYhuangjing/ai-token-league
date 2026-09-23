@@ -47,15 +47,27 @@ const STYLE = `
 .cs-lane-tag { font-size: 11px; color: var(--muted, #888); border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 999px; padding: 1px 8px; }
 .cs-wall { display: flex; gap: 8px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--gold, #c90); border-radius: 10px; margin-bottom: 6px; font-size: 12.5px; }
 .cs-templates { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-/* 认领卡（我的认领）：标签/值/操作网格，值不折行 */
-.cs-claim-config { display: flex; flex-direction: column; gap: 5px; }
-.cs-claim-row { display: flex; align-items: center; gap: 8px; }
-.cs-claim-label { flex: 0 0 96px; font-size: 11px; color: var(--muted, #888); white-space: nowrap; }
-.cs-claim-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
-.cs-claim-mini { padding: 2px 8px; font-size: 11px; white-space: nowrap; }
-.cs-claim-row .outline-button { white-space: nowrap; }
+/* 借用者 API 接入：把凭证与协议地址放在工具命令之前，和 CPA 的接入层级一致。 */
+.cs-access-panel { display: grid; gap: 10px; margin: 10px 0 4px; padding: 12px; border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 12px; background: var(--subtle-bg, #f6f6f3); }
+.cs-access-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cs-access-head strong { font-size: 13px; }
+.cs-access-ready { padding: 2px 9px; border: 1px solid var(--green, #2f9e79); border-radius: 999px; color: var(--green, #2f9e79); font-size: 11px; white-space: nowrap; }
+.cs-access-key { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 9px; background: var(--panel-bg, #fff); }
+.cs-access-key code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-access-label { color: var(--muted, #888); font-size: 11.5px; white-space: nowrap; }
+.cs-access-endpoints { display: grid; gap: 7px; }
+.cs-access-endpoint { display: grid; grid-template-columns: 22px minmax(125px, .7fr) minmax(0, 1.3fr) auto; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 9px; background: var(--panel-bg, #fff); }
+.cs-access-mark { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--green, #2f9e79); background: var(--subtle-bg, #eee); font-size: 12px; font-weight: 700; }
+.cs-access-protocol { min-width: 0; display: grid; gap: 1px; }
+.cs-access-protocol strong { font-size: 12px; }
+.cs-access-protocol small { color: var(--muted, #888); font-size: 10.5px; }
+.cs-access-endpoint code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 7px; border-radius: 5px; background: var(--subtle-bg, #f6f6f3); font-size: 11px; }
+.cs-claim-mini { padding: 3px 8px; font-size: 11px; white-space: nowrap; }
+.cs-access-setup { display: grid; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle, #e3e3e0); }
+.cs-access-setup > strong { font-size: 12px; }
+.cs-env-preview { margin: 0; padding: 8px 10px; border: 1px solid var(--border-subtle, #e3e3e0); border-radius: 8px; overflow-x: auto; font-size: 11px; line-height: 1.5; }
+@media (max-width: 640px) { .cs-access-endpoint { grid-template-columns: 22px minmax(0, 1fr) auto; } .cs-access-endpoint code { grid-column: 1 / -1; grid-row: 2; } .cs-access-key { grid-template-columns: auto minmax(0, 1fr) auto auto; } }
 .cs-claim-section { margin: 10px 0 4px; font-size: 11px; letter-spacing: .06em; color: var(--muted, #888); border-bottom: 1px solid var(--border-subtle, #e3e3e0); padding-bottom: 2px; }
-.cs-claim-config-head { display: flex; align-items: center; justify-content: space-between; }
 .cs-claim-meta { line-height: 1.5; }
 .cs-test-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cs-test-row .grow { flex: 1 1 160px; min-width: 0; }
@@ -86,9 +98,11 @@ const STYLE = `
 .cs-receipt { font-size: 11.5px; color: var(--muted, #888); margin: 4px 0; }
 .cs-quota { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted, #888); margin: 4px 0; }
 .cs-quota b { color: inherit; font-weight: 650; }
-.cs-tool-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
-.cs-tool-bar label { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted, #888); }
-.cs-tool-bar select { max-width: 180px; }
+.cs-tool-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, .85fr) auto; align-items: end; gap: 8px; margin: 4px 0; }
+.cs-tool-bar label { display: grid; gap: 4px; min-width: 0; font-size: 11.5px; color: var(--muted, #888); }
+.cs-tool-bar select, .cs-tool-bar input { width: 100%; min-width: 0; max-width: none; }
+.cs-tool-bar .cs-state { white-space: normal; }
+@media (max-width: 640px) { .cs-tool-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cs-tool-bar > button { justify-self: end; } }
 .cs-pending { font-size: 11.5px; color: var(--gold, #c90); }
 .cs-flash { outline: 2px solid var(--gold, #c90); outline-offset: 2px; transition: outline .2s; }
 .cs-entry-items { display: grid; gap: 3px; margin-top: 4px; }
@@ -197,7 +211,17 @@ const STRINGS = {
     "cs.models.empty": "该车道范围在目录中无具体模型——请手动填写",
     "cs.models.pick": "模型",
     "cs.models.manual": "手动输入…",
-    "cs.tool.title": "接入配置",
+    "cs.api.title": "API 接入",
+    "cs.api.claimed": "Key 有效",
+    "cs.api.key": "API Key",
+    "cs.api.copy": "复制",
+    "cs.api.copied": "已复制",
+    "cs.api.copyFailed": "复制失败，请检查剪贴板权限",
+    "cs.api.openai": "OpenAI 兼容",
+    "cs.api.openaiHint": "Chat / Responses",
+    "cs.api.claude": "Claude / Anthropic",
+    "cs.api.claudeHint": "Messages API",
+    "cs.tool.setup": "工具配置",
     "cs.tool.select": "目标工具",
     "cs.tool.claude": "Claude Code",
     "cs.tool.codex": "Codex CLI",
@@ -205,7 +229,6 @@ const STRINGS = {
     "cs.tool.anthropic": "通用 Anthropic 兼容",
     "cs.tool.shell": "Shell",
     "cs.tool.copyAll": "复制全部",
-    "cs.tool.copied": "已复制",
     "cs.tool.note": "以上变量仅当前终端会话生效（重启工具后失效）；不会写入你的配置文件。",
     "cs.tool.codexToml": "Codex 持久配置（粘贴到 ~/.codex/config.toml 后重启 Codex）",
     "cs.tool.codexNote": "Codex 0.14x 仅靠环境变量不会离开 ChatGPT 账号路径——需要下面的 provider 配置才会走共享端点；上面的环境变量仍供其他 OpenAI 兼容工具使用。粘贴后重启 Codex 生效。",
@@ -287,7 +310,17 @@ const STRINGS = {
     "cs.models.empty": "No concrete model in this lane's scope — enter the model name manually",
     "cs.models.pick": "Model",
     "cs.models.manual": "Manual entry…",
-    "cs.tool.title": "Connect a tool",
+    "cs.api.title": "API access",
+    "cs.api.claimed": "Key active",
+    "cs.api.key": "API Key",
+    "cs.api.copy": "Copy",
+    "cs.api.copied": "Copied",
+    "cs.api.copyFailed": "Could not copy; check clipboard access",
+    "cs.api.openai": "OpenAI compatible",
+    "cs.api.openaiHint": "Chat / Responses",
+    "cs.api.claude": "Claude / Anthropic",
+    "cs.api.claudeHint": "Messages API",
+    "cs.tool.setup": "Tool setup",
     "cs.tool.select": "Target tool",
     "cs.tool.claude": "Claude Code",
     "cs.tool.codex": "Codex CLI",
@@ -295,7 +328,6 @@ const STRINGS = {
     "cs.tool.anthropic": "Generic Anthropic-compatible",
     "cs.tool.shell": "Shell",
     "cs.tool.copyAll": "Copy all",
-    "cs.tool.copied": "Copied",
     "cs.tool.note": "These variables apply to the current terminal session only (gone after restarting the tool); nothing is written to your config files.",
     "cs.tool.codexToml": "Persistent Codex config (paste into ~/.codex/config.toml, then restart Codex)",
     "cs.tool.codexNote": "Codex 0.14x ignores bare env vars and stays on its ChatGPT account path — the provider config below is what routes it to the shared endpoint; the env vars above still serve other OpenAI-compatible tools. Restart Codex after pasting.",
@@ -1122,8 +1154,8 @@ export default {
     }
 
     // ── 算力借用（车道目录 + 我的认领） ────────────────────────────────────
-    // 认领卡「接入配置」(0.1.0 / CS-03)：目标工具 × 具体模型 × shell 方言
-    // 生成可复制命令。模型来自借用 Key 经 sidecar 请求的 CPA 模型目录并与
+    // 认领卡「API 接入」：先展示可复制凭证与协议地址，再按目标工具 ×
+    // 具体模型 × shell 方言生成命令。模型来自借用 Key 的 CPA 模型目录并与
     // 车道白名单求交；目录不可用时降级为带说明的手动输入，绝不猜测模型名。
     const TOOLS = [
       { id: "claude", labelKey: "cs.tool.claude", protocol: "anthropic", env: (c, model) => [
@@ -1224,7 +1256,93 @@ export default {
       const model = state.model === "__manual" ? state.manualModel : state.model;
       const rows = tool.env(claim, model);
       const section = document.createElement("div");
-      section.className = "cs-claim-config";
+      section.className = "cs-access-panel";
+      section.dataset.csAccess = claim.keyId;
+      const base = String(claim.baseURL || "").replace(/\/+$/, "");
+      const maskOf = (value) => String(value).length > 12
+        ? `${String(value).slice(0, 8)}…${String(value).slice(-4)}` : "…";
+      const copyValue = (button, value) => {
+        if (!navigator.clipboard?.writeText) {
+          notify(t("cs.api.copyFailed"));
+          return;
+        }
+        const original = button.textContent;
+        navigator.clipboard.writeText(value).then(() => {
+          button.textContent = t("cs.api.copied");
+          setTimeout(() => { if (button.isConnected) button.textContent = original; }, 1200);
+        }).catch(() => notify(t("cs.api.copyFailed")));
+      };
+      const copyButton = (value, label, dataName) => {
+        const button = document.createElement("button");
+        button.className = "outline-button cs-claim-mini";
+        button.type = "button";
+        button.textContent = t("cs.api.copy");
+        button.setAttribute("aria-label", `${t("cs.api.copy")} ${label}`);
+        button.dataset[dataName] = claim.keyId;
+        button.addEventListener("click", () => copyValue(button, value));
+        return button;
+      };
+
+      const head = document.createElement("div");
+      head.className = "cs-access-head";
+      head.innerHTML = `<strong>${esc(t("cs.api.title"))}</strong><span class="cs-access-ready">${esc(t("cs.api.claimed"))}</span>`;
+      section.appendChild(head);
+
+      const keyRow = document.createElement("div");
+      keyRow.className = "cs-access-key";
+      const keyLabel = document.createElement("span");
+      keyLabel.className = "cs-access-label";
+      keyLabel.textContent = t("cs.api.key");
+      const keyCode = document.createElement("code");
+      keyCode.dataset.csApiKey = claim.keyId;
+      let revealed = false;
+      const showKey = () => { keyCode.textContent = revealed ? claim.token : maskOf(claim.token); };
+      showKey();
+      const reveal = document.createElement("button");
+      reveal.className = "outline-button cs-claim-mini";
+      reveal.type = "button";
+      reveal.textContent = t("desktop.sharing.borrow.reveal");
+      reveal.addEventListener("click", () => {
+        revealed = !revealed;
+        showKey();
+        reveal.textContent = t(revealed ? "desktop.sharing.borrow.hide" : "desktop.sharing.borrow.reveal");
+      });
+      keyRow.append(keyLabel, keyCode, reveal, copyButton(claim.token, t("cs.api.key"), "csCopyKey"));
+      section.appendChild(keyRow);
+
+      const endpoints = document.createElement("div");
+      endpoints.className = "cs-access-endpoints";
+      for (const entry of [
+        { id: "openai", mark: "O", label: t("cs.api.openai"), hint: t("cs.api.openaiHint"), url: `${base}/v1` },
+        { id: "claude", mark: "C", label: t("cs.api.claude"), hint: t("cs.api.claudeHint"), url: base },
+      ]) {
+        const endpoint = document.createElement("div");
+        endpoint.className = "cs-access-endpoint";
+        endpoint.dataset.csEndpoint = entry.id;
+        const mark = document.createElement("span");
+        mark.className = "cs-access-mark";
+        mark.setAttribute("aria-hidden", "true");
+        mark.textContent = entry.mark;
+        const protocol = document.createElement("span");
+        protocol.className = "cs-access-protocol";
+        const name = document.createElement("strong");
+        name.textContent = entry.label;
+        const hint = document.createElement("small");
+        hint.textContent = entry.hint;
+        protocol.append(name, hint);
+        const code = document.createElement("code");
+        code.textContent = entry.url;
+        code.title = entry.url;
+        endpoint.append(mark, protocol, code, copyButton(entry.url, entry.label, "csCopyEndpoint"));
+        endpoints.appendChild(endpoint);
+      }
+      section.appendChild(endpoints);
+
+      const setup = document.createElement("div");
+      setup.className = "cs-access-setup";
+      const setupTitle = document.createElement("strong");
+      setupTitle.textContent = t("cs.tool.setup");
+      setup.appendChild(setupTitle);
 
       const bar = document.createElement("div");
       bar.className = "cs-tool-bar";
@@ -1237,6 +1355,8 @@ export default {
         option.selected = entry.id === state.tool;
         toolSelect.appendChild(option);
       }
+      const toolLabel = document.createElement("label");
+      toolLabel.append(t("cs.tool.select"), toolSelect);
       const modelSelect = document.createElement("select");
       modelSelect.dataset.csModel = claim.keyId;
       const modelLabel = document.createElement("label");
@@ -1254,6 +1374,14 @@ export default {
         manual.selected = state.model === "__manual";
         modelSelect.appendChild(manual);
         modelLabel.append(`${t("cs.models.pick")} `, modelSelect);
+        if (state.model === "__manual") {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.placeholder = t("cs.models.pick");
+          input.value = state.manualModel;
+          input.dataset.csModelInput = claim.keyId;
+          modelLabel.appendChild(input);
+        }
       } else {
         const input = document.createElement("input");
         input.type = "text";
@@ -1282,72 +1410,46 @@ export default {
         option.selected = value === state.shell;
         shellSelect.appendChild(option);
       }
+      const shellLabel = document.createElement("label");
+      shellLabel.append(t("cs.tool.shell"), shellSelect);
       const copyAll = document.createElement("button");
       copyAll.className = "outline-button cs-claim-mini";
       copyAll.type = "button";
       copyAll.textContent = t("cs.tool.copyAll");
       const lines = rows.map(([name, value]) => envLine(state.shell, name, value)).join("\n");
-      copyAll.addEventListener("click", () => {
-        navigator.clipboard?.writeText(lines).then(() => {
-          copyAll.textContent = t("cs.tool.copied");
-          setTimeout(() => { copyAll.textContent = t("cs.tool.copyAll"); }, 1200);
-        });
-      });
+      copyAll.addEventListener("click", () => copyValue(copyAll, lines));
       bar.append(
-        Object.assign(document.createElement("label"), { textContent: t("cs.tool.select") }),
-        toolSelect,
+        toolLabel,
         modelLabel,
-        Object.assign(document.createElement("label"), { textContent: t("cs.tool.shell") }),
-        shellSelect,
+        shellLabel,
         copyAll,
       );
-      section.appendChild(bar);
-
-      for (const [name, value] of rows) {
-        const row = document.createElement("div");
-        row.className = "cs-claim-row";
-        const label = document.createElement("span");
-        label.className = "cs-claim-label";
-        label.textContent = name;
-        const code = document.createElement("code");
-        code.className = "cs-claim-value";
-        if (secretNames.has(name)) {
-          const maskOf = (v) => (String(v).length > 12 ? `${String(v).slice(0, 8)}…${String(v).slice(-4)}` : "…");
-          let revealed = false;
-          const render = () => { code.textContent = revealed ? value : maskOf(value); };
-          render();
-          const reveal = document.createElement("button");
-          reveal.className = "outline-button cs-claim-mini";
-          reveal.type = "button";
-          reveal.textContent = t("desktop.sharing.borrow.reveal");
-          reveal.addEventListener("click", () => {
-            revealed = !revealed;
-            render();
-            reveal.textContent = t(revealed ? "desktop.sharing.borrow.hide" : "desktop.sharing.borrow.reveal");
-          });
-          row.append(label, code, reveal);
-        } else {
-          code.textContent = value;
-          code.title = value;
-          row.append(label, code);
-        }
-        section.appendChild(row);
-      }
+      setup.appendChild(bar);
+      const preview = document.createElement("pre");
+      preview.className = "cs-env-preview";
+      preview.textContent = rows.map(([name, value]) => envLine(state.shell, name,
+        secretNames.has(name) ? maskOf(value) : value)).join("\n");
+      setup.appendChild(preview);
 
       const note = document.createElement("div");
       note.className = "cs-muted";
       note.textContent = t(tool.id === "codex" ? "cs.tool.codexNote" : "cs.tool.note");
-      section.appendChild(note);
+      setup.appendChild(note);
 
       if (tool.id === "codex") {
         // Codex 0.14x ignores bare env vars (falls back to its ChatGPT
         // account path) — the provider snippet is the working entry, so it
         // renders inline, not folded away (verified live 2026-09-20)
+        const codexTitle = document.createElement("strong");
+        codexTitle.textContent = t("cs.tool.codexToml");
+        setup.appendChild(codexTitle);
         const pre = document.createElement("pre");
-        const base = String(claim.baseURL || "").replace(/\/+$/, "");
+        pre.className = "cs-env-preview";
+        pre.dataset.csCodexConfig = claim.keyId;
         pre.textContent = `# ~/.codex/config.toml\nmodel = "${model || "glm-5.3"}"\nmodel_provider = "atl-share"\n\n[model_providers.atl-share]\nname = "ATL Share"\nbase_url = "${base}/v1"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"`;
-        section.appendChild(pre);
+        setup.appendChild(pre);
       }
+      section.appendChild(setup);
       return section;
     }
 
@@ -1365,6 +1467,7 @@ export default {
       row.querySelector(`[data-cs-model-input="${CSS.escape(claim.keyId)}"]`)?.addEventListener("change", (event) => {
         state.manualModel = event.target.value.trim();
         state.model = "__manual";
+        renderMineLast();
       });
       row.querySelector(`[data-cs-shell="${CSS.escape(claim.keyId)}"]`)?.addEventListener("change", (event) => {
         state.shell = event.target.value;
@@ -1702,10 +1805,6 @@ export default {
             row.insertAdjacentHTML("beforeend", `<div class="cs-pending">${esc(t("cs.claim.syncing"))}</div>`);
           }
           row.insertAdjacentHTML("beforeend", quotaLine(claim, live));
-          const configHead = document.createElement("div");
-          configHead.className = "cs-claim-section";
-          configHead.textContent = t("cs.tool.title");
-          row.appendChild(configHead);
           row.appendChild(toolConfigSection(claim));
           bindToolEvents(row, claim);
           loadModels(claim);
