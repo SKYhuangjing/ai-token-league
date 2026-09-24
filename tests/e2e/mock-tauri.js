@@ -795,6 +795,19 @@
         if (window.__ATL_E2E_STATE__.failOwnerStatus) return Promise.reject(new Error("backend_unreachable:connection refused"));
         // mirror the sidecar merge (R51-4): plugin status file rides along
         const owner = clone(window.__ATL_E2E_STATE__.ownerShare);
+        if (owner.share && window.__ATL_E2E_STATE__.ownerStatusLaneOverride
+          && (!window.__ATL_E2E_STATE__.ownerStatusLaneOverrideOnCall
+            || window.__ATL_E2E_STATE__.ownerCalls.status === window.__ATL_E2E_STATE__.ownerStatusLaneOverrideOnCall)) {
+          owner.share.lanes = clone(window.__ATL_E2E_STATE__.ownerStatusLaneOverride);
+        }
+        if (owner.share && window.__ATL_E2E_STATE__.reorderOwnerLaneFields) {
+          owner.share.lanes = owner.share.lanes.map((lane) => ({
+            ...lane,
+            window: { n: lane.window.n, unit: lane.window.unit },
+            schedule: lane.schedule.map((item) => ({ end: item.end, start: item.start })),
+            peak: { ...lane.peak, windows: lane.peak.windows.map((item) => ({ end: item.end, start: item.start })) },
+          }));
+        }
         if (owner.share) owner.pluginStatus = window.__ATL_E2E_STATE__.pluginStatus || { phase: 'beating', lastError: null, endpointWarning: null };
         return Promise.resolve(owner);
       }
@@ -806,7 +819,7 @@
         // Storage keeps the VIEW shape the backend serves on owner-status
         // (wire nests budget/schedule/peak are normalized back) — storing raw
         // wire lanes would fork the card/backend contract.
-        if (Array.isArray(args && args.lanes) && window.__ATL_E2E_STATE__.ownerShare?.share) {
+        if (Array.isArray(args && args.lanes) && !window.__ATL_E2E_STATE__.ignoreOwnerLaneWrites && window.__ATL_E2E_STATE__.ownerShare?.share) {
           const prev = window.__ATL_E2E_STATE__.ownerShare.share.lanes || [];
           window.__ATL_E2E_STATE__.ownerShare.share.lanes = args.lanes.map((wire) => {
             const before = prev.find((l) => l.id === wire.id) || {};
@@ -843,9 +856,17 @@
         if (window.__ATL_E2E_STATE__.ownerShare?.share && args && args.policy) {
           Object.assign(window.__ATL_E2E_STATE__.ownerShare.share.policy, args.policy);
         }
+        const responseLanes = clone(window.__ATL_E2E_STATE__.ownerShare?.share?.lanes || []);
+        if (window.__ATL_E2E_STATE__.reorderOwnerLaneFields) {
+          for (const lane of responseLanes) {
+            lane.window = { n: lane.window.n, unit: lane.window.unit };
+            lane.schedule = lane.schedule.map((item) => ({ end: item.end, start: item.start }));
+            lane.peak = { ...lane.peak, windows: lane.peak.windows.map((item) => ({ end: item.end, start: item.start })) };
+          }
+        }
         return Promise.resolve({
           policy: { ...(window.__ATL_E2E_STATE__.ownerShare?.share?.policy || {}), ...((args || {}).policy || {}) },
-          lanes: clone(window.__ATL_E2E_STATE__.ownerShare?.share?.lanes || []),
+          lanes: responseLanes,
         });
       }
       if (command === "compute-sharing:owner-unregister") {

@@ -178,6 +178,9 @@ const STRINGS = {
     "cs.owner.stale": "暂时无法更新（{error}）· 已保留上次视图",
     "cs.owner.retry": "重试",
     "cs.owner.pendingSync": "有策略变更尚未被节点应用，最长 10 分钟内生效",
+    "cs.lane.saveUnconfirmed": "服务端未确认车道变更，请保留草稿并重试。",
+    "cs.lane.savedPendingSync": "车道已保存到服务端，等待节点应用",
+    "cs.lane.invalidClock": "时段请用 24 小时 HH:MM 格式填写（例如 08:00）。",
     "cs.lane.pause": "暂停",
     "cs.lane.resume": "恢复",
     "cs.lane.terminate": "终止",
@@ -277,6 +280,9 @@ const STRINGS = {
     "cs.owner.stale": "Temporarily unable to update ({error}) · last view kept",
     "cs.owner.retry": "Retry",
     "cs.owner.pendingSync": "Policy changes not applied by the node yet; effective within ~10 minutes",
+    "cs.lane.saveUnconfirmed": "The server did not confirm the lane changes. Keep the draft and retry.",
+    "cs.lane.savedPendingSync": "Lane saved on the server; waiting for the node to apply it",
+    "cs.lane.invalidClock": "Enter times in 24-hour HH:MM format (for example, 08:00).",
     "cs.lane.pause": "Pause",
     "cs.lane.resume": "Resume",
     "cs.lane.terminate": "Terminate",
@@ -592,10 +598,10 @@ export default {
             <label>${esc(t("desktop.sharing.lane.f.maxClaims"))}<input data-cs-f="maxClaims" type="number" step="1" min="1" value="${esc(String(draft.maxClaims))}" /></label>
           </div>
           <div class="cs-fields">
-            <label>${esc(t("desktop.sharing.lane.f.winStart"))}<input data-cs-f="winStart" type="time" value="${esc(draft.winStart)}" /></label>
-            <label>${esc(t("desktop.sharing.lane.f.winEnd"))}<input data-cs-f="winEnd" type="time" value="${esc(draft.winEnd)}" /></label>
-            <label>${esc(t("desktop.sharing.lane.f.peakStart"))}<input data-cs-f="peakStart" type="time" value="${esc(draft.peakStart)}" /></label>
-            <label>${esc(t("desktop.sharing.lane.f.peakEnd"))}<input data-cs-f="peakEnd" type="time" value="${esc(draft.peakEnd)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.winStart"))}<input data-cs-f="winStart" type="text" inputmode="numeric" placeholder="HH:MM" maxlength="5" value="${esc(draft.winStart)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.winEnd"))}<input data-cs-f="winEnd" type="text" inputmode="numeric" placeholder="HH:MM" maxlength="5" value="${esc(draft.winEnd)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.peakStart"))}<input data-cs-f="peakStart" type="text" inputmode="numeric" placeholder="HH:MM" maxlength="5" value="${esc(draft.peakStart)}" /></label>
+            <label>${esc(t("desktop.sharing.lane.f.peakEnd"))}<input data-cs-f="peakEnd" type="text" inputmode="numeric" placeholder="HH:MM" maxlength="5" value="${esc(draft.peakEnd)}" /></label>
             <label>${esc(t("desktop.sharing.lane.f.peakMultiplier"))}<input data-cs-f="peakMultiplier" type="number" step="1" min="1" max="10" value="${esc(String(draft.peakMultiplier))}" /></label>
           </div>
           <div class="cs-muted">${esc(t("desktop.sharing.lane.formHint"))}</div>
@@ -766,22 +772,65 @@ export default {
         windowN: Number(val("windowN")) || 1,
         budget: Number(val("budget")),
         maxClaims: Number(val("maxClaims")),
-        winStart: val("winStart"),
-        winEnd: val("winEnd"),
-        peakStart: val("peakStart"),
-        peakEnd: val("peakEnd"),
+        winStart: val("winStart").trim(),
+        winEnd: val("winEnd").trim(),
+        peakStart: val("peakStart").trim(),
+        peakEnd: val("peakEnd").trim(),
         peakMultiplier: Number(val("peakMultiplier")) || 1,
       };
     }
 
+    function validateLaneTimes(form) {
+      const clock = /^([01]\d|2[0-3]):[0-5]\d$/;
+      if ([form.winStart, form.winEnd, form.peakStart, form.peakEnd].some((value) => value && !clock.test(value))) {
+        throw new Error(t("cs.lane.invalidClock"));
+      }
+    }
+
+    function lanesMatch(requested, actual) {
+      if (!Array.isArray(actual) || actual.length !== requested.length) return false;
+      const byId = new Map(actual.map((lane) => [lane.id, lane]));
+      const windowsOf = (value) => Array.isArray(value) ? value : (value && value.windows) || [];
+      const sameModels = (left, right) => Array.isArray(left) && left.length === right.length
+        && left.every((model, index) => model === right[index]);
+      const sameWindows = (left, right) => left.length === right.length
+        && left.every((item, index) => item.start === right[index].start && item.end === right[index].end);
+      return requested.every((wire) => {
+        const lane = byId.get(wire.id);
+        if (!lane) return false;
+        const schedule = windowsOf(lane.schedule);
+        const peak = (lane.peak && lane.peak.windows) || [];
+        return lane.title === wire.title
+          && sameModels(lane.models, wire.models)
+          && lane.window && lane.window.unit === wire.window.unit && lane.window.n === wire.window.n
+          && lane.budgetTokens === wire.budget.tokens
+          && lane.maxClaims === wire.maxClaims
+          && lane.state === wire.state
+          && sameWindows(schedule, windowsOf(wire.schedule))
+          && sameWindows(peak, windowsOf(wire.peak))
+          && (!peak.length || lane.peak.multiplier === wire.peak.multiplier);
+      });
+    }
+
     async function saveLanes(lanes, { successKey = "desktop.sharing.lane.saved" } = {}) {
-      await ctx.invoke("compute-sharing:owner-policy", { lanes });
-      notify(t(successKey));
-      laneEditor = null;
+      const saved = await ctx.invoke("compute-sharing:owner-policy", { lanes });
+      if (!lanesMatch(lanes, saved && saved.lanes)) throw new Error(t("cs.lane.saveUnconfirmed"));
+      const observed = await ctx.invoke("compute-sharing:owner-status", {});
+      if (!lanesMatch(lanes, observed && observed.share && observed.share.lanes)) {
+        throw new Error(t("cs.lane.saveUnconfirmed"));
+      }
+      lastOwnerData = observed;
       // lane/policy writes change what the borrower directory shows — force
       // the shares refetch or the directory keeps stale lanes until a manual
       // refresh
       await refresh({ forceShares: true });
+      if (ownerStaleError || !lanesMatch(lanes, lastOwnerData && lastOwnerData.share && lastOwnerData.share.lanes)) {
+        throw new Error(t("cs.lane.saveUnconfirmed"));
+      }
+      laneEditor = null;
+      renderOwnerLast();
+      const share = lastOwnerData.share || {};
+      notify(t((share.policyRev || 1) > (share.policyAckedRev || 0) ? "cs.lane.savedPendingSync" : successKey));
     }
 
     // lanes wire format: budget/schedule/peak nests; id/title/models flat.
@@ -930,6 +979,7 @@ export default {
         if (!form || !form.models.trim() || !Number.isFinite(form.budget) || form.budget < 1000) {
           throw new Error(t("desktop.sharing.lane.templateInvalid"));
         }
+        validateLaneTimes(form);
         if (cardConfig.laneTemplates.length >= 6) throw new Error(t("desktop.sharing.lane.templatesFull"));
         const tpl = {
           title: form.title.trim() || form.models.trim(), models: form.models.trim(), windowUnit: form.windowUnit, windowN: form.windowN,
@@ -995,6 +1045,7 @@ export default {
       if (laneSave) laneSave.addEventListener("click", () => guard(async () => {
         const form = readLaneForm();
         if (!form) return;
+        validateLaneTimes(form);
         if (!form.title) throw new Error(t("desktop.sharing.lane.titleRequired"));
         const titleTaken = lanes.some((l) => l.id !== laneEditor.draft.id && l.title === form.title);
         if (titleTaken) throw new Error(t("desktop.sharing.lane.titleDuplicate"));

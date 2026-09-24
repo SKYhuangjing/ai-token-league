@@ -81,6 +81,15 @@ const installed = scenarioTest({
   modules: { 'compute-sharing': { enabled: true, config: {}, installedVersion: VERSION } },
 });
 
+const installedZh = scenarioTest({
+  desktopAutoInitialized: false,
+  language: 'zh-CN',
+  apiBaseUrl: 'http://backend.test',
+  routes: baseRoutes,
+  shares: SHARES,
+  modules: { 'compute-sharing': { enabled: true, config: {}, installedVersion: VERSION } },
+});
+
 for (const language of ['en', 'zh-CN']) {
   const offline = scenarioTest({
     desktopAutoInitialized: false, language, apiBaseUrl: 'http://backend.test',
@@ -409,6 +418,99 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     expect(afterPausedSave).toBe('paused');
   });
 
+  installed('editing a GLM lane persists model scope and open hours', async ({ page }) => {
+    await openCard(page, 'owner');
+    // serde_json reorders object keys across the native sidecar boundary.
+    await page.evaluate(() => { window.__ATL_E2E_STATE__.reorderOwnerLaneFields = true; });
+    await page.locator('[data-cs-lane-edit="1"]').click();
+    await page.locator('[data-cs-f="models"]').fill('glm-5.3');
+    await page.locator('[data-cs-f="winStart"]').fill('08:00');
+    await page.locator('[data-cs-f="winEnd"]').fill('20:00');
+    await expect(page.locator('[data-cs-f="winStart"]')).toHaveAttribute('type', 'text');
+    await page.evaluate(() => {
+      window.__oldLaneForm = document.querySelector('[data-cs="lane-form"]');
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForFunction(() => !window.__oldLaneForm.isConnected);
+    await expect(page.locator('[data-cs-f="winStart"]')).toHaveValue('08:00');
+    await expect(page.locator('[data-cs-f="winEnd"]')).toHaveValue('20:00');
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('#toast')).toContainText('Lane saved', { timeout: 5_000 });
+    const wire = await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.lanes.at(-1).find((lane) => lane.id === 'glm-offpeak'));
+    expect(wire.models).toEqual(['glm-5.3']);
+    expect(wire.schedule).toEqual({ windows: [{ start: '08:00', end: '20:00' }] });
+    await expect(page.locator('[data-cs-lane="glm-offpeak"]')).toContainText('glm-5.3');
+    await expect(page.locator('[data-cs-lane="glm-offpeak"]')).toContainText('08:00–20:00');
+  });
+
+  installed('invalid 24-hour time cannot silently become an all-day lane', async ({ page }) => {
+    await openCard(page, 'owner');
+    await page.locator('[data-cs-lane-edit="1"]').click();
+    await page.locator('[data-cs-f="winStart"]').fill('8:00');
+    await page.locator('[data-cs-f="winEnd"]').fill('20:00');
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('24-hour HH:MM', { timeout: 5_000 });
+    expect(await page.evaluate(() => window.__ATL_E2E_STATE__.ownerCalls.lanes)).toHaveLength(0);
+    await expect(page.locator('[data-cs-f="winStart"]')).toHaveValue('8:00');
+  });
+
+  installed('a confirmed lane save says when CPA has not applied the new revision yet', async ({ page }) => {
+    await openCard(page, 'owner');
+    await page.locator('[data-cs-lane-edit="1"]').click();
+    await page.locator('[data-cs-f="models"]').fill('glm-5.3');
+    await page.evaluate(() => {
+      const share = window.__ATL_E2E_STATE__.ownerShare.share;
+      share.policyRev = 5;
+      share.policyAckedRev = 3;
+    });
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('#toast')).toContainText('waiting for the node to apply it', { timeout: 5_000 });
+  });
+
+  installed('a successful owner-policy response cannot claim a lane was saved when writes were ignored', async ({ page }) => {
+    await openCard(page, 'owner');
+    await page.locator('[data-cs-lane-edit="1"]').click();
+    await page.locator('[data-cs-f="models"]').fill('glm-5.3');
+    await page.evaluate(() => { window.__ATL_E2E_STATE__.ignoreOwnerLaneWrites = true; });
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('server did not confirm', { timeout: 5_000 });
+    await expect(page.locator('[data-cs-f="models"]')).toHaveValue('glm-5.3');
+    await expect(page.locator('[data-cs-lane="glm-offpeak"]')).toContainText('glm-5.3-flash');
+    await page.evaluate(() => { window.__ATL_E2E_STATE__.ignoreOwnerLaneWrites = false; });
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs-lane="glm-offpeak"]')).toContainText('glm-5.3');
+  });
+
+  installed('the save receipt waits for owner-status readback', async ({ page }) => {
+    await openCard(page, 'owner');
+    await page.locator('[data-cs-lane-edit="1"]').click();
+    await page.locator('[data-cs-f="models"]').fill('glm-5.3');
+    await page.evaluate(() => {
+      const state = window.__ATL_E2E_STATE__;
+      state.ownerStatusLaneOverride = structuredClone(state.ownerShare.share.lanes);
+    });
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('server did not confirm', { timeout: 5_000 });
+    await expect(page.locator('[data-cs-f="models"]')).toHaveValue('glm-5.3');
+    await page.evaluate(() => { window.__ATL_E2E_STATE__.ownerStatusLaneOverride = null; });
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs-lane="glm-offpeak"]')).toContainText('glm-5.3');
+  });
+
+  installed('a later refresh cannot replace the confirmed lane with old values and still show success', async ({ page }) => {
+    await openCard(page, 'owner');
+    await page.locator('[data-cs-lane-edit="1"]').click();
+    await page.locator('[data-cs-f="models"]').fill('glm-5.3');
+    await page.evaluate(() => {
+      const state = window.__ATL_E2E_STATE__;
+      state.ownerStatusLaneOverride = structuredClone(state.ownerShare.share.lanes);
+      state.ownerStatusLaneOverrideOnCall = state.ownerCalls.status + 2;
+    });
+    await page.locator('[data-cs="laneSave"]').click();
+    await expect(page.locator('[data-cs="status"]')).toContainText('server did not confirm', { timeout: 5_000 });
+    await expect(page.locator('[data-cs-f="models"]')).toHaveValue('glm-5.3');
+  });
+
   installed('reference ratio: suggestions recalculate and persist the new field (F03)', async ({ page }) => {
     await openCard(page, "owner");
     const body = page.locator('[data-cs="owner-body"]');
@@ -717,6 +819,16 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     await manyCard.locator('[data-cs-lanes-more]').click();
     await expect(manyCard.locator('.cs-lane')).toHaveCount(5);
   });
+});
+
+installedZh('zh-CN lane save does not report success when the server keeps old values', async ({ page }) => {
+  await openCard(page, 'owner');
+  await page.locator('[data-cs-lane-edit="1"]').click();
+  await page.locator('[data-cs-f="models"]').fill('glm-5.3');
+  await page.evaluate(() => { window.__ATL_E2E_STATE__.ignoreOwnerLaneWrites = true; });
+  await page.locator('[data-cs="laneSave"]').click();
+  await expect(page.locator('[data-cs="status"]')).toContainText('服务端未确认车道变更', { timeout: 5_000 });
+  await expect(page.locator('[data-cs-f="models"]')).toHaveValue('glm-5.3');
 });
 
 const zhAccess = scenarioTest({
