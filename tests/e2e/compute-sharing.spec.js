@@ -13,6 +13,16 @@ const mockScript = readFileSync(resolve(import.meta.dirname, 'mock-tauri.js'), '
 const pluginSource = readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/index.js'), 'utf8');
 
 const VERSION = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../plugins/compute-sharing/manifest.json'), 'utf8')).version;
+
+// The claim card's tool command dialect is platform-aware (Windows defaults to
+// PowerShell, everything else to POSIX export lines) and Chromium's clipboard
+// on Windows round-trips multi-line text with CRLF endings — mirror both so
+// copy assertions stay deterministic on every host.
+const isWindowsHost = process.platform === 'win32';
+const envLine = (name, value) => (isWindowsHost
+  ? `$env:${name} = "${value}"`
+  : `export ${name}=${value}`);
+const clipText = (text) => text.replace(/\r\n/g, '\n');
 const CATALOG = {
   version: 1,
   catalog: [
@@ -260,11 +270,11 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     await access.locator('[data-cs-endpoint="claude"] [data-cs-copy-endpoint]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://192.168.1.4:8317');
     await page.locator('[data-cs="mine"] button', { hasText: 'Copy all' }).click();
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()).then(clipText))
       .toBe([
-        'export ANTHROPIC_BASE_URL=http://192.168.1.4:8317',
-        'export ANTHROPIC_AUTH_TOKEN=atl_sk_e2e_secret',
-        'export ANTHROPIC_MODEL=gemini-3.8-flash-high',
+        envLine('ANTHROPIC_BASE_URL', 'http://192.168.1.4:8317'),
+        envLine('ANTHROPIC_AUTH_TOKEN', 'atl_sk_e2e_secret'),
+        envLine('ANTHROPIC_MODEL', 'gemini-3.8-flash-high'),
       ].join('\n'));
     // same-resource guard (§4.3): the directory now shows 查看配置 instead of claim
     await expect(page.locator('[data-cs-claim-lane="gemini-week"]')).toHaveCount(0);
@@ -297,7 +307,7 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     await page.locator(`[data-cs-shell="${key}"]`).selectOption('powershell');
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.locator('[data-cs="mine"] button', { hasText: 'Copy all' }).click();
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()).then(clipText))
       .toBe([
         '$env:OPENAI_BASE_URL = "http://192.168.1.4:8317/v1"',
         '$env:OPENAI_API_KEY = "atl_sk_e2e_secret"',
@@ -320,11 +330,11 @@ installed.describe('Compute sharing (0.1.0 card, en)', () => {
     await input.fill('gemini-3.7-pro');
     await input.press('Tab');
     await expect(page.locator(`[data-cs-access="${key}"] .cs-env-preview`).first())
-      .toContainText('ANTHROPIC_MODEL=gemini-3.7-pro');
+      .toContainText(envLine('ANTHROPIC_MODEL', 'gemini-3.7-pro'));
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.locator(`[data-cs-access="${key}"] button`, { hasText: 'Copy all' }).click();
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toContain('export ANTHROPIC_MODEL=gemini-3.7-pro');
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()).then(clipText))
+      .toContain(envLine('ANTHROPIC_MODEL', 'gemini-3.7-pro'));
   });
 
   const seeded = scenarioTest({
