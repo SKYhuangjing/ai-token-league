@@ -885,6 +885,17 @@ describe('sortProviderHealthByStatus', () => {
       'dsh_local', 'kimi_local', 'zzz_tool_local',
     ]);
   });
+  it('orders antigravity_local after kimi_local', () => {
+    const health = [
+      { providerId: 'zzz_tool_local', enabled: true, detected: true, ok: true },
+      { providerId: 'antigravity_local', enabled: true, detected: true, ok: true },
+      { providerId: 'kimi_local', enabled: true, detected: true, ok: true },
+    ];
+    const sorted = sortProviderHealthByStatus(health);
+    expect(sorted.map((item) => item.providerId)).toEqual([
+      'kimi_local', 'antigravity_local', 'zzz_tool_local',
+    ]);
+  });
   it('does not mutate the input array', () => {
     const health = [
       { providerId: 'mimocode_local', enabled: false, detected: true, ok: true },

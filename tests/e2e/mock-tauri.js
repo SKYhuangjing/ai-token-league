@@ -223,6 +223,12 @@
       sources: [{ kind: "auto", id: "/Users/demo/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home", label: "kimi-desktop", path: "/Users/demo/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home", ignored: false }],
     },
     {
+      providerId: "antigravity_local", toolCode: "antigravity",
+      enabled: true, detected: true, ok: true, scannedFiles: 4,
+      roots: ["/Users/demo/.gemini/antigravity"],
+      sources: [{ kind: "auto", id: "/Users/demo/.gemini/antigravity/conversations", label: "~/.gemini/antigravity", path: "/Users/demo/.gemini/antigravity/conversations", ignored: false }],
+    },
+    {
       providerId: "cursor_dashboard_usage", toolCode: "cursor",
       enabled: true, detected: true, ok: true, scannedFiles: 1,
       latestUsageDay: today,

@@ -52,6 +52,7 @@ const sourceNames = {
   workbuddy_local: "WorkBuddy",
   dsh_local: "DeepSeek Harness",
   kimi_local: "Kimi",
+  antigravity_local: "Antigravity",
 };
 
 const qualityNames = {

@@ -14,6 +14,7 @@ describe("shared sourceName", () => {
     expect(sourceName("workbuddy_local")).toBe("WorkBuddy");
     expect(sourceName("dsh_local")).toBe("DeepSeek Harness");
     expect(sourceName("kimi_local")).toBe("Kimi");
+    expect(sourceName("antigravity_local")).toBe("Antigravity");
   });
 });
 
@@ -27,6 +28,7 @@ describe("providerSourceColor", () => {
     expect(providerSourceColor("workbuddy_local")).toBe("#a67a5b");
     expect(providerSourceColor("dsh_local")).toBe("#b08968");
     expect(providerSourceColor("kimi_local")).toBe("#8b7355");
+    expect(providerSourceColor("antigravity_local")).toBe("#5f7a8c");
   });
   it("keeps the original three providers and falls back to other", () => {
     expect(providerSourceColor("claude_code_local")).toBe("#b4552f");

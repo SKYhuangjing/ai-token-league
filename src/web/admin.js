@@ -1912,7 +1912,8 @@ const providerDisplayNames = {
   zcode_local: "ZCode",
   workbuddy_local: "WorkBuddy",
   dsh_local: "DeepSeek Harness",
-  kimi_local: "Kimi"
+  kimi_local: "Kimi",
+  antigravity_local: "Antigravity"
 };
 
 function renderPrimarySource(items = []) {

@@ -92,6 +92,15 @@
 | Codex | `codex_local` | 支持 | 扫描本地 Codex session JSONL 日志。 |
 | Claude Code | `claude_code_local` | 支持 | 扫描本地 Claude Code 项目日志。 |
 | Cursor | `cursor_dashboard_usage` | 显式启用后支持 | 使用 Cursor dashboard usage API；不提供真实项目路径。 |
+| MiMoCode | `mimocode_local` | 支持 | 扫描本地 MiMoCode SQLite 数据库。 |
+| OpenCode | `opencode_local` | 支持 | 扫描本地 OpenCode SQLite 数据库。 |
+| Hermes | `hermes_local` | 支持 | 扫描本地 Hermes SQLite 数据库。 |
+| OpenClaw | `openclaw_local` | 支持 | 扫描本地 OpenClaw JSONL 日志。 |
+| ZCode | `zcode_local` | 支持 | 扫描本地 ZCode SQLite 数据库。 |
+| WorkBuddy | `workbuddy_local` | 支持 | 扫描本地 WorkBuddy trace JSON 文件。 |
+| DeepSeek Harness | `dsh_local` | 支持 | 扫描本地 DeepSeek Harness 会话日志（多帧 zstd JSONL）。 |
+| Kimi | `kimi_local` | 支持 | 扫描本地 Kimi 桌面客户端 Agent 会话日志。 |
+| Antigravity | `antigravity_local` | 支持 | 扫描本地 Antigravity 会话数据库（SQLite + protobuf）。 |
 
 token 总量规则：
 

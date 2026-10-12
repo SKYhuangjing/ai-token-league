@@ -1,5 +1,6 @@
 use crate::config::AppConfig;
 use crate::crypto::sha256_hex;
+use crate::provider::antigravity_local::AntigravityLocalProvider;
 use crate::provider::claude_code_local::ClaudeCodeLocalProvider;
 use crate::provider::codex_local::CodexProvider;
 use crate::provider::cursor_dashboard::{build_cursor_session_cookie, CursorDashboardProvider};
@@ -574,6 +575,48 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
+    // Antigravity (Gemini-family agent, one SQLite db per conversation)
+    let antigravity = AntigravityLocalProvider;
+    let antigravity_dbs = antigravity.scan_sessions(config);
+    let mut antigravity_errors: Vec<String> = Vec::new();
+    for db in &antigravity_dbs {
+        let source_meta =
+            crate::provider::common::source_metadata(db, antigravity.id(), antigravity.version());
+        if let Some(cached) = source_cache
+            .take_cached_source(&source_meta.source_fingerprint)
+            .filter(|items| cached_items_have_hour(items))
+        {
+            source_index.insert(source_meta.source_fingerprint, cached);
+            continue;
+        }
+        match antigravity.try_parse_usage(db) {
+            Ok(events) => {
+                source_index.insert(
+                    source_meta.source_fingerprint,
+                    events
+                        .into_iter()
+                        .map(|event| finalize_event(event, config))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Err(error) => {
+                antigravity_errors.push(format!("{}: {}", db, error));
+            }
+        }
+    }
+    if !antigravity_errors.is_empty() {
+        provider_errors.insert(antigravity.id().to_string(), antigravity_errors.join("; "));
+    }
+    health.push(local_provider_health(
+        antigravity.id(),
+        antigravity.tool_code(),
+        antigravity.auto_roots(config),
+        antigravity.manual_roots(config),
+        config,
+        antigravity_dbs.len(),
+        true,
+    ));
+
     // Aggregate
     let aggregated = aggregate_item_refs(source_index.values().flat_map(|items| items.iter()));
 
@@ -598,6 +641,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let workbuddy = WorkBuddyLocalProvider;
     let dsh = DshLocalProvider;
     let kimi = KimiLocalProvider;
+    let antigravity = AntigravityLocalProvider;
     let codex_files = codex.scan_sessions(config);
     let claude_files = claude.scan_sessions(config);
     let cursor_sources = cursor.discover_sources(config);
@@ -609,6 +653,7 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
     let workbuddy_files = workbuddy.scan_sessions(config);
     let dsh_files = dsh.scan_sessions(config);
     let kimi_files = kimi.scan_sessions(config);
+    let antigravity_dbs = antigravity.scan_sessions(config);
 
     vec![
         local_provider_health(
@@ -699,6 +744,15 @@ pub fn provider_health(config: &AppConfig) -> Vec<Value> {
             kimi.manual_roots(config),
             config,
             kimi_files.len(),
+            true,
+        ),
+        local_provider_health(
+            antigravity.id(),
+            antigravity.tool_code(),
+            antigravity.auto_roots(config),
+            antigravity.manual_roots(config),
+            config,
+            antigravity_dbs.len(),
             true,
         ),
         cursor_provider_health(

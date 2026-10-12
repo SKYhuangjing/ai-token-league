@@ -46,6 +46,7 @@ Core behavior:
 | `workbuddy_local` | Supported | Scans local WorkBuddy trace JSON files (per-request tokens from generation spans). |
 | `dsh_local` | Supported | Scans local DeepSeek Harness session logs (multi-frame zstd JSONL). |
 | `kimi_local` | Supported | Scans local Kimi desktop client agent session logs (daimon kernel `wire.jsonl` usage records). Web-style chats are server-only and not covered. |
+| `antigravity_local` | Supported | Scans local Antigravity conversation databases (SQLite + protobuf blobs in `gen_metadata`/`steps`); workdir attribution from the `trajectory_metadata_blob` field-7 workspace URI, virtual bucket fallback. Requires ccusage >= 20.0.30 for verification. |
 
 Token total rule:
 
@@ -235,9 +236,15 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | `scripts/install-cpa-plugin.sh` | Build and install the compute-sharing `atl-share` cdylib into a local CLIProxyAPI plugin dir and print the CPA config snippet. | `scripts/install-cpa-plugin.sh --api https://atl.example.com` |
 | `scripts/prepare-github-release.js` | GitHub Actions helper: create or reuse one draft release, delete stale duplicate drafts, clear old assets, and output the canonical `release_id`. | Called by `.github/workflows/release.yml` |
 | `scripts/upload-github-release-asset.js` | GitHub Actions helper: upload a generated release asset such as `latest.json` by `release_id`, with optional clobber. | Called by `.github/workflows/release.yml` |
+| `scripts/build-release-body.js` | GitHub Actions helper: render the GitHub release notes body from `CHANGELOG.md` / `CHANGELOG.zh-CN.md` for a version. | Called by `.github/workflows/release.yml` |
+| `scripts/build-github-tauri-update-json.js` | GitHub Actions helper: build the Tauri `latest.json` update manifest from a published GitHub release's assets for the GitHub update channel. | Called by `.github/workflows/release.yml` |
 | `scripts/patch-dmg-layout.sh` | Prepare generated macOS DMGs with the "已损坏修复" helper and Finder layout; normally called by release scripts. | `scripts/patch-dmg-layout.sh --dmg <path>` |
 | `scripts/generate-icons.js` | Regenerate desktop and web icon assets from `assets/app-icon-source.png`. | `npm run icons` |
+| `scripts/generate-tray-icons.js` | Regenerate tray icon assets into `assets/` and `src-tauri/icons/`; runs together with `generate-icons.js` under `npm run icons`. | `npm run icons:tray` |
 | `scripts/network-probe.mjs` | Print local network interfaces for LAN/server access diagnostics. | `node scripts/network-probe.mjs` |
+| `scripts/query-usage-daily.js` | One-shot MySQL daily-usage query for ops diagnostics; reads an env file and queries a participant/day aggregate. | `node scripts/query-usage-daily.js --env env.test` |
+| `scripts/verify-ccusage.mjs` | Collector correctness gate: compare completed local days against unified `ccusage` commands (Claude/Codex/Antigravity, Antigravity needs ccusage >= 20.0.30) or direct SQLite (`--provider=opencode`). | `npm run verify:ccusage` |
+| `scripts/verify-dsh.mjs` | dsh_local collector verifier comparing collector output against local DeepSeek Harness session logs. | `npm run verify:dsh` |
 
 Raw `npm start` runs `src/backend/server.js` directly. Use it only when intentionally bypassing `scripts/start-server.sh`, for example inside focused test commands or when a wrapper would hide the behavior being debugged.
 
@@ -465,7 +472,7 @@ Use the smallest verification that covers the touched surface:
 - Desktop renderer changes (pure functions, data transforms, HTML generators in `renderer-helpers.js`, `renderer-data.js`, `renderer-components.js`): run `npm run test:ui`. These unit tests import real production code and verify outputs directly.
 - Desktop UI changes before merge or handoff: run `node --check src/desktop/renderer.js`, `npm run test:ui`, `cargo test --workspace`, and `npm run desktop` to verify the Tauri app launches.
 - Desktop UI feature verification (scan display, range switching, navigation, settings, wizard, sync status): run `npm run test:e2e` (52 mock E2E tests including zh-CN locale, async scan, empty data, error states, large dataset, and product workflows).
-- Collector correctness gate: run `npm run verify:ccusage` — compares against external ccusage output for Claude/Codex, direct SQLite query for OpenCode.
+- Collector correctness gate: run `npm run verify:ccusage` — compares against external ccusage output for Claude/Codex/Antigravity (Antigravity requires ccusage >= 20.0.30), direct SQLite query for OpenCode.
 - Full desktop release gate: `npm test`, `npm run test:ui`, `npm run test:e2e`, `cargo test --workspace`, `npm run desktop`. All must pass before packaging.
 - Packaging, updater, preset, bundled-asset, install/download UX, or package-resource changes: run tests, then build with `scripts/release.sh --platform current --env <env-file> --yes`, and follow `doc/packaging.md`.
 - MySQL storage changes: run JSON tests plus the Docker/MySQL path in `doc/test-deployment.md` when feasible.

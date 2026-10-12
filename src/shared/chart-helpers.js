@@ -15,6 +15,7 @@ const SOURCE_PALETTE = {
   workbuddy_local: { base: "#a67a5b", alt: "#b89276", light: "#cbad96" },
   dsh_local: { base: "#b08968", alt: "#c09d7e", light: "#d0b394" },
   kimi_local: { base: "#8b7355", alt: "#a08a6c", light: "#b7a48c" },
+  antigravity_local: { base: "#5f7a8c", alt: "#7a94a3", light: "#9cb0bb" },
   other: { base: "#b5aea0", alt: "#c4bcae", light: "#d6cec2" }
 };
 
@@ -150,6 +151,7 @@ export function sourceName(providerId) {
   if (providerId === "workbuddy_local") return t("source.workbuddy") || "WorkBuddy";
   if (providerId === "dsh_local") return t("source.dsh") || "DeepSeek Harness";
   if (providerId === "kimi_local") return t("source.kimi") || "Kimi";
+  if (providerId === "antigravity_local") return t("source.antigravity") || "Antigravity";
   if (providerId === "cursor_dashboard_usage") return t("source.cursor") || "Cursor";
   return providerId;
 }

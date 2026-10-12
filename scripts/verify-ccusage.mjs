@@ -15,7 +15,7 @@ const providers = new Set(
     .map((arg) => arg.trim())
     .filter(Boolean)
 );
-const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy", "kimi"]);
+const selectedProviders = providers.size > 0 ? providers : new Set(["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy", "kimi", "antigravity"]);
 const explicitlySelected = providers.size > 0;
 const home = process.env.HOME || "";
 const configPath = join(home, ".ai-token-league", "config.json");
@@ -50,7 +50,7 @@ function parseSemver(value) {
   return match ? match.slice(1).map(Number) : null;
 }
 
-function requireCcusageVersion(minimum) {
+function requireCcusageVersion(minimum, feature = "Codex rollout/subagent deduplication") {
   requireCommand("ccusage");
   const actualText = run("ccusage", ["--version"]).trim();
   const actual = parseSemver(actualText);
@@ -62,7 +62,7 @@ function requireCcusageVersion(minimum) {
     if (actual[index] > required[index]) return;
     if (actual[index] < required[index]) {
       throw new Error(
-        `ccusage ${minimum}+ is required for Codex rollout/subagent deduplication; found ${actualText}`
+        `ccusage ${minimum}+ is required for ${feature}; found ${actualText} (upgrade: npm i -g ccusage@latest)`
       );
     }
   }
@@ -423,6 +423,27 @@ function expectedKimi() {
   return verified("kimi", expected);
 }
 
+function expectedAntigravity() {
+  const incompatible = externalProviderCanMatch("antigravity_local", "antigravity");
+  if (incompatible) return incompatible;
+  // The antigravity subcommand shipped in ccusage 20.0.30.
+  requireCcusageVersion("20.0.30", "the Antigravity report");
+  const raw = run("ccusage", ["antigravity", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
+  const parsed = JSON.parse(raw);
+  const expected = new Map();
+  for (const row of parsed.daily || []) {
+    // ccusage's totalTokens includes reasoning tokens; rebuild the ATL total
+    // (reasoning is diagnostic-only and excluded from the ranking total).
+    const total = Number(row.inputTokens || 0)
+      + Number(row.outputTokens || 0)
+      + Number(row.cacheReadTokens || 0)
+      + Number(row.cacheCreationTokens || 0);
+    const dateValue = row.period || row.date;
+    if (total > 0 && dateValue) expected.set(normalizeDay(dateValue), total);
+  }
+  return verified("antigravity", expected);
+}
+
 function comparableDays(actual, expected) {
   const today = localDay();
   return [...new Set([...actual.keys(), ...expected.keys()])]
@@ -488,8 +509,8 @@ function compareExpected(name, actual, result) {
 }
 
 function main() {
-  if (![...selectedProviders].every((provider) => ["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy", "kimi"].includes(provider))) {
-    throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, workbuddy, kimi, or combinations.");
+  if (![...selectedProviders].every((provider) => ["claude", "codex", "opencode", "hermes", "openclaw", "mimocode", "workbuddy", "kimi", "antigravity"].includes(provider))) {
+    throw new Error("Unsupported --provider value. Use claude, codex, opencode, hermes, openclaw, mimocode, workbuddy, kimi, antigravity, or combinations.");
   }
 
   // scan persists into the local usage database (refusing on provider errors),
@@ -505,7 +526,8 @@ function main() {
     openclaw: "openclaw_local",
     mimocode: "mimocode_local",
     workbuddy: "workbuddy_local",
-    kimi: "kimi_local"
+    kimi: "kimi_local",
+    antigravity: "antigravity_local"
   };
   const actual = {};
   for (const provider of selectedProviders) {
@@ -536,6 +558,9 @@ function main() {
   }
   if (selectedProviders.has("kimi")) {
     ok = compareExpected("kimi", actual.kimi, expectedKimi()) && ok;
+  }
+  if (selectedProviders.has("antigravity")) {
+    ok = compareExpected("antigravity", actual.antigravity, expectedAntigravity()) && ok;
   }
 
   if (!ok) process.exit(1);

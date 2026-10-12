@@ -59,6 +59,25 @@ test.describe('Sources Workflows', () => {
     await expect(row.first()).toContainText('.zcode/cli');
   });
 
+  test('sources screen renders antigravity provider card from its nav item', async ({ page }) => {
+    await navigateTo(page, 'sources');
+
+    const antigravityNav = page.locator('#provider-nav-list [data-provider-nav="antigravity_local"]');
+    await expect(antigravityNav).toBeVisible({ timeout: 5_000 });
+    await antigravityNav.click();
+    await expect(antigravityNav).toHaveClass(/active/);
+    await expect(antigravityNav).toHaveAttribute('aria-current', 'true');
+
+    const card = page.locator('#settings-source-list .provider-card', { hasText: 'Antigravity' });
+    await expect(card.first()).toBeVisible({ timeout: 5_000 });
+    await expect(card.locator('h4')).toHaveText('Antigravity');
+
+    // Auto-discovered conversations directory row
+    const row = card.locator('[data-root-path], .source-row, .auto-source-row');
+    await expect(row.first()).toBeVisible({ timeout: 5_000 });
+    await expect(row.first()).toContainText('.gemini/antigravity');
+  });
+
   test('provider card shows a data overview with stats and composition bar for providers with usage', async ({ page }) => {
     await navigateTo(page, 'sources');
 

@@ -1885,6 +1885,7 @@ const TRAY_PROVIDER_NAMES: &[(&str, &str)] = &[
     ("workbuddy_local", "WorkBuddy"),
     ("dsh_local", "DeepSeek Harness"),
     ("kimi_local", "Kimi"),
+    ("antigravity_local", "Antigravity"),
     ("cursor_dashboard_usage", "Cursor"),
 ];
 

@@ -361,6 +361,7 @@ const translations = {
     "desktop.sources.addWorkbuddy": "添加 WorkBuddy 位置",
     "desktop.sources.addDsh": "添加 DeepSeek Harness 位置",
     "desktop.sources.addKimi": "添加 Kimi 位置",
+    "desktop.sources.addAntigravity": "添加 Antigravity 位置",
     "desktop.sources.addCursor": "连接 Cursor",
     "desktop.sources.manualCursorToken": "手工令牌",
     "desktop.sources.localDesc": "扫描本机使用记录，只上传每日汇总。",
@@ -560,6 +561,7 @@ const translations = {
     "source.workbuddy": "WorkBuddy",
     "source.dsh": "DeepSeek Harness",
     "source.kimi": "Kimi",
+    "source.antigravity": "Antigravity",
     "source.cursor": "Cursor",
 
     // 桌面端 - 渲染器补充
@@ -1342,6 +1344,7 @@ const translations = {
     "web.home.sourceWorkbuddyNote": "本地 WorkBuddy trace 记录",
     "web.home.sourceDshNote": "本地 DeepSeek Harness 会话日志（zstd JSONL）",
     "web.home.sourceKimiNote": "本地 Kimi 桌面客户端 Agent 会话记录",
+    "web.home.sourceAntigravityNote": "本地 Antigravity 会话数据库",
     "web.home.sourceZcodeNote": "本地 ZCode 请求级用量存储",
     "web.home.sourceOpencodeNote": "本地 OpenCode 用量数据库",
     "web.home.sourceMimocodeNote": "本地 MiMoCode 用量数据库",
@@ -2059,6 +2062,7 @@ const translations = {
     "desktop.sources.addWorkbuddy": "Add WorkBuddy location",
     "desktop.sources.addDsh": "Add DeepSeek Harness location",
     "desktop.sources.addKimi": "Add Kimi location",
+    "desktop.sources.addAntigravity": "Add Antigravity location",
     "desktop.sources.addCursor": "Connect Cursor",
     "desktop.sources.manualCursorToken": "Manual token",
     "desktop.sources.localDesc": "Scans local usage records and uploads only daily aggregates.",
@@ -2256,6 +2260,7 @@ const translations = {
     "source.workbuddy": "WorkBuddy",
     "source.dsh": "DeepSeek Harness",
     "source.kimi": "Kimi",
+    "source.antigravity": "Antigravity",
     "source.cursor": "Cursor",
 
     // Desktop - Renderer supplement
@@ -3038,6 +3043,7 @@ const translations = {
     "web.home.sourceWorkbuddyNote": "Local WorkBuddy trace records",
     "web.home.sourceDshNote": "Local DeepSeek Harness session logs (zstd JSONL)",
     "web.home.sourceKimiNote": "Local Kimi desktop agent session logs",
+    "web.home.sourceAntigravityNote": "Local Antigravity conversation databases",
     "web.home.sourceZcodeNote": "Local ZCode request-level usage store",
     "web.home.sourceOpencodeNote": "Local OpenCode usage database",
     "web.home.sourceMimocodeNote": "Local MiMoCode usage database",

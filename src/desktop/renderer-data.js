@@ -66,6 +66,7 @@ export function sourceName(providerId, t = (k) => k) {
   if (providerId === "workbuddy_local") return t("source.workbuddy");
   if (providerId === "dsh_local") return t("source.dsh");
   if (providerId === "kimi_local") return t("source.kimi");
+  if (providerId === "antigravity_local") return t("source.antigravity");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

@@ -1146,6 +1146,7 @@ function sourceIconPath(providerId) {
   if (providerId === "workbuddy_local") return "./icons/folder-code.svg";
   if (providerId === "dsh_local") return "./icons/folder-code.svg";
   if (providerId === "kimi_local") return "./icons/folder-code.svg";
+  if (providerId === "antigravity_local") return "./icons/folder-code.svg";
   if (providerId === "cursor_dashboard_usage") return "./icons/database.svg";
   return "./icons/file-text.svg";
 }
@@ -3650,7 +3651,8 @@ const PROVIDER_ADD_ROOT_LABEL_KEYS = {
   zcode_local: "desktop.sources.addZCode",
   workbuddy_local: "desktop.sources.addWorkbuddy",
   dsh_local: "desktop.sources.addDsh",
-  kimi_local: "desktop.sources.addKimi"
+  kimi_local: "desktop.sources.addKimi",
+  antigravity_local: "desktop.sources.addAntigravity"
 };
 
 function providerAddRootButton(item) {
@@ -4713,6 +4715,7 @@ function sourceName(providerId) {
   if (providerId === "workbuddy_local") return t("source.workbuddy");
   if (providerId === "dsh_local") return t("source.dsh");
   if (providerId === "kimi_local") return t("source.kimi");
+  if (providerId === "antigravity_local") return t("source.antigravity");
   if (providerId === "cursor_dashboard_usage") return t("source.cursor");
   return providerId;
 }

@@ -92,6 +92,15 @@ Current version: `0.7.18`
 | Codex | `codex_local` | Supported | Scans local Codex session JSONL logs. |
 | Claude Code | `claude_code_local` | Supported | Scans local Claude Code project logs. |
 | Cursor | `cursor_dashboard_usage` | Supported when enabled | Uses Cursor dashboard usage API; real project paths are unavailable. |
+| MiMoCode | `mimocode_local` | Supported | Scans the local MiMoCode SQLite database. |
+| OpenCode | `opencode_local` | Supported | Scans the local OpenCode SQLite database. |
+| Hermes | `hermes_local` | Supported | Scans the local Hermes SQLite database. |
+| OpenClaw | `openclaw_local` | Supported | Scans local OpenClaw JSONL logs. |
+| ZCode | `zcode_local` | Supported | Scans the local ZCode SQLite database. |
+| WorkBuddy | `workbuddy_local` | Supported | Scans local WorkBuddy trace JSON files. |
+| DeepSeek Harness | `dsh_local` | Supported | Scans local DeepSeek Harness session logs (multi-frame zstd JSONL). |
+| Kimi | `kimi_local` | Supported | Scans local Kimi desktop agent session logs. |
+| Antigravity | `antigravity_local` | Supported | Scans local Antigravity conversation databases (SQLite + protobuf). |
 
 Token total rule:
 

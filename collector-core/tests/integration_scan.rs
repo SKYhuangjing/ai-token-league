@@ -454,6 +454,227 @@ fn scenario_kimi_scan() {
     assert!(health.iter().any(|h| h["providerId"] == "kimi_local"));
 }
 
+// ── Scenario 1k: Antigravity synthetic conversations db ──
+
+mod antigravity_fixture {
+    // Minimal protobuf encoder for synthetic Antigravity conversation rows.
+    fn enc_varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                break;
+            }
+            out.push(byte | 0x80);
+        }
+        out
+    }
+
+    fn field(field_no: u32, wire: u8, payload: &[u8]) -> Vec<u8> {
+        let mut out = enc_varint((u64::from(field_no) << 3) | u64::from(wire));
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn varint_field(field_no: u32, value: u64) -> Vec<u8> {
+        field(field_no, 0, &enc_varint(value))
+    }
+
+    fn bytes_field(field_no: u32, data: &[u8]) -> Vec<u8> {
+        let mut payload = enc_varint(data.len() as u64);
+        payload.extend_from_slice(data);
+        field(field_no, 2, &payload)
+    }
+
+    fn str_field(field_no: u32, value: &str) -> Vec<u8> {
+        bytes_field(field_no, value.as_bytes())
+    }
+
+    fn timestamp_message(seconds: u64) -> Vec<u8> {
+        let mut out = varint_field(1, seconds);
+        out.extend(varint_field(2, 0));
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn usage_blob(
+        input: u64,
+        total_out: u64,
+        visible: u64,
+        reasoning: u64,
+        cache_read: u64,
+        message_id: &str,
+    ) -> Vec<u8> {
+        let mut out = varint_field(2, input);
+        out.extend(varint_field(3, total_out));
+        out.extend(varint_field(5, cache_read));
+        out.extend(varint_field(9, reasoning));
+        out.extend(varint_field(10, visible));
+        out.extend(str_field(7, message_id));
+        out
+    }
+
+    fn gen_row(model: &str, ts: u64, usage: &[u8]) -> Vec<u8> {
+        let generation_info = bytes_field(4, &timestamp_message(ts));
+        let mut chat = bytes_field(4, usage);
+        chat.extend(bytes_field(9, &generation_info));
+        chat.extend(str_field(19, model));
+        bytes_field(1, &chat)
+    }
+
+    fn gen_retry_row(usage: &[u8]) -> Vec<u8> {
+        let retry = bytes_field(2, usage);
+        let chat = bytes_field(17, &retry);
+        bytes_field(1, &chat)
+    }
+
+    fn step_row(usage: &[u8], model: &str, ts: u64) -> Vec<u8> {
+        let model_info = str_field(12, model);
+        let mut out = bytes_field(9, usage);
+        out.extend(bytes_field(24, &model_info));
+        out.extend(bytes_field(8, &timestamp_message(ts)));
+        out
+    }
+
+    /// Creates a synthetic conversations dir with one database and returns
+    /// the conversations dir path (register it as a provider root).
+    pub fn create(root: &std::path::Path) -> std::path::PathBuf {
+        use rusqlite::Connection;
+        let conversations = root.join("conversations");
+        std::fs::create_dir_all(&conversations).unwrap();
+        let db_path = conversations.join("11111111-2222-3333-4444-555555555555.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "CREATE TABLE gen_metadata (`idx` integer,`data` blob,`size` integer NOT NULL DEFAULT 0,PRIMARY KEY (`idx`))",
+            [],
+        )
+        .unwrap();
+        // Row 0 + retry copy (same message id): merged maxima
+        //   input=1200, output=100, cacheRead=500 => total 1800.
+        conn.execute(
+            "INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?1, ?2)",
+            rusqlite::params![
+                gen_row(
+                    "gemini 3.8 flash (high)",
+                    1_780_867_200,
+                    &usage_blob(1000, 100, 80, 20, 500, "bot-a")
+                ),
+                0
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?1, ?2)",
+            rusqlite::params![
+                gen_retry_row(&usage_blob(1200, 120, 100, 20, 500, "bot-a")),
+                0
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE steps (`idx` integer,`metadata` blob,PRIMARY KEY (`idx`))",
+            [],
+        )
+        .unwrap();
+        // Step usage (own model + timestamp): 200 + 30 => total 230.
+        conn.execute(
+            "INSERT INTO steps (idx, metadata) VALUES (0, ?1)",
+            rusqlite::params![step_row(
+                &usage_blob(200, 30, 30, 0, 0, "step-a"),
+                "claude 3.7 sonnet",
+                1_780_867_200
+            )],
+        )
+        .unwrap();
+        // Trajectory metadata: timestamp fallback + workspace root URI.
+        let mut trajectory = bytes_field(2, &timestamp_message(1_780_867_200));
+        trajectory.extend(str_field(7, "file:///tmp/atl-integ-control"));
+        conn.execute(
+            "CREATE TABLE trajectory_metadata_blob (`id` text DEFAULT \"main\",`data` blob,PRIMARY KEY (`id`))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO trajectory_metadata_blob (id, data) VALUES ('main', ?1)",
+            rusqlite::params![trajectory],
+        )
+        .unwrap();
+        drop(conn);
+        conversations
+    }
+}
+
+#[test]
+fn scenario_antigravity_scan() {
+    let _guard = lock();
+    let _prev = SaveHome::new();
+    let env = TestEnv::new();
+    let cfg = env.init_config();
+
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture_root = std::env::temp_dir().join(format!("atl-integ-antigravity-{}", suffix));
+    let conversations_parent = antigravity_fixture::create(&fixture_root);
+    let cfg = config::add_provider_root(
+        "antigravity_local",
+        &conversations_parent.to_string_lossy(),
+        &cfg,
+    );
+
+    let result = run_async(scanner::scan_usage_async(&cfg, HashMap::new()));
+
+    let antigravity: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i["toolCode"] == "antigravity")
+        .collect();
+
+    assert!(
+        !antigravity.is_empty(),
+        "should find antigravity items from the synthetic conversations db"
+    );
+
+    for item in &antigravity {
+        assert_eq!(item["providerId"], "antigravity_local");
+        assert!(item["totalTokens"].as_i64().unwrap_or(0) > 0);
+        assert!(!item["day"].as_str().unwrap_or("").is_empty());
+        assert!(!item["model"].as_str().unwrap_or("").is_empty());
+        assert!(!item["workdirHash"].as_str().unwrap_or("").is_empty());
+        // Workspace root from the trajectory blob attribute to its dir name;
+        // the raw path itself must not survive finalize.
+        assert_eq!(item["workdirDisplayName"], "atl-integ-control");
+        assert!(item.get("workdirCandidate").is_none());
+    }
+
+    // Retry copy merges into the original (max per bucket): 1200+100+500;
+    // step row: 200+30. Exact expected total: 2030.
+    let total: i64 = antigravity
+        .iter()
+        .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert_eq!(total, 2030, "antigravity synthetic total should match");
+
+    let models: std::collections::HashSet<_> = antigravity
+        .iter()
+        .filter_map(|i| i["model"].as_str().map(String::from))
+        .collect();
+    assert!(models.contains("gemini-3.8-flash-high"), "{models:?}");
+    assert!(models.contains("claude-3-7-sonnet"), "{models:?}");
+
+    assert!(!result.provider_errors.contains_key("antigravity_local"));
+
+    let health = scanner::provider_health(&cfg);
+    assert!(health
+        .iter()
+        .any(|h| h["providerId"] == "antigravity_local"));
+
+    let _ = fs::remove_dir_all(&fixture_root);
+}
+
 // ── Scenario 2: Scan → persist → query roundtrip ──
 
 #[test]
