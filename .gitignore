@@ -59,3 +59,4 @@ artifacts/
 src-tauri/coverage/
 .codex
 .agents
+.zcode

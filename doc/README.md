@@ -45,6 +45,38 @@ This directory keeps the project documents after the v0.1 phase freeze.
 - `provider-integration-guide.md` - 新 provider（数据源）接入指南：调研问题清单、collector 实现契约、前端触点清单、测试矩阵、真库对账与打包陷阱。
 - `../env.example` - committed Docker env template; local `env.local` and `env.test` are ignored secrets.
 
+## Designs
+
+- [dsh-local-provider-design.md](dsh-local-provider-design.md) - `dsh_local` provider 设计：DeepSeek Harness 多帧 zstd JSONL 解析、token 口径与测试矩阵。
+- [kimi-local-provider-design.md](kimi-local-provider-design.md) - `kimi_local` provider 设计：daimon kernel `wire.jsonl` usage 记录扫描与边界。
+- [antigravity-local-provider-design.md](antigravity-local-provider-design.md) - `antigravity_local` provider 设计：Antigravity 会话 SQLite/protobuf 解析、去重与对账边界。
+- [workbuddy-local-provider-design.md](workbuddy-local-provider-design.md) - `workbuddy_local` provider 设计：trace JSON generation span 的 per-request token 提取。
+- [sync-status-product-technical-design.md](sync-status-product-technical-design.md) - 数据同步状态的产品语义与技术实现方案。
+- [share-design-plan.md](share-design-plan.md) - 分享数据图（share card）设计方案。
+- [theme-color-schemes.md](theme-color-schemes.md) - 主题色方案对照与选型。
+- [backend_multi_device_cursor_cloud_dedup_design.md](backend_multi_device_cursor_cloud_dedup_design.md) - 多设备 Cursor 云端用量去重设计。
+- [plugin-platform.md](plugin-platform.md) - 插件平台 P0–P3 目标规划。
+- [web-ui-optimization-prompt.md](web-ui-optimization-prompt.md) - Web UI 优化提升 prompt（2026-09 版）。
+
+## Handoffs and Historical Records
+
+- [compute-sharing.md](compute-sharing.md) - 算力共享 `feat/compute-sharing` 分支总览（历史起点，当前设计以 usability design 为准）。
+- [compute-sharing-handoff.md](compute-sharing-handoff.md) - 算力共享研发 Handoff（持续迭代记录）。
+- [HANDOFF-cursor-dashboard-auth-hardening.md](HANDOFF-cursor-dashboard-auth-hardening.md) - Cursor 采集断流根因、修复与交接状态。
+- [handoff-config-crash-recovery.md](handoff-config-crash-recovery.md) - 防止 Windows 重启后引导页重现的修复交接。
+- [handoff-device-aware-cloud-delete.md](handoff-device-aware-cloud-delete.md) - 设备感知的云端数据删除设计交接。
+- [handoff-restart-update-fix.md](handoff-restart-update-fix.md) - 「重启更新」按钮无法点击问题的修复交接。
+- [mysql-data-loss-handoff-2026-05-25.md](mysql-data-loss-handoff-2026-05-25.md) - MySQL 数据丢失事故修复 handoff 与复盘。
+- [test-coverage-handoff-2026-05-24.md](test-coverage-handoff-2026-05-24.md) - 测试覆盖提升交接记录。
+- [test-infra-handoff.md](test-infra-handoff.md) - 测试基础设施独立评审交接。
+- [node-free-runtime-refactor.md](node-free-runtime-refactor.md) - Node-free 运行时重构方案（历史方案记录）。
+- [tauri-refactor.md](tauri-refactor.md) - Tauri 化重构方案（历史方案记录）。
+- [performance-risk-review.md](performance-risk-review.md) - 性能风险评审记录。
+- [refatcor_sync_status.md](refatcor_sync_status.md) - 统一云端同步状态类型定义的早期 plan（文件名拼写错误保留原样，避免链接失效）。
+- [ui-test-plan.md](ui-test-plan.md) - UI 测试开发计划。
+- [ui-ux-expert-guidelines.md](ui-ux-expert-guidelines.md) - UI/UX 专家评审 guidelines。
+- [demos/data-value-real-experiment-HANDOFF.md](demos/data-value-real-experiment-HANDOFF.md) - 真实数据价值 UI 实验 handoff。
+
 ## Rule
 
 New product baseline work must add a paired `doc/<baseline>-baseline.md` and `doc/<baseline>-development-tasks.md` instead of appending unrelated requirements to old baselines.
