@@ -6,6 +6,25 @@
 
 ---
 
+## [0.7.19] - 2026-10-12
+
+### 新增
+
+- [Desktop, Web] 新增 `antigravity_local` 本地数据源支持：只读扫描 Antigravity（Gemini 系列 Agent）本地 SQLite 会话库（覆盖 `~/.gemini/antigravity*/` 与 `~/.config/antigravity/`），采用轻量 Wire-format Protobuf 解析器安全提取元数据，按 Gemini 规范统计 `input`、`output`、`cacheRead` 与 `cacheWrite` 四桶用量；基于并查集（Union-Find）对响应与重试副本精确去重，按会话 UUID 跨根折叠备份文件；解析会话轨迹（trajectory）字段提取真实项目工作区路径，全端触点接入桌面端工作台、公榜与管理后台、图表主题及公开下载页。
+- [Desktop] 算力共享卡片（0.1.5）借用方接入区重构：明确区分 OpenAI 与 Claude 接入协议与地址，支持模型动态发现、下拉选择与手填，实时生成并一键复制 Bash 与 PowerShell 环境变量命令，并内联展示 Codex `[model_providers.atl-share]` TOML 配置片段。
+
+### 修复
+
+- [Desktop] 修复 Codex 本地日志因 compaction 遗漏用量的问题：采集器支持解析新版 Codex 日志中的 `token_usage_record` 记录，在会话压缩标记出现时释放被压缩吞掉的用量，并与后续 `token_count` 差分合并防双计，避免历史用量丢失。
+- [Desktop] 修复算力共享卡片（0.1.6）车道编辑保存状态假阳性：将时间选择改为统一校验的 24 小时制 HH:MM 格式，确保车道修改经接口回包、节点状态与前端视图三方确认后再提示成功，未确认前保留编辑草稿。
+- 持久化 ZCode 请求级账本并支持 v2 备份格式：同小时部分历史请求被源库清理时自动保留本地请求账本，备份包含 SQLite 在线快照与条目完整性校验，杜绝历史数据缩水。
+- 修复 Windows 主机跨平台兼容性：单测归一化路径反斜杠分隔符，E2E 剪贴板测试自动适配平台默认 PowerShell 方言与 Chromium CRLF 行尾。
+
+### 变更
+
+- `verify:ccusage` 对账工具新增 Antigravity 自动化验证支持（依赖 `ccusage >= 20.0.30`），并将其纳入默认数据源检查集合。
+- 清理孤立卡片截图脚本，更新文档索引与 `.gitignore` 规则，补充架构熵治理报告。
+
 ## [0.7.18] - 2026-09-22
 
 ### 修复

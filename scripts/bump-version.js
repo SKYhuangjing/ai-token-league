@@ -169,7 +169,7 @@ function bump({ version, baseline, date }) {
   const newVersion = version || oldVersion;
   const claudeContent = read("CLAUDE.md");
   const claudeUpdated = claudeContent.replace(
-    /- \*\*Product baseline\*\*: `\d+\.\d+` \| \*\*Client version\*\*: `\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?` \(released (\d{4}-\d{2}-\d{2})\)/,
+    /- \*\*Product baseline\*\*: `\d+\.\d+` \| \*\*Client version\*\*: `\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?` \((?:released |release candidate, )?(\d{4}-\d{2}-\d{2})\)/,
     (_match, oldDate) => `- **Product baseline**: \`${newBaseline}\` | **Client version**: \`${newVersion}\` (released ${versionChanged ? date : oldDate})`
   );
   if (claudeUpdated !== claudeContent) {
@@ -180,7 +180,7 @@ function bump({ version, baseline, date }) {
   // 4. AGENTS.md — update product baseline + client version
   const agentsContent = read("AGENTS.md");
   const agentsUpdated = agentsContent.replace(
-    /Current product baseline: `\d+\.\d+`; client version: `\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?` \(released (\d{4}-\d{2}-\d{2})\)\./,
+    /Current product baseline: `\d+\.\d+`; client version: `\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?` \((?:released |release candidate, )?(\d{4}-\d{2}-\d{2})\)\./,
     (_match, oldDate) => `Current product baseline: \`${newBaseline}\`; client version: \`${newVersion}\` (released ${versionChanged ? date : oldDate}).`
   );
   if (agentsUpdated !== agentsContent) {

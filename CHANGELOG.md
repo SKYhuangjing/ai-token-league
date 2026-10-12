@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.19] - 2026-10-12
+
+### Added
+
+- [Desktop, Web] Support for `antigravity_local` data source: scans local Antigravity (Gemini-family agent) SQLite conversation databases across `~/.gemini/antigravity*/` and `~/.config/antigravity/` using read-only connections. Wire-format Protobuf metadata is safely parsed without heavy dependencies, computing tokens under Gemini four-bucket semantics (`input`, `output`, `cacheRead`, `cacheWrite`). Deduplicates retry copies with union-find identity keys, collapses cross-root backup copies by session UUID, extracts real workspace paths from trajectory metadata, and integrates across the desktop app, public leaderboard, admin console, chart themes, and download page.
+- [Desktop] Compute-sharing card (0.1.5) borrower access redesign: separates OpenAI and Claude endpoint protocols, provides live model discovery and selection with custom fallback, previews and copies Bash/PowerShell environment exports, and displays inline Codex `[model_providers.atl-share]` TOML configuration snippets.
+
+### Fixed
+
+- [Desktop] Support `token_usage_record` lines in Codex local logs to prevent undercounting caused by log compaction. Compacted tokens are released upon compaction markers and matched against subsequent `token_count` deltas to avoid duplicates.
+- [Desktop] Compute-sharing card (0.1.6) lane edit confirmation: replaces native time inputs with validated 24-hour HH:MM inputs, confirms lane modifications against backend API and owner status before reporting success, and retains drafts on unacknowledged saves.
+- ZCode local journal persistence and v2 backup format: request-level records are preserved when source tables are purged within the same hour, and backups now include SQLite online snapshots and entry-level integrity verification.
+- Cross-platform compatibility for Windows hosts: normalized backslashes in collector path assertions and adapted E2E clipboard test assertions for PowerShell dialect and Chromium CRLF line endings.
+
+### Changed
+
+- Verifier `verify:ccusage` adds automated Antigravity daily reconciliation against `ccusage >= 20.0.30` and includes Antigravity in the default provider verification suite.
+- Cleaned orphan capture scripts, updated documentation indexing, and added repository architecture entropy governance tracking.
+
 ## [0.7.18] - 2026-09-22
 
 ### Fixed
