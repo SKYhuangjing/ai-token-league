@@ -1655,7 +1655,11 @@ mod tests {
             1,
             "same-stem backup copy must collapse: {fixture_sessions:?}"
         );
-        assert!(fixture_sessions[0].contains("main/conversations"), "{}", fixture_sessions[0]);
+        assert!(
+            fixture_sessions[0].replace('\\', "/").contains("main/conversations"),
+            "{}",
+            fixture_sessions[0]
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
