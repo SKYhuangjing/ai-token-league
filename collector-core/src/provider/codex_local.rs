@@ -1,14 +1,14 @@
 use crate::config::AppConfig;
 use crate::provider::common::*;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 pub const PROVIDER_ID: &str = "codex_local";
 pub const TOOL_CODE: &str = "codex";
-pub const VERSION: &str = "0.3.0";
+pub const VERSION: &str = "0.4.0";
 
 pub struct CodexProvider;
 
@@ -225,9 +225,90 @@ impl CodexProvider {
         let mut previous_cumulative_total: i64 = 0;
         let mut previous_cumulative_usage: Option<RawUsage> = None;
 
+        // New Codex clients (since ~2026-09) also emit `token_usage_record`
+        // rows carrying per-response usage. A compaction resets the cumulative
+        // token_count snapshots, swallowing the compacted response's usage, so
+        // the record must be counted when its `compacted` marker arrives; a
+        // record matched by a following token_count delta is suppressed to
+        // avoid double counting (semantics ported from ccusage's codex
+        // adapter, MIT).
+        let mut pending_records: HashMap<String, PendingUsageRecord> = HashMap::new();
+        let mut emitted_record_ids: HashSet<String> = HashSet::new();
+        let mut compacted_response_ids: HashSet<String> = HashSet::new();
+        let mut latest_record_id: Option<String> = None;
+
         for row in &rows {
             if let Some(model) = codex_model_from_row(row) {
                 current_model = model;
+            }
+
+            match row["type"].as_str() {
+                Some("compacted") => {
+                    let response_id = row["payload"]["compaction_response_id"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    if let Some(response_id) = response_id {
+                        compacted_response_ids.insert(response_id.clone());
+                        if let Some(pending) = pending_records.remove(&response_id) {
+                            if emitted_record_ids.insert(response_id) {
+                                events.push(usage_record_event(
+                                    pending,
+                                    &session_id,
+                                    &source,
+                                    &session_cwd,
+                                ));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                Some("token_usage_record") => {
+                    let response_id = row["payload"]["response_id"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    let usage = row["payload"]
+                        .get("usage")
+                        .and_then(raw_usage_from_value)
+                        .and_then(|raw| usage_result(raw, false));
+                    if let (Some(response_id), Some(usage)) = (response_id, usage) {
+                        if !emitted_record_ids.contains(&response_id) {
+                            let normalized_model = normalize_codex_model(&current_model);
+                            let normalized_model = if normalized_model.is_empty() {
+                                "gpt-5".to_string()
+                            } else {
+                                normalized_model
+                            };
+                            let timestamp = row.get("timestamp").and_then(Value::as_str).unwrap_or_default();
+                            let record = PendingUsageRecord {
+                                day: day_from_record(row, mtime_ms),
+                                hour: hour_from_record(row, mtime_ms),
+                                model: normalized_model,
+                                dedup_key: format!("record|{}|{}", timestamp, response_id),
+                                usage,
+                            };
+                            if compacted_response_ids.contains(&response_id) {
+                                emitted_record_ids.insert(response_id.clone());
+                                events.push(usage_record_event(
+                                    record,
+                                    &session_id,
+                                    &source,
+                                    &session_cwd,
+                                ));
+                            } else {
+                                pending_records
+                                    .entry(response_id.clone())
+                                    .or_insert(record);
+                            }
+                            latest_record_id = Some(response_id);
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
             }
 
             let usage = match extract_usage_with_previous(row, &mut previous_cumulative_usage) {
@@ -245,6 +326,21 @@ impl CodexProvider {
             let total_tokens = usage.delta_total(previous_cumulative_total);
             if total_tokens == 0 {
                 continue;
+            }
+
+            // The token_count delta already carries the latest record's
+            // usage; consume it so the record is never counted twice.
+            if let Some(response_id) = latest_record_id.as_ref() {
+                if let Some(pending) = pending_records.get(response_id) {
+                    let matches = pending.usage.raw_input_tokens == usage.raw_input_tokens
+                        && pending.usage.cache_read_tokens == usage.cache_read_tokens
+                        && pending.usage.cache_write_tokens == usage.cache_write_tokens
+                        && pending.usage.output_tokens == usage.output_tokens;
+                    if matches {
+                        pending_records.remove(response_id);
+                        emitted_record_ids.insert(response_id.clone());
+                    }
+                }
             }
 
             let replay_usage = ReplayUsage::from(&usage);
@@ -800,6 +896,54 @@ fn usage_result(raw: RawUsage, is_cumulative: bool) -> Option<UsageResult> {
     })
 }
 
+/// A `token_usage_record` row held until its fate is known: released by a
+/// `compacted` marker, consumed by a matching token_count delta, or dropped
+/// when neither arrives (the token_count snapshots carry that usage).
+struct PendingUsageRecord {
+    day: String,
+    hour: u32,
+    model: String,
+    dedup_key: String,
+    usage: UsageResult,
+}
+
+fn usage_record_event(
+    record: PendingUsageRecord,
+    session_id: &str,
+    source: &crate::provider::common::SourceMetadata,
+    session_cwd: &str,
+) -> Value {
+    let workdir_candidate = if !session_cwd.is_empty() {
+        session_cwd.to_string()
+    } else {
+        std::env::current_dir()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_default()
+    };
+    json!({
+        "providerId": PROVIDER_ID,
+        "providerVersion": VERSION,
+        "toolCode": TOOL_CODE,
+        "sourceKind": "local_log",
+        "sourceQuality": record.usage.quality,
+        "sessionId": session_id,
+        "day": record.day,
+        "hour": record.hour,
+        "workdirCandidate": workdir_candidate,
+        "model": record.model,
+        "inputTokens": record.usage.input_tokens,
+        "outputTokens": record.usage.output_tokens,
+        "cacheReadTokens": record.usage.cache_read_tokens,
+        "cacheWriteTokens": record.usage.cache_write_tokens,
+        "reasoningTokens": record.usage.reasoning_tokens,
+        "totalTokens": record.usage.total,
+        "rawSourceRef": source.raw_source_ref,
+        "sourceFingerprint": source.source_fingerprint,
+        "parserVersion": source.parser_version,
+        "_codexDedupKey": record.dedup_key,
+    })
+}
+
 impl From<&UsageResult> for ReplayUsage {
     fn from(usage: &UsageResult) -> Self {
         Self {
@@ -1025,6 +1169,120 @@ mod tests {
         let mut previous = None;
         assert!(extract_usage_with_previous(&row("2026-05-12T08:00:00Z"), &mut previous).is_some());
         assert!(extract_usage_with_previous(&row("2026-05-12T08:00:01Z"), &mut previous).is_none());
+    }
+
+    fn write_rows_and_parse(label: &str, rows: &[Value]) -> Vec<Value> {
+        let dir = unique_temp_dir(label);
+        let file = dir.join("session.jsonl");
+        let content = rows
+            .iter()
+            .map(|row| serde_json::to_string(row).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&file, content).unwrap();
+        let events = CodexProvider.parse_usage(&file.to_string_lossy());
+        let _ = std::fs::remove_dir_all(dir);
+        events
+    }
+
+    fn usage_record_row(timestamp: &str, response_id: &str, input: i64, cached: i64, output: i64) -> Value {
+        json!({
+            "timestamp": timestamp,
+            "type": "token_usage_record",
+            "payload": {
+                "response_id": response_id,
+                "usage": {
+                    "input_tokens": input,
+                    "cached_input_tokens": cached,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": output,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": input + output
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn test_token_usage_record_released_by_compacted_marker() {
+        // Compaction resets the cumulative snapshots, so the record is the
+        // only witness of the compacted response's usage.
+        let events = write_rows_and_parse(
+            "record-compacted",
+            &[
+                json!({"timestamp": "2026-09-30T01:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/tmp/proj"}}),
+                json!({"timestamp": "2026-09-30T01:00:01Z", "type": "turn_context", "payload": {"model": "gpt-6-luna"}}),
+                usage_record_row("2026-09-30T01:00:05Z", "resp-a", 240706, 240384, 501),
+                json!({"timestamp": "2026-09-30T01:00:06Z", "type": "compacted", "payload": {"compaction_response_id": "resp-a"}}),
+            ],
+        );
+        assert_eq!(events.len(), 1, "record must be released by the compacted marker");
+        let event = &events[0];
+        // Codex input includes cached input; the split keeps cache separate.
+        assert_eq!(event["inputTokens"], 322);
+        assert_eq!(event["cacheReadTokens"], 240384);
+        assert_eq!(event["outputTokens"], 501);
+        assert_eq!(event["totalTokens"], 241207);
+        assert_eq!(event["model"], "gpt-6-luna");
+        assert_eq!(event["sessionId"], "s1");
+        assert!(event["_codexDedupKey"].as_str().unwrap().contains("resp-a"));
+    }
+
+    #[test]
+    fn test_token_usage_record_consumed_by_matching_token_count() {
+        // The following token_count delta carries the same usage, so the
+        // record is suppressed instead of double counted.
+        let events = write_rows_and_parse(
+            "record-consumed",
+            &[
+                json!({"timestamp": "2026-09-30T01:00:00Z", "type": "session_meta", "payload": {"id": "s2"}}),
+                json!({"timestamp": "2026-09-30T01:00:01Z", "type": "turn_context", "payload": {"model": "gpt-6-luna"}}),
+                usage_record_row("2026-09-30T01:00:05Z", "resp-b", 1000, 800, 20),
+                json!({
+                    "timestamp": "2026-09-30T01:00:06Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 20, "total_tokens": 1020},
+                            "total_token_usage": {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 20, "total_tokens": 1020}
+                        }
+                    }
+                }),
+            ],
+        );
+        assert_eq!(events.len(), 1, "only the token_count event must remain");
+        assert_eq!(events[0]["inputTokens"], 200);
+        assert_eq!(events[0]["cacheReadTokens"], 800);
+        assert_eq!(events[0]["totalTokens"], 1020);
+    }
+
+    #[test]
+    fn test_token_usage_record_without_marker_or_match_is_dropped() {
+        let events = write_rows_and_parse(
+            "record-pending",
+            &[
+                json!({"timestamp": "2026-09-30T01:00:00Z", "type": "session_meta", "payload": {"id": "s3"}}),
+                usage_record_row("2026-09-30T01:00:05Z", "resp-c", 100, 0, 10),
+            ],
+        );
+        assert!(events.is_empty(), "unresolved record must not be counted");
+    }
+
+    #[test]
+    fn test_compacted_marker_before_record_emits_immediately() {
+        let events = write_rows_and_parse(
+            "record-after-compact",
+            &[
+                json!({"timestamp": "2026-09-30T01:00:00Z", "type": "session_meta", "payload": {"id": "s4"}}),
+                json!({"timestamp": "2026-09-30T01:00:01Z", "type": "compacted", "payload": {"compaction_response_id": "resp-d"}}),
+                usage_record_row("2026-09-30T01:00:05Z", "resp-d", 500, 100, 30),
+            ],
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["inputTokens"], 400);
+        assert_eq!(events[0]["cacheReadTokens"], 100);
+        assert_eq!(events[0]["totalTokens"], 530);
     }
 
     #[test]
