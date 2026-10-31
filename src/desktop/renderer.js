@@ -103,6 +103,7 @@ const MODEL_DETAIL_VIRTUAL_THRESHOLD = 120;
 const MODEL_DETAIL_ROW_HEIGHT = 44;
 const MODEL_DETAIL_OVERSCAN = 8;
 const FULL_USAGE_RENDER_CACHE_LIMIT = 5000;
+const MODULES_CATALOG_TTL_MS = 5 * 60 * 1000;
 
 function localeTokenCompact(value) {
   return formatTokenCompact(value, getCurrentLang());
@@ -189,11 +190,22 @@ let nextVirtualModelDetailId = 1;
 let usageQueryGeneration = 0;
 let usageQueryRefreshRunning = false;
 let usageQueryRefreshPending = false;
+// Bumped every time a fresh snapshot lands; lets range switches reuse
+// queried surfaces without re-issuing IPC when the data cannot have changed.
+let usageDataGeneration = 0;
 const virtualModelDetailTables = new Map();
 const usageQueryState = {
   summaries: new Map(),
   trends: new Map(),
   workdirs: new Map(),
+  // Per-entry fetch generation: a cached range only counts as fresh when it
+  // was fetched at the CURRENT snapshot generation. One global stamp let
+  // entries from older generations look fresh as soon as any other range was
+  // refetched (live-caught in UI verification: range cards showed
+  // pre-scan numbers with zero refetch).
+  summaryGenerations: new Map(),
+  trendGenerations: new Map(),
+  workdirGenerations: new Map(),
   lastRowCount: 0
 };
 
@@ -746,7 +758,6 @@ async function saveInstantPreference(field, value) {
 function renderInstantPreferenceViews() {
   renderToday();
   renderWorkdirs();
-  renderAliases();
 }
 
 for (const field of DIRTY_TRACKED_FIELDS) {
@@ -897,7 +908,11 @@ function selectSection(section) {
 function handlePrimaryNavigationClick(section) {
   selectSection(section);
   if (section === "overview") {
-    if (!scanRunning) run(() => loadToday(true));
+    // Navigating back to the overview must not force a full rescan on every
+    // click: a stale-when-fetched request reuses the 5-min cache fast path
+    // and only scans when the data is actually old. Manual refresh keeps
+    // force = true.
+    if (!scanRunning) run(() => loadToday(false));
   }
   if (section === "sources") run(loadHealth);
   if (section === "modules") {
@@ -1465,6 +1480,7 @@ async function loadMyIdentity() {
 
 async function refreshCloudDependentState() {
   serverPriceMap = null;
+  resetPriceMapCaches();
   latestUpdateState = null;
   updateDownloadedPersisted = false;
   updateInstallRunning = false;
@@ -2448,6 +2464,7 @@ function shouldSyncAfterRefresh(config = latestConfig) {
 }
 
 function applyUsageSnapshot(usage) {
+  usageDataGeneration += 1;
   const items = (usage.items || []).map(normalizeUsageTotal);
   usageQueryState.lastRowCount = Number(usage.rowCount || items.length || 0);
   allUsage = items.length <= FULL_USAGE_RENDER_CACHE_LIMIT ? items : [];
@@ -2460,7 +2477,6 @@ function applyUsageSnapshot(usage) {
   renderToday();
   renderWorkdirs();
   renderHealth();
-  renderAliases();
   renderRailStatus();
   refreshUsageQuerySurfaces().catch(console.error);
 }
@@ -2473,9 +2489,28 @@ async function refreshUsageQuerySurfaces() {
   }
   usageQueryRefreshRunning = true;
   const generation = ++usageQueryGeneration;
+  // Capture the data generation at fetch start: a snapshot can land while
+  // the queries are in flight, and stamping with the post-await (newer)
+  // generation would let the queued rerun skip and pin the older data.
+  const dataGenerationAtFetch = usageDataGeneration;
   try {
     const trendGrain = overviewTrendGrain();
     const trendKey = usageQueryKey(overviewRange, trendGrain);
+    // Pure range/grain switch on already-loaded data: the synchronous
+    // render above read the cached entries, so skip the 5 IPC round trips
+    // (each one a sidecar command). Freshness is judged PER ENTRY against
+    // the current snapshot generation — a global stamp made entries fetched
+    // before the last scan look fresh and pinned stale range cards.
+    const entryFresh = (values, generations, key) =>
+      values.has(key) && generations.get(key) === usageDataGeneration;
+    const haveCachedSurfaces = entryFresh(usageQueryState.summaries, usageQueryState.summaryGenerations, overviewRange)
+      && entryFresh(usageQueryState.trends, usageQueryState.trendGenerations, trendKey)
+      && entryFresh(usageQueryState.workdirs, usageQueryState.workdirGenerations, workdirsRange)
+      && entryFresh(usageQueryState.workdirs, usageQueryState.workdirGenerations, "today")
+      && entryFresh(usageQueryState.workdirs, usageQueryState.workdirGenerations, "all");
+    if (haveCachedSurfaces) {
+      return;
+    }
     const results = await Promise.allSettled([
       api.usageSummary({ range: overviewRange }),
       api.usageTrend({ range: overviewRange, grain: trendGrain }),
@@ -2485,16 +2520,32 @@ async function refreshUsageQuerySurfaces() {
     ]);
     if (generation !== usageQueryGeneration) return;
     const [summary, trend, workdirs, todayWorkdirs, allWorkdirs] = results.map((result) => result.status === "fulfilled" ? result.value : null);
-    if (summary) usageQueryState.summaries.set(overviewRange, normalizeUsageSummary(summary));
-    if (trend) usageQueryState.trends.set(trendKey, normalizeUsageTrend(trend));
-    if (workdirs) usageQueryState.workdirs.set(workdirsRange, normalizeUsageWorkdirs(workdirs));
-    if (todayWorkdirs) usageQueryState.workdirs.set("today", normalizeUsageWorkdirs(todayWorkdirs));
-    else if (workdirsRange === "today" && workdirs) usageQueryState.workdirs.set("today", normalizeUsageWorkdirs(workdirs));
-    if (allWorkdirs) usageQueryState.workdirs.set("all", normalizeUsageWorkdirs(allWorkdirs));
+    if (summary) {
+      usageQueryState.summaries.set(overviewRange, normalizeUsageSummary(summary));
+      usageQueryState.summaryGenerations.set(overviewRange, dataGenerationAtFetch);
+    }
+    if (trend) {
+      usageQueryState.trends.set(trendKey, normalizeUsageTrend(trend));
+      usageQueryState.trendGenerations.set(trendKey, dataGenerationAtFetch);
+    }
+    if (workdirs) {
+      usageQueryState.workdirs.set(workdirsRange, normalizeUsageWorkdirs(workdirs));
+      usageQueryState.workdirGenerations.set(workdirsRange, dataGenerationAtFetch);
+    }
+    if (todayWorkdirs) {
+      usageQueryState.workdirs.set("today", normalizeUsageWorkdirs(todayWorkdirs));
+      usageQueryState.workdirGenerations.set("today", dataGenerationAtFetch);
+    } else if (workdirsRange === "today" && workdirs) {
+      usageQueryState.workdirs.set("today", normalizeUsageWorkdirs(workdirs));
+      usageQueryState.workdirGenerations.set("today", dataGenerationAtFetch);
+    }
+    if (allWorkdirs) {
+      usageQueryState.workdirs.set("all", normalizeUsageWorkdirs(allWorkdirs));
+      usageQueryState.workdirGenerations.set("all", dataGenerationAtFetch);
+    }
     renderToday();
     renderWorkdirs();
-    renderAliases();
-    renderRailStatus();
+      renderRailStatus();
   } finally {
     usageQueryRefreshRunning = false;
     if (usageQueryRefreshPending) {
@@ -3556,68 +3607,6 @@ function currentRailSyncStatus() {
   });
 }
 
-function renderTrend() {
-  if (!$("#trend-chart-panel")) return;
-  virtualModelDetailTables.clear();
-  const rows = groupTrend(allUsage);
-  if (rows.length && !selectedTrendBucketKey) selectedTrendBucketKey = trendBucketKey(rows[0]);
-  if (!rows.some((row) => trendBucketKey(row) === selectedTrendBucketKey)) selectedTrendBucketKey = rows[0] ? trendBucketKey(rows[0]) : "";
-  if (!rows.some((row) => trendBucketKey(row) === trendDrawerBucketKey)) trendDrawerBucketKey = "";
-  $("#trend-chart-panel").hidden = trendMode !== "chart";
-  $("#trend-table-panel").hidden = trendMode !== "table";
-  $("#trend-heading").textContent = trendViewMeta().heading;
-  $("#trend-summary").textContent = `${rows.length} ${trendViewMeta().bucketLabel}${rows.length === 1 ? "" : "s"} · ${trendViewMeta().summary}.`;
-  $("#trend-chart-panel").innerHTML = rows.length
-    ? renderTrendDashboard(rows)
-    : `<article class="empty-state">${t("desktop.renderer.noLocalUsageFound")}</article>`;
-  $("#trend-rows").innerHTML = rows.length
-    ? rows
-        .map((row) => `<tr>
-          <td><button type="button" data-expand-trend="${escapeHtml(trendBucketKey(row))}">${trendDrawerBucketKey === trendBucketKey(row) ? t("common.hide") : t("common.show")}</button> ${formatTrendPeriod(row)}</td>
-          <td class="numeric" title="${formatTokenRaw(row.totalTokens)}">${formatToken(row.totalTokens)}</td>
-          <td>${escapeHtml(row.compositionSummary || tokenCompositionSummary(row))}</td>
-          <td>${renderCompactBreakdown(row.modelBreakdown)}</td>
-          <td>${renderCompactBreakdown(row.workdirBreakdown)}</td>
-          ${latestConfig?.showEstimatedCost ? `<td class="numeric" title="${escapeHtml(costTitle(row))}">${renderCostAmount(row)}</td>` : ""}
-        </tr>`)
-        .join("")
-    : `<tr><td colspan="${latestConfig?.showEstimatedCost ? 6 : 5}" class="empty-cell">${t("desktop.renderer.noLocalUsageFound")}</td></tr>`;
-  $("#trend-selection-panel").hidden = trendMode === "table";
-  $("#trend-selection-panel").innerHTML = trendMode === "chart" && rows.length && selectedTrendBucketKey
-    ? renderTrendSelection(rows.find((row) => trendBucketKey(row) === selectedTrendBucketKey))
-    : "";
-  renderTrendDrawer(rows);
-  hydrateVirtualModelDetailTables();
-  document.querySelectorAll("[data-expand-trend]").forEach((button) => {
-    button.addEventListener("click", () => {
-      trendDrawerBucketKey = trendDrawerBucketKey === button.dataset.expandTrend ? "" : button.dataset.expandTrend;
-      renderTrend();
-    });
-  });
-  document.querySelectorAll("[data-select-trend]").forEach((button) => {
-    button.addEventListener("click", () => {
-      selectedTrendBucketKey = button.dataset.selectTrend;
-      renderTrend();
-    });
-  });
-}
-
-function renderAliases() {
-  if (!$("#workdir-alias-list")) return;
-  const workdirs = usageQueryState.workdirs.get("all")?.items || groupWorkdirs(allUsage);
-  $("#workdir-alias-list").innerHTML = workdirs.length
-    ? workdirs
-        .map((item) => `<article class="alias-row">
-          <div>
-            <strong>${escapeHtml(item.name)}</strong>
-            <small title="${formatTokenRaw(item.totalTokens)}">${formatToken(item.totalTokens)} ${t("unit.tokens")}</small>
-          </div>
-          <input data-alias-input="${escapeHtml(item.workdirHash)}" data-current-alias="${escapeHtml(latestConfig?.workdirAliases?.[item.workdirHash] || "")}" value="${escapeHtml(latestConfig?.workdirAliases?.[item.workdirHash] || "")}" placeholder="${escapeHtml(t("desktop.workdir.aliasPlaceholder"))}" />
-        </article>`)
-        .join("")
-    : `<article class="empty-state">${t("desktop.renderer.noWorkdirs")}</article>`;
-}
-
 const PROVIDER_NAV_STATUS = { 1: "ok", 2: "warn", 3: "off" };
 
 function providerNavStatusClass(item) {
@@ -3665,6 +3654,10 @@ function providerAddRootButton(item) {
 }
 
 function renderHealth() {
+  // Snapshot ticks used to rebuild the O(allUsage) provider index and every
+  // provider card even while the sources screen was hidden. Entering the
+  // screen (loadHealth) rebuilds it, so skip while it is not visible.
+  if (!document.querySelector("#sources.active")) return;
   renderProviderNav();
   // One index pass feeds every provider card; capped marks datasets that
   // exceeded FULL_USAGE_RENDER_CACHE_LIMIT so the overview degrades instead
@@ -4516,6 +4509,15 @@ function animateTrendDrawerClosed() {
     $("#trend-drawer").hidden = true;
     $("#trend-drawer-backdrop").hidden = true;
     $("#trend-drawer-body").innerHTML = "";
+    // Drop virtual model-detail entries whose table left the DOM: ids
+    // increment per open, so stale entries otherwise pin their whole
+    // modelDetails array for the rest of the session (the old cleanup lived
+    // behind a dead #trend-chart-panel guard and never ran).
+    for (const tableId of [...virtualModelDetailTables.keys()]) {
+      if (!document.querySelector(`[data-model-detail-scroll="${CSS.escape(tableId)}"]`)) {
+        virtualModelDetailTables.delete(tableId);
+      }
+    }
   }, 180);
 }
 
@@ -4773,13 +4775,32 @@ function aggregateUsageCost(items) {
   return { ...current, missingPriceModels: sortedBreakdown(current.missingPriceModels || {}) };
 }
 
+// Cached local fallback price map (serverPriceMap === null) — it used to be
+// rebuilt on every per-item cost call.
+let localFallbackPriceMapCache = null;
+// Cached "does the active price map have any model" for the per-item hot
+// path: Object.keys() on the whole map per usage item made groupBy passes
+// O(items × models). null = recompute on next use; reset wherever
+// serverPriceMap is assigned.
+let priceMapHasEntries = null;
+
+function resetPriceMapCaches() {
+  localFallbackPriceMapCache = null;
+  priceMapHasEntries = null;
+}
+
 function activePriceMap() {
-  return serverPriceMap || createPriceMap();
+  if (serverPriceMap) return serverPriceMap;
+  if (!localFallbackPriceMapCache) localFallbackPriceMapCache = createPriceMap();
+  return localFallbackPriceMapCache;
 }
 
 function addDisplayCostToUsageItem(item) {
+  if (priceMapHasEntries === null) {
+    priceMapHasEntries = Object.keys(activePriceMap() || {}).length > 0;
+  }
   const priceMap = activePriceMap();
-  if (Object.keys(priceMap || {}).length) return addCostToUsageItem(item, priceMap);
+  if (priceMapHasEntries) return addCostToUsageItem(item, priceMap);
   if (item.estimatedCostUsd !== null && item.estimatedCostUsd !== undefined) {
     return {
       ...item,
@@ -4805,6 +4826,7 @@ function schedulePricingRefresh() {
 async function refreshPricing({ renderOnComplete = false } = {}) {
   if (!latestConfig?.apiBaseUrl) {
     serverPriceMap = null;
+    resetPriceMapCaches();
     pricingSource = t("desktop.renderer.serverPricingUnavailable");
     await syncTrayCostState();
     if (renderOnComplete) renderInstantPreferenceViews();
@@ -4817,9 +4839,11 @@ async function refreshPricing({ renderOnComplete = false } = {}) {
       Object.fromEntries((data?.openrouter || []).map((item) => [item.model, item])),
       Object.fromEntries((data?.aliases || []).map((item) => [item.model, item.targetModel]))
     );
+    resetPriceMapCaches();
     pricingSource = data?.remote?.status ? t("desktop.renderer.serverPricingDetail", { status: data.remote.status }) : t("desktop.renderer.serverPricing");
   } catch (error) {
     serverPriceMap = null;
+    resetPriceMapCaches();
     pricingSource = t("desktop.renderer.serverPricingError", { error: error.message });
   } finally {
     await syncTrayCostState();
@@ -5801,7 +5825,19 @@ async function refreshModulesPanel() {
   // cards. Do not put an up-to-eight-second network request before mounting.
   renderModuleCards();
   updateModuleCardStates();
-  try { await refreshRemoteCatalog(); } catch { modulesHost.online = { loaded: true, noBase: false, failed: true, byId: {} }; }
+  // Catalog fetch is TTL-gated: every screen entry used to hit the network
+  // (up to 8s timeout) even seconds after the last visit. A failed fetch is
+  // NOT cached — the next entry retries it.
+  const catalogFresh = modulesHost.online.loaded
+    && !modulesHost.online.failed
+    && !modulesHost.online.noBase
+    && Date.now() - (modulesHost.online.fetchedAt || 0) < MODULES_CATALOG_TTL_MS;
+  if (!catalogFresh) {
+    try {
+      await refreshRemoteCatalog();
+      modulesHost.online.fetchedAt = Date.now();
+    } catch { modulesHost.online = { loaded: true, noBase: false, failed: true, byId: {} }; }
+  }
   refreshCatalogDependentCards();
   renderOnlinePane();
 }

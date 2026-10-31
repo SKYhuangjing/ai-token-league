@@ -24,6 +24,13 @@
     startUsageSyncCount: 0,
     checkUpdateCount: 0,
     lastStartUsageScanArgs: null,
+    // Per-range usage-query fetch counters: e2e asserts the renderer's
+    // per-entry generation cache (pure range switches must not refetch;
+    // a fresh snapshot must invalidate every range entry).
+    usageQueryCounts: { summary: {}, trend: {}, workdirs: {} },
+    resetUsageQueryCounts() {
+      window.__ATL_E2E_STATE__.usageQueryCounts = { summary: {}, trend: {}, workdirs: {} };
+    },
   });
 
   // Use LOCAL dates (same as renderer's localDay()) to avoid timezone mismatch.
@@ -518,17 +525,23 @@
 
     api.usageSummary = (args) => {
       const range = args?.range || "today";
+      const counts = window.__ATL_E2E_STATE__.usageQueryCounts;
+      counts.summary[range] = (counts.summary[range] || 0) + 1;
       return Promise.resolve(makeSummary(range, range === "today" ? today : range === "all" ? "" : yesterday, today));
     };
 
     api.usageTrend = (args) => {
       const range = args?.range || "today";
       const grain = range === "today" ? "hour" : "day";
+      const counts = window.__ATL_E2E_STATE__.usageQueryCounts;
+      counts.trend[`${range}|${grain}`] = (counts.trend[`${range}|${grain}`] || 0) + 1;
       return Promise.resolve(makeTrend(range, grain));
     };
 
     api.usageWorkdirs = (args) => {
       const range = args?.range || "today";
+      const counts = window.__ATL_E2E_STATE__.usageQueryCounts;
+      counts.workdirs[range] = (counts.workdirs[range] || 0) + 1;
       return Promise.resolve(makeWorkdirs(range));
     };
 

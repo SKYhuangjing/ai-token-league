@@ -1133,10 +1133,13 @@ async fn background_status(background: State<'_, BackgroundState>) -> Result<Val
 
 async fn run_sidecar_refresh(app: &AppHandle, sync_to_cloud: bool) -> Result<Value, String> {
     let sidecar = app.state::<SidecarState>();
+    // force=false lets the tick reuse a scan less than 5 minutes old
+    // (manual refresh, another tick) via the sidecar's cache fast path
+    // instead of always rerunning the full pipeline; older data still scans.
     let mut status = call_sidecar(
         &sidecar,
         "usage:scan-start",
-        json!({"force": true, "syncAfter": sync_to_cloud}),
+        json!({"force": false, "syncAfter": sync_to_cloud}),
     )
     .await?;
     for _ in 0..600 {
@@ -1183,6 +1186,46 @@ fn background_refresh_payload<'a>(status: &'a Value, mode: &str) -> &'a Value {
             .filter(|value| !value.is_null())
             .unwrap_or(status)
     }
+}
+
+/// Self-heal a stale "unreachable" API connection state. The service often
+/// lives behind a VPN that comes and goes, and the cached health result is
+/// only written once — a failure taken while offline would otherwise stick
+/// (cloud banner plus gated foreground sync) until a manual recheck. One
+/// live probe per background tick, only while the cached status is not
+/// reachable. Runs on the host tick so it also works tray-only (hidden
+/// window), independent of webview throttling.
+async fn heal_stale_api_connection(app: &AppHandle, config: &Value) {
+    let base = config
+        .get("apiBaseUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if base.is_empty() {
+        return;
+    }
+    let cached_status = config
+        .pointer("/apiConnection/status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if cached_status == "reachable" {
+        return;
+    }
+    let sidecar = app.state::<SidecarState>();
+    let Ok(result) = call_sidecar(&sidecar, "api:check", json!({ "apiBaseUrl": base })).await
+    else {
+        return;
+    };
+    if result.get("status").and_then(|v| v.as_str()) != Some("reachable") {
+        return;
+    }
+    let _ = call_sidecar(
+        &sidecar,
+        "config:update",
+        json!({ "apiBaseUrl": base, "apiConnection": result }),
+    )
+    .await;
 }
 
 fn background_refresh_count(payload: &Value) -> u64 {
@@ -1309,6 +1352,10 @@ fn start_background_refresh(app: AppHandle, background: BackgroundState) {
                     let _ = app.emit("tray:refresh-failed", json!(null));
                 }
             }
+            // Heal after the tick (success or failure): a reachable result
+            // also unblocks the next tick's sync and the UI banner via the
+            // renderer's config reloads.
+            heal_stale_api_connection(&app, config.as_ref().unwrap_or(&Value::Null)).await;
             next_run_at = Some(unix_now_secs().saturating_add(refresh_secs));
         }
     });
