@@ -3,15 +3,46 @@ use serde_json::{json, Map, Value};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 const DEFAULT_RUNTIME_LOG_RETENTION_DAYS: u64 = 3;
 const REDACTED: &str = "[redacted]";
 const PATH_REDACTED: &str = "[path-redacted]";
 
-pub fn append_runtime_event(source: &str, event: &str, level: &str, data: Value) {
-    config::ensure_app_dir();
+/// Day-level guard for log retention work. Pruning re-reads and rewrites the
+/// current-day log file, so running it on every append made each sidecar
+/// command slower as the day's log grew (quadratic write amplification).
+/// Retention is day-granular anyway: once per UTC day (plus the first append
+/// of each process) is enough.
+static LAST_PRUNE_DAY: Mutex<Option<chrono::NaiveDate>> = Mutex::new(None);
+
+fn prune_runtime_log_if_due() {
+    let today = chrono::Utc::now().date_naive();
+    // Hold the guard across the prune so concurrent appends cannot run
+    // overlapping read-modify-write passes on the same file.
+    let mut last = LAST_PRUNE_DAY.lock().unwrap_or_else(|e| e.into_inner());
+    if *last == Some(today) {
+        return;
+    }
     migrate_legacy_runtime_log();
     prune_runtime_log_by_days(runtime_log_retention_days());
+    *last = Some(today);
+}
+
+/// Unconditional prune for the (rare) diagnostics read paths, which the
+/// retention tests also rely on. The per-day gate only covers the hot
+/// append path.
+fn prune_runtime_log_now() {
+    let today = chrono::Utc::now().date_naive();
+    let mut last = LAST_PRUNE_DAY.lock().unwrap_or_else(|e| e.into_inner());
+    migrate_legacy_runtime_log();
+    prune_runtime_log_by_days(runtime_log_retention_days());
+    *last = Some(today);
+}
+
+pub fn append_runtime_event(source: &str, event: &str, level: &str, data: Value) {
+    config::ensure_app_dir();
+    prune_runtime_log_if_due();
     let entry = json!({
         "ts": now_iso(),
         "level": normalize_level(level),
@@ -27,8 +58,7 @@ pub fn append_runtime_event(source: &str, event: &str, level: &str, data: Value)
 }
 
 pub fn read_recent_runtime_events(limit: usize) -> Vec<Value> {
-    migrate_legacy_runtime_log();
-    prune_runtime_log_by_days(runtime_log_retention_days());
+    prune_runtime_log_now();
     let mut rows = runtime_log_files()
         .into_iter()
         .filter_map(|path| fs::read_to_string(path).ok())
@@ -53,8 +83,7 @@ pub fn read_recent_runtime_events(limit: usize) -> Vec<Value> {
 
 pub fn runtime_log_summary() -> Value {
     let retention_days = runtime_log_retention_days();
-    migrate_legacy_runtime_log();
-    prune_runtime_log_by_days(retention_days);
+    prune_runtime_log_now();
     let files = runtime_log_files();
     let size_bytes = files
         .iter()
