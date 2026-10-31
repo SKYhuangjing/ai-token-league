@@ -11,78 +11,137 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 const USAGE_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 
-pub async fn run() -> Result<(), String> {
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-    let mut runtime = SidecarRuntime::default();
+/// Commands that read-modify-write shared local state (config.json,
+/// modules.json, backups, local data). The old sequential command loop
+/// serialized these implicitly; with concurrent dispatch they take
+/// `state_lock` so two mutating commands cannot interleave their
+/// load-modify-save cycles.
+const STATE_LOCKED_COMMANDS: &[&str] = &[
+    "config:get", // ensure_config_with_api_connection may persist api_connection
+    "config:init",
+    "config:update",
+    "config:remove-provider-root",
+    "config:ignore-auto-source",
+    "config:unignore-auto-source",
+    "config:import:apply",
+    "identity:import:apply",
+    "providers:add-root",
+    "workdirs:set-alias",
+    "cursor:add-token",
+    "cursor:remove-token",
+    "cursor:connect:poll",
+    "cursor:disconnect",
+    "modules:set",
+    "modules:package-put",
+    "modules:package-delete",
+    "app:reset-local-data",
+    "app:reset-with-cloud",
+    "local-backup:create",
+    "local-backup:restore-apply",
+    "local-backup:clear",
+    "local-backup:run-due-auto",
+];
 
-    let reader = stdin.lock();
-    for line in reader.lines() {
-        let line = line.map_err(|e| format!("stdin read error: {}", e))?;
+pub async fn run() -> Result<(), String> {
+    let runtime = Arc::new(SidecarRuntime::default());
+
+    // Each request is handled in its own task; responses funnel through one
+    // writer so stdout stays line-atomic. The host matches responses by
+    // request id (not order), so a slow network command (tray identity,
+    // pricing, plugin quota) can no longer stall UI queries queued behind it.
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let writer = tokio::spawn(async move {
+        while let Some(line) = response_rx.recv().await {
+            let mut stdout = std::io::stdout();
+            let _ = writeln!(stdout, "{}", line);
+            let _ = stdout.flush();
+        }
+    });
+
+    // stdin reads are blocking — park them on a blocking thread.
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let reader = tokio::task::spawn_blocking(move || {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            match line {
+                Ok(line) => {
+                    if line_tx.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    while let Some(line) = line_rx.recv().await {
         if line.trim().is_empty() {
             continue;
         }
-
         let request: SidecarRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(_) => continue,
         };
 
-        let id = request.id.clone();
-        let command_name = request.command.clone();
-        let args_summary =
-            collector_core::observability::summarize_command_args(&command_name, &request.args);
-        let started = std::time::Instant::now();
-        if command_name != "runtime:log"
-            && command_name != "ping"
-            && command_name != "diagnostics:status"
-            && command_name != "diagnostics:clear-runtime-log"
-        {
-            collector_core::observability::append_runtime_event(
-                "sidecar",
-                "command_start",
-                "info",
-                serde_json::json!({
-                    "command": command_name.clone(),
-                    "args": args_summary
-                }),
+        let runtime = Arc::clone(&runtime);
+        let response_tx = response_tx.clone();
+        tokio::spawn(async move {
+            let id = request.id.clone();
+            let command_name = request.command.clone();
+            let args_summary = collector_core::observability::summarize_command_args(
+                &command_name,
+                &request.args,
             );
-        }
-        let result = handle_command(request, &mut runtime).await;
-        if command_name != "runtime:log"
-            && command_name != "ping"
-            && command_name != "diagnostics:status"
-            && command_name != "diagnostics:clear-runtime-log"
-        {
-            collector_core::observability::append_runtime_event(
-                "sidecar",
-                if result.is_ok() {
-                    "command_end"
-                } else {
-                    "command_error"
-                },
-                if result.is_ok() { "info" } else { "error" },
-                serde_json::json!({
-                    "command": command_name.clone(),
-                    "durationMs": started.elapsed().as_millis() as u64,
-                    "result": collector_core::observability::summarize_command_result(&command_name, &result)
-                }),
+            let should_log = !matches!(
+                command_name.as_str(),
+                "runtime:log" | "ping" | "diagnostics:status" | "diagnostics:clear-runtime-log"
             );
-        }
-        let response = match result {
-            Ok(data) => SidecarResponse::ok(id, data),
-            Err(e) => SidecarResponse::error(id, e),
-        };
-
-        let out = serde_json::to_string(&response).unwrap_or_default();
-        let _ = writeln!(stdout, "{}", out);
-        let _ = stdout.flush();
+            let started = std::time::Instant::now();
+            if should_log {
+                collector_core::observability::append_runtime_event(
+                    "sidecar",
+                    "command_start",
+                    "info",
+                    serde_json::json!({
+                        "command": command_name.clone(),
+                        "args": args_summary
+                    }),
+                );
+            }
+            let result = handle_command(request, &runtime).await;
+            if should_log {
+                collector_core::observability::append_runtime_event(
+                    "sidecar",
+                    if result.is_ok() {
+                        "command_end"
+                    } else {
+                        "command_error"
+                    },
+                    if result.is_ok() { "info" } else { "error" },
+                    serde_json::json!({
+                        "command": command_name.clone(),
+                        "durationMs": started.elapsed().as_millis() as u64,
+                        "result": collector_core::observability::summarize_command_result(&command_name, &result)
+                    }),
+                );
+            }
+            let response = match result {
+                Ok(data) => SidecarResponse::ok(id, data),
+                Err(e) => SidecarResponse::error(id, e),
+            };
+            let out = serde_json::to_string(&response).unwrap_or_default();
+            let _ = response_tx.send(out);
+        });
     }
 
+    drop(response_tx);
+    let _ = writer.await;
+    let _ = reader.await;
     Ok(())
 }
 
@@ -98,9 +157,27 @@ struct SidecarRuntime {
     sync_running: Arc<Mutex<bool>>,
     full_reconcile_running: Arc<Mutex<bool>>,
     worker_lock: Arc<tokio::sync::Mutex<()>>,
-    next_scan_task_id: u64,
-    tray_estimated_cost_usd: Option<f64>,
-    pending_cursor_connect: Option<PendingCursorConnect>,
+    /// Serializes commands in `STATE_LOCKED_COMMANDS` (shared-state
+    /// read-modify-write cycles that the old sequential loop ordered).
+    state_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes full snapshot builds so concurrent scan/sync triggers
+    /// cannot run duplicate full scans or write the SQLite store in
+    /// parallel. Never held while waiting for `worker_lock`.
+    scan_lock: Arc<tokio::sync::Mutex<()>>,
+    next_scan_task_id: AtomicU64,
+    tray_estimated_cost_usd: Mutex<Option<f64>>,
+    pending_cursor_connect: Mutex<Option<PendingCursorConnect>>,
+    /// In-memory mirror of usage-cache.json: (file mtime, parsed snapshot).
+    /// Lets tray menu builds skip re-parsing the multi-MB cache file.
+    usage_cache_memory: Arc<Mutex<Option<(std::time::SystemTime, serde_json::Value)>>>,
+    /// Cached /api/board/my-identity result: (payload, fetched_at_ms, key)
+    /// where key binds the cache to one apiBaseUrl+participantId. Tray menu
+    /// builds use the cached value; expiry refreshes in the background
+    /// (stale-while-revalidate) instead of blocking the menu.
+    identity_cache: Arc<Mutex<Option<(serde_json::Value, i64, String)>>>,
+    /// Reused store connection for usage queries (summary/trend/workdirs),
+    /// so each query skips the per-call open + schema DDL + meta write.
+    query_store: Arc<Mutex<Option<collector_core::local_usage_store::LocalUsageStore>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -130,8 +207,13 @@ fn package_arg(args: &serde_json::Value, key: &str) -> Result<String, String> {
 
 async fn handle_command(
     request: SidecarRequest,
-    runtime: &mut SidecarRuntime,
+    runtime: &SidecarRuntime,
 ) -> Result<serde_json::Value, String> {
+    let _state_guard = if STATE_LOCKED_COMMANDS.contains(&request.command.as_str()) {
+        Some(runtime.state_lock.lock().await)
+    } else {
+        None
+    };
     let command = match Command::from_str(&request.command) {
         Some(command) => command,
         None => {
@@ -270,29 +352,30 @@ async fn handle_command(
         Command::UsageScan => {
             let cfg = config::ensure_desktop_config();
             let force = request.args["force"].as_bool().unwrap_or(false);
+            let _scan_guard = runtime.scan_lock.lock().await;
             usage_snapshot(&cfg, force).await
         }
-        Command::UsageSummary => local_usage_query(|store| {
+        Command::UsageSummary => local_usage_query(&runtime.query_store, |store| {
             let range = arg_str(&request.args, "range", "today");
             store.summary(&range, &UsageFilters::default())
         }),
-        Command::UsageTrend => local_usage_query(|store| {
+        Command::UsageTrend => local_usage_query(&runtime.query_store, |store| {
             let range = arg_str(&request.args, "range", "today");
             let grain = arg_str(&request.args, "grain", "day");
             store.trend(&range, &grain, &UsageFilters::default())
         }),
-        Command::UsageWorkdirs => local_usage_query(|store| {
+        Command::UsageWorkdirs => local_usage_query(&runtime.query_store, |store| {
             let range = arg_str(&request.args, "range", "today");
             let limit = arg_i64(&request.args, "limit", 100);
             store.workdirs(&range, limit, &UsageFilters::default())
         }),
-        Command::UsageDetailPage => local_usage_query(|store| {
+        Command::UsageDetailPage => local_usage_query(&runtime.query_store, |store| {
             let range = arg_str(&request.args, "range", "today");
             let page = arg_i64(&request.args, "page", 1).max(1);
             let page_size = arg_i64(&request.args, "pageSize", 100).clamp(1, 500);
             store.detail_window(&range, (page - 1) * page_size, page_size, &UsageFilters::default())
         }),
-        Command::UsageDetailWindow => local_usage_query(|store| {
+        Command::UsageDetailWindow => local_usage_query(&runtime.query_store, |store| {
             let range = arg_str(&request.args, "range", "today");
             let offset = arg_i64(&request.args, "offset", 0);
             let limit = arg_i64(&request.args, "limit", 100);
@@ -303,7 +386,10 @@ async fn handle_command(
             if cfg.api_base_url.is_empty() {
                 return Err("API base URL not configured".to_string());
             }
-            let snapshot = usage_snapshot(&cfg, false).await?;
+            let snapshot = {
+                let _scan_guard = runtime.scan_lock.lock().await;
+                usage_snapshot(&cfg, false).await?
+            };
             let _worker_guard = runtime.worker_lock.lock().await;
             let sync_result = sync_snapshot(&cfg, &snapshot).await?;
             trigger_full_reconcile_if_pending(
@@ -339,8 +425,8 @@ async fn handle_command(
             if cfg.api_base_url.is_empty() {
                 return Err("API base URL not configured".to_string());
             }
-            runtime.next_scan_task_id = runtime.next_scan_task_id.saturating_add(1);
-            let task_id = runtime.next_scan_task_id;
+            runtime.next_scan_task_id.fetch_add(1, Ordering::Relaxed);
+            let task_id = runtime.next_scan_task_id.load(Ordering::Relaxed);
             let started_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let status = serde_json::json!({
@@ -363,8 +449,12 @@ async fn handle_command(
             let reconcile_running = Arc::clone(&runtime.full_reconcile_running);
             let worker_lock = Arc::clone(&runtime.worker_lock);
             let sync_running = Arc::clone(&runtime.sync_running);
+            let scan_lock = Arc::clone(&runtime.scan_lock);
             tokio::spawn(async move {
-                let snapshot_result = usage_snapshot(&cfg, false).await;
+                let snapshot_result = {
+                    let _scan_guard = scan_lock.lock().await;
+                    usage_snapshot(&cfg, false).await
+                };
                 let finished_at =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                 let finished_status = match snapshot_result {
@@ -468,7 +558,7 @@ async fn handle_command(
         Command::TrayMenuData => {
             let cfg = config::load_config();
             let base = if let Some(c) = cfg.as_ref() {
-                let cached = read_usage_cache();
+                let cached = read_usage_cache_memory(&runtime.usage_cache_memory);
                 let items = cached
                     .as_ref()
                     .and_then(|value| value.get("items").and_then(|v| v.as_array()).cloned())
@@ -476,12 +566,13 @@ async fn handle_command(
                 let scanned_at = cached
                     .as_ref()
                     .and_then(|value| value.get("scannedAt").and_then(|v| v.as_str()));
-                let identity = if !c.api_base_url.is_empty() && !c.participant_id.is_empty() {
-                    my_identity().await.ok()
-                } else {
-                    None
-                };
-                build_tray_menu_data(c, &items, scanned_at, runtime.tray_estimated_cost_usd, identity.as_ref())
+                let identity = tray_identity(&runtime.identity_cache, c).await;
+                let tray_estimated_cost = runtime
+                    .tray_estimated_cost_usd
+                    .lock()
+                    .ok()
+                    .and_then(|guard| *guard);
+                build_tray_menu_data(c, &items, scanned_at, tray_estimated_cost, identity.as_ref())
             } else {
                 build_tray_menu_data_without_config()
             };
@@ -544,11 +635,14 @@ async fn handle_command(
             Ok(json!({ "alerts": alerts_out, "items": items }))
         }
         Command::TrayCostState => {
-            runtime.tray_estimated_cost_usd = request
+            let next = request
                 .args
                 .get("estimatedCostUsd")
                 .and_then(|value| value.as_f64())
                 .filter(|value| value.is_finite() && *value >= 0.0);
+            if let Ok(mut guard) = runtime.tray_estimated_cost_usd.lock() {
+                *guard = next;
+            }
             Ok(serde_json::json!({"ok": true}))
         }
         Command::BackgroundStatus => Ok(serde_json::json!({
@@ -619,6 +713,15 @@ async fn handle_command(
             {
                 return Err("Wait for scan, sync, and reconcile to finish before restoring data".to_string());
             }
+            // The restore rewrites the local usage DB. Hold scan_lock so it
+            // cannot interleave with a concurrently dispatched usage:scan /
+            // usage:sync (the old sequential loop ordered these for free),
+            // and drop the reused query connection so the next query
+            // reopens the new file.
+            let _scan_guard = runtime.scan_lock.lock().await;
+            if let Ok(mut guard) = runtime.query_store.lock() {
+                *guard = None;
+            }
             let result = collector_core::local_backup::restore_local_backup(request.args)?;
             let cfg = config::ensure_desktop_config();
             if !cfg.api_base_url.trim().is_empty() {
@@ -656,15 +759,21 @@ async fn handle_command(
                 uuid, challenge
             );
             let expires_at = chrono::Utc::now().timestamp() + 300;
-            runtime.pending_cursor_connect = Some(PendingCursorConnect {
-                uuid,
-                code_verifier,
-                expires_at,
-            });
+            if let Ok(mut guard) = runtime.pending_cursor_connect.lock() {
+                *guard = Some(PendingCursorConnect {
+                    uuid,
+                    code_verifier,
+                    expires_at,
+                });
+            }
             Ok(serde_json::json!({"loginUrl": login_url, "expiresIn": 300}))
         }
         Command::CursorConnectPoll => {
-            let pending = runtime.pending_cursor_connect.take();
+            let pending = runtime
+                .pending_cursor_connect
+                .lock()
+                .ok()
+                .and_then(|mut guard| guard.take());
             match pending {
                 None => Err("no pending connect".to_string()),
                 Some(p) => {
@@ -730,9 +839,18 @@ async fn handle_command(
                             Ok(sanitize_config_value(&next))
                         }
                         Err(e) => {
-                            // Put pending back if still pending (404)
+                            // Put pending back if still pending (404). Only
+                            // into an EMPTY slot: the await above released
+                            // the mutex, and cursor:connect:start may have
+                            // stored a newer flow meanwhile — restoring
+                            // unconditionally would clobber it and silently
+                            // poll a dead uuid for the rest of its TTL.
                             if e.contains("pending") || e.contains("404") {
-                                runtime.pending_cursor_connect = Some(p);
+                                if let Ok(mut guard) = runtime.pending_cursor_connect.lock() {
+                                    if guard.is_none() {
+                                        *guard = Some(p);
+                                    }
+                                }
                                 Err("pending".to_string())
                             } else {
                                 Err(e)
@@ -743,7 +861,9 @@ async fn handle_command(
             }
         }
         Command::CursorConnectCancel => {
-            runtime.pending_cursor_connect = None;
+            if let Ok(mut guard) = runtime.pending_cursor_connect.lock() {
+                *guard = None;
+            }
             Ok(serde_json::json!({"cancelled": true}))
         }
         Command::CursorDisconnect => {
@@ -861,6 +981,14 @@ async fn handle_command(
             Ok(serde_json::json!({"mandatory": false, "compatible": true, "status": "compatible"}))
         }
         Command::AppResetLocalData => {
+            // reset deletes the usage DB file; hold scan_lock so a
+            // concurrently dispatched scan cannot resurrect data mid-wipe
+            // (trailing write_usage_cache), and drop the reused query
+            // connection so it must not keep serving the unlinked inode.
+            let _scan_guard = runtime.scan_lock.lock().await;
+            if let Ok(mut guard) = runtime.query_store.lock() {
+                *guard = None;
+            }
             config::reset_local_data();
             Ok(serde_json::json!({"ok": true}))
         }
@@ -896,6 +1024,10 @@ async fn handle_command(
             if !resp.status().is_success() {
                 return Err(format!("Cloud delete failed: {}", resp.status()));
             }
+            let _scan_guard = runtime.scan_lock.lock().await;
+            if let Ok(mut guard) = runtime.query_store.lock() {
+                *guard = None;
+            }
             config::reset_local_data();
             Ok(serde_json::json!({"ok": true}))
         }
@@ -927,8 +1059,8 @@ async fn handle_command(
             }
 
             let cfg = config::ensure_desktop_config();
-            runtime.next_scan_task_id = runtime.next_scan_task_id.saturating_add(1);
-            let task_id = runtime.next_scan_task_id;
+            runtime.next_scan_task_id.fetch_add(1, Ordering::Relaxed);
+            let task_id = runtime.next_scan_task_id.load(Ordering::Relaxed);
             let started_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let status = serde_json::json!({
@@ -949,8 +1081,12 @@ async fn handle_command(
             let reconcile_running = Arc::clone(&runtime.full_reconcile_running);
             let worker_lock = Arc::clone(&runtime.worker_lock);
             let sync_running = Arc::clone(&runtime.sync_running);
+            let scan_lock = Arc::clone(&runtime.scan_lock);
             tokio::spawn(async move {
-                let result = usage_snapshot(&cfg, force).await;
+                let result = {
+                    let _scan_guard = scan_lock.lock().await;
+                    usage_snapshot(&cfg, force).await
+                };
                 let finished_at =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                 let finished_status = match result {
@@ -1378,16 +1514,55 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
         let source_cache = read_source_index_cache();
         scanner::scan_usage_async(cfg, source_cache).await
     };
-    let previous_items = if let Some(store) = local_store.as_ref() {
-        store.all_usage_items().unwrap_or_default()
-    } else {
-        read_usage_cache()
-            .and_then(|snapshot| snapshot.get("items").and_then(|v| v.as_array()).cloned())
-            .unwrap_or_default()
+    // Scopes whose source fingerprints are new since the last merged scan.
+    // None => not safe to incrementalize (legacy store / first stamped
+    // merge): rewrite every scope, exactly like the previous full merge.
+    let dirty_scopes = match local_store.as_ref() {
+        Some(store) => Some(store.dirty_scopes_for_scan(&result.source_index)?),
+        None => None,
     };
     let mut provider_errors = result.provider_errors.clone();
-    preserve_providers_with_missing_rows(&result.items, &previous_items, cfg, &mut provider_errors);
-    let items = merge_failed_provider_items(result.items, previous_items, &provider_errors);
+    let previous_failed_items: Vec<serde_json::Value>;
+    if let Some(store) = local_store.as_ref() {
+        // Cheap provider counts replace the full-ledger read this path used
+        // to do on every scan; failed-provider history is fetched only when
+        // some provider actually failed.
+        let previous_provider_counts = store.provider_row_counts()?;
+        preserve_providers_with_missing_rows(
+            &result.items,
+            &previous_provider_counts,
+            cfg,
+            &mut provider_errors,
+        );
+        let failed: HashSet<String> = provider_errors.keys().cloned().collect();
+        previous_failed_items = store.usage_items_for_providers(&failed)?;
+    } else {
+        let previous_items = read_usage_cache()
+            .and_then(|snapshot| snapshot.get("items").and_then(|v| v.as_array()).cloned())
+            .unwrap_or_default();
+        let mut previous_provider_counts: HashMap<String, i64> = HashMap::new();
+        for item in &previous_items {
+            if let Some(provider_id) = item.get("providerId").and_then(|v| v.as_str()) {
+                *previous_provider_counts.entry(provider_id.to_string()).or_insert(0) += 1;
+            }
+        }
+        preserve_providers_with_missing_rows(
+            &result.items,
+            &previous_provider_counts,
+            cfg,
+            &mut provider_errors,
+        );
+        previous_failed_items = previous_items
+            .into_iter()
+            .filter(|item| {
+                item.get("providerId")
+                    .and_then(|value| value.as_str())
+                    .map(|provider_id| provider_errors.contains_key(provider_id))
+                    .unwrap_or(false)
+            })
+            .collect();
+    }
+    let items = merge_failed_provider_items(result.items, previous_failed_items, &provider_errors);
     let mut snapshot = build_usage_snapshot(items, result.health, provider_errors.clone(), false, cfg);
     if let Some(store) = local_store.as_mut() {
         let scanned_at = snapshot
@@ -1399,11 +1574,18 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        store.replace_source_cache(&result.source_index, scanned_at)?;
-        store.merge_non_zcode_facts(&items, scanned_at)?;
+        // Merge BEFORE refreshing the source cache: the cache write stamps
+        // "these fingerprints were merged", so a crash between the two can
+        // never leave the cache ahead of the ledger.
+        match dirty_scopes.as_ref().and_then(|scopes| scopes.as_ref()) {
+            Some(dirty) => store.merge_non_zcode_facts_scoped(&items, dirty, scanned_at)?,
+            None => store.merge_non_zcode_facts(&items, scanned_at)?,
+        }
         if !provider_errors.contains_key("zcode_local") && !result.zcode_requests.is_empty() {
             store.ingest_zcode_requests(&result.zcode_requests, scanned_at)?;
         }
+        store.replace_source_cache(&result.source_index, scanned_at)?;
+        store.mark_incremental_merge_ready()?;
         // The ledger is the sole source for rendering and sync. A scan is
         // merely an observation and may omit history retained locally.
         let ledger_items = store.all_usage_items()?;
@@ -1418,12 +1600,26 @@ async fn usage_snapshot(cfg: &config::AppConfig, force: bool) -> Result<serde_js
 }
 
 fn local_usage_query(
+    slot: &Arc<Mutex<Option<collector_core::local_usage_store::LocalUsageStore>>>,
     query: impl FnOnce(
         &collector_core::local_usage_store::LocalUsageStore,
     ) -> Result<serde_json::Value, String>,
 ) -> Result<serde_json::Value, String> {
+    // Reuse one long-lived connection: every query used to reopen the store
+    // (schema DDL + meta write per call — 5+ times per UI range switch).
+    if let Ok(guard) = slot.lock() {
+        if let Some(store) = guard.as_ref() {
+            return query(store);
+        }
+    }
     let store = collector_core::local_usage_store::LocalUsageStore::open_default()?;
-    query(&store)
+    let result = query(&store);
+    if result.is_ok() {
+        if let Ok(mut guard) = slot.lock() {
+            *guard = Some(store);
+        }
+    }
+    result
 }
 
 fn arg_str(args: &serde_json::Value, key: &str, default_value: &str) -> String {
@@ -1462,7 +1658,7 @@ fn merge_failed_provider_items(
 /// are excluded: disabling a source is a deliberate removal.
 fn preserve_providers_with_missing_rows(
     current_items: &[serde_json::Value],
-    previous_items: &[serde_json::Value],
+    previous_provider_counts: &HashMap<String, i64>,
     cfg: &config::AppConfig,
     provider_errors: &mut HashMap<String, String>,
 ) {
@@ -1470,9 +1666,9 @@ fn preserve_providers_with_missing_rows(
         .iter()
         .filter_map(|item| item.get("providerId").and_then(|v| v.as_str()))
         .collect();
-    let previous_providers: HashSet<&str> = previous_items
-        .iter()
-        .filter_map(|item| item.get("providerId").and_then(|v| v.as_str()))
+    let previous_providers: HashSet<&str> = previous_provider_counts
+        .keys()
+        .map(|id| id.as_str())
         .collect();
     for provider_id in previous_providers {
         if current_providers.contains(provider_id) || provider_errors.contains_key(provider_id) {
@@ -1545,6 +1741,82 @@ fn read_usage_cache() -> Option<serde_json::Value> {
     }
 }
 
+/// Parsed usage-cache.json behind an in-memory mirror keyed on the file's
+/// mtime. Tray menu builds (every scan completion + a 300s tick) re-parse
+/// the multi-MB cache only when the file actually changed (e.g. a CLI scan
+/// rewrote it); otherwise they reuse the already-parsed snapshot.
+fn read_usage_cache_memory(
+    memory: &Arc<Mutex<Option<(std::time::SystemTime, serde_json::Value)>>>,
+) -> Option<serde_json::Value> {
+    let path = config::usage_cache_path();
+    let mtime = fs::metadata(&path)
+        .ok()
+        .and_then(|meta| meta.modified().ok());
+    {
+        let guard = memory.lock().ok()?;
+        if let (Some(file_mtime), Some((seen_mtime, value))) = (mtime, guard.as_ref()) {
+            if seen_mtime == &file_mtime {
+                return Some(value.clone());
+            }
+        }
+    }
+    let parsed = read_usage_cache()?;
+    let mtime = mtime.or_else(|| {
+        fs::metadata(&path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+    });
+    if let Some(mtime) = mtime {
+        if let Ok(mut guard) = memory.lock() {
+            *guard = Some((mtime, parsed.clone()));
+        }
+    }
+    Some(parsed)
+}
+
+const TRAY_IDENTITY_TTL_MS: i64 = 10 * 60 * 1000;
+
+/// Tray identity with stale-while-revalidate caching. Building the tray
+/// menu used to block on /api/board/my-identity (measured avg ~700ms, worst
+/// 75s) on every rebuild. Cached value returns immediately; a stale entry
+/// refreshes in the background so the next rebuild picks it up.
+async fn tray_identity(
+    cache: &Arc<Mutex<Option<(serde_json::Value, i64, String)>>>,
+    cfg: &config::AppConfig,
+) -> Option<serde_json::Value> {
+    if cfg.api_base_url.is_empty() || cfg.participant_id.is_empty() {
+        return None;
+    }
+    let identity_key = format!("{}|{}", cfg.api_base_url, cfg.participant_id);
+    let now = now_millis();
+    let cached = cache.lock().ok().and_then(|guard| guard.clone());
+    match cached {
+        Some((value, fetched_at, key)) if key == identity_key => {
+            if now.saturating_sub(fetched_at) > TRAY_IDENTITY_TTL_MS {
+                let cache = Arc::clone(cache);
+                let key = identity_key.clone();
+                tokio::spawn(async move {
+                    if let Ok(next) = my_identity().await {
+                        if let Ok(mut guard) = cache.lock() {
+                            *guard = Some((next, now_millis(), key));
+                        }
+                    }
+                });
+            }
+            Some(value)
+        }
+        _ => {
+            // First build after startup (or identity key changed): the menu
+            // waits for one fetch, then stays cached.
+            let value = my_identity().await.ok()?;
+            if let Ok(mut guard) = cache.lock() {
+                *guard = Some((value.clone(), now, identity_key));
+            }
+            Some(value)
+        }
+    }
+}
+
 /// Providers whose last scan reported errors. Their server-only scopes must
 /// not be pruned by full reconcile: missing local rows mean the collector
 /// failed to re-read the data, not that the data stopped existing.
@@ -1569,7 +1841,9 @@ fn write_usage_cache(snapshot: &serde_json::Value) -> Result<(), String> {
     if let Some(obj) = light_snapshot.as_object_mut() {
         obj.remove("sourceIndex");
     }
-    let text = serde_json::to_string_pretty(&light_snapshot).map_err(|e| e.to_string())?;
+    // Compact JSON: the file is re-read by tray builds and cache-hit scans,
+    // and pretty-printing only inflated its size.
+    let text = serde_json::to_string(&light_snapshot).map_err(|e| e.to_string())?;
     fs::write(config::usage_cache_path(), format!("{}\n", text)).map_err(|e| e.to_string())
 }
 
@@ -2528,13 +2802,19 @@ mod tests {
     fn item(provider_id: &str) -> serde_json::Value {
         serde_json::json!({"providerId": provider_id, "day": "2026-08-27", "totalTokens": 1})
     }
+    fn provider_counts(provider_ids: &[&str]) -> HashMap<String, i64> {
+        provider_ids
+            .iter()
+            .map(|id| (id.to_string(), 1))
+            .collect()
+    }
 
     #[test]
     fn preserve_marks_enabled_provider_that_lost_all_rows() {
         let mut cfg = test_config();
         cfg.provider_enabled.insert("cursor_dashboard_usage".into(), true);
         let current = vec![item("codex_local")];
-        let previous = vec![item("cursor_dashboard_usage"), item("codex_local")];
+        let previous = provider_counts(&["cursor_dashboard_usage", "codex_local"]);
         let mut errors = HashMap::new();
         preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
         assert_eq!(errors.len(), 1);
@@ -2545,7 +2825,7 @@ mod tests {
     fn preserve_skips_provider_with_current_rows_or_existing_error() {
         let cfg = test_config();
         let current = vec![item("codex_local")];
-        let previous = vec![item("codex_local"), item("claude_code_local")];
+        let previous = provider_counts(&["codex_local", "claude_code_local"]);
         let mut errors = HashMap::new();
         errors.insert("claude_code_local".to_string(), "scan failed".to_string());
         preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
@@ -2559,7 +2839,7 @@ mod tests {
         // Cursor is opt-in: without an explicit true it never scans, so its
         // previous rows must not be preserved.
         let current: Vec<serde_json::Value> = vec![];
-        let previous = vec![item("cursor_dashboard_usage")];
+        let previous = provider_counts(&["cursor_dashboard_usage"]);
         let mut errors = HashMap::new();
         preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
         assert!(errors.is_empty(), "opt-in provider without enable must not be preserved");
@@ -2567,7 +2847,7 @@ mod tests {
         // Local providers are opt-out: explicit false means deliberate removal.
         cfg.provider_enabled.insert("cursor_dashboard_usage".into(), true);
         cfg.provider_enabled.insert("claude_code_local".into(), false);
-        let previous = vec![item("cursor_dashboard_usage"), item("claude_code_local")];
+        let previous = provider_counts(&["cursor_dashboard_usage", "claude_code_local"]);
         let mut errors = HashMap::new();
         preserve_providers_with_missing_rows(&current, &previous, &cfg, &mut errors);
         assert_eq!(errors.len(), 1);
@@ -2871,8 +3151,8 @@ mod tests {
                 "alias": "new-name"
             }),
         };
-        let mut runtime = SidecarRuntime::default();
-        let result = handle_command(request, &mut runtime).await.unwrap();
+        let runtime = SidecarRuntime::default();
+        let result = handle_command(request, &runtime).await.unwrap();
 
         assert_eq!(result["workdirAliases"]["workdir-hash"], "new-name");
         assert!(!config::usage_cache_path().exists());
@@ -2909,8 +3189,8 @@ mod tests {
                 }
             }),
         };
-        let mut runtime = SidecarRuntime::default();
-        let result = handle_command(request, &mut runtime).await.unwrap();
+        let runtime = SidecarRuntime::default();
+        let result = handle_command(request, &runtime).await.unwrap();
         let content = serde_json::to_string(&result).unwrap();
 
         assert_eq!(result["participantId"].as_str(), Some("p-imported"));

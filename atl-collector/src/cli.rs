@@ -315,11 +315,21 @@ async fn scan_and_persist(cfg: &AppConfig, full: bool) -> Result<(scanner::ScanR
     let mut persisted = false;
     if let Some(store) = store.as_mut() {
         let scanned_at = now_iso();
-        store.replace_source_cache(&result.source_index, &scanned_at)?;
-        store.merge_non_zcode_facts(&result.items, &scanned_at)?;
+        // Same incremental order as the desktop sidecar: merge first (scoped
+        // to changed-source scopes), then refresh the source cache, whose
+        // transaction stamps that these fingerprints were merged.
+        let dirty_scopes = store.dirty_scopes_for_scan(&result.source_index)?;
+        match dirty_scopes.as_ref() {
+            Some(dirty) => {
+                store.merge_non_zcode_facts_scoped(&result.items, dirty, &scanned_at)?
+            }
+            None => store.merge_non_zcode_facts(&result.items, &scanned_at)?,
+        }
         if !result.zcode_requests.is_empty() {
             store.ingest_zcode_requests(&result.zcode_requests, &scanned_at)?;
         }
+        store.replace_source_cache(&result.source_index, &scanned_at)?;
+        store.mark_incremental_merge_ready()?;
         persisted = true;
     }
     Ok((result, persisted))
