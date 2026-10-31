@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const DB_SCHEMA_VERSION: i64 = 1;
+const DB_SCHEMA_VERSION: i64 = 2;
 
 pub struct LocalUsageStore {
     conn: Connection,
@@ -21,7 +21,7 @@ impl LocalUsageStore {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
-        let store = Self { conn };
+        let mut store = Self { conn };
         store.init()?;
         Ok(store)
     }
@@ -42,7 +42,7 @@ impl LocalUsageStore {
         Ok(Self { conn })
     }
 
-    fn init(&self) -> Result<(), String> {
+    fn init(&mut self) -> Result<(), String> {
         self.conn
             .execute_batch(
                 r#"
@@ -97,8 +97,14 @@ impl LocalUsageStore {
 
                 -- ZCode removes individual requests from its source database.
                 -- These local-only facts survive that retention policy.
+                -- day/hour/requestHash exist so scans can skip unchanged
+                -- requests and recompute aggregates per (day, hour) scope
+                -- instead of rebuilding the whole ledger.
                 CREATE TABLE IF NOT EXISTS zcode_request_fact (
                   requestId TEXT PRIMARY KEY,
+                  day TEXT,
+                  hour INTEGER,
+                  requestHash TEXT,
                   itemJson TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS zcode_legacy_residual (
@@ -108,6 +114,7 @@ impl LocalUsageStore {
                 "#,
             )
             .map_err(|e| e.to_string())?;
+        self.migrate_zcode_request_columns()?;
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('schemaVersion', ?)",
@@ -115,6 +122,95 @@ impl LocalUsageStore {
             )
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// v1 → v2: add day/hour/requestHash to zcode_request_fact (existing
+    /// installs) and backfill them once from the stored itemJson.
+    fn migrate_zcode_request_columns(&mut self) -> Result<(), String> {
+        let mut has_day = false;
+        let mut has_hour = false;
+        let mut has_hash = false;
+        {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(zcode_request_fact)")
+                .map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let name: String = row.get(1).map_err(|e| e.to_string())?;
+                match name.as_str() {
+                    "day" => has_day = true,
+                    "hour" => has_hour = true,
+                    "requestHash" => has_hash = true,
+                    _ => {}
+                }
+            }
+        }
+        if !has_day {
+            self.conn
+                .execute("ALTER TABLE zcode_request_fact ADD COLUMN day TEXT", [])
+                .map_err(|e| e.to_string())?;
+        }
+        if !has_hour {
+            self.conn
+                .execute("ALTER TABLE zcode_request_fact ADD COLUMN hour INTEGER", [])
+                .map_err(|e| e.to_string())?;
+        }
+        if !has_hash {
+            self.conn
+                .execute(
+                    "ALTER TABLE zcode_request_fact ADD COLUMN requestHash TEXT",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        // Created here (not in the schema batch) so it also works on v1
+        // databases where the columns only exist after the ALTERs above.
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_zcode_request_scope
+                 ON zcode_request_fact(day, hour)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        if has_day && has_hour && has_hash {
+            return Ok(());
+        }
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT requestId, itemJson FROM zcode_request_fact
+                     WHERE day IS NULL OR hour IS NULL OR requestHash IS NULL",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?;
+            let pending = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+            drop(stmt);
+            let mut update = tx
+                .prepare(
+                    "UPDATE zcode_request_fact SET day = ?1, hour = ?2, requestHash = ?3
+                     WHERE requestId = ?4",
+                )
+                .map_err(|e| e.to_string())?;
+            for (id, text) in pending {
+                let Ok(item) = serde_json::from_str::<Value>(&text) else {
+                    continue;
+                };
+                let hash = crate::crypto::sha256_hex(&text);
+                update
+                    .execute(params![
+                        str_field(&item, "day"),
+                        i64_field(&item, "hour"),
+                        hash,
+                        id
+                    ])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
     }
 
     pub fn replace_source_cache(
@@ -141,6 +237,20 @@ impl LocalUsageStore {
             )
             .map_err(|e| e.to_string())?;
         }
+        // Skip fingerprints already stored: the scanner served those items
+        // from this very row (identical content), and rewriting every
+        // multi-KB blob on every scan dominated scan cost. scannedAt /
+        // lastSeenAt on kept rows stay at first-write values — nothing reads
+        // them for behavior.
+        let existing: std::collections::HashSet<String> = {
+            let mut stmt = tx
+                .prepare("SELECT fingerprint FROM source_cache")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|row| row.ok()).collect()
+        };
         {
             let mut stmt = tx
                 .prepare(
@@ -159,12 +269,84 @@ impl LocalUsageStore {
                 if fingerprint.trim().is_empty() {
                     continue;
                 }
+                if existing.contains(fingerprint) {
+                    continue;
+                }
                 let text = serde_json::to_string(items).map_err(|e| e.to_string())?;
                 stmt.execute(params![fingerprint, text, scanned_at, scanned_at])
                     .map_err(|e| e.to_string())?;
             }
         }
+        // Merge-completion stamp: its presence tells the next scan that the
+        // fingerprints currently in source_cache were fully merged into
+        // usage_fact, so unchanged scopes can be skipped safely. Set via
+        // `mark_incremental_merge_ready` AFTER a completed merge + cache
+        // write; a crash in between leaves it unset and the next scan falls
+        // back to one full merge. Stores written by older builds start
+        // unstamped for the same reason.
         tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Record that the current source_cache contents are fully merged (see
+    /// `replace_source_cache`). Callers must merge BEFORE refreshing the
+    /// cache and mark only after both succeeded.
+    pub fn mark_incremental_merge_ready(&mut self) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('incrementalMergeReady', '1')",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn source_cache_fingerprints(&self) -> Result<std::collections::HashSet<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT fingerprint FROM source_cache")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|row| row.ok()).collect())
+    }
+
+    /// Whether a previous scan completed a stamped merge (see
+    /// `replace_source_cache`). Until then, scans must treat every scope as
+    /// dirty.
+    pub fn incremental_merge_ready(&self) -> bool {
+        self.conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'incrementalMergeReady'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map(|value| value.is_some())
+            .unwrap_or(false)
+    }
+
+    /// (day, hour, providerId) scopes touched by sources whose fingerprint
+    /// is new since the last merged scan. `None` means "not safe to
+    /// incrementalize" — the caller must rewrite every scope.
+    pub fn dirty_scopes_for_scan(
+        &self,
+        source_index: &HashMap<String, Vec<Value>>,
+    ) -> Result<Option<std::collections::BTreeSet<UsageScope>>, String> {
+        if !self.incremental_merge_ready() {
+            return Ok(None);
+        }
+        let existing = self.source_cache_fingerprints()?;
+        let mut dirty = std::collections::BTreeSet::new();
+        for (fingerprint, items) in source_index {
+            if fingerprint.trim().is_empty() || existing.contains(fingerprint) {
+                continue;
+            }
+            for item in items {
+                dirty.insert(item_scope(item));
+            }
+        }
+        Ok(Some(dirty))
     }
 
     pub fn clear_source_cache(&mut self) -> Result<(), String> {
@@ -183,15 +365,23 @@ impl LocalUsageStore {
     /// is the durable ledger, so vanished-from-source must never mean
     /// vanished-from-local.
     pub fn merge_usage_facts(&mut self, items: &[Value], scanned_at: &str) -> Result<(), String> {
-        let mut scan_scopes: std::collections::BTreeSet<(String, i64, String)> =
-            std::collections::BTreeSet::new();
-        for item in items {
-            scan_scopes.insert((
-                str_field(item, "day"),
-                i64_field(item, "hour"),
-                str_field(item, "providerId"),
-            ));
-        }
+        let scopes = item_scopes(items);
+        self.merge_usage_facts_scoped(items, &scopes, scanned_at)
+    }
+
+    /// Incremental merge: rewrite only the (day, hour, providerId) scopes
+    /// whose sources changed since the last merged scan. Scopes that only
+    /// cache-hit sources contribute keep their existing rows — identical
+    /// content by the fingerprint invariant stamped in
+    /// `replace_source_cache`. Scopes absent from the scan stay preserved
+    /// exactly as in the full merge.
+    pub fn merge_usage_facts_scoped(
+        &mut self,
+        items: &[Value],
+        dirty_scopes: &std::collections::BTreeSet<UsageScope>,
+        scanned_at: &str,
+    ) -> Result<(), String> {
+        let scan_scopes = item_scopes(items);
 
         let preserved = self.preserved_scope_stats(&scan_scopes)?;
 
@@ -200,7 +390,7 @@ impl LocalUsageStore {
             let mut delete_stmt = tx
                 .prepare("DELETE FROM usage_fact WHERE day = ? AND hour = ? AND providerId = ?")
                 .map_err(|e| e.to_string())?;
-            for (day, hour, provider) in &scan_scopes {
+            for (day, hour, provider) in dirty_scopes {
                 delete_stmt
                     .execute(params![day, hour, provider])
                     .map_err(|e| e.to_string())?;
@@ -220,6 +410,9 @@ impl LocalUsageStore {
                 )
                 .map_err(|e| e.to_string())?;
             for item in items {
+                if !dirty_scopes.contains(&item_scope(item)) {
+                    continue;
+                }
                 stmt.execute(params![
                     usage_key(item),
                     str_field(item, "day"),
@@ -259,21 +452,187 @@ impl LocalUsageStore {
         self.merge_usage_facts(&non_zcode, scanned_at)
     }
 
+    /// Scoped variant of `merge_non_zcode_facts` — see
+    /// `merge_usage_facts_scoped`. ZCode scopes are filtered out of the
+    /// dirty set: they are owned by the request-ledger rebuild, and the
+    /// zcode source fingerprint is file-level (one changed day marks every
+    /// day of that source dirty), so deleting them here would erase history
+    /// that only a full ledger rebuild used to restore.
+    pub fn merge_non_zcode_facts_scoped(
+        &mut self,
+        items: &[Value],
+        dirty_scopes: &std::collections::BTreeSet<UsageScope>,
+        scanned_at: &str,
+    ) -> Result<(), String> {
+        let non_zcode_dirty = dirty_scopes
+            .iter()
+            .filter(|(_, _, provider)| provider != "zcode_local")
+            .cloned()
+            .collect::<std::collections::BTreeSet<UsageScope>>();
+        let non_zcode = items.iter().filter(|item| str_field(item, "providerId") != "zcode_local")
+            .cloned().collect::<Vec<_>>();
+        self.merge_usage_facts_scoped(&non_zcode, &non_zcode_dirty, scanned_at)
+    }
+
     /// Upsert observed requests without deleting requests absent from a scan.
     /// On the first run, split existing aggregate rows into live requests and
     /// a residual for requests already pruned from ZCode's database.
+    ///
+    /// After initialization this is incremental: requests whose content hash
+    /// is unchanged are skipped entirely, and only the (day, hour) scopes
+    /// touched by changed requests are recomputed in usage_fact. The full
+    /// ledger rebuild used to re-parse and re-insert every request row (tens
+    /// of thousands on long-lived installs) on every scan.
     pub fn ingest_zcode_requests(&mut self, requests: &[Value], scanned_at: &str) -> Result<(), String> {
         let initialized = self.conn.query_row(
             "SELECT value FROM meta WHERE key = 'zcodeRequestLedgerInitialized'", [],
             |row| row.get::<_, String>(0),
         ).optional().map_err(|e| e.to_string())?.is_some();
-        let old_rows = if initialized { Vec::new() } else {
-            self.all_usage_items()?.into_iter()
-                .filter(|item| str_field(item, "providerId") == "zcode_local")
-                .collect::<Vec<_>>()
+        if !initialized {
+            return self.ingest_zcode_requests_initial(requests, scanned_at);
+        }
+        let parsed = parse_zcode_requests(requests)?;
+        let existing: HashMap<String, String> = {
+            let mut stmt = self.conn
+                .prepare("SELECT requestId, requestHash FROM zcode_request_fact")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|row| row.ok())
+                .filter_map(|(id, hash)| hash.map(|hash| (id, hash)))
+                .collect()
         };
+        let changed: Vec<&ParsedZcodeRequest> = parsed
+            .iter()
+            .filter(|request| existing.get(&request.id) != Some(&request.hash))
+            .collect();
+        // Self-heal: request-ledger scopes that lost their usage_fact rows
+        // (interrupted or buggy run) recompute even when no request content
+        // changed. Computed before the early return so a quiet scan still
+        // repairs a damaged ledger.
+        let missing_scopes: std::collections::BTreeSet<(String, i64)> = {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT DISTINCT day, hour FROM zcode_request_fact
+                     EXCEPT
+                     SELECT day, hour FROM usage_fact WHERE providerId = 'zcode_local'",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|row| row.ok()).collect()
+        };
+        if changed.is_empty() && missing_scopes.is_empty() {
+            return Ok(());
+        }
+        // A retry can move a request across (day, hour) scopes (its winning
+        // attempt's started_at changed). Read each changed request's
+        // PREVIOUS scope before the upsert overwrites it — the old scope
+        // must recompute too, otherwise its tokens stay in the old hour
+        // bucket forever and the request double-counts. (The pre-incremental
+        // full rebuild recomputed every scope and never had this gap.)
+        let mut affected: std::collections::BTreeSet<(String, i64)> = missing_scopes;
+        if !changed.is_empty() {
+            let ids = changed.iter().map(|request| request.id.as_str()).collect::<Vec<_>>();
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let mut stmt = self
+                .conn
+                .prepare(&format!(
+                    "SELECT day, hour FROM zcode_request_fact
+                     WHERE day IS NOT NULL AND hour IS NOT NULL AND requestId IN ({placeholders})"
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let (day, hour) = row.map_err(|e| e.to_string())?;
+                affected.insert((day, hour));
+            }
+        }
+        for request in &changed {
+            affected.insert((request.day.clone(), request.hour));
+        }
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO zcode_request_fact (requestId, day, hour, requestHash, itemJson)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(requestId) DO UPDATE SET
+                       day = excluded.day,
+                       hour = excluded.hour,
+                       requestHash = excluded.requestHash,
+                       itemJson = excluded.itemJson",
+                )
+                .map_err(|e| e.to_string())?;
+            for request in &changed {
+                stmt.execute(params![request.id, request.day, request.hour, request.hash, request.json])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        // Residual rows are frozen after initialization; parse them (small)
+        // so affected scopes recompute with their contribution included.
+        let residual: Vec<Value> = {
+            let mut stmt = tx
+                .prepare("SELECT itemJson FROM zcode_legacy_residual")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|row| row.ok())
+                .filter_map(|text| serde_json::from_str(&text).ok())
+                .collect()
+        };
+        let mut affected: std::collections::BTreeSet<(String, i64)> = affected;
+        for (day, hour) in &affected {
+            let mut values: Vec<Value> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT itemJson FROM zcode_request_fact WHERE day = ?1 AND hour = ?2",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(params![day, hour], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                rows.filter_map(|row| row.ok())
+                    .filter_map(|text| serde_json::from_str(&text).ok())
+                    .collect()
+            };
+            values.extend(
+                residual
+                    .iter()
+                    .filter(|item| str_field(item, "day") == *day && i64_field(item, "hour") == *hour)
+                    .cloned(),
+            );
+            let aggregate = aggregate_local_items(values.iter());
+            tx.execute(
+                "DELETE FROM usage_fact WHERE providerId = 'zcode_local' AND day = ?1 AND hour = ?2",
+                params![day, hour],
+            )
+            .map_err(|e| e.to_string())?;
+            insert_usage_fact_aggregates(&tx, aggregate, scanned_at)?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    fn ingest_zcode_requests_initial(
+        &mut self,
+        requests: &[Value],
+        scanned_at: &str,
+    ) -> Result<(), String> {
+        let old_rows = self.all_usage_items()?.into_iter()
+            .filter(|item| str_field(item, "providerId") == "zcode_local")
+            .collect::<Vec<_>>();
         let live = aggregate_local_items(requests.iter());
-        if !initialized && !old_rows.is_empty() && !live.is_empty() {
+        if !old_rows.is_empty() && !live.is_empty() {
             let old_scopes = old_rows.iter().map(|item| (str_field(item, "day"), i64_field(item, "hour")))
                 .collect::<std::collections::HashSet<_>>();
             let overlap = requests.iter().filter(|item| old_scopes.contains(&(str_field(item, "day"), i64_field(item, "hour"))))
@@ -283,8 +642,9 @@ impl LocalUsageStore {
                 return Err("ZCode ledger migration rejected: source attribution does not match existing local data".to_string());
             }
         }
+        let parsed = parse_zcode_requests(requests)?;
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
-        if !initialized {
+        {
             let mut residual_stmt = tx.prepare(
                 "INSERT INTO zcode_legacy_residual (usageKey, itemJson) VALUES (?1, ?2)"
             ).map_err(|e| e.to_string())?;
@@ -313,15 +673,17 @@ impl LocalUsageStore {
         }
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO zcode_request_fact (requestId, itemJson) VALUES (?1, ?2)
-                 ON CONFLICT(requestId) DO UPDATE SET itemJson = excluded.itemJson"
+                "INSERT INTO zcode_request_fact (requestId, day, hour, requestHash, itemJson)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(requestId) DO UPDATE SET
+                   day = excluded.day,
+                   hour = excluded.hour,
+                   requestHash = excluded.requestHash,
+                   itemJson = excluded.itemJson"
             ).map_err(|e| e.to_string())?;
-            for request in requests {
-                let id = request.get("_localRequestId").and_then(Value::as_str)
-                    .filter(|id| !id.is_empty()).ok_or("ZCode request missing stable ID")?;
-                let mut item = request.clone();
-                item.as_object_mut().ok_or("Invalid ZCode request")?.remove("_localRequestId");
-                stmt.execute(params![id, item.to_string()]).map_err(|e| e.to_string())?;
+            for request in &parsed {
+                stmt.execute(params![request.id, request.day, request.hour, request.hash, request.json])
+                    .map_err(|e| e.to_string())?;
             }
         }
         let mut values = Vec::new();
@@ -337,27 +699,7 @@ impl LocalUsageStore {
         let aggregate = aggregate_local_items(values.iter());
         tx.execute("DELETE FROM usage_fact WHERE providerId = 'zcode_local'", [])
             .map_err(|e| e.to_string())?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO usage_fact (usageKey, day, hour, toolCode, providerId, workdirHash,
-                 workdirDisplayName, model, inputTokens, outputTokens, cacheReadTokens,
-                 cacheWriteTokens, reasoningTokens, totalTokens, sourceQuality, rawSourceRef,
-                 providerVersion, parserVersion, sourceFingerprint, scannedAt)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"
-            ).map_err(|e| e.to_string())?;
-            for (key, item) in aggregate {
-                stmt.execute(params![key, str_field(&item,"day"), i64_field(&item,"hour"),
-                    str_field(&item,"toolCode"), str_field(&item,"providerId"),
-                    str_field(&item,"workdirHash"), str_field(&item,"workdirDisplayName"),
-                    str_field(&item,"model"), i64_field(&item,"inputTokens"),
-                    i64_field(&item,"outputTokens"), i64_field(&item,"cacheReadTokens"),
-                    i64_field(&item,"cacheWriteTokens"), i64_field(&item,"reasoningTokens"),
-                    i64_field(&item,"totalTokens"), str_field(&item,"sourceQuality"),
-                    str_field(&item,"rawSourceRef"), str_field(&item,"providerVersion"),
-                    str_field(&item,"parserVersion"), str_field(&item,"sourceFingerprint"), scanned_at])
-                    .map_err(|e| e.to_string())?;
-            }
-        }
+        insert_usage_fact_aggregates(&tx, aggregate, scanned_at)?;
         tx.commit().map_err(|e| e.to_string())
     }
 
@@ -509,6 +851,59 @@ impl LocalUsageStore {
                 "note": "scopes absent from scan are preserved locally (source-side retention/pruning)",
             }),
         );
+    }
+
+    /// Per-provider row counts — a cheap stand-in for reading the whole
+    /// ledger when a scan only needs to know which providers previously had
+    /// rows (missing-row preservation).
+    pub fn provider_row_counts(&self) -> Result<HashMap<String, i64>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT providerId, COUNT(*) FROM usage_fact GROUP BY providerId")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|row| row.ok()).collect())
+    }
+
+    /// Full ledger rows filtered to the given providers — used to re-attach
+    /// history for providers whose scan failed this round.
+    pub fn usage_items_for_providers(
+        &self,
+        provider_ids: &std::collections::HashSet<String>,
+    ) -> Result<Vec<Value>, String> {
+        if provider_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = provider_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let ids: Vec<String> = provider_ids.iter().cloned().collect();
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                r#"
+                SELECT day, hour, toolCode, providerId, workdirHash, workdirDisplayName, model,
+                       inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
+                       reasoningTokens, totalTokens, sourceQuality, rawSourceRef, providerVersion,
+                       parserVersion, sourceFingerprint
+                FROM usage_fact
+                WHERE providerId IN ({placeholders})
+                ORDER BY day DESC, totalTokens DESC
+                "#,
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), usage_row_to_value)
+            .map_err(|e| e.to_string())?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok(items)
     }
 
     pub fn all_usage_items(&self) -> Result<Vec<Value>, String> {
@@ -874,6 +1269,85 @@ fn usage_key(item: &Value) -> String {
     .join("|")
 }
 
+/// A ledger replace unit: all rows of one provider within one (day, hour).
+pub type UsageScope = (String, i64, String);
+
+fn item_scope(item: &Value) -> UsageScope {
+    (
+        str_field(item, "day"),
+        i64_field(item, "hour"),
+        str_field(item, "providerId"),
+    )
+}
+
+fn item_scopes(items: &[Value]) -> std::collections::BTreeSet<UsageScope> {
+    items.iter().map(item_scope).collect()
+}
+
+struct ParsedZcodeRequest {
+    id: String,
+    day: String,
+    hour: i64,
+    hash: String,
+    json: String,
+}
+
+fn parse_zcode_requests(requests: &[Value]) -> Result<Vec<ParsedZcodeRequest>, String> {
+    requests
+        .iter()
+        .map(|request| {
+            let id = request
+                .get("_localRequestId")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or("ZCode request missing stable ID")?
+                .to_string();
+            let mut item = request.clone();
+            item.as_object_mut()
+                .ok_or("Invalid ZCode request")?
+                .remove("_localRequestId");
+            let json = item.to_string();
+            let hash = crate::crypto::sha256_hex(&json);
+            Ok(ParsedZcodeRequest {
+                id,
+                day: str_field(&item, "day"),
+                hour: i64_field(&item, "hour"),
+                hash,
+                json,
+            })
+        })
+        .collect()
+}
+
+fn insert_usage_fact_aggregates(
+    tx: &rusqlite::Transaction<'_>,
+    aggregate: HashMap<String, Value>,
+    scanned_at: &str,
+) -> Result<(), String> {
+    let mut stmt = tx
+        .prepare(
+            "INSERT INTO usage_fact (usageKey, day, hour, toolCode, providerId, workdirHash,
+             workdirDisplayName, model, inputTokens, outputTokens, cacheReadTokens,
+             cacheWriteTokens, reasoningTokens, totalTokens, sourceQuality, rawSourceRef,
+             providerVersion, parserVersion, sourceFingerprint, scannedAt)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+        )
+        .map_err(|e| e.to_string())?;
+    for (key, item) in aggregate {
+        stmt.execute(params![key, str_field(&item, "day"), i64_field(&item, "hour"),
+            str_field(&item, "toolCode"), str_field(&item, "providerId"),
+            str_field(&item, "workdirHash"), str_field(&item, "workdirDisplayName"),
+            str_field(&item, "model"), i64_field(&item, "inputTokens"),
+            i64_field(&item, "outputTokens"), i64_field(&item, "cacheReadTokens"),
+            i64_field(&item, "cacheWriteTokens"), i64_field(&item, "reasoningTokens"),
+            i64_field(&item, "totalTokens"), str_field(&item, "sourceQuality"),
+            str_field(&item, "rawSourceRef"), str_field(&item, "providerVersion"),
+            str_field(&item, "parserVersion"), str_field(&item, "sourceFingerprint"), scanned_at])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 const TOKEN_FIELDS: [&str; 6] = [
     "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
     "reasoningTokens", "totalTokens",
@@ -1048,13 +1522,19 @@ mod tests {
     use super::*;
 
     fn temp_db() -> (LocalUsageStore, std::path::PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "atl-lus-test-{}.sqlite3",
+        // Unique across parallel test threads: nanos alone can collide when
+        // two threads allocate in the same nanosecond, which surfaces as
+        // "database is locked" on open.
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let unique = format!(
+            "{}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
-        ));
+                .as_nanos(),
+            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let path = std::env::temp_dir().join(format!("atl-lus-test-{unique}.sqlite3"));
         let store = LocalUsageStore::open(path.clone()).unwrap();
         (store, path)
     }
@@ -1621,6 +2101,250 @@ mod tests {
 
         assert!(store.take_cached_source("valid_fp").is_none());
         assert!(store.has_usage_facts().unwrap());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scoped_merge_skips_unchanged_scopes() {
+        let (mut store, path) = temp_db();
+        let day_a = make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100);
+        let day_b = make_item("2026-05-11", 11, "codex", "codex_local", "gpt-5", 200);
+        store
+            .merge_usage_facts(&[day_a.clone(), day_b.clone()], "t1")
+            .unwrap();
+
+        // Scope B's source changed; scope A is untouched.
+        let mut changed_b = day_b.clone();
+        changed_b["totalTokens"] = json!(999);
+        let dirty = std::collections::BTreeSet::from([item_scope(&day_b)]);
+        store
+            .merge_usage_facts_scoped(&[day_a, changed_b], &dirty, "t2")
+            .unwrap();
+
+        let items = store.all_usage_items().unwrap();
+        let by_day: std::collections::HashMap<String, Value> = items
+            .into_iter()
+            .map(|item| (str_field(&item, "day"), item))
+            .collect();
+        assert_eq!(by_day["2026-05-11"]["totalTokens"], json!(999));
+        // Untouched scope keeps its rows (and its original scannedAt).
+        assert_eq!(by_day["2026-05-10"]["totalTokens"], json!(100));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn replace_source_cache_stamps_and_dirty_scopes_track_changes() {
+        let (mut store, path) = temp_db();
+        let item_a = make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100);
+        let fp_a = "fp_a".to_string();
+        store
+            .replace_source_cache(&HashMap::from([(fp_a.clone(), vec![item_a.clone()])]), "t1")
+            .unwrap();
+        assert!(!store.incremental_merge_ready(), "stamp must wait for a merge");
+
+        store.merge_usage_facts(&[item_a.clone()], "t1").unwrap();
+        store
+            .replace_source_cache(&HashMap::from([(fp_a.clone(), vec![item_a])]), "t2")
+            .unwrap();
+        store.mark_incremental_merge_ready().unwrap();
+        assert!(store.incremental_merge_ready());
+
+        // Same fingerprints => nothing dirty.
+        let same = HashMap::from([(fp_a.clone(), vec![make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100)])]);
+        assert!(store.dirty_scopes_for_scan(&same).unwrap().unwrap().is_empty());
+
+        // A new fingerprint marks its scopes dirty; a dropped fingerprint
+        // disappears from the cache.
+        let item_b = make_item("2026-05-11", 9, "claude", "claude_code_local", "sonnet", 50);
+        let next = HashMap::from([
+            (fp_a, vec![make_item("2026-05-10", 10, "codex", "codex_local", "gpt-5", 100)]),
+            ("fp_b".to_string(), vec![item_b]),
+        ]);
+        let dirty = store.dirty_scopes_for_scan(&next).unwrap().unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert!(dirty.contains(&("2026-05-11".to_string(), 9, "claude_code_local".to_string())));
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn usage_fact_scanned_at(store: &LocalUsageStore, day: &str, hour: i64) -> String {
+        store
+            .conn
+            .query_row(
+                "SELECT scannedAt FROM usage_fact WHERE day = ?1 AND hour = ?2",
+                params![day, hour],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn v1_zcode_table_migrates_day_hour_hash() {
+        // A store written by schema v1 (no day/hour/requestHash columns, no
+        // scope index) must migrate on open — the schema batch must not
+        // reference the new columns before the ALTERs add them.
+        let unique = format!(
+            "{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            std::process::id()
+        );
+        let path = std::env::temp_dir().join(format!("atl-lus-mig-{unique}.sqlite3"));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE zcode_request_fact (
+                   requestId TEXT PRIMARY KEY,
+                   itemJson TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+            let mut item = make_item("2026-08-01", 9, "zcode", "zcode_local", "glm", 42);
+            item.as_object_mut().unwrap().remove("_localRequestId");
+            conn.execute(
+                "INSERT INTO zcode_request_fact (requestId, itemJson) VALUES (?1, ?2)",
+                params!["r1", item.to_string()],
+            )
+            .unwrap();
+        }
+        let store = LocalUsageStore::open(path.clone()).unwrap();
+        let (day, hour, hash): (String, i64, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT day, hour, requestHash FROM zcode_request_fact WHERE requestId = 'r1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((day.as_str(), hour), ("2026-08-01", 9));
+        assert!(hash.is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scoped_non_zcode_merge_never_touches_zcode_scopes() {
+        // The zcode source fingerprint is file-level: one changed day marks
+        // every zcode scope dirty. The non-zcode merge must ignore those
+        // scopes — it has no zcode rows to reinsert, so deleting them would
+        // erase history only a full ledger rebuild used to restore.
+        let (mut store, path) = temp_db();
+        let zcode_day = make_item("2026-10-20", 8, "zcode", "zcode_local", "glm", 500);
+        let codex_day = make_item("2026-10-21", 9, "codex", "codex_local", "gpt-5", 100);
+        store
+            .merge_usage_facts(&[zcode_day.clone(), codex_day.clone()], "t1")
+            .unwrap();
+
+        let dirty = std::collections::BTreeSet::from([
+            item_scope(&zcode_day),
+            item_scope(&codex_day),
+        ]);
+        store
+            .merge_non_zcode_facts_scoped(&[zcode_day, codex_day], &dirty, "t2")
+            .unwrap();
+
+        let items = store.all_usage_items().unwrap();
+        let zcode_tokens: i64 = items
+            .iter()
+            .filter(|item| str_field(item, "providerId") == "zcode_local")
+            .map(|item| i64_field(item, "totalTokens"))
+            .sum();
+        assert_eq!(zcode_tokens, 500, "zcode rows must survive a scoped non-zcode merge");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zcode_incremental_rebuilds_scopes_missing_from_usage_fact() {
+        let (mut store, path) = temp_db();
+        let mut request = make_item("2026-09-22", 12, "zcode", "zcode_local", "glm", 300);
+        request["_localRequestId"] = json!("request-1");
+        store.ingest_zcode_requests(&[request.clone()], "t1").unwrap();
+        // Simulate lost aggregate rows (buggy/interrupted run).
+        store
+            .conn
+            .execute("DELETE FROM usage_fact WHERE providerId = 'zcode_local'", [])
+            .unwrap();
+
+        store.ingest_zcode_requests(&[request], "t2").unwrap();
+
+        let tokens: i64 = store
+            .all_usage_items()
+            .unwrap()
+            .iter()
+            .filter(|item| str_field(item, "providerId") == "zcode_local")
+            .map(|item| i64_field(item, "totalTokens"))
+            .sum();
+        assert_eq!(tokens, 300, "missing scopes must self-heal from the request ledger");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zcode_request_moving_across_hours_recomputes_the_old_scope() {
+        // A retry's winning attempt can carry a different started_at, moving
+        // the request to another hour. The incremental ingest must recompute
+        // the PREVIOUS hour's aggregate too, or the request double-counts.
+        let (mut store, path) = temp_db();
+        let mut request = make_item("2026-09-22", 10, "zcode", "zcode_local", "glm", 300);
+        request["_localRequestId"] = json!("request-1");
+        store.ingest_zcode_requests(&[request.clone()], "t1").unwrap();
+
+        let mut moved = request.clone();
+        moved["hour"] = json!(11);
+        store.ingest_zcode_requests(&[moved], "t2").unwrap();
+
+        let by_hour: std::collections::HashMap<i64, i64> = store
+            .all_usage_items()
+            .unwrap()
+            .into_iter()
+            .map(|item| (i64_field(&item, "hour"), i64_field(&item, "totalTokens")))
+            .collect();
+        assert!(by_hour.get(&10).is_none(), "old hour must be recomputed (empty aggregate -> no row)");
+        assert_eq!(by_hour.get(&11), Some(&300), "new hour holds the request");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zcode_incremental_reingest_of_identical_requests_is_a_no_op() {
+        let (mut store, path) = temp_db();
+        let mut request = make_item("2026-09-22", 12, "zcode", "zcode_local", "glm", 300);
+        request["_localRequestId"] = json!("request-1");
+        store.ingest_zcode_requests(&[request.clone()], "t1").unwrap();
+
+        store.ingest_zcode_requests(&[request], "t2").unwrap();
+
+        // Identical content hash: no upsert, no aggregate rebuild — the row
+        // keeps its first scannedAt.
+        assert_eq!(usage_fact_scanned_at(&store, "2026-09-22", 12), "t1");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zcode_incremental_recomputes_only_the_changed_scope() {
+        let (mut store, path) = temp_db();
+        let mut r1 = make_item("2026-09-22", 12, "zcode", "zcode_local", "glm", 300);
+        r1["_localRequestId"] = json!("request-1");
+        let mut r2 = make_item("2026-09-23", 13, "zcode", "zcode_local", "glm", 500);
+        r2["_localRequestId"] = json!("request-2");
+        store.ingest_zcode_requests(&[r1.clone(), r2.clone()], "t1").unwrap();
+
+        // Only day-23's request changed; day-22 keeps its aggregate row.
+        let mut r2_changed = r2.clone();
+        r2_changed["totalTokens"] = json!(800);
+        r2_changed["inputTokens"] = json!(400);
+        r2_changed["outputTokens"] = json!(200);
+        r2_changed["cacheReadTokens"] = json!(100);
+        r2_changed["cacheWriteTokens"] = json!(100);
+        store.ingest_zcode_requests(&[r1, r2_changed], "t2").unwrap();
+
+        let rows = store.all_usage_items().unwrap();
+        let by_day: std::collections::HashMap<String, Value> = rows
+            .into_iter()
+            .map(|item| (str_field(&item, "day"), item))
+            .collect();
+        assert_eq!(by_day["2026-09-23"]["totalTokens"], json!(800));
+        assert_eq!(usage_fact_scanned_at(&store, "2026-09-23", 13), "t2");
+        assert_eq!(by_day["2026-09-22"]["totalTokens"], json!(300));
+        assert_eq!(usage_fact_scanned_at(&store, "2026-09-22", 12), "t1");
         let _ = std::fs::remove_file(path);
     }
 }
