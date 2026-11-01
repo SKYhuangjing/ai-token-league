@@ -33,8 +33,10 @@ rm -rf node_modules .tmp .tmp-smoke test doc .gitignore
 
 git add -A
 VERSION="$(node -p "require('./package.json').version")"
+# a re-run with unchanged content has nothing to commit; that must not stop
+# the script before its push (set -e would), so the empty commit is tolerated
 git -c user.name="atl-release" -c user.email="release@localhost" \
-  commit --quiet -m "magpie-atl-sync dist v${VERSION} (from magpie-plugin/ at $(git -C "$ROOT" rev-parse --short HEAD))"
+  commit --quiet -m "magpie-atl-sync dist v${VERSION} (from magpie-plugin/ at $(git -C "$ROOT" rev-parse --short HEAD))" || true
 
 echo "dist branch '$BRANCH' rebuilt at v$VERSION:"
 git log --oneline -1
