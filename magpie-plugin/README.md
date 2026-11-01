@@ -1,5 +1,7 @@
 # magpie-atl-sync
 
+[![npm version](https://img.shields.io/npm/v/magpie-atl-sync.svg)](https://www.npmjs.com/package/magpie-atl-sync)
+
 把 Magpie 采集的**全部用量**（统一口径）同步到 AI Token League 榜单。
 
 **口径**：与 Magpie「用量」页所见同源——网关账本 + 全部 agent 的本地会话扫描，request id 去重。不是"只走网关的流量"：只要 Magpie 能看见的用量（含 ZCode/Claude Code/Codex/Kimi/WorkBuddy/DSH/Hermes 等本地会话），本插件都会带上传。
