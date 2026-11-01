@@ -37,13 +37,29 @@ import {
   readStatus,
   writeUsageData
 } from "./lib/state.js";
-import { fetchBoardRank, fetchMyIdentity } from "./lib/board-query.js";
+import { fetchBoardProfile, fetchMyIdentity } from "./lib/board-query.js";
 
 import pkg from "./package.json" with { type: "json" };
 const VERSION = pkg.version || "0.0.0";
 
 function defaultLedgerPath() {
   return process.env.MAGPIE_LEDGER || join(process.env.HOME || "~", ".config", "magpie", "usage.jsonl");
+}
+
+// Magpie's own number rendering follows its chineseUnits setting (Settings,
+// default OFF → the B/M/K ladder even for zh). The page sandbox can't read
+// files, so the flag rides the status bridge; a missing file or key means
+// the default. Best-effort: display preference must never affect syncing.
+function readMagpieChineseUnits() {
+  try {
+    const settingsPath = process.env.MAGPIE_LEDGER
+      ? join(process.env.MAGPIE_LEDGER, "..", "settings.json")
+      : join(process.env.HOME || "~", ".config", "magpie", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    return settings.chineseUnits === true;
+  } catch {
+    return false;
+  }
 }
 
 // A failed run must reach the page too: without this the panel keeps showing
@@ -62,35 +78,42 @@ function writeFailStatus(config, message, { dryRun = false } = {}) {
   });
 }
 
-// The page sandbox has no network: the board rank travels as a snapshot in
-// status.js, fetched once after each sync. A failure keeps the previous
-// value (with the reason) and never changes the sync's own outcome.
+// The page sandbox has no network: the board standing travels as a snapshot
+// in status.js, fetched once after each sync. Identity first — the anonymous
+// board's publicId is the profile's displayId — then one profile call for
+// rank + persistence stats. A failure keeps the previous value (with the
+// reason) and never changes the sync's own outcome.
 async function enrichStatusWithRank(config, identity) {
   if (!config.apiBaseUrl || !identity?.participantId) return;
   const prev = readStatus() || {};
-  try {
-    const serverRank = await fetchBoardRank({ apiBaseUrl: config.apiBaseUrl, participantId: identity.participantId });
-    writeStatus({ ...prev, serverRank });
-  } catch (error) {
-    writeStatus({
-      ...prev,
-      serverRank: { ...(prev.serverRank || {}), error: String(error.message || error).slice(0, 120) }
-    });
-  }
   // the anonymous board's daily display name, same snapshot discipline: a
   // failure keeps the previous value and never touches the sync outcome
+  let displayId = identity.participantId;
   try {
     const serverIdentity = await fetchMyIdentity({ apiBaseUrl: config.apiBaseUrl, participantId: identity.participantId });
-    const latest = readStatus() || prev;
     if (serverIdentity.identityMode === "anonymous") {
-      writeStatus({ ...latest, serverIdentity });
+      writeStatus({ ...prev, serverIdentity });
+      displayId = serverIdentity.publicId || displayId;
     } else {
       // public board: no alias to show — clear any stale anonymous name
-      const { serverIdentity: _drop, ...rest } = latest;
+      const { serverIdentity: _drop, ...rest } = prev;
       writeStatus(rest);
     }
   } catch {
-    // keep whatever the last successful fetch left in status
+    // keep whatever the last successful fetch left in status; the profile
+    // call below still works with the raw participantId (the endpoint falls
+    // back to it when the anonymizer cannot resolve the id)
+  }
+  try {
+    const serverProfile = await fetchBoardProfile({ apiBaseUrl: config.apiBaseUrl, displayId });
+    const latest = readStatus() || prev;
+    writeStatus({ ...latest, serverProfile });
+  } catch (error) {
+    const latest = readStatus() || prev;
+    writeStatus({
+      ...latest,
+      serverProfile: { ...(latest.serverProfile || {}), error: String(error.message || error).slice(0, 120) }
+    });
   }
 }
 
@@ -586,6 +609,7 @@ async function main() {
     // The page must not wait out a long upload to learn who it now is:
     // an interim status lands the identity (and live progress) at once.
     const prevStatus = readStatus() || {};
+    const magpieChineseUnits = readMagpieChineseUnits();
     const writeSyncing = (done) => {
       writeStatus({
         ...prevStatus,
@@ -600,6 +624,7 @@ async function main() {
         deviceId: identity.deviceId || "",
         apiBaseUrl: config.apiBaseUrl,
         buckets: allKeys.length,
+        chineseUnits: magpieChineseUnits,
         lastSyncAt: prevStatus.lastSyncAt
       });
     };
@@ -646,6 +671,7 @@ async function main() {
         deviceId: identity.deviceId || "",
         apiBaseUrl: config.apiBaseUrl,
         buckets: allKeys.length,
+        chineseUnits: magpieChineseUnits,
         dirty: 0,
         firstSyncStart: manifest.firstSyncStart || null
       });
@@ -698,6 +724,7 @@ async function main() {
       deviceId: identity.deviceId || "",
       apiBaseUrl: config.apiBaseUrl,
       buckets: allKeys.length,
+      chineseUnits: magpieChineseUnits,
       dirty: dirtyKeys.length,
       uploadedTokens,
       lastSyncAt: new Date().toISOString(),

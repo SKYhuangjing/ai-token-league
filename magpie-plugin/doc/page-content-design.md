@@ -23,7 +23,8 @@
 
 | 接口 | 关键参数 | 返回字段(摘) | 用途 |
 | --- | --- | --- | --- |
-| `GET /api/board/analytics` | `participantId`、`period=today\|this_week\|this_month\|all` | `rankStats: { rank, participantCount, leaderDays, isLeaderToday }`、`displayName`、`summary.totalTokens`(server.js L898;store.js `analyticsRankStats` L2052) | **主选**:一次拿排名四元组,不用拉全榜 |
+| `GET /api/board/profile/<displayId>` | displayId=匿名板 publicId(先 `/api/board/my-identity` 取)或 participantId(公开板/降级,匿名板端点解析失败回退原值) | `rank`(总榜)、`currentStreak`、`activeDays`、`peakDay{day,totalTokens}`(server.js L994;store.js `participantProfile` L1719) | **主选(2026-11-01 起)**:一次拿总榜排名+坚持数据;总榜排名服务端按业务日缓存,不怕分析型聚合 |
+| `GET /api/board/analytics` | `participantId`、`period=today\|this_week\|this_month\|all` | `rankStats: { rank, participantCount, leaderDays, isLeaderToday }`、`displayName`、`summary.totalTokens`(server.js L898;store.js `analyticsRankStats` L2052) | 已退役(2026-11-01 前):leaderDays 在 period=today 下恒 0/1,与 isLeaderToday 语义重复 |
 | `GET /api/leaderboard` | `range=today\|last7\|last30\|all`、`tool=all` | `items: [{ rank, participantId, nickname, totalTokens, toolBreakdown, lastSyncedAt }]`(store.js L1202) | 备选/校验:可拿服务端侧昵称与周期总量 |
 | `GET /api/health` | — | 健康体 | 已由 `checkHealth` 使用(测试连接) |
 
@@ -99,15 +100,16 @@ KPI / 趋势 / 热力图 / 来源 / 模型五个区块内容不变(【现有】)
 
 ### 3.3 区块 A 的云端取数(Bun 侧实施说明,P0)
 
-sync.js 在**每次成功或 noop 同步之后**(以及 `--test-connection` 成功时)追加:
+sync.js 在**每次成功或 noop 同步之后**(以及 `--test-connection` 成功时)追加两连发(顺序敏感:identity 的 publicId 是 profile 的 displayId):
 
 ```
-GET {apiBaseUrl}/api/board/analytics?participantId=<identity.participantId>&period=today
+GET {apiBaseUrl}/api/board/my-identity?participantId=<identity.participantId>
+GET {apiBaseUrl}/api/board/profile/<publicId | participantId>
 ```
 
-- 取 `rankStats.rank / rankStats.participantCount / rankStats.leaderDays / rankStats.isLeaderToday`(P0 页面只用前两个,后两个字段先落盘,P1 直接消费)。
-- 写入 status(增量,见 §7 schema):`serverRank: { period: "today", rank, participantCount, fetchedAt }`。
-- **失败策略**:GET 抛错 / 非 200 / 401 → 保留上一次 `serverRank`(带旧 fetchedAt,页面按 24h 规则灰显),并写 `serverRank.error = <message>` 供 title 展示;**不得让排名失败影响同步主流程的退出码**——排名 GET 包在自己的 try/catch 里,超时 5s。
+- 取 `rank`(总榜名次)/ `currentStreak`(连续活跃天数)/ `activeDays` / `peakDay`(进悬停)。
+- 写入 status(增量,见 §7 schema):`serverProfile: { rank, currentStreak, activeDays, peakDay, fetchedAt }`;`serverIdentity` 由第一发写入,公开板清除旧匿名名。
+- **失败策略**:任一 GET 抛错 / 非 200 / 401 → 保留上一次快照(带旧 fetchedAt,页面按 24h 规则灰显),并写 `serverProfile.error = <message>` 供 title 展示;identity 失败时 profile 仍以 participantId 直查(端点对解析不了的 id 回退原值);**不得让榜单失败影响同步主流程的退出码**——两个 GET 各自包 try/catch,超时 5s。
 - 未配置 apiBaseUrl 或 `enabled=false` 跳过 GET。
 
 ### 3.4 区块 B:状态行(原 `#since` 行升级,P0)
@@ -189,12 +191,12 @@ KPI 四格、趋势图、热力图、来源 / 模型列表:数据、格式、空
 
 - 原"服务端"卡(`#s-server`)保留不动,与身份卡并列(现 tilerow 结构不变)。
 
-### 4.3 区块 D:云端排名卡(新增,P0 骨架 / P1 补全)
+### 4.3 区块 D:榜单条(2026-11-01 改版:总榜战况)
 
-- **目的**:回答"我在榜单上的位置、和多少人比"。
-- **P0 字段**:`今日 #3 / 12`、`更新于 <相对时间>`、`[打开榜单]` 按钮(复用 b-open)。数据与用量页身份行同源(同一个 `serverRank`),不额外发 GET。
-- **P1 追加字段**(数据 P0 已落盘):`领先 4 天`(`leaderDays`)、`今日第 1` 徽标(`isLeaderToday` 为 true 时)、`云端今日总量 9449 万`(取 `/api/board/analytics` 的 `summary.totalTokens`,与本地今日 KPI 并排对比,差异 > 5% 灰字提示"云端为已同步快照")。
-- **空态 / 错误态**:同 §3.2 排名列(未配置 → 整卡显示"未启用云端排名,配置服务端地址后自动获取";失败 → 上次值 + 灰显)。
+- **目的**:一句话回答"我是谁、我在联赛什么位置、我坚持了多久"。云端的比赛细节(人数、领先幅度、登顶次数、参与人数)归云端页面,这里只留三条独立语义:身份 / 总榜名次 / 连续天数。
+- **字段**:`● 昵称 · 匿名名 · #总榜名次 · 连续 N 天 · [打开榜单]`。`#N` 悬停含 stale 提示;`连续 N 天` 悬停 = `累计 {days} 天 · 峰值 {M/d} {tokens}`。数据源 = `serverProfile`(§3.3),不额外发 GET。
+- **退役字段**(2026-11-01,语义重复/循环):`/2 参与人数`、`领先`(`isLeaderToday`)、`榜首 N 天`(`leaderDays` 在 period=today 下恒 0/1)、`云端今日 X 与本地一致/落后`(插件本职即同步,一致是应然,轮询窗口内必然翻"落后"制造噪音)。
+- **空态 / 错误态**:从未成功 → `未上榜`(悬停:尚未同步到云端);失败 → 上次值 + 24h 灰显(悬停:云端暂不可达,显示 {time} 的结果)。
 
 ### 4.4 区块 E:同步卡(升级,P0)
 
@@ -224,7 +226,7 @@ KPI 四格、趋势图、热力图、来源 / 模型列表:数据、格式、空
 ## 5. 两页联动的刷新规则(P0)
 
 - 身份行 / 状态行 / 设置页三卡全部由 `ATLView.renderStatus(status, t)` 渲染(现已有该函数,扩展即可);4s 桥轮询已覆盖,无需新定时器。
-- `serverRank` 的 24h 灰显判断在渲染时做:`Date.now() - fetchedAt > 86400_000`。
+- `serverProfile` 的 24h 灰显判断在渲染时做:`Date.now() - fetchedAt > 86400_000`。
 - 相对时间统一一个帮助函数 `relTime(iso, lang)`(分钟/小时/天三档),两页共用,替换现 `toLocaleString`。
 
 ---

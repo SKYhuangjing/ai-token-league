@@ -25,7 +25,7 @@
 - 账本行(兜底路径):`route_id, t(带时区), agent(客户端), provider(上游), model/req/served, in/out/cache_read/cache_write(四分项), reasoning, ms, ttft_ms, status, kind(memory_consolidation|thread_title|model_list|...), response_id, session, providerAccount(PII), host(PII)`
 - `onUsage` 钩子(moejs)无网络/文件能力且与 Bun 宿主无桥 → 弃用;插件 Bun 宿主直接拉取/读文件
 - 触发:`.hooks.js` onRequest/onResponse(节流 60s)+ 常驻 interval(15min)+ 页面命令握手;均为 detached 拉起 `bun sync.js`,不占钩子预算
-- 页面内容按 `magpie-plugin/doc/page-content-design.md` 实施(P0 已落地):status.js 携带 nickname/deviceId/sourceChannel/firstSyncStart/serverRank(同步后 GET `/api/board/analytics?period=today` 快照,失败保留旧值且不影响同步结果);同步失败/busy/拒传也写 status(ok:false + error,保留旧昵称与排名);用量页顶部身份行 = 昵称 + 短 participantId + 今日云端排名(24h 过期灰显,不可达降级为 —)
+- 页面内容按 `magpie-plugin/doc/page-content-design.md` 实施(P0 已落地,2026-11-01 起榜单条改版):status.js 携带 nickname/deviceId/sourceChannel/firstSyncStart/serverProfile(同步后先 GET `/api/board/my-identity` 取 publicId,再 GET `/api/board/profile/<displayId>` 一次拿总榜排名+连续活跃天数+累计天数/峰值日快照,失败保留旧值且不影响同步结果);同步失败/busy/拒传也写 status(ok:false + error,保留旧昵称与排名);用量页顶部状态条 = 昵称 + 匿名名 + #总榜名次 + 连续 N 天(24h 过期灰显,从未成功降级为 未上榜)
 
 ## 3. 协议契约(与官方 collector 逐字节一致,金样测试锁定)
 

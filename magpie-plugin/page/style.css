@@ -83,7 +83,7 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 .sync-chip.err::before { background: var(--magpie-red); }
 @keyframes pulse { 50% { opacity: .35; } }
 
-/* ---- board strip: name · rank · cloud check · link on one line ---------- */
+/* ---- board strip: name · alias · all-time rank · streak · link ---------- */
 .board-strip { display: flex; align-items: center; gap: 10px; padding: 7px 14px; flex-wrap: wrap; min-height: 36px; }
 .bs-id { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 .bs-id .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--magpie-green); flex: none; }
@@ -91,10 +91,8 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 .bs-sep { width: 1px; height: 14px; background: var(--line-2); flex: none; }
 .bs-rank { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .bs-rank b { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.bs-rank #bd-count { font-size: 11.5px; color: var(--magpie-muted); }
 .bs-rank b.stale { color: var(--magpie-muted); }
 .bs-days { font-size: 11px; color: var(--magpie-muted); white-space: nowrap; }
-.chip-lead { display: inline-block; padding: 1px 7px; border-radius: 9px; background: var(--magpie-accent-soft); color: var(--magpie-accent); font-size: 10.5px; font-weight: 600; }
 /* the anonymous alias chip speaks Magpie's own pm-chip language: a small
    5px-radius badge, soft tint + same-hue text + 5px dot, the hue being the
    participant's board avatar color (per-user, from publicId) */
@@ -102,11 +100,6 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 .chip-alias .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--alias-color, var(--magpie-accent)); flex: none; }
 .chip-alias .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv .alias-dot { display: inline-block; width: 5px; height: 5px; margin-right: 5px; border-radius: 50%; vertical-align: middle; }
-.bs-cloud { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
-.bs-cloud .lbl { font-size: 11px; color: var(--magpie-muted); }
-.bs-cloud b { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.bs-cloud small { font-size: 11px; color: var(--magpie-muted); font-variant-numeric: tabular-nums; }
-.bs-cloud small.warn { color: var(--magpie-amber); }
 .btn.slim { height: 22px; min-width: 0; padding: 0 10px; font-size: 11px; }
 
 /* ---- segmented control (app.css .segs/.opt/.thumb) ----------------------- */
@@ -126,7 +119,8 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 /* money reads green in magpie's own UI (.cost), and so it does here */
 .kpi b.cost { color: var(--magpie-green); }
 .kpi span { display: block; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--magpie-muted); margin-top: 3px; }
-.kpi small { display: block; font-size: 11px; color: var(--magpie-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kpi small { display: block; font-size: 11px; color: var(--magpie-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+/* derivation parts wrap rather than truncate — Magpie #2378 keeps parts whole */
 .kpi small .err { color: var(--magpie-red); }
 .kpi small span { display: inline; font-size: inherit; letter-spacing: 0; text-transform: none; font-weight: 400; }
 @media (max-width: 640px) {

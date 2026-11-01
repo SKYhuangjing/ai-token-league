@@ -21,8 +21,8 @@
   </div>
   <div class="segs small" id="periods">
     <span class="thumb"></span>
-    <button type="button" class="opt" data-range="1" aria-selected="false" data-t="today">今日</button>
-    <button type="button" class="opt" data-range="7" aria-selected="true" data-t="d7">近 7 天</button>
+    <button type="button" class="opt" data-range="1" aria-selected="true" data-t="today">今日</button>
+    <button type="button" class="opt" data-range="7" aria-selected="false" data-t="d7">近 7 天</button>
     <button type="button" class="opt" data-range="30" aria-selected="false" data-t="d30">近 30 天</button>
     <button type="button" class="opt" data-range="0" aria-selected="false" data-t="all">全部</button>
   </div>
@@ -31,17 +31,15 @@
 </div>
 
 <section id="view-usage">
-  <!-- a compact status strip, not a hero card: name · rank · cloud check ·
-       board link on ONE line (wraps when narrow). Hidden entirely when no
-       apiBaseUrl is configured. -->
-  <section class="card board-strip" id="board" role="group" aria-label="今日战况" hidden>
+  <!-- a compact status strip, not a hero card: name · alias · all-time rank ·
+       streak · board link on ONE line (wraps when narrow). Hidden entirely
+       when no apiBaseUrl is configured. -->
+  <section class="card board-strip" id="board" role="group" aria-label="总榜战况" hidden>
     <span class="bs-id"><i class="dot"></i><b id="bd-nick">—</b></span>
     <span class="chip-alias" id="bd-alias" hidden></span>
     <i class="bs-sep"></i>
-    <span class="bs-rank"><b id="bd-rank">—</b><span id="bd-count"></span><span class="chip-lead" id="bd-lead" hidden data-t="leading">领先</span></span>
-    <span class="bs-days" id="bd-days"></span>
-    <i class="bs-sep"></i>
-    <span class="bs-cloud"><span class="lbl" data-t="cloudToday">云端今日</span><b id="bd-cloud">—</b><small id="bd-compare"></small></span>
+    <span class="bs-rank"><b id="bd-rank">—</b></span>
+    <span class="bs-days" id="bd-streak"></span>
     <span class="grow"></span>
     <button class="btn slim" type="button" data-open-board data-t="openBoard">打开榜单</button>
   </section>

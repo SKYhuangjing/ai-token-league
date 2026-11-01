@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CsvError, findMagpieBinary, runUsageCsv, parseUsageCsv } from "../lib/magpie-csv.js";
+import { localDayAndHour } from "../lib/atl.js";
 
 const HEADER =
   "time,agent,requested_model,provider,host,model,served_model,swapped,effort,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,reasoning_tokens,cost_usd,status,session,kind,provider_account,source,rejected";
@@ -166,6 +167,7 @@ describe("csv rolling window + daily full reconciliation", () => {
         MAGPIE_PLUGINS_JSON: join(state, "plugins-absent.json"),
         MAGPIE_LEDGER: "",
         MAGPIE_BIN: bin,
+        APP_TIME_ZONE: TEST_TZ,
         MAGPIE_GATEWAY_URL: "http://127.0.0.1:1"
       },
       stdout: "pipe",
@@ -174,7 +176,12 @@ describe("csv rolling window + daily full reconciliation", () => {
     return new Response(proc.stdout).text().then(() => readFileSync(argsFile, "utf8").trim());
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Pin the timezone on both sides of the spawn: bun test resolves Intl to
+  // UTC while the spawned sync reads the system zone, and toISOString()
+  // seeds the UTC day — unpinned, the pair disagreed past local midnight
+  // (UTC+8) and the daily-full decision flaked every night.
+  const TEST_TZ = "UTC";
+  const today = localDayAndHour(new Date(), TEST_TZ).day;
   const seededManifest = { firstRouteId: null, firstSyncStart: "2026-01-01T00:00:00Z", buckets: { "2026-05-01|10|zcode_local": "fp" }, lastFullDay: today };
   const seededCache = { today, days: [{ day: "2026-05-01", total: 420 }], todayHours: [], todayHoursBySource: [] };
 

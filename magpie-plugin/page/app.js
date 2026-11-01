@@ -11,19 +11,17 @@
       today: "今日", d7: "近 7 天", d30: "近 30 天", all: "全部",
       chipSynced: "同步 {time}", chipJustNow: "刚刚同步", chipSyncing: "同步中 {done}/{total} 批",
       chipFailed: "同步失败", chipNever: "尚未同步",
-      boardLabel: "今日战况", rankOf: " · {count} 人", leading: "领先",
-      leaderDays: "榜首 {n} 天", leaderDaysOne: "榜首 1 天",
-      cloudToday: "云端今日", cloudMatch: "与本地一致", cloudBehind: "落后本地 {tokens} · 待同步",
-      syncingShort: "同步中…", rankNone: "未上榜",
+      boardLabel: "总榜战况", rankNone: "未上榜",
+      streakDays: "连续 {n} 天", streakActive: "累计 {days} 天", streakPeak: "峰值 {d} {t}",
       rankNeverTip: "尚未同步到云端", rankStaleTip: "云端暂不可达，显示 {time} 的结果",
       openBoard: "打开榜单",
       kTotal: "总量", kCache: "缓存读取", kRequests: "请求", kCost: "费用",
-      kTotalSub: "输入 {a} · 输出 {b} · 缓存 {c}",
+      kTotalSub: "输入 {a} · 输出 {b} · 缓存 {c}", kYda: "昨日 {tokens}",
       kTotalTip: "排名口径：总量 = 输入 + 输出 + 缓存读 + 缓存写",
       kCacheSub: "命中 {p}",
       kCacheTip: "命中率 = 缓存读取 ÷（缓存读取 + 输入 + 缓存写入），即提示词中来自缓存的部分。缓存写入 {n}",
       kReqOk: "全部成功", kReqFail: "失败 {n}", kReqTip: "失败：本口径下请求未成功返回",
-      kCostSub: "生效价格", kCostTip: "费用为展示估算，不参与排名",
+      kCostSub: "按当前单价估算", kCostTip: "按最新生效的模型牌价估算的费用，仅展示用，不参与排名",
       trend: "趋势", mTokens: "Token", mCalls: "请求", mCost: "费用",
       splitBy: "按", splitSource: "来源", splitModel: "模型",
       grainHour: "按小时 · 来源", grainDay: "按日", timesUnit: "次", tokensUnit: "tokens",
@@ -65,19 +63,17 @@
       today: "Today", d7: "7 days", d30: "30 days", all: "All",
       chipSynced: "Synced {time}", chipJustNow: "Synced just now", chipSyncing: "Syncing {done}/{total}",
       chipFailed: "Sync failed", chipNever: "Never synced",
-      boardLabel: "Today on the board", rankOf: " of {count}", leading: "lead",
-      leaderDays: "{n} days at #1", leaderDaysOne: "1 day at #1",
-      cloudToday: "Cloud today", cloudMatch: "matches local", cloudBehind: "{tokens} behind local · pending",
-      syncingShort: "syncing…", rankNone: "not ranked yet",
+      boardLabel: "League standing", rankNone: "not ranked yet",
+      streakDays: "{n}-day streak", streakActive: "{days} days active", streakPeak: "peak {d} {t}",
       rankNeverTip: "not synced to the board yet", rankStaleTip: "board unreachable — showing result from {time}",
       openBoard: "Open board",
       kTotal: "Total tokens", kCache: "Cache read", kRequests: "Requests", kCost: "Cost",
-      kTotalSub: "{a} in · {b} out · {c} cache",
+      kTotalSub: "{a} in · {b} out · {c} cache", kYda: "yesterday {tokens}",
       kTotalTip: "Board metric: input + output + cache read + cache write",
       kCacheSub: "hit rate {p}",
       kCacheTip: "Hit rate = cache read ÷ (cache read + input + cache write): the share of the prompt served from cache. Cache written {n}",
       kReqOk: "none failed", kReqFail: "{n} failed", kReqTip: "Failed: requests that did not return successfully",
-      kCostSub: "effective prices", kCostTip: "Cost is an estimate for display; it does not affect ranking",
+      kCostSub: "at current prices", kCostTip: "Estimated with the latest effective model prices; display only, never ranked",
       trend: "Trend", mTokens: "Tokens", mCalls: "Requests", mCost: "Cost",
       splitBy: "by", splitSource: "Source", splitModel: "Model",
       grainHour: "hourly · by source", grainDay: "daily", timesUnit: "calls", tokensUnit: "tokens",
@@ -187,18 +183,9 @@
 
   // ── views / periods / metric / split ──
   let currentView = "usage";
-  let currentRange = 7;
+  let currentRange = 1;
   let currentMetric = "tokens";
   let currentSplit = "source";
-
-  // today's local total, for the board card's cloud-vs-local verdict
-  function localTodayTokens() {
-    const d = window.__ATL_USAGE_DATA__;
-    if (!d) return 0;
-    const todayEntry = (d.days || []).find((x) => x.day === d.today);
-    if (todayEntry && Number(todayEntry.total) > 0) return Number(todayEntry.total) || 0;
-    return (d.todayHours || []).reduce((sum, h) => sum + (Number(h) || 0), 0);
-  }
 
   // An optimistic identity (import submit / nickname save) must SURVIVE the
   // 4s bridge poll: status.js still carries the old identity until the sync
@@ -227,13 +214,16 @@
   function render() {
     const usage = window.__ATL_USAGE_DATA__;
     const status = effectiveStatus();
+    // Magpie's chineseUnits display setting rides the status bridge (absent
+    // = its default OFF = the B/M/K ladder); numbers must match the host app
+    if (window.ATLView) window.ATLView.chineseUnits = status?.chineseUnits === true;
     if (!usage) {
       // skeleton until the first bridge payload lands (never "—" numbers)
       ATLView.renderSkeleton();
     } else {
       ATLView.render(usage, currentRange, t, locale(), { metric: currentMetric, split: currentSplit });
     }
-    ATLView.renderBoard(status, t, locale(), localTodayTokens());
+    ATLView.renderBoard(status, t, locale());
     ATLView.renderStatus(status, t, locale());
     // sync button busy state follows the live status
     const bSync = $("b-sync");

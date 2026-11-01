@@ -14,17 +14,36 @@
 
   const ATLView = {};
 
-  const compactCache = new Map();
-  function compact(locale) {
-    if (!compactCache.has(locale)) {
-      compactCache.set(locale, new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }));
+  const groupedCache = new Map();
+  // ledNum: plain grouping with separators (782,895,048) — Magpie shows the
+  // exact figure in tooltips and request counts
+  function grouped(locale) {
+    const key = locale || "en";
+    if (!groupedCache.has(key)) {
+      groupedCache.set(key, new Intl.NumberFormat(key));
     }
-    return compactCache.get(locale);
+    return groupedCache.get(key);
   }
 
+  // Magpie's own fmtN (internal/gui/assets app.js), ported so panel numbers
+  // read native. 万/亿 units only when the host's chineseUnits setting is on
+  // (sync.js bridges it into status; Magpie itself defaults it to OFF — zh
+  // users see the B/M/K ladder too, which is exactly what the user reported).
+  // Unary + strips trailing zeros the way Magpie's does ("7.8 亿").
+  ATLView.chineseUnits = false;
   ATLView.fmtTokens = function (n, locale) {
     if (typeof n !== "number" || !isFinite(n)) return "—";
-    return compact(locale || "en").format(n);
+    if (ATLView.chineseUnits && String(locale || "").toLowerCase().startsWith("zh")) {
+      if (n >= 1e8) return +(n / 1e8).toFixed(2) + " 亿";
+      if (n >= 1e4) return +(n / 1e4).toFixed(1) + " 万";
+      return String(n);
+    }
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e7) return Math.round(n / 1e6) + "M";
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e5) return Math.round(n / 1e3) + "K";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+    return String(n);
   };
 
   // Magpie's fmtCost: no fake precision, and unknown ≠ $0 — an empty string
@@ -483,7 +502,7 @@
   // value formatter per metric: compact tokens, plain calls, fmtCost cost
   function metricFmt(metric, locale) {
     if (metric === "cost") return (v) => ATLView.fmtCost(v) || "—";
-    if (metric === "calls") return (v) => compact(locale || "en").format(v);
+    if (metric === "calls") return (v) => grouped(locale).format(v);
     return (v) => ATLView.fmtTokens(v, locale);
   }
 
@@ -571,19 +590,34 @@
     // re-apply static i18n on the rebuilt nodes
     if (typeof window.__ATLApplyI18n === "function") window.__ATLApplyI18n();
 
-    // KPI 1: the league number, with its derivation as the subline
+    // KPI 1: the league number. Today's subline is the local yesterday
+    // anchor ("how big is a normal day"); the four-part derivation lives in
+    // the tooltip. Other ranges keep the derivation on the surface.
     set("k-total", ATLView.fmtTokens(t.total, locale));
+    const kt = el("k-total");
+    if (kt) kt.title = grouped(locale).format(t.total);
     const kts = el("k-total-s");
     if (kts) {
-      kts.title = T.kTotalTip;
-      kts.textContent = T.kTotalSub
+      const breakdown = T.kTotalSub
         .replace("{a}", ATLView.fmtTokens(t.input, locale))
         .replace("{b}", ATLView.fmtTokens(t.output, locale))
         .replace("{c}", ATLView.fmtTokens(t.cacheRead + t.cacheWrite, locale));
+      const yesterday = range === 1
+        ? (summary.days || []).find((d) => d.day === ATLView.shiftDay(summary.today, -1))
+        : null;
+      if (yesterday && Number(yesterday.total) > 0) {
+        kts.textContent = T.kYda.replace("{tokens}", ATLView.fmtTokens(yesterday.total, locale));
+        kts.title = T.kTotalTip + "\n" + breakdown;
+      } else {
+        kts.textContent = breakdown;
+        kts.title = T.kTotalTip;
+      }
     }
     // KPI 2: cache read with the prompt-calibre hit rate (title shows the
     // formula — cacheRead/total names itself wrong)
     set("k-cache", ATLView.fmtTokens(t.cacheRead, locale));
+    const kc = el("k-cache");
+    if (kc) kc.title = grouped(locale).format(t.cacheRead);
     const kcs = el("k-cache-s");
     if (kcs) {
       const denom = t.cacheRead + t.input + t.cacheWrite;
@@ -592,12 +626,14 @@
       kcs.textContent = hit === null ? "" : T.kCacheSub.replace("{p}", hit + "%");
     }
     // KPI 3: requests, failures turn the subline red
-    set("k-calls", compact(locale || "en").format(t.calls || 0));
+    set("k-calls", grouped(locale).format(t.calls || 0));
+    const kcl = el("k-calls");
+    if (kcl) kcl.title = grouped(locale).format(t.calls || 0);
     const krs = el("k-calls-s");
     if (krs) {
       krs.title = T.kReqTip;
       if (t.errors > 0) {
-        krs.innerHTML = `<span class="err">${T.kReqFail.replace("{n}", compact(locale || "en").format(t.errors))}</span>`;
+        krs.innerHTML = `<span class="err">${T.kReqFail.replace("{n}", grouped(locale).format(t.errors))}</span>`;
       } else {
         krs.textContent = t.calls ? T.kReqOk : "";
       }
@@ -659,7 +695,7 @@
 
   // the board card: identity · rank · cloud-vs-local, with its degrade
   // matrix — hidden whole when no server is configured
-  ATLView.renderBoard = function (status, T, locale, localTodayTokens) {
+  ATLView.renderBoard = function (status, T, locale) {
     const board = document.getElementById("board");
     if (!board) return;
     if (!status || !status.apiBaseUrl) {
@@ -667,13 +703,6 @@
       return;
     }
     board.hidden = false;
-    const set = (id, value, title) => {
-      const node = document.getElementById(id);
-      if (node) {
-        node.textContent = value;
-        if (title !== undefined) node.title = title;
-      }
-    };
     // the strip is one line: full ids live in titles, never on the surface
     const nickEl = document.getElementById("bd-nick");
     if (nickEl) {
@@ -702,60 +731,44 @@
       }
     }
 
-    const rank = status.serverRank;
+    // the standing snapshot: all-time rank + persistence stats from the
+    // server profile. Offline keeps the last snapshot (stale style past 24h),
+    // never-synced reads 未上榜 — the strip never blocks on the network.
+    const profile = status.serverProfile;
     const rankEl = document.getElementById("bd-rank");
-    const countEl = document.getElementById("bd-count");
-    const leadEl = document.getElementById("bd-lead");
-    const daysEl = document.getElementById("bd-days");
-    const stale = !!(rank && rank.fetchedAt && Date.now() - new Date(rank.fetchedAt).getTime() > 86400_000);
-    if (!rank || !Number.isFinite(Number(rank.rank))) {
-      if (rankEl) {
+    const stale = !!(profile && profile.fetchedAt && Date.now() - new Date(profile.fetchedAt).getTime() > 86400_000);
+    if (rankEl) {
+      if (!profile || !Number.isFinite(Number(profile.rank))) {
         rankEl.textContent = T.rankNone;
-        rankEl.title = rank && rank.error && rank.fetchedAt
-          ? T.rankStaleTip.replace("{time}", ATLView.relTime(rank.fetchedAt, T))
+        rankEl.title = profile && profile.error && profile.fetchedAt
+          ? T.rankStaleTip.replace("{time}", ATLView.relTime(profile.fetchedAt, T))
           : T.rankNeverTip;
-      }
-      if (countEl) countEl.textContent = "";
-    } else {
-      if (rankEl) {
-        rankEl.textContent = "#" + rank.rank;
+      } else {
+        rankEl.textContent = "#" + profile.rank;
         rankEl.classList.toggle("stale", stale);
-        rankEl.title = stale ? T.rankStaleTip.replace("{time}", ATLView.relTime(rank.fetchedAt, T)) : "";
+        rankEl.title = stale ? T.rankStaleTip.replace("{time}", ATLView.relTime(profile.fetchedAt, T)) : "";
       }
-      if (countEl) countEl.textContent = T.rankOf.replace("{count}", String(rank.participantCount));
     }
-    if (leadEl) leadEl.hidden = !(rank && rank.isLeaderToday);
-    if (daysEl) {
-      const d = rank ? Number(rank.leaderDays) : 0;
-      daysEl.textContent = d >= 1 ? (d === 1 ? T.leaderDaysOne : T.leaderDays.replace("{n}", String(d))) : "";
-    }
-
-    // cloud today + the one-line health verdict against local
-    const cloud = document.getElementById("bd-cloud");
-    const cmp = document.getElementById("bd-compare");
-    if (rank && Number.isFinite(Number(rank.cloudTodayTokens))) {
-      if (cloud) cloud.textContent = ATLView.fmtTokens(rank.cloudTodayTokens, locale);
-      if (cmp) {
-        if (status.syncing && status.syncing.total) {
-          cmp.textContent = T.syncingShort;
-          cmp.className = "";
-        } else if (Number(localTodayTokens) > 0) {
-          const diff = localTodayTokens - rank.cloudTodayTokens;
-          if (diff > localTodayTokens * 0.01) {
-            cmp.textContent = T.cloudBehind.replace("{tokens}", ATLView.fmtTokens(diff, locale));
-            cmp.className = "warn";
-          } else {
-            cmp.textContent = T.cloudMatch;
-            cmp.className = "";
-          }
-        } else {
-          cmp.textContent = "";
-          cmp.className = "";
+    // streak beside the rank; the tooltip carries the depth stats
+    const streakEl = document.getElementById("bd-streak");
+    if (streakEl) {
+      const n = profile ? Number(profile.currentStreak) : 0;
+      if (n >= 1) {
+        streakEl.textContent = T.streakDays.replace("{n}", String(n));
+        const depth = [];
+        if (Number(profile.activeDays) >= 1) depth.push(T.streakActive.replace("{days}", String(profile.activeDays)));
+        const peak = profile.peakDay;
+        if (peak && peak.day) {
+          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(peak.day));
+          depth.push(T.streakPeak
+            .replace("{d}", m ? `${Number(m[2])}/${Number(m[3])}` : String(peak.day))
+            .replace("{t}", ATLView.fmtTokens(peak.totalTokens, locale)));
         }
+        streakEl.title = depth.join(" · ");
+      } else {
+        streakEl.textContent = "";
+        streakEl.title = "";
       }
-    } else {
-      if (cloud) cloud.textContent = "—";
-      if (cmp) cmp.textContent = "";
     }
   };
 

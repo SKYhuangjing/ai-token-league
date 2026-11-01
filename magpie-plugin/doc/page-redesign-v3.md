@@ -4,7 +4,7 @@
 触发:用户实机评价——"整个头部的信息布局是有问题的。来源的内容其实和趋势里面是有重复的。产品能力不够强""这真的是产品可用吗?你自己看看 Magpie 产品是怎么设计的"。
 v2 修订(doc/page-content-design.md §11)只挪了头部摆位、删了来源卡,没有触及"页面在讲什么故事"这一层,所以救不回来。本稿推倒重排,给出开发可直接照做的规格;v2 §11 的 DOM 细节以本稿为准作废。
 
-数据边界(不可逾越,不造数据):页面无网络,全部数据来自 status.js(身份/同步结果/同步进度/数据通道/榜单快照 rank·participantCount·leaderDays·isLeaderToday·cloudTodayTokens)与 usage-data.js(今日+217 天逐日聚合:tokens 四分项/请求/失败/费用,按来源与按模型)。范围:今天/7天/30天/全部;指标:token/请求/费用;拆分:来源/模型。配置走 options,命令只有 立即同步/测试连接/导出配置/导入 ATL 配置。
+数据边界(不可逾越,不造数据):页面无网络,全部数据来自 status.js(身份/同步结果/同步进度/数据通道/榜单快照 serverProfile{rank·currentStreak·activeDays·peakDay}·serverIdentity;2026-11-01 前的 rank·participantCount·leaderDays·isLeaderToday·cloudTodayTokens 快照已随榜单条改版退役,见 page-content-design.md §3.3/§4.3)与 usage-data.js(今日+217 天逐日聚合:tokens 四分项/请求/失败/费用,按来源与按模型)。范围:今天/7天/30天/全部(默认今天);指标:token/请求/费用;拆分:来源/模型。配置走 options,命令只有 立即同步/测试连接/导出配置/导入 ATL 配置。
 
 ---
 
