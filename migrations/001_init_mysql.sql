@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   providerVersion VARCHAR(64) NOT NULL DEFAULT '',
   parserVersion VARCHAR(64) NOT NULL DEFAULT '',
   sourceFingerprint VARCHAR(128) NOT NULL DEFAULT '',
+  hourlyDerived TINYINT(1) NOT NULL DEFAULT 0,
   uploadedAt VARCHAR(40) NULL,
   INDEX idx_usage_day_tokens (day, totalTokens),
   INDEX idx_usage_participant_day (participantId, day),

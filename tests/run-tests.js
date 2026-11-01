@@ -1282,6 +1282,142 @@ function testHourlySnapshotMixedCaseModelMerges() {
   console.log("  testHourlySnapshotMixedCaseModelMerges passed");
 }
 
+function testWriterPrecedencePluginOutrankedByClient() {
+  const tmp = path.join(os.tmpdir(), `test-writer-precedence-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_wp", did = "d_wp";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "wp", identityPublicKey: "pk_wp", os: "test", appVersion: "0.1.0"
+  });
+  const pluginClient = { clientProtocolVersion: 2, clientPlatform: "magpie-plugin", clientBuild: "magpie-bun-0.2.0" };
+
+  // client-class upload (no client field): accepted, stamped as non-plugin
+  const clientHour10 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "wh_real", workdirDisplayName: "Real", model: "GLM-5.3", inputTokens: 300, outputTokens: 0, totalTokens: 300 })
+  ], pid, did, { hour: 10 });
+  const clientResult = store.upsertUsageBatch(clientHour10);
+  assert.equal(clientResult.accepted, 1);
+  assert.equal(store.hourlyBucketHasClientRows(pid, did, "2026-05-14", 10, "codex_local"), true);
+  assert.ok(Object.values(store.db.usageHourly).every((row) => row.clientPlatform !== "magpie-plugin"));
+
+  // plugin bucket on the SAME hour-bucket (its own virtual-workdir rows): outranked
+  const pluginHour10 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "wh_magpie", workdirDisplayName: "Magpie", model: "glm-5.3", inputTokens: 999, outputTokens: 0, totalTokens: 999 })
+  ], pid, did, { hour: 10 });
+  pluginHour10.client = pluginClient;
+  const outranked = store.upsertUsageBatch(pluginHour10);
+  assert.equal(outranked.noOp, true);
+  assert.equal(outranked.outranked, true);
+  assert.equal(outranked.duplicate, true);
+  assert.equal(outranked.accepted, 1, "suppressed bucket must ack the plugin's own rowCount");
+  assert.equal(outranked.rejected, 0);
+  // no plugin rows landed; bucket metadata stays the client's
+  const hourlyRows10 = store.listHourlyBucketUsageRows(pid, did, "2026-05-14", 10, "codex_local");
+  assert.equal(hourlyRows10.length, 1);
+  assert.equal(hourlyRows10[0].workdirHash, "wh_real");
+  const meta10 = store.getHourlyBucketSync(pid, did, "2026-05-14", 10, "codex_local");
+  assert.notEqual(meta10.bucketFingerprint, pluginHour10.snapshot.bucketFingerprint, "suppressed upload must not overwrite bucket metadata");
+  // behavioral proof: the client's own content still matches stored rows+metadata
+  // (server fingerprints are computed over model-normalized items, hence the
+  // helper's raw-model fingerprint is not directly comparable)
+  const reClient = store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "wh_real", workdirDisplayName: "Real", model: "GLM-5.3", inputTokens: 300, outputTokens: 0, totalTokens: 300 })
+  ], pid, did, { hour: 10 }));
+  assert.equal(reClient.noOp, true, "client re-upload must remain a genuine noOp after plugin suppression");
+
+  // plugin bucket on an hour the client never wrote: accepted and stamped
+  const pluginHour11 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 11, workdirHash: "wh_magpie", workdirDisplayName: "Magpie", model: "glm-5.3", inputTokens: 80, outputTokens: 0, totalTokens: 80 })
+  ], pid, did, { hour: 11 });
+  pluginHour11.client = pluginClient;
+  const pluginResult = store.upsertUsageBatch(pluginHour11);
+  assert.equal(pluginResult.noOp, undefined);
+  assert.equal(pluginResult.accepted, 1);
+  const pluginRow = Object.values(store.db.usageHourly).find((row) => row.hour === 11);
+  assert.equal(pluginRow.clientPlatform, "magpie-plugin");
+
+  // client later claims hour 11: whole-bucket replace wipes the plugin rows
+  const clientHour11 = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 11, workdirHash: "wh_real", workdirDisplayName: "Real", model: "GLM-5.3", inputTokens: 120, outputTokens: 0, totalTokens: 120 })
+  ], pid, did, { hour: 11 });
+  const reclaim = store.upsertUsageBatch(clientHour11);
+  assert.equal(reclaim.accepted, 1);
+  assert.ok(
+    Object.values(store.db.usageHourly).every((row) => row.workdirHash !== "wh_magpie"),
+    "client bucket replace must wipe plugin rows for that hour"
+  );
+  const dailyTotal = Object.values(store.db.usageDaily).reduce((sum, row) => sum + row.totalTokens, 0);
+  assert.equal(dailyTotal, 420, "daily = client 300 + client 120; plugin hour replaced, not summed");
+
+  // magpie_local is plugin-only territory: never suppressed
+  const magpieBucket = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 12, toolCode: "magpie", providerId: "magpie_local", workdirHash: "wh_magpie", workdirDisplayName: "Magpie", model: "glm-5.3", inputTokens: 50, outputTokens: 0, totalTokens: 50 })
+  ], pid, did, { hour: 12, providerId: "magpie_local" });
+  magpieBucket.client = pluginClient;
+  const magpieResult = store.upsertUsageBatch(magpieBucket);
+  assert.equal(magpieResult.noOp, undefined);
+  assert.equal(magpieResult.accepted, 1);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testWriterPrecedencePluginOutrankedByClient passed");
+}
+
+function testHourlyDerivedFlagSurvivesReloadAndCleansStaleRows() {
+  const tmp = path.join(os.tmpdir(), `test-hourly-derived-reload-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_hd", did = "d_hd";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "hd", identityPublicKey: "pk_hd", os: "test", appVersion: "0.1.0"
+  });
+
+  // two workdirs in hour 10 → two derived daily rows
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "wh_a", inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
+    makeSnapshotItem({ hour: 10, workdirHash: "wh_b", inputTokens: 40, outputTokens: 0, totalTokens: 40 })
+  ], pid, did, { hour: 10 }));
+  assert.equal(Object.values(store.db.usageDaily).length, 2);
+  assert.ok(Object.values(store.db.usageDaily).every((row) => row.hourlyDerived === true));
+
+  // simulate the MySQL per-request reload (loadWriteScope → usageFromRow):
+  // rows come back as plain copies with the flag coerced back to boolean.
+  // Pre-fix the flag was dropped here and stale derived rows became immortal.
+  store.db.usageDaily = Object.fromEntries(Object.entries(store.db.usageDaily).map(([key, row]) => [
+    key,
+    { ...row, hourlyDerived: Boolean(row.hourlyDerived), clientPlatform: row.clientPlatform || "" }
+  ]));
+
+  // bucket shrinks to one workdir → the stale derived row must be deleted
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "wh_a", inputTokens: 90, outputTokens: 0, totalTokens: 90 })
+  ], pid, did, { hour: 10 }));
+  const dailyRows = Object.values(store.db.usageDaily);
+  assert.equal(dailyRows.length, 1, "stale hourly-derived daily row must be cleaned after a flag-preserving reload");
+  assert.equal(dailyRows[0].workdirHash, "wh_a");
+  assert.equal(dailyRows[0].totalTokens, 90);
+
+  // protection boundary: rows without the flag (legacy daily-mode rows) stay
+  const legacyRowKey = usageKey(makeSnapshotItem({ workdirHash: "wh_legacy" }), pid, did);
+  store.db.usageDaily[legacyRowKey] = {
+    ...makeSnapshotItem({ workdirHash: "wh_legacy" }),
+    participantId: pid,
+    deviceId: did,
+    workdirId: `${pid}:wh_legacy`,
+    uploadedAt: new Date().toISOString()
+  };
+  // changed content (different fingerprint) forces derivation to run again;
+  // a same-fingerprint re-upload would noOp before deriving
+  store.upsertUsageBatch(makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 10, workdirHash: "wh_a", inputTokens: 95, outputTokens: 0, totalTokens: 95 })
+  ], pid, did, { hour: 10 }));
+  assert.equal(Object.values(store.db.usageDaily)[0].totalTokens, 95);
+  assert.ok(store.db.usageDaily[legacyRowKey], "legacy non-derived daily rows must not be deleted by hourly derivation");
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testHourlyDerivedFlagSurvivesReloadAndCleansStaleRows passed");
+}
+
 function testHourlySnapshotSameBucketCaseCollisionSums() {
   const tmp = path.join(os.tmpdir(), `test-hourly-case-collision-${Date.now()}.json`);
   const store = new Store(tmp);
@@ -3441,6 +3577,8 @@ testBucketMetadataSchema();
 testSnapshotReplaceSemantics();
 testHourlySnapshotDerivesDailyAndProtectsFromLegacy();
 testHourlySnapshotMixedCaseModelMerges();
+testWriterPrecedencePluginOutrankedByClient();
+testHourlyDerivedFlagSurvivesReloadAndCleansStaleRows();
 testHourlySnapshotSameBucketCaseCollisionSums();
 testHourlySnapshotPoisonedBucketHealsOnReupload();
 testSnapshotWorkdirHashChange();

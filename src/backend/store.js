@@ -10,6 +10,18 @@ import { currentBusinessDay } from "./day-context.js";
 
 export const ANALYTICS_ALL_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 
+// Dual-writer coexistence: the ATL client and the Magpie plugin may share one
+// identity (participant+device) and both stay online. Both read persistent
+// logs, so uptime decides nothing — the server arbitrates per hour-bucket:
+// client-class rows are canonical, plugin-class uploads only fill hour-buckets
+// the client never wrote. Writers are classified by the upload's
+// client.clientPlatform (plugin contract locks "magpie-plugin").
+export const PLUGIN_WRITER_PLATFORM = "magpie-plugin";
+
+export function isPluginWriter(input) {
+  return String(input?.client?.clientPlatform || "").trim() === PLUGIN_WRITER_PLATFORM;
+}
+
 // Public per-source leaderboard (/api/board/source-leaderboard): number of top
 // participants returned per provider. Bounded so the public payload stays small.
 export const SOURCE_LEADERBOARD_DEFAULT_TOP = 3;
@@ -579,6 +591,14 @@ export class Store {
     ));
   }
 
+  /// Rows written by anything other than the Magpie plugin count as
+  /// client-class for writer precedence. Legacy rows stored before the
+  /// clientPlatform column existed carry "" and outrank the plugin too.
+  hourlyBucketHasClientRows(participantId, deviceId, day, hour, providerId) {
+    return this.listHourlyBucketUsageRows(participantId, deviceId, day, hour, providerId)
+      .some((row) => row.clientPlatform !== PLUGIN_WRITER_PLATFORM);
+  }
+
   upsertHourlySnapshotBatch(input) {
     const now = new Date().toISOString();
     const snapshot = input.snapshot;
@@ -606,6 +626,15 @@ export class Store {
     const mergedItems = [...mergedByKey.values()];
     const serverBucketFingerprint = computeBucketFingerprint(mergedItems);
     const serverBucketTotalTokens = mergedItems.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+
+    // Writer precedence: a plugin-class bucket landing on an hour-bucket that
+    // already holds client-class rows is outranked. Ack it as noOp (with the
+    // plugin's own itemCount, which its uploader checks) so the plugin's
+    // manifest settles — no rows written, no bucket metadata updated.
+    const writerPlatform = String(input?.client?.clientPlatform || "").trim();
+    if (isPluginWriter(input) && this.hourlyBucketHasClientRows(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId)) {
+      return { accepted: acceptedItemCount, rejected, duplicate: true, noOp: true, outranked: true };
+    }
 
     // Idempotency check. Facts are authoritative: bucket metadata can match
     // while the stored rows still carry legacy overwrite damage from a
@@ -645,6 +674,7 @@ export class Store {
       this.db.usageHourly[hKey] = {
         ...raw,
         hour: snapshotHour,
+        clientPlatform: writerPlatform,
         inputCostUsd: withCost.inputCostUsd,
         outputCostUsd: withCost.outputCostUsd,
         cacheReadCostUsd: withCost.cacheReadCostUsd,

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS usage_hourly (
   providerVersion VARCHAR(64) NOT NULL DEFAULT '',
   parserVersion VARCHAR(64) NOT NULL DEFAULT '',
   sourceFingerprint VARCHAR(128) NOT NULL DEFAULT '',
+  clientPlatform VARCHAR(32) NOT NULL DEFAULT '',
   uploadedAt VARCHAR(40) NULL,
   INDEX idx_hourly_day_tokens (day, totalTokens),
   INDEX idx_hourly_participant_day (participantId, day),

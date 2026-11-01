@@ -114,6 +114,23 @@ export class MySqlStore extends Store {
     if (!columns.length) {
       await this.pool.query("ALTER TABLE usage_daily ADD COLUMN pricingSource VARCHAR(64) NOT NULL DEFAULT '' AFTER pricingModel");
     }
+    // Dual-writer coexistence: per-row writer stamp for writer precedence, and
+    // persisted hourlyDerived so stale derived daily rows survive the
+    // per-request loadWriteScope round-trip and stay deletable.
+    const [hourlyPlatformColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'usage_hourly' AND COLUMN_NAME = 'clientPlatform'`
+    );
+    if (!hourlyPlatformColumns.length) {
+      await this.pool.query("ALTER TABLE usage_hourly ADD COLUMN clientPlatform VARCHAR(32) NOT NULL DEFAULT '' AFTER sourceFingerprint");
+    }
+    const [dailyDerivedColumns] = await this.pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'usage_daily' AND COLUMN_NAME = 'hourlyDerived'`
+    );
+    if (!dailyDerivedColumns.length) {
+      await this.pool.query("ALTER TABLE usage_daily ADD COLUMN hourlyDerived TINYINT(1) NOT NULL DEFAULT 0 AFTER sourceFingerprint");
+    }
     const [lanIpColumns] = await this.pool.query(
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'devices' AND COLUMN_NAME = 'lanIp'`
@@ -2762,7 +2779,7 @@ async function insertUsageRows(conn, entries) {
       (usageKey, day, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
        model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
        estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
-       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
+       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, hourlyDerived, uploadedAt)
      VALUES ?`,
     [entries.map(([usageKey, row]) => [
       usageKey,
@@ -2791,6 +2808,7 @@ async function insertUsageRows(conn, entries) {
       row.providerVersion || "",
       row.parserVersion || "",
       row.sourceFingerprint || "",
+      row.hourlyDerived ? 1 : 0,
       row.uploadedAt || null
     ])]
   );
@@ -2803,7 +2821,7 @@ async function upsertUsageRows(conn, entries) {
       (usageKey, day, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
        model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
        estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
-       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
+       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, hourlyDerived, uploadedAt)
      VALUES ?
      ON DUPLICATE KEY UPDATE
        inputTokens = VALUES(inputTokens),
@@ -2822,6 +2840,7 @@ async function upsertUsageRows(conn, entries) {
        providerVersion = VALUES(providerVersion),
        parserVersion = VALUES(parserVersion),
        sourceFingerprint = VALUES(sourceFingerprint),
+       hourlyDerived = VALUES(hourlyDerived),
        uploadedAt = VALUES(uploadedAt),
        workdirDisplayName = VALUES(workdirDisplayName)`,
     [entries.map(([usageKey, row]) => [
@@ -2851,6 +2870,7 @@ async function upsertUsageRows(conn, entries) {
       row.providerVersion || "",
       row.parserVersion || "",
       row.sourceFingerprint || "",
+      row.hourlyDerived ? 1 : 0,
       row.uploadedAt || null
     ])]
   );
@@ -2863,7 +2883,7 @@ async function insertUsageHourlyRows(conn, entries) {
       (usageKey, day, hour, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
        model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
        estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
-       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
+       rawSourceRef, providerVersion, parserVersion, sourceFingerprint, clientPlatform, uploadedAt)
      VALUES ?`,
     [entries.map(([usageKey, row]) => [
       usageKey,
@@ -2893,6 +2913,7 @@ async function insertUsageHourlyRows(conn, entries) {
       row.providerVersion || "",
       row.parserVersion || "",
       row.sourceFingerprint || "",
+      row.clientPlatform || "",
       row.uploadedAt || null
     ])]
   );
@@ -2940,6 +2961,8 @@ function usageFromRow(row) {
     providerVersion: row.providerVersion || "",
     parserVersion: row.parserVersion || "",
     sourceFingerprint: row.sourceFingerprint || "",
+    clientPlatform: row.clientPlatform || "",
+    hourlyDerived: Boolean(row.hourlyDerived),
     uploadedAt: row.uploadedAt instanceof Date ? row.uploadedAt.toISOString() : row.uploadedAt || ""
   };
 }
