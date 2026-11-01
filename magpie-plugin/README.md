@@ -29,13 +29,7 @@ magpie plugin add ./ai-token-league/magpie-plugin
 magpie plugin add magpie-atl-sync
 ```
 
-**从 GitHub 源码安装**——独立 dist 分支（`magpie-plugin-dist`，目录内容置于仓库根）:
-
-```bash
-magpie plugin add github:SKYhuangjing/ai-token-league#magpie-plugin-dist
-```
-
-> 主仓 `develop` 分支的 `magpie-plugin/` 是开发源;`magpie-plugin-dist` 分支与 npm 包均由 `scripts/publish-magpie-plugin.sh` 生成（`PUSH=1` 推 dist 分支，`NPM=1 NPM_PUBLISH=1` 发 npm），因为 Magpie 的 git 安装按仓库根解析入口，不支持子目录。
+> Git 源码安装不提供：Magpie 的 git 装载按仓库根解析 package.json（本插件在主仓子目录）。npm 是唯一对外通道，由 `scripts/publish-magpie-plugin.sh` 发布（`NPM_PUBLISH=1`）。
 
 安装后在 Magpie 侧栏打开「AI Token League」页。
 
