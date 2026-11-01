@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.20] - 2026-11-01
+
+### Added
+
+- [Desktop, Web] `magpie_local` source display support: colors, labels and ordering across the desktop app, public board and admin console; fed by the new Magpie plugin `magpie-atl-sync` (npm channel, one-line install via `magpie plugin add magpie-atl-sync`) — Magpie users can sync all usage their gateway collects (unified caliber) to the league without keeping the ATL desktop client running. See `magpie-plugin/README.md`.
+
+### Performance
+
+- [Desktop] Trigger convergence, per-entry query caching and VPN-reconnect self-healing: noticeably faster scans and view switching, tray data held in memory, incremental ledger merging (dirty-scope rewrites + zcode request-hash deltas), and runtime-log trimming reduced to once a day.
+
 ## [0.7.19] - 2026-10-12
 
 ### Added

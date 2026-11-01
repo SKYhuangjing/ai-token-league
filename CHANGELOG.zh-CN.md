@@ -6,6 +6,16 @@
 
 ---
 
+## [0.7.20] - 2026-11-01
+
+### Added
+
+- [Desktop, Web] 新来源 `magpie_local` 展示支持：桌面端、公开榜单与后台的配色、标签与排序就位；由新发布的 Magpie 插件 `magpie-atl-sync`（npm 渠道，`magpie plugin add magpie-atl-sync` 一行安装）上报——Magpie 用户可将其网关采集的全部用量（统一口径）同步上榜，替代常开 ATL 客户端，详见 `magpie-plugin/README.md`。
+
+### Performance
+
+- [Desktop] 触发收敛、逐条目查询缓存与 VPN 断连自愈：扫描与界面切换显著提速，托盘数据内存化，账本增量合并（脏 scope 重写 + zcode 请求级哈希增量），运行日志修剪改为每日一次。
+
 ## [0.7.19] - 2026-10-12
 
 ### 新增

@@ -12,7 +12,7 @@
 
 **官方支持平台**：macOS Apple silicon、macOS Intel、Windows x64。
 
-当前版本：`0.7.19`
+当前版本：`0.7.20`
 
 ---
 
@@ -101,6 +101,7 @@
 | DeepSeek Harness | `dsh_local` | 支持 | 扫描本地 DeepSeek Harness 会话日志（多帧 zstd JSONL）。 |
 | Kimi | `kimi_local` | 支持 | 扫描本地 Kimi 桌面客户端 Agent 会话日志。 |
 | Antigravity | `antigravity_local` | 支持 | 扫描本地 Antigravity 会话数据库（SQLite + protobuf）。 |
+| Magpie（插件） | `magpie_local` | 安装 Magpie 插件后支持 | 由 [`magpie-atl-sync` 插件](https://www.npmjs.com/package/magpie-atl-sync) 上报：网关账本中 Magpie 自身与未识别客户端的用量。 |
 
 token 总量规则：
 
@@ -109,6 +110,16 @@ totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
 ```
 
 reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
+
+### Magpie 插件：让 Magpie 用户零客户端上榜
+
+在 [Magpie](https://github.com/yetone/magpie)（AI 网关）里装一行命令，即可把它采集到的**全部用量**（统一口径：网关账本 + 本地 agent 会话扫描，去重后）同步到 AI Token League——不再需要常开 ATL 桌面客户端：
+
+```bash
+magpie plugin add magpie-atl-sync
+```
+
+插件以官方同款协议（Ed25519 签名小时桶、整桶覆盖幂等）上报，仅上传 token 数与模型名；支持在插件页导入 ATL 身份完成同号迁移。详见 [`magpie-plugin/README.md`](magpie-plugin/README.md)。
 
 ---
 
@@ -151,9 +162,9 @@ reasoning tokens 是诊断和成本相关字段，不进入主排行总量。
 
 前往 [GitHub Releases](https://github.com/SKYhuangjing/ai-token-league/releases) 下载对应系统的安装包：
 
-- **macOS Apple silicon**：`AI Token League-0.7.19-mac-arm64-installer.dmg`
-- **macOS Intel**：`AI Token League-0.7.19-mac-x64-installer.dmg`
-- **Windows x64**：`AI Token League-0.7.19-win-x64-installer.exe`
+- **macOS Apple silicon**：`AI Token League-0.7.20-mac-arm64-installer.dmg`
+- **macOS Intel**：`AI Token League-0.7.20-mac-x64-installer.dmg`
+- **Windows x64**：`AI Token League-0.7.20-win-x64-installer.exe`
 
 ### 选项 B：下载 zip 包
 

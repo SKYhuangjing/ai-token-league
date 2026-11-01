@@ -12,7 +12,7 @@ A local-first AI coding token usage collector and public leaderboard for **Codex
 
 **Officially supported platforms**: macOS Apple silicon, macOS Intel, and Windows x64.
 
-Current version: `0.7.19`
+Current version: `0.7.20`
 
 ---
 
@@ -101,6 +101,7 @@ Current version: `0.7.19`
 | DeepSeek Harness | `dsh_local` | Supported | Scans local DeepSeek Harness session logs (multi-frame zstd JSONL). |
 | Kimi | `kimi_local` | Supported | Scans local Kimi desktop agent session logs. |
 | Antigravity | `antigravity_local` | Supported | Scans local Antigravity conversation databases (SQLite + protobuf). |
+| Magpie (plugin) | `magpie_local` | Supported with the Magpie plugin | Fed by the [`magpie-atl-sync` plugin](https://www.npmjs.com/package/magpie-atl-sync): Magpie's own and unknown-client traffic from the gateway ledger. |
 
 Token total rule:
 
@@ -109,6 +110,16 @@ totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
 ```
 
 Reasoning tokens are diagnostic and cost-related fields. They are not part of the main ranking total.
+
+### Magpie plugin: join the league straight from Magpie
+
+Install the plugin inside [Magpie](https://github.com/yetone/magpie) (the AI gateway) with one command and it syncs **all usage Magpie collects** (unified caliber: gateway ledger + local agent session scans, deduplicated) to AI Token League — no ATL desktop client needed:
+
+```bash
+magpie plugin add magpie-atl-sync
+```
+
+The plugin uploads with the same protocol as the official collector (Ed25519-signed hourly buckets, idempotent whole-bucket replace) and sends only token counts and model names; identities can be migrated from ATL via the plugin page import. See [`magpie-plugin/README.md`](magpie-plugin/README.md).
 
 ---
 
@@ -151,9 +162,9 @@ Practical safety tips:
 
 Go to [GitHub Releases](https://github.com/SKYhuangjing/ai-token-league/releases) and download the installer for your system:
 
-- **macOS Apple silicon**: `AI Token League-0.7.19-mac-arm64-installer.dmg`
-- **macOS Intel**: `AI Token League-0.7.19-mac-x64-installer.dmg`
-- **Windows x64**: `AI Token League-0.7.19-win-x64-installer.exe`
+- **macOS Apple silicon**: `AI Token League-0.7.20-mac-arm64-installer.dmg`
+- **macOS Intel**: `AI Token League-0.7.20-mac-x64-installer.dmg`
+- **Windows x64**: `AI Token League-0.7.20-win-x64-installer.exe`
 
 ### Option B: Download Zip Packages
 
