@@ -5561,7 +5561,9 @@ async function testAdminParticipantDetailUsesRangeAndGrainSeparately() {
   try {
     const identity = generateIdentity();
     const deviceId = newId("d");
-    const yesterday = addDays(localDay(), -1);
+    // seeded TODAY: range=month is the calendar month (1st..today), so a
+    // "yesterday" seed would fall outside the window on the 1st of a month
+    const yesterday = localDay();
     await fetch(`${baseUrl}/api/devices/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
