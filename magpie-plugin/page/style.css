@@ -1,0 +1,247 @@
+/* Mirrors magpie's own usage page (internal/gui/assets/app.css + plugins/
+   usage/page.js), rebuilt inside the plugin sandbox: the theme tokens the
+   bridge injects, plus the ones the built-in page synthesizes itself.
+   v3: header is a control row; identity lives in the board card; 4 KPIs;
+   rank legend doubles as the split dimension; settings is a single column. */
+:root {
+  /* the bridge's 15 theme tokens come in as --magpie-*; these are ours */
+  --pill: var(--magpie-card);
+  --line-2: color-mix(in srgb, var(--magpie-line) 55%, var(--magpie-card));
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --pop: color-mix(in srgb, var(--magpie-card) 94%, transparent);
+  --shadow: 0 16px 44px rgba(20, 22, 30, .16), 0 2px 8px rgba(20, 22, 30, .06), 0 0 0 .5px rgba(20, 22, 30, .1);
+  --c1: var(--magpie-accent);
+  --c2: #0ea5e9;
+  --c3: #10b981;
+  --c4: #f59e0b;
+  --c5: #ec4899;
+  --c6: #8b5cf6;
+  --c7: #64748b;
+}
+/* the bridge sets documentElement[data-theme]; the built-in page's dark
+   series colors ride on it */
+[data-theme="dark"] {
+  --shadow: 0 16px 44px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(255, 255, 255, .1);
+  --c1: var(--magpie-accent);
+  --c2: #7dd3fc;
+  --c3: #6ee7b7;
+  --c4: #fcd34d;
+  --c5: #f9a8d4;
+  --c6: #c4b5fd;
+  --c7: #94a3b8;
+}
+/* standalone-preview fallbacks only (the panel always injects the real
+   tokens via the bridge); mirrors the built-in page's light values */
+:root:not([data-theme]) {
+  --magpie-bg: #fff;
+  --magpie-card: #f6f6f7;
+  --magpie-fg: #1d1d1f;
+  --magpie-fg-2: #48484d;
+  --magpie-muted: #6e6e73;
+  --magpie-faint: #98989f;
+  --magpie-line: #e5e5ea;
+  --magpie-accent: #4f46e5;
+  --magpie-accent-soft: rgba(79, 70, 229, .14);
+  --magpie-accent-fg: #fff;
+  --magpie-green: #1d7a36;
+  --magpie-red: #d70015;
+  --magpie-amber: #b25000;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --magpie-bg: #1d1d1f;
+    --magpie-card: #2a2a2d;
+    --magpie-fg: #f2f2f4;
+    --magpie-fg-2: #c8c8cd;
+    --magpie-muted: #98989f;
+    --magpie-faint: #6d6d74;
+    --magpie-line: #3a3a3e;
+    --magpie-accent: #a5b4fc;
+    --magpie-accent-soft: rgba(132, 140, 252, .18);
+    --magpie-accent-fg: #1d1d1f;
+    --magpie-green: #4dc266;
+    --magpie-red: #ff6961;
+    --magpie-amber: #ffb340;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--magpie-bg); color: var(--magpie-fg); }
+body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", system-ui, sans-serif); }
+
+/* ---- control row (app.css .usage-head): switches only, no content ------- */
+.usage-head { display: flex; align-items: center; gap: 10px; min-height: 34px; margin: 0 0 12px; flex-wrap: wrap; }
+.grow { flex: 1; }
+
+/* sync-chip: the one status affordance, present on both views, clickable */
+.sync-chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border: 0; border-radius: 11px; background: var(--pill); font-size: 11.5px; color: var(--magpie-muted); font-variant-numeric: tabular-nums; cursor: default; }
+.sync-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--magpie-faint); flex: none; }
+.sync-chip.ok { color: var(--magpie-fg-2, var(--magpie-fg)); }
+.sync-chip.ok::before { background: var(--magpie-green); }
+.sync-chip.busy { color: var(--magpie-fg-2, var(--magpie-fg)); }
+.sync-chip.busy::before { background: var(--magpie-amber); animation: pulse 1.2s ease-in-out infinite; }
+.sync-chip.err { color: var(--magpie-red); }
+.sync-chip.err::before { background: var(--magpie-red); }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* ---- board strip: name · rank · cloud check · link on one line ---------- */
+.board-strip { display: flex; align-items: center; gap: 10px; padding: 7px 14px; flex-wrap: wrap; min-height: 36px; }
+.bs-id { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.bs-id .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--magpie-green); flex: none; }
+.bs-id b { font-size: 13.5px; font-weight: 600; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bs-sep { width: 1px; height: 14px; background: var(--line-2); flex: none; }
+.bs-rank { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.bs-rank b { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bs-rank #bd-count { font-size: 11.5px; color: var(--magpie-muted); }
+.bs-rank b.stale { color: var(--magpie-muted); }
+.bs-days { font-size: 11px; color: var(--magpie-muted); white-space: nowrap; }
+.chip-lead { display: inline-block; padding: 1px 7px; border-radius: 9px; background: var(--magpie-accent-soft); color: var(--magpie-accent); font-size: 10.5px; font-weight: 600; }
+/* the anonymous alias chip speaks Magpie's own pm-chip language: a small
+   5px-radius badge, soft tint + same-hue text + 5px dot, the hue being the
+   participant's board avatar color (per-user, from publicId) */
+.chip-alias { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px; border-radius: 5px; font-size: 10.5px; font-weight: 500; max-width: 20ch; background: color-mix(in srgb, var(--alias-color, var(--magpie-accent)) 14%, var(--magpie-card)); color: color-mix(in srgb, var(--alias-color, var(--magpie-accent)) 72%, var(--magpie-fg)); }
+.chip-alias .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--alias-color, var(--magpie-accent)); flex: none; }
+.chip-alias .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv .alias-dot { display: inline-block; width: 5px; height: 5px; margin-right: 5px; border-radius: 50%; vertical-align: middle; }
+.bs-cloud { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.bs-cloud .lbl { font-size: 11px; color: var(--magpie-muted); }
+.bs-cloud b { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bs-cloud small { font-size: 11px; color: var(--magpie-muted); font-variant-numeric: tabular-nums; }
+.bs-cloud small.warn { color: var(--magpie-amber); }
+.btn.slim { height: 22px; min-width: 0; padding: 0 10px; font-size: 11px; }
+
+/* ---- segmented control (app.css .segs/.opt/.thumb) ----------------------- */
+.segs { position: relative; display: inline-flex; padding: 2px; border-radius: 7px; background: var(--pill); }
+.segs .opt { position: relative; z-index: 1; height: 22px; padding: 0 10px; border: 0; border-radius: 5px; background: none; font-size: 12px; color: var(--magpie-muted); cursor: default; }
+.segs .opt.on { color: var(--magpie-fg); }
+.segs .opt:hover:not(.on) { color: var(--magpie-fg-2, var(--magpie-fg)); }
+.segs.small .opt { height: 20px; padding: 0 8px; font-size: 11px; }
+.segs .thumb { position: absolute; top: 2px; bottom: 2px; border-radius: 5px; background: var(--magpie-card); box-shadow: 0 1px 2px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .06); transition: left .28s var(--ease), width .28s var(--ease); }
+.segs[data-off] { visibility: hidden; }
+
+/* ---- KPI: ONE box, hairline separators (app.css .stats/.kpi) ------------ */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--magpie-line); border: 1px solid var(--magpie-line); border-radius: 12px; overflow: hidden; margin-bottom: 10px; }
+.kpi { background: var(--magpie-card); padding: 12px 14px 11px; min-width: 0; }
+.kpi:nth-child(4n+2), .kpi:nth-child(4n+3), .kpi:nth-child(4n+4) { border-left: 1px solid var(--line-2); }
+.kpi b { display: block; font-size: 20px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* money reads green in magpie's own UI (.cost), and so it does here */
+.kpi b.cost { color: var(--magpie-green); }
+.kpi span { display: block; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--magpie-muted); margin-top: 3px; }
+.kpi small { display: block; font-size: 11px; color: var(--magpie-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kpi small .err { color: var(--magpie-red); }
+.kpi small span { display: inline; font-size: inherit; letter-spacing: 0; text-transform: none; font-weight: 400; }
+@media (max-width: 640px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .kpi:nth-child(4n+2), .kpi:nth-child(4n+3), .kpi:nth-child(4n+4) { border-left: 0; }
+  .kpi:nth-child(2n) { border-left: 1px solid var(--line-2); }
+  .kpi:nth-child(n+3) { border-top: 1px solid var(--line-2); }
+}
+/* empty state replaces the whole grid (R5): one message + one pointer */
+.stats.empty { display: block; background: var(--magpie-card); padding: 26px 18px; text-align: center; }
+.stats.empty b { display: block; font-size: 14px; font-weight: 600; color: var(--magpie-fg); }
+.stats.empty p { margin: 4px 0 12px; font-size: 12px; color: var(--magpie-muted); }
+
+/* ---- cards --------------------------------------------------------------- */
+.card { background: var(--magpie-card); border: 1px solid var(--magpie-line); border-radius: 12px; padding: 10px 14px; margin-bottom: 10px; }
+.c-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.c-head b { font-size: 12.5px; font-weight: 600; }
+.c-head span { font-size: 11px; color: var(--magpie-muted); }
+.help { margin-left: 2px; font-size: 11px; color: var(--magpie-faint); cursor: help; user-select: none; }
+.grain { font-size: 11px; color: var(--magpie-faint); white-space: nowrap; }
+.led-by { font-size: 11px; color: var(--magpie-faint); }
+
+/* ---- trend chart + rank legend (app.css .led-trend/.led-rank) ------------ */
+.c-body { display: grid; grid-template-columns: minmax(0, 1fr) 272px; gap: 18px; }
+@media (max-width: 860px) { .c-body { grid-template-columns: 1fr; gap: 8px; } }
+.plot { position: relative; height: 236px; overflow: hidden; }
+.plot svg { display: block; }
+.plot .tip { position: absolute; top: 2px; }
+.plot svg g.bar { transition: opacity .18s var(--ease); }
+.plot.has-focus g.bar { opacity: .25; }
+.plot.has-focus g.bar.focus { opacity: 1; }
+.rank { align-self: start; max-height: 244px; overflow-y: auto; scrollbar-width: thin; mask-image: linear-gradient(180deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
+.rk { display: block; width: 100%; padding: 6px 8px 7px; border: 0; border-radius: 8px; background: transparent; text-align: left; font: inherit; color: inherit; cursor: default; }
+.rk:hover { background: var(--pill); }
+.rk.focus { background: var(--pill); }
+.rk-a { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.rk-a i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.rk-a span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.rk-a b { font-weight: 600; font-variant-numeric: tabular-nums; padding-left: 8px; white-space: nowrap; }
+.rk-bar { height: 4px; margin: 5px 0 4px 15px; border-radius: 2px; background: var(--pill); overflow: hidden; }
+.rk-bar i { display: block; height: 100%; border-radius: 2px; }
+.rk-b { margin-left: 15px; font-size: 10.5px; line-height: 1.45; color: var(--magpie-muted); font-variant-numeric: tabular-nums; }
+
+/* ---- tooltip (app.css .tip) ---------------------------------------------- */
+.tip { position: absolute; z-index: 5; min-width: 150px; max-width: 260px; padding: 8px 10px 7px; background: var(--pop); border-radius: 9px; box-shadow: var(--shadow); font-size: 11.5px; pointer-events: none; }
+.tip .tr { display: flex; align-items: center; gap: 7px; padding: 1px 0; }
+.tip .tr i { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+.tip .tr span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tip .tr b { font-variant-numeric: tabular-nums; font-weight: 500; }
+.tip .sum { display: flex; justify-content: space-between; gap: 10px; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line-2); font-variant-numeric: tabular-nums; }
+.tip .sum b { font-weight: 600; }
+
+/* ---- heatmap (app.css .led-heat/.heat-grid; 5 discrete levels) ----------- */
+.heat-scroll { overflow-x: auto; padding-bottom: 4px; }
+.heat-grid { display: grid; grid-template-columns: auto repeat(var(--weeks, 53), minmax(10px, 1fr)); gap: 3px; font-size: 10px; color: var(--magpie-muted); }
+/* an empty day reads as a soft grey cell, not the card's own colour */
+.heat-grid i { aspect-ratio: 1; border-radius: 3px; background: color-mix(in srgb, var(--magpie-line) 50%, var(--magpie-card)); }
+.heat-grid i.l1 { background: color-mix(in srgb, var(--magpie-accent) 22%, var(--pill)); }
+.heat-grid i.l2 { background: color-mix(in srgb, var(--magpie-accent) 45%, var(--pill)); }
+.heat-grid i.l3 { background: color-mix(in srgb, var(--magpie-accent) 70%, var(--pill)); }
+.heat-grid i.l4 { background: var(--magpie-accent); }
+.heat-grid i:hover { outline: 1px solid var(--magpie-fg-2, var(--magpie-fg)); outline-offset: -1px; }
+.heat-grid .wd { padding-right: 6px; line-height: 1; align-self: center; white-space: nowrap; }
+.heat-grid .mo { grid-row: 1; line-height: 1.2; padding-bottom: 2px; white-space: nowrap; overflow: visible; }
+.heat-foot { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 4px; font-size: 10.5px; color: var(--magpie-muted); }
+.heat-foot i { width: 10px; height: 10px; border-radius: 2.5px; display: inline-block; background: color-mix(in srgb, var(--magpie-line) 50%, var(--magpie-card)); }
+.heat-foot i.l1 { background: color-mix(in srgb, var(--magpie-accent) 22%, var(--pill)); }
+.heat-foot i.l2 { background: color-mix(in srgb, var(--magpie-accent) 45%, var(--pill)); }
+.heat-foot i.l3 { background: color-mix(in srgb, var(--magpie-accent) 70%, var(--pill)); }
+.heat-foot i.l4 { background: var(--magpie-accent); }
+.heat-wrap { position: relative; }
+.heat-wrap .tip { top: auto; }
+
+/* ---- skeletons (R6): same shape as the content they stand in ------------ */
+.sk { position: relative; overflow: hidden; background: var(--pill); border-radius: 6px; }
+.sk::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--magpie-fg) 6%, transparent), transparent); animation: sweep 1.4s ease infinite; }
+@keyframes sweep { 100% { transform: translateX(100%); } }
+.sk-num { height: 20px; width: 64%; margin-bottom: 5px; }
+.sk-label { height: 9px; width: 40%; }
+.sk-plot { height: 236px; border-radius: 8px; }
+
+/* ---- settings: identity row + config/sync two-column --------------------- */
+.id-card { padding: 10px 14px; }
+.id-line { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.id-line .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--magpie-green); flex: none; }
+.id-nick { font-size: 14px; font-weight: 600; letter-spacing: -.01em; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.id-meta { display: flex; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--magpie-faint); }
+.id-meta .idsep { color: var(--magpie-faint); }
+.setcols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+.setcols .card { margin-bottom: 0; min-width: 0; }
+@media (max-width: 760px) { .setcols { grid-template-columns: 1fr; } }
+/* ---- settings rows --------------------------------------------------------- */
+.chip { display: inline-block; padding: 1px 9px; border-radius: 9px; background: var(--magpie-accent-soft); color: var(--magpie-accent); font-size: 11px; font-weight: 500; }
+/* native settings rows: label left, value right, hairline between */
+.srow { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; min-height: 28px; }
+.srow + .srow { border-top: 1px solid var(--line-2); }
+.srow .sl { flex: 0 0 96px; font-size: 11.5px; color: var(--magpie-muted); }
+.srow .sv { flex: 1; min-width: 0; font-size: 12.5px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.srow .sv.mono { font-family: var(--magpie-code, ui-monospace, Menlo, monospace); font-size: 11.5px; }
+.srow .sv .ok { color: var(--magpie-green); }
+.srow .sv .err { color: var(--magpie-red); }
+.srow .sv.stale { color: var(--magpie-muted); }
+label { display: block; font-size: 12px; color: var(--magpie-muted); margin: 12px 0 4px; }
+input[type="text"], input[type="date"] { width: 100%; padding: 5px 9px; border: 1px solid var(--magpie-line); border-radius: 6px; background: var(--magpie-card); color: var(--magpie-fg); font: inherit; }
+input[type="text"]:focus-visible, input[type="date"]:focus-visible { outline: 2px solid var(--magpie-accent); outline-offset: 1px; }
+.switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 2px; font-size: 12.5px; }
+.actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.btn { height: 26px; min-width: 64px; padding: 0 12px; border: 0; border-radius: 13px; font-size: 12px; font-weight: 600; background: var(--pill); color: var(--magpie-fg-2, var(--magpie-fg)); cursor: default; }
+.btn:hover { color: var(--magpie-fg); }
+.btn.primary { background: var(--magpie-accent-soft); color: var(--magpie-accent); }
+.btn.primary:hover { background: var(--magpie-accent); color: var(--magpie-accent-fg, #fff); }
+.btn:disabled { opacity: .55; }
+
+/* ---- toast (bottom-right, one at a time) ---------------------------------- */
+.toast { position: fixed; right: 16px; bottom: 16px; z-index: 20; max-width: min(340px, calc(100vw - 32px)); padding: 8px 14px; border-radius: 10px; background: var(--pop); box-shadow: var(--shadow); font-size: 12px; color: var(--magpie-fg); animation: toast-in .18s var(--ease); }
+.toast.err { color: var(--magpie-red); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+[hidden] { display: none !important; }

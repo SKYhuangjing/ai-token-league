@@ -1,0 +1,5 @@
+# runtime bridges the sync process writes beside the page (regenerated every
+# sync; the publish script strips them from the dist branch)
+page/status.js
+page/usage-data.js
+*.tgz

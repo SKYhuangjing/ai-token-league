@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Token League</title>
+<link rel="stylesheet" href="style.css">
+<script src="_magpie/bridge.js"></script>
+<script src="view.js"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<!-- v3: the header is a control row only (Magpie's usage-head pattern) —
+     no title (the host sidebar names this page), no identity (that is
+     content, it lives in the board card), no status line (sync-chip). -->
+<div class="usage-head">
+  <div class="segs" id="views">
+    <span class="thumb"></span>
+    <button type="button" class="opt" data-view="usage" aria-selected="true" data-t="usage">用量</button>
+    <button type="button" class="opt" data-view="settings" aria-selected="false" data-t="settings">设置</button>
+  </div>
+  <div class="segs small" id="periods">
+    <span class="thumb"></span>
+    <button type="button" class="opt" data-range="1" aria-selected="false" data-t="today">今日</button>
+    <button type="button" class="opt" data-range="7" aria-selected="true" data-t="d7">近 7 天</button>
+    <button type="button" class="opt" data-range="30" aria-selected="false" data-t="d30">近 30 天</button>
+    <button type="button" class="opt" data-range="0" aria-selected="false" data-t="all">全部</button>
+  </div>
+  <span class="grow"></span>
+  <button class="sync-chip" type="button" id="sync-chip" role="status" aria-live="polite">尚未同步</button>
+</div>
+
+<section id="view-usage">
+  <!-- a compact status strip, not a hero card: name · rank · cloud check ·
+       board link on ONE line (wraps when narrow). Hidden entirely when no
+       apiBaseUrl is configured. -->
+  <section class="card board-strip" id="board" role="group" aria-label="今日战况" hidden>
+    <span class="bs-id"><i class="dot"></i><b id="bd-nick">—</b></span>
+    <span class="chip-alias" id="bd-alias" hidden></span>
+    <i class="bs-sep"></i>
+    <span class="bs-rank"><b id="bd-rank">—</b><span id="bd-count"></span><span class="chip-lead" id="bd-lead" hidden data-t="leading">领先</span></span>
+    <span class="bs-days" id="bd-days"></span>
+    <i class="bs-sep"></i>
+    <span class="bs-cloud"><span class="lbl" data-t="cloudToday">云端今日</span><b id="bd-cloud">—</b><small id="bd-compare"></small></span>
+    <span class="grow"></span>
+    <button class="btn slim" type="button" data-open-board data-t="openBoard">打开榜单</button>
+  </section>
+
+  <section class="stats" id="stats">
+    <div class="kpi"><b id="k-total">—</b><span data-t="kTotal">总量</span><small id="k-total-s"></small></div>
+    <div class="kpi"><b id="k-cache">—</b><span data-t="kCache">缓存读取</span><small id="k-cache-s"></small></div>
+    <div class="kpi"><b id="k-calls">—</b><span data-t="kRequests">请求</span><small id="k-calls-s"></small></div>
+    <div class="kpi"><b id="k-cost" class="cost">—</b><span data-t="kCost">费用</span><small id="k-cost-s"></small></div>
+  </section>
+
+  <section class="card" id="trend-card">
+    <div class="c-head">
+      <b data-t="trend">趋势</b>
+      <div class="segs small" id="metric">
+        <span class="thumb"></span>
+        <button type="button" class="opt" data-metric="tokens" aria-selected="true" data-t="mTokens">Token</button>
+        <button type="button" class="opt" data-metric="calls" aria-selected="false" data-t="mCalls">请求</button>
+        <button type="button" class="opt" data-metric="cost" aria-selected="false" data-t="mCost">费用</button>
+      </div>
+      <span class="grow"></span>
+      <span class="led-by" data-t="splitBy">按</span>
+      <div class="segs small" id="splitby">
+        <span class="thumb"></span>
+        <button type="button" class="opt" data-split="source" aria-selected="true" data-t="splitSource">来源</button>
+        <button type="button" class="opt" data-split="model" aria-selected="false" data-t="splitModel">模型</button>
+      </div>
+      <span class="grain" id="grain">按日</span>
+    </div>
+    <div class="c-body">
+      <div class="plot" id="chart"></div>
+      <div class="rank" id="chart-legend"></div>
+    </div>
+  </section>
+
+  <section class="card heat-wrap" id="heat-card">
+    <div class="c-head"><b data-t="heat">活跃热力图</b><span data-t="heatSub" id="heat-sub" title="">53 周 · 按日</span></div>
+    <div class="heat-scroll"><div class="heat-grid" id="heat"></div></div>
+    <div class="heat-foot"><span data-t="less">少</span><i></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><span data-t="more">多</span></div>
+    <div class="tip heat-tip" id="heat-tip" hidden></div>
+  </section>
+
+</section>
+
+<section id="view-settings" hidden>
+  <!-- identity: one compact row — name + source chip + truncated ids +
+       the two actions. No ceremonial big-name card. -->
+  <section class="card id-card">
+    <div class="id-line">
+      <i class="dot"></i><b class="id-nick" id="s-nick">—</b><span class="chip" id="s-source">—</span>
+      <span class="grow"></span>
+      <button class="btn" type="button" id="b-import" data-t="importBtn">导入</button>
+      <button class="btn" type="button" id="b-export" data-t="exportBtn">导出</button>
+    </div>
+    <div class="id-meta mono"><span id="s-pid" title="">—</span><span class="idsep">·</span><span id="s-device" title="">—</span></div>
+    <div class="srow" id="s-alias-row" hidden><span class="sl" data-t="aliasLabel">匿名名称</span><span class="sv" id="s-alias">—</span></div>
+    <input type="file" id="f-import" accept="application/json,.json" hidden>
+  </section>
+
+  <!-- config and sync side by side: the form and the state card fill one
+       row instead of stacking into a tall sparse column -->
+  <div class="setcols">
+    <section class="card">
+      <div class="c-head"><b data-t="cfgTitle">配置</b><span class="help" id="h-privacy">ⓘ</span></div>
+      <label for="f-api" data-t="cfgApi">服务端地址</label>
+      <input type="text" id="f-api" spellcheck="false">
+      <label for="f-nickname" data-t="cfgNick">昵称</label>
+      <input type="text" id="f-nickname" spellcheck="false">
+      <label for="f-since" data-t="cfgSince">起始日期</label>
+      <input type="date" id="f-since">
+      <div class="switch"><span data-t="cfgFreq" id="freq-label">同步频率</span>
+        <div class="segs small" id="freq">
+          <span class="thumb"></span>
+          <button type="button" class="opt" data-interval="5" aria-selected="false" data-t="f5">5 分钟</button>
+          <button type="button" class="opt" data-interval="15" aria-selected="true" data-t="f15">15 分钟</button>
+          <button type="button" class="opt" data-interval="30" aria-selected="false" data-t="f30">30 分钟</button>
+          <button type="button" class="opt" data-interval="60" aria-selected="false" data-t="f60">1 小时</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" type="button" id="b-save" data-t="save">保存</button>
+        <button class="btn" type="button" id="b-test" data-t="test">测试连接</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="c-head"><b data-t="syncTitle">同步</b></div>
+      <div class="srow"><span class="sl" data-t="lastResult">上次结果</span><span class="sv" id="s-last">—</span></div>
+      <div class="srow"><span class="sl" data-t="dataSource">数据源</span><span class="sv" id="s-channel">—</span></div>
+      <div class="srow"><span class="sl" data-t="syncStats">同步统计</span><span class="sv" id="s-stats">—</span></div>
+      <div class="srow"><span class="sl" data-t="server">服务端</span><span class="sv mono" id="s-server">—</span></div>
+      <div class="srow" id="s-export-row" hidden><span class="sl" data-t="lastExport">最近导出</span><span class="sv mono" id="s-export">—</span></div>
+      <div class="actions">
+        <button class="btn primary" type="button" id="b-sync" data-t="syncNow">立即同步</button>
+      </div>
+    </section>
+  </div>
+</section>
+
+<div class="toast" id="toast" hidden></div>
+</body>
+</html>
