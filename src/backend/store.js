@@ -562,6 +562,15 @@ export class Store {
     // bucket-scoped delete of stale rows
     this.deleteBucketUsageRows(input.participantId, input.deviceId, snapshot.day, snapshot.providerId, [...incomingKeys]);
 
+    // Cross-granularity writer precedence: a client-class daily snapshot is the
+    // client's whole-day claim on this provider scope. Plugin-class hourly
+    // rows (e.g. a reconcile over a scope the plugin backfilled) must yield,
+    // or the two measurements would sum in usage_daily. Drop them and re-derive.
+    if (!isPluginWriter(input)) {
+      this.dropPluginHourlyRowsForDailyScope(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
+      this.deriveDailyFromHourly(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);
+    }
+
     // record bucket metadata
     this.recordBucketSync({
       participantId: input.participantId,
@@ -599,6 +608,37 @@ export class Store {
       .some((row) => row.clientPlatform !== PLUGIN_WRITER_PLATFORM);
   }
 
+  /// A client-class daily-granularity snapshot claims the whole provider-day:
+  /// its rows are non-derived (the plugin never writes daily rows), so any
+  /// non-derived daily row in scope marks client ownership. Hour-level
+  /// arbitration cannot work against day-granularity facts, so a claimed scope
+  /// suppresses plugin fills entirely instead of double counting.
+  dailyScopeHasClientRows(participantId, deviceId, day, providerId) {
+    return Object.values(this.db.usageDaily || {}).some((row) => (
+      row.participantId === participantId
+      && row.deviceId === deviceId
+      && row.day === day
+      && row.providerId === providerId
+      && !row.hourlyDerived
+    ));
+  }
+
+  /// Day-wide companion of the hourly arbitration: used by the daily-granularity
+  /// upload path when a client-class snapshot claims a scope the plugin filled.
+  dropPluginHourlyRowsForDailyScope(participantId, deviceId, day, providerId) {
+    for (const [key, row] of Object.entries(this.db.usageHourly || {})) {
+      if (
+        row.participantId === participantId
+        && row.deviceId === deviceId
+        && row.day === day
+        && row.providerId === providerId
+        && row.clientPlatform === PLUGIN_WRITER_PLATFORM
+      ) {
+        delete this.db.usageHourly[key];
+      }
+    }
+  }
+
   upsertHourlySnapshotBatch(input) {
     const now = new Date().toISOString();
     const snapshot = input.snapshot;
@@ -631,8 +671,15 @@ export class Store {
     // already holds client-class rows is outranked. Ack it as noOp (with the
     // plugin's own itemCount, which its uploader checks) so the plugin's
     // manifest settles — no rows written, no bucket metadata updated.
+    // Runs after payload validation so a poisoned plugin body cannot buy a 200
+    // ack through this branch.
+    assertNoForbiddenUploadFields(input);
     const writerPlatform = String(input?.client?.clientPlatform || "").trim();
-    if (isPluginWriter(input) && this.hourlyBucketHasClientRows(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId)) {
+    if (
+      isPluginWriter(input)
+      && (this.hourlyBucketHasClientRows(input.participantId, input.deviceId, snapshot.day, snapshotHour, snapshot.providerId)
+        || this.dailyScopeHasClientRows(input.participantId, input.deviceId, snapshot.day, snapshot.providerId))
+    ) {
       return { accepted: acceptedItemCount, rejected, duplicate: true, noOp: true, outranked: true };
     }
 
@@ -648,7 +695,6 @@ export class Store {
       }
     }
 
-    assertNoForbiddenUploadFields(input);
     const incomingHourlyKeys = new Set();
     const priceMap = this.priceMap();
 
@@ -795,8 +841,11 @@ export class Store {
       }
     }
 
-    // Delete any non-derived daily rows for this bucket that are no longer valid
-    // (legacy rows that should be replaced by hourly-derived rows)
+    // Delete stale hourly-derived daily rows for this bucket: derived rows
+    // whose group no longer exists in usage_hourly (bucket shrunk, workdir or
+    // model gone, or plugin rows dropped by writer precedence). Legacy
+    // non-derived daily rows are NOT touched — they are protected against the
+    // hourly path by design (see deleteBucketUsageRows for the mirror guard).
     for (const [key, row] of Object.entries(this.db.usageDaily)) {
       if (
         row.participantId === participantId &&

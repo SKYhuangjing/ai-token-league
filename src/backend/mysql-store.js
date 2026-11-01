@@ -158,6 +158,7 @@ export class MySqlStore extends Store {
       "INSERT IGNORE INTO app_meta (metaKey, metaValue, updatedAt) VALUES (?, ?, ?)",
       ["serverInstanceId", newId("srv"), now]
     );
+    await this.ensureUsageDailyDerivedBackfill();
     await this.pool.query(
       `CREATE TABLE IF NOT EXISTS usage_sync_buckets (
         bucketKey VARCHAR(512) PRIMARY KEY,
@@ -292,8 +293,42 @@ export class MySqlStore extends Store {
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sharing_claims' AND COLUMN_NAME = 'lastSeq'`
     );
     if (!claimSeqColumns.length) {
-      await this.pool.query("ALTER TABLE sharing_claims ADD COLUMN lastSeq BIGINT NOT NULL DEFAULT 0 AFTER lastUsedAt, ADD COLUMN revokedBy VARCHAR(16) NOT NULL DEFAULT '' AFTER lastSeq, ADD COLUMN revokedAt BIGINT NOT NULL DEFAULT 0 AFTER revokedBy, ADD COLUMN revokeReason VARCHAR(80) NOT NULL DEFAULT '' AFTER revokedAt");
+      await this.pool.query("ALTER TABLE sharing_claims ADD COLUMN lastSeq BIGINT NOT NULL DEFAULT 0 AFTER lastUsedAt, ADD COLUMN revokedBy VARCHAR(16) NOT NULL DEFAULT '' AFTER lastSeq, ADD COLUMN revokedAt BIGINT NOT NULL DEFAULT 0 AFTER revokedBy, ADD COLUMN revokeReason VARCHAR(80) NOT NULL DEFAULT '' AFTER revokeAt");
     }
+  }
+
+  /// One-time compatibility backfill: every usage_daily row whose natural
+  /// group exists in usage_hourly is hourly-derived content and must carry the
+  /// flag — otherwise the fixed stale-row cleanup treats all pre-column rows
+  /// as legacy-protected and leaks zombie daily rows the next time a bucket
+  /// shrinks (scan correction / log cleanup). Existing deployments cannot ask
+  /// users to reset their data, so boot migrates them in place. Rows with no
+  /// hourly backing keep flag=0: those are true legacy daily-mode writes the
+  /// hourly path must keep protecting. Model comparison relies on the schema's
+  /// case-insensitive collation, matching deriveDailyFromHourly's grouping.
+  async ensureUsageDailyDerivedBackfill() {
+    const markerKey = "usageDailyHourlyDerivedBackfillV1";
+    const [marker] = await this.pool.query("SELECT metaValue FROM app_meta WHERE metaKey = ?", [markerKey]);
+    if (marker.length) return;
+    const [result] = await this.pool.query(
+      `UPDATE usage_daily d
+       SET d.hourlyDerived = 1
+       WHERE EXISTS (
+         SELECT 1 FROM usage_hourly h
+         WHERE h.participantId = d.participantId
+           AND h.deviceId = d.deviceId
+           AND h.day = d.day
+           AND h.providerId = d.providerId
+           AND h.toolCode = d.toolCode
+           AND h.workdirHash = d.workdirHash
+           AND h.model = d.model
+       )`
+    );
+    const now = new Date().toISOString();
+    await this.pool.query(
+      "REPLACE INTO app_meta (metaKey, metaValue, updatedAt) VALUES (?, ?, ?)",
+      [markerKey, `flagged=${result.affectedRows}`, now]
+    );
   }
 
   async load() {
@@ -2076,7 +2111,7 @@ export class MySqlStore extends Store {
             (usageKey, day, participantId, deviceId, toolCode, providerId, workdirId, workdirHash, workdirDisplayName,
              model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens,
              estimatedCostUsd, costQuality, pricingVersion, pricingModel, pricingSource, sourceQuality,
-             rawSourceRef, providerVersion, parserVersion, sourceFingerprint, uploadedAt)
+             rawSourceRef, providerVersion, parserVersion, sourceFingerprint, hourlyDerived, uploadedAt)
            VALUES ?
            ON DUPLICATE KEY UPDATE
              inputTokens = VALUES(inputTokens), outputTokens = VALUES(outputTokens),
@@ -2087,28 +2122,45 @@ export class MySqlStore extends Store {
              pricingSource = VALUES(pricingSource), sourceQuality = VALUES(sourceQuality),
              rawSourceRef = VALUES(rawSourceRef), providerVersion = VALUES(providerVersion),
              parserVersion = VALUES(parserVersion), sourceFingerprint = VALUES(sourceFingerprint),
+             hourlyDerived = VALUES(hourlyDerived),
              uploadedAt = VALUES(uploadedAt), workdirDisplayName = VALUES(workdirDisplayName)`,
           [[[uk, row.day, row.participantId, row.deviceId, row.toolCode, row.providerId, row.workdirId, row.workdirHash, row.workdirDisplayName,
              row.model, row.inputTokens || 0, row.outputTokens || 0, row.cacheReadTokens || 0, row.cacheWriteTokens || 0, row.reasoningTokens || 0, row.totalTokens || 0,
              row.estimatedCostUsd, row.costQuality || "", row.pricingVersion || "", row.pricingModel || "", row.pricingSource || "", row.sourceQuality || "unknown",
-             row.rawSourceRef || "", row.providerVersion || "", row.parserVersion || "", row.sourceFingerprint || "", row.uploadedAt || null]]]
+             row.rawSourceRef || "", row.providerVersion || "", row.parserVersion || "", row.sourceFingerprint || "", row.hourlyDerived ? 1 : 0, row.uploadedAt || null]]]
         );
       }
 
-      // bucket-scoped delete of stale rows (only accepted keys, not rejected items)
+      // bucket-scoped delete of stale rows (only accepted keys, not rejected
+      // items). hourlyDerived guard mirrors deleteBucketUsageRows: a daily-mode
+      // upload must never delete rows derived from hourly facts.
       const incomingKeys = result.incomingKeys || [];
       if (incomingKeys.length > 0) {
         const placeholders = incomingKeys.map(() => "?").join(",");
         await conn.query(
-          `DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ? AND usageKey NOT IN (${placeholders})`,
+          `DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ? AND hourlyDerived = 0 AND usageKey NOT IN (${placeholders})`,
           [input.participantId, input.deviceId, snapshot.day, snapshot.providerId, ...incomingKeys]
         );
       } else {
         await conn.query(
-          `DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?`,
+          `DELETE FROM usage_daily WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ? AND hourlyDerived = 0`,
           [input.participantId, input.deviceId, snapshot.day, snapshot.providerId]
         );
       }
+
+      // Mirror the day-wide hourly scope as well: the daily path may have
+      // dropped plugin-class hourly rows for writer precedence (memory is the
+      // source of truth here), and the daily mirror above never touches
+      // usage_hourly.
+      await conn.query(
+        "DELETE FROM usage_hourly WHERE participantId = ? AND deviceId = ? AND day = ? AND providerId = ?",
+        [input.participantId, input.deviceId, snapshot.day, snapshot.providerId]
+      );
+      const hourlyScopeEntries = Object.entries(this.db.usageHourly || {}).filter(
+        ([, row]) => row.participantId === input.participantId && row.deviceId === input.deviceId && row.day === snapshot.day && row.providerId === snapshot.providerId
+      );
+      await this.syncWorkdirsForUsageEntries(conn, hourlyScopeEntries);
+      await insertUsageHourlyRows(conn, hourlyScopeEntries);
 
       // upsert bucket metadata
       const meta = this.getBucketSync(input.participantId, input.deviceId, snapshot.day, snapshot.providerId);

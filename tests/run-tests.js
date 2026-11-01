@@ -1418,6 +1418,63 @@ function testHourlyDerivedFlagSurvivesReloadAndCleansStaleRows() {
   console.log("  testHourlyDerivedFlagSurvivesReloadAndCleansStaleRows passed");
 }
 
+function testDailySnapshotClaimReplacesPluginHourlyRows() {
+  const tmp = path.join(os.tmpdir(), `test-daily-claim-${Date.now()}.json`);
+  const store = new Store(tmp);
+  const pid = "p_dc", did = "d_dc";
+  store.registerDevice({
+    participantId: pid, deviceId: did,
+    nickname: "dc", identityPublicKey: "pk_dc", os: "test", appVersion: "0.1.0"
+  });
+  const pluginClient = { clientProtocolVersion: 2, clientPlatform: "magpie-plugin", clientBuild: "magpie-bun-0.2.0" };
+
+  // plugin backfills two hours of a scope the client only ever wrote in
+  // daily granularity (legacy manifest shape — reconcile sends these)
+  for (const hour of [9, 10]) {
+    const bucket = makeHourlySnapshotPayload([
+      makeSnapshotItem({ hour, workdirHash: "wh_magpie", workdirDisplayName: "Magpie", model: "glm-5.3", inputTokens: 80, outputTokens: 0, totalTokens: 80 })
+    ], pid, did, { hour });
+    bucket.client = pluginClient;
+    const r = store.upsertUsageBatch(bucket);
+    assert.equal(r.noOp, undefined);
+  }
+  assert.equal(Object.values(store.db.usageHourly).length, 2);
+  assert.equal(Object.values(store.db.usageDaily).length, 1);
+  assert.equal(Object.values(store.db.usageDaily)[0].totalTokens, 160);
+
+  // client-class daily snapshot claims the whole scope
+  const dailyItems = [
+    makeSnapshotItem({ workdirHash: "wh_real", workdirDisplayName: "Real", model: "gpt-5", inputTokens: 300, outputTokens: 0, totalTokens: 300 })
+  ];
+  const daily = makeSnapshotPayload(dailyItems, pid, did);
+  const claimed = store.upsertSnapshotBatch(daily);
+  assert.equal(claimed.accepted, 1);
+
+  // plugin hourly rows and their derived daily rows must be gone; the client's
+  // daily row is the scope's only accounting — no double count
+  assert.equal(Object.values(store.db.usageHourly).length, 0, "client daily claim must drop plugin hourly rows");
+  const dailyRows = Object.values(store.db.usageDaily);
+  assert.equal(dailyRows.length, 1);
+  assert.equal(dailyRows[0].totalTokens, 300);
+  assert.equal(dailyRows[0].workdirHash, "wh_real");
+
+  // plugin re-upload of the dropped hour: the scope now holds a client daily
+  // claim (non-derived rows), and hour-level arbitration cannot decompose day
+  // facts — so the refill must be suppressed rather than double count.
+  const refill = makeHourlySnapshotPayload([
+    makeSnapshotItem({ hour: 9, workdirHash: "wh_magpie", workdirDisplayName: "Magpie", model: "glm-5.3", inputTokens: 80, outputTokens: 0, totalTokens: 80 })
+  ], pid, did, { hour: 9 });
+  refill.client = pluginClient;
+  const refillResult = store.upsertUsageBatch(refill);
+  assert.equal(refillResult.noOp, true, "daily-claimed scope must suppress plugin refill (no hour decomposition → no double count)");
+  assert.equal(Object.values(store.db.usageHourly).length, 0);
+  assert.equal(Object.values(store.db.usageDaily).length, 1);
+  assert.equal(Object.values(store.db.usageDaily)[0].totalTokens, 300);
+
+  if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  console.log("  testDailySnapshotClaimReplacesPluginHourlyRows passed");
+}
+
 function testHourlySnapshotSameBucketCaseCollisionSums() {
   const tmp = path.join(os.tmpdir(), `test-hourly-case-collision-${Date.now()}.json`);
   const store = new Store(tmp);
@@ -3579,6 +3636,7 @@ testHourlySnapshotDerivesDailyAndProtectsFromLegacy();
 testHourlySnapshotMixedCaseModelMerges();
 testWriterPrecedencePluginOutrankedByClient();
 testHourlyDerivedFlagSurvivesReloadAndCleansStaleRows();
+testDailySnapshotClaimReplacesPluginHourlyRows();
 testHourlySnapshotSameBucketCaseCollisionSums();
 testHourlySnapshotPoisonedBucketHealsOnReupload();
 testSnapshotWorkdirHashChange();
