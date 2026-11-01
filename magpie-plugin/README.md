@@ -2,102 +2,98 @@
 
 [![npm version](https://img.shields.io/npm/v/magpie-atl-sync.svg)](https://www.npmjs.com/package/magpie-atl-sync)
 
-把 Magpie 采集的**全部用量**（统一口径）同步到 AI Token League 榜单。
+A usage page in [magpie](https://usemagpie.ai)'s window that syncs everything magpie sees — the unified ledger (gateway ledger plus every local agent session magpie scans, deduped by request id) — to an [AI Token League](https://github.com/SKYhuangjing/ai-token-league) leaderboard, signed with its own Ed25519 identity.
 
-**口径**：与 Magpie「用量」页所见同源——网关账本 + 全部 agent 的本地会话扫描，request id 去重。不是"只走网关的流量"：只要 Magpie 能看见的用量（含 ZCode/Claude Code/Codex/Kimi/WorkBuddy/DSH/Hermes 等本地会话），本插件都会带上传。
+Made by **Sky Huang**, part of [SKYhuangjing/ai-token-league](https://github.com/SKYhuangjing/ai-token-league) (this package lives in its `magpie-plugin/` directory).
 
-- **数据源**（降级链，按序取用）:
-  1. `magpie usage --csv` —— 官方 CLI 导出统一口径。**例行同步只读滚动窗口**（`--days N`，默认 7 天，历史不可变+桶指纹清单保证增量正确;~0.8 秒）。**每天第一个同步自动升为全量读取对账一次**（与 ATL 的每日全量同步同语义:重核全部指纹、漂移即上传）;`--full`、首次同步、页面摘要缓存缺失时也为全量。页面所需的全史视图由 `page-summary.json` 缓存与窗口日覆盖合并供给
-  2. 网关只读 API `GET /v1/magpie/usage/requests`（JSON 分页，本机免 key）—— CLI 不可用时后备，默认只拉近 7 天窗口
-  3. 网关账本文件 `~/.config/magpie/usage.jsonl` —— 末位兜底（仅网关口径）
-- **归因**:按 `agent`（发起请求的客户端）映射到 ATL 既有来源——`zcode→zcode_local`、`claude→claude_code_local`、`codex→codex_local`、`opencode→opencode_local`、`kimi→kimi_local`、`workbuddy→workbuddy_local`、`dsh→dsh_local`、`hermes→hermes_local`;`magpie` → 新来源 `magpie_local`;ATL 没有对应来源的 agent 明确跳过并计数，不误归因
-- **协议**:与官方 collector 完全一致的 Ed25519 签名 + 小时桶快照（`/api/usage/daily-batches`），整桶覆盖幂等，重复上报安全
-- **隐私**:白名单 18 字段显式构造;账号邮箱、host、session、response_id 在解析层即被丢弃，永不上传
+## Install
 
-## 安装
-
-**本地开发（官方就地加载标准）**:
-
-```bash
-git clone https://github.com/SKYhuangjing/ai-token-league.git
-magpie plugin add ./ai-token-league/magpie-plugin
-```
-
-**从 npm 安装**（首选——Magpie 装载先问 npm）:
-
-```bash
+```sh
 magpie plugin add magpie-atl-sync
 ```
 
-> Git 源码安装不提供：Magpie 的 git 装载按仓库根解析 package.json（本插件在主仓子目录）。npm 是唯一对外通道，由 `scripts/publish-magpie-plugin.sh` 发布（`NPM_PUBLISH=1`）。
+Or, for development, load the repo checkout in place:
 
-安装后在 Magpie 侧栏打开「AI Token League」页。
-
-> 插件卡片上的**「请求 Hook」徽章**与**「选项」按钮**是 Magpie 给所有带网关 hooks 插件的标准件:hooks 是同步触发器（onRequest 为宿主要求必须导出）;「选项」是宿主原生的 options JSON 编辑器，与插件页设置写同一份数据，正常使用不需要碰它。
-
-## 插件页
-
-**用量视图**
-
-- 控制行:用量/设置 · 时间范围（今日/近 7 天/近 30 天/全部） · 同步 chip（成功=绿·相对时间;同步中=琥珀·N/M 批;失败=红·点击跳详情）
-- 状态条（配置服务端后显示）:`● 昵称 · #名次 · 领先/榜首 N 天 · 云端今日 X · 与本地一致/落后 · [打开榜单]`——完整参与者 ID 在悬停里;「打开榜单」由宿主进程开浏览器（页面沙箱无弹窗能力）
-- KPI×4:总量（副行给输入/输出/缓存推导）、缓存读取（提示词口径命中率，公式在悬停）、请求（失败数红显）、费用（`≈$` 牌价估算，无价显示空）
-- 趋势:Token/请求/费用 × 来源/模型（今日固定按小时·按来源）;右侧图例=排名=过滤器，点行聚焦图中该序列
-- 活跃热力图:53 周按日
-- 四态齐备:骨架屏/空态（一句话+去设置）/同步中进度/失败保留最后数据
-
-**设置视图**（一行身份 + 双列配置/同步）
-
-- 身份:昵称 + 来源 chip + 截断 ID + **导入/导出**
-- 配置:服务端地址、昵称（一次性改名）、起始日期、**同步频率 5/15/30/60 分钟**（即时生效）、保存/测试连接
-- 同步:上次结果/数据源/统计/服务端 + 立即同步
-
-页面零说明文:口径、公式、隐私、导入格式全部在 tooltip。
-
-## 导入 / 导出（身份迁移）
-
-- **导入**（ATL 设置页「导出配置」生成的 JSON）= 明确的身份切换:
-  - 旧身份自动备份为 `identity.json.<旧pid>.bak`（0600），可换回
-  - **服务端地址一并采用**（导出带哪个服务器就切哪个——同身份重导入换服务器即切换后端的正规路径）
-  - 首次导入到全新机器时，若本机尚未配置任何服务端，也直接采用导出的地址
-- **导出**:同格式写 `~/Downloads/atl-magpie-config-<时间戳>.json`（0600，含私钥，留在本机）
-- 昵称改名是**一次性命令**（保存即提交、用后即焚），不存在常驻昵称配置——常驻值会与导入来的身份互相改写（已修的历史 bug）
-
-## 触发机制
-
-- 每个网关请求前后（onRequest/onResponse）节流 60s 拉起独立同步进程
-- 常驻兜底间隔 = 插件页「同步频率」（`syncIntervalMinutes`，默认 15 分钟）
-- 页面按钮（立即同步/测试连接/导出配置/打开榜单）经 options 命令握手，由宿主进程代执（页面沙箱无网络无弹窗）
-
-CLI/诊断:
-
-```bash
-cd <插件目录>
-bun sync.js --dry-run          # 只打印分桶与总量,不上传
-bun sync.js --test-connection  # 探活服务端
-bun sync.js --export-config    # 导出迁移配置到 Downloads
+```sh
+magpie plugin add ./ai-token-league/magpie-plugin
 ```
 
-状态文件:`~/.config/magpie/atl-sync/`（identity.json 0600 / sync-state.<server>.json 按服务端分清单，断点续传 / sync.log）。
+It then has a page, **AI Token League** (用量), under Plugins in the sidebar. Installing from a git URL is not offered: magpie resolves a git repo's root `package.json`, and this plugin is a subdirectory — npm is the only outside channel.
 
-## 隐私红线
+The **请求 Hook** badge and **选项** button on the plugin card are magpie's standard furniture for every gateway-hook plugin: the hook is the sync trigger (and the anchor that keeps the host resident), and 选项 is magpie's own JSON editor over the same options the settings page writes. You normally touch neither.
 
-上传 items 为白名单构造，仅含:day/hour/toolCode/providerId/workdirHash（虚拟桶，participantId 加盐）/workdirDisplayName（"Magpie"）/model（小写）/token 四分项/reasoning/sourceQuality/exact/trace 文本（≤160 字符）。采集数据中的 `providerAccount`、`host`、`session`、`native_session`、`response_id`、`err`、`ep` 等字段物理上不会出现在上传载荷中（有测试断言）。
+## What it does
 
-## 能力边界（重要）
+- **The same numbers magpie's usage page shows.** Unified scope — gateway ledger plus the local sessions magpie scans (ZCode, Claude Code, Codex, OpenCode, Kimi, WorkBuddy, DSH, Hermes), request-id deduped. Not "gateway-only traffic": any usage magpie can see is carried up.
+- **Attribution by agent.** `zcode→zcode_local`, `claude→claude_code_local`, `codex→codex_local`, `opencode→opencode_local`, `kimi→kimi_local`, `workbuddy→workbuddy_local`, `dsh→dsh_local`, `hermes→hermes_local`; magpie's own traffic lands in `magpie_local`, a source the ATL client never measured. An agent ATL has no source for is skipped and counted, never mis-attributed.
+- **Signed hourly buckets.** The same protocol as the official collector: Ed25519-signed hourly snapshot buckets to `/api/usage/daily-batches`. Whole-bucket overwrites are idempotent — repeated uploads are safe.
+- **A usage page.** Ranges today / 7d / 30d / all. KPIs: total (today carries yesterday as a reference sub-row), cache read with a prompt-basis hit rate, requests (failures in red), cost (`≈$`, the list-price estimate from magpie's own cost column; blank when the channel carries none). A trend chart — tokens/requests/cost × source/model — whose legend rows double as filters. A 53-week heatmap. A board line `● nickname · anonymous name · #all-time rank · N-day streak · 打开榜单` from one `/api/board/profile` call; the button opens the board in your browser. Skeleton, empty, syncing and failed states all exist; on failure the last data stays.
+- **A settings page.** An identity row (nickname, source chip, truncated id, import/export), server URL, a one-shot rename, start date, sync frequency (5/15/30/60 minutes, immediate), test connection, sync now. No standing explainer text — scopes, formulas and privacy notes live in tooltips.
+- **Numbers look like magpie's.** K/M/B, or 万/亿 when magpie's `chineseUnits` setting is on (it rides the status bridge; off by default, as in magpie). Colors, fonts and language come from the window.
+- **A portable identity.** Import adopts an ATL config export as an explicit identity switch — server URL included, old identity backed up beside it — so the same identity can move between machines, or between this plugin and the ATL client. Export writes the same shape to `~/Downloads/atl-magpie-config-<timestamp>.json` (0600, contains the private key, stays on your machine).
+- **Privacy.** Upload items are whitelist-built: day, hour, toolCode, providerId, a salted virtual workdir hash, display name "Magpie", lowercased model, the four token counts, reasoning, quality, and a ≤160-char trace text. `providerAccount`, `host`, `session`, `native_session`, `response_id` and friends are dropped at the parse layer and physically absent from the payload — test-asserted.
 
-- 覆盖 **Magpie 能看见的全部用量**（统一口径）。工具完全不接 Magpie 时该部分用量本插件看不到，应继续由 ATL 客户端对应来源采集——**一源一写入者**:某来源要么交给本插件，要么归 ATL 客户端，不要两边同时开（同 participant+device 下同源双写会互相覆盖，数字摆动但不会翻倍）
-- 与 ATL 客户端在重叠时段的日常残差属正常（后台流量、跨午夜归日差异）;详见 doc/magpie-plugin.md
-- workdir/项目维度退化为虚拟桶（CSV/API 通道无 cwd）
-- full-reconcile 云端修剪、sync-state 差异对账为后续版本项
+It registers no provider, asks for no sign-in and keeps no gateway key. The page frame has no network of its own; every byte it shows arrives through files the sync writes.
 
-## 完整性保险丝
+## How it works
 
-同步前对数据做形状与完整性校验:route_id 形态、response_id 唯一性、坏行占比（>5% 判格式漂移）。任何异常**响亮拒传**（退出码 3），绝不静默错报。
+A plugin page runs in a sandboxed frame with no network (`connect-src 'none'`). So this plugin has two parts:
 
-## 测试
+1. `page/`: the page magpie hosts. It reads theme, language and options through `_magpie/bridge.js`, and loads `status.js` / `usage-data.js` as same-origin `<script src>` — that is the only way data crosses into it. Its buttons cannot leave the sandbox: sync now / test connection / export write a pending command with a nonce into options, which the host executes exactly once; 打开榜单 hands an http(s) URL to the host, which opens your browser (the URL goes as an argument, never through a shell).
+2. `hooks.js` + `sync.js` + `lib/`: run by magpie's Bun plugin host. Every trigger spawns a detached one-shot `bun sync.js`; the hooks never throw and never block the gateway. Triggers: gateway activity (throttled to one sync a minute), a resident catch-up timer at the configured frequency, host startup, and page commands.
 
-```bash
-cd <插件目录> && bun test    # 签名金样/指纹、聚合、PII 断言、完整性校验、
-                              # 真实宿主 plugins.json 形状、身份迁移、导入携带服务端
+### What the sync reads and sends
+
+- From magpie, in order: `magpie usage --csv`, the official CLI export of the unified ledger (routine syncs read a rolling window, default 7 days, ~0.8s; the first sync of each day — also the first ever, `--full`, or a missing page-summary cache — reads full history and re-verifies every bucket fingerprint, uploading any drift); the gateway JSON API `GET /v1/magpie/usage/requests` when the CLI is unavailable (loopback needs no key; paged, so window-only); the raw ledger `~/.config/magpie/usage.jsonl` as last resort (gateway-only scope).
+- To the configured server only: the signed hourly buckets above. Nothing else, nowhere else.
+- State under `~/.config/magpie/atl-sync/`: `identity.json` (0600), per-server `sync-state.<server>.json` bucket-fingerprint manifests (resumable incremental syncs), the page-summary cache, and `sync.log`.
+
+### Sharing an identity with the ATL client
+
+Since 2026-11-01 the server arbitrates writers, so running the ATL desktop client and this plugin on one identity at the same time is supported: the client's version of an hour bucket always wins, the plugin fills the hours the client cannot see (background gateway batches), and `magpie_local` is always the plugin's. A request crossing midnight may be counted by both in adjacent hours — tens of thousands of tokens, by design. One device identity imported onto two machines at once is still out of scope: register each machine as its own device.
+
+## Options
+
+```json
+{ "apiBaseUrl": "", "syncIntervalMinutes": 15, "gatewayWindowDays": 7, "usageSource": "auto" }
 ```
+
+The settings page writes these same keys. `apiBaseUrl` starts empty on purpose — the sync refuses until a server is configured. `syncIntervalMinutes` is the catch-up cadence (5/15/30/60 in the page; any whole minute via options). `gatewayWindowDays` is how far back routine syncs look (1/7/30; 0 = always full history). `usageSource` pins the channel: `auto` tries CSV, then the API, then the ledger; `gateway` / `ledger` pin one.
+
+## Diagnostics from a terminal
+
+```sh
+cd <plugin dir>
+bun sync.js --dry-run           # print buckets and totals; upload nothing
+bun sync.js --test-connection   # probe the configured server
+bun sync.js --export-config     # write a migration file to ~/Downloads
+```
+
+`--full`, `--window <1|7|30>`, `--api`, `--since-day`, `--source` exist too; `bun sync.js` with no arguments prints the full list. Exit code 3 is an integrity refusal, not a crash.
+
+## Integrity fuse
+
+Before any upload the data is checked for shape and completeness: route-id form, response-id uniqueness, bad-row share (over 5% reads as format drift). Anything anomalous refuses loudly (exit 3); it never silently misreports.
+
+## Known limits
+
+- Workdir / project attribution degrades to one virtual bucket, "Magpie" (CSV and API carry no cwd).
+- Usage of a tool that never routes through magpie and whose sessions magpie does not scan is invisible here — leave that source to the ATL client.
+- The gateway-API fallback is window-limited; deep paging through months is too slow to be useful.
+- Cloud-side pruning (full reconcile) and sync-state diff reconciliation are future work.
+
+## Test
+
+```sh
+cd magpie-plugin && bun test
+```
+
+Covers signing golden samples and fingerprints, aggregation, PII assertions, integrity checks, the real host's `plugins.json` shape, identity migration, import-with-server, and the units bridge.
+
+## License
+
+MIT, © 2026 Sky Huang. See [LICENSE](LICENSE).
+
+---
+
+中文：把 Magpie 看得见的全部用量（网关账本 + 全部本地 agent 会话扫描，按 request id 去重，与自带「用量」页同口径）以 Ed25519 签名的小时桶同步到 AI Token League 榜单。按 agent 归因到 ATL 既有来源，Magpie 自身流量进新来源 `magpie_local`；上传载荷白名单构造，账号邮箱、host、session 等永不离开本机（有测试断言）。插件页提供用量看板（KPI、趋势、53 周热力图、榜单名次条）与设置（服务端地址、同步频率、身份导入/导出）。与 ATL 桌面客户端同身份双开自 2026-11-01 起由服务端写者优先级仲裁，安全；npm 是唯一对外安装通道。
