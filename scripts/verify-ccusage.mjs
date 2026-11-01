@@ -38,6 +38,13 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
+function runCcusage(args) {
+  // The globally installed ccusage is an npm shim (ccusage.cmd); Windows cannot
+  // spawn it without a shell (Node rejects .cmd without shell since CVE-2024-27980).
+  if (process.platform !== "win32") return run("ccusage", args);
+  return run(`ccusage ${args.join(" ")}`, [], { shell: true });
+}
+
 function requireCommand(command) {
   const result = spawnSync("which", [command], { encoding: "utf8" });
   if (result.status !== 0) {
@@ -52,7 +59,7 @@ function parseSemver(value) {
 
 function requireCcusageVersion(minimum, feature = "Codex rollout/subagent deduplication") {
   requireCommand("ccusage");
-  const actualText = run("ccusage", ["--version"]).trim();
+  const actualText = runCcusage(["--version"]).trim();
   const actual = parseSemver(actualText);
   const required = parseSemver(minimum);
   if (!actual || !required) {
@@ -144,7 +151,7 @@ function expectedClaude() {
   const incompatible = externalProviderCanMatch("claude_code_local", "claude");
   if (incompatible) return incompatible;
   requireCommand("ccusage");
-  const raw = run("ccusage", ["claude", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
+  const raw = runCcusage(["claude", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
   const parsed = JSON.parse(raw);
   const expected = new Map();
   for (const row of parsed.daily || []) {
@@ -159,7 +166,7 @@ function expectedCodex() {
   const incompatible = externalProviderCanMatch("codex_local", "codex");
   if (incompatible) return incompatible;
   requireCcusageVersion("20.0.19");
-  const raw = run("ccusage", ["codex", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
+  const raw = runCcusage(["codex", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
   const parsed = JSON.parse(raw);
   const expected = new Map();
   for (const row of parsed.daily || []) {
@@ -428,7 +435,7 @@ function expectedAntigravity() {
   if (incompatible) return incompatible;
   // The antigravity subcommand shipped in ccusage 20.0.30.
   requireCcusageVersion("20.0.30", "the Antigravity report");
-  const raw = run("ccusage", ["antigravity", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
+  const raw = runCcusage(["antigravity", "daily", "--json", "--timezone", TIMEZONE, "--offline"]);
   const parsed = JSON.parse(raw);
   const expected = new Map();
   for (const row of parsed.daily || []) {
