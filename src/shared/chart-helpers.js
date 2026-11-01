@@ -16,6 +16,7 @@ const SOURCE_PALETTE = {
   dsh_local: { base: "#b08968", alt: "#c09d7e", light: "#d0b394" },
   kimi_local: { base: "#8b7355", alt: "#a08a6c", light: "#b7a48c" },
   antigravity_local: { base: "#5f7a8c", alt: "#7a94a3", light: "#9cb0bb" },
+  magpie_local: { base: "#6d5f8a", alt: "#837699", light: "#9d92b0" },
   other: { base: "#b5aea0", alt: "#c4bcae", light: "#d6cec2" }
 };
 
@@ -152,6 +153,7 @@ export function sourceName(providerId) {
   if (providerId === "dsh_local") return t("source.dsh") || "DeepSeek Harness";
   if (providerId === "kimi_local") return t("source.kimi") || "Kimi";
   if (providerId === "antigravity_local") return t("source.antigravity") || "Antigravity";
+  if (providerId === "magpie_local") return t("source.magpie") || "Magpie";
   if (providerId === "cursor_dashboard_usage") return t("source.cursor") || "Cursor";
   return providerId;
 }

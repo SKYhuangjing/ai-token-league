@@ -562,6 +562,7 @@ const translations = {
     "source.dsh": "DeepSeek Harness",
     "source.kimi": "Kimi",
     "source.antigravity": "Antigravity",
+    "source.magpie": "Magpie",
     "source.cursor": "Cursor",
 
     // 桌面端 - 渲染器补充
@@ -2261,6 +2262,7 @@ const translations = {
     "source.dsh": "DeepSeek Harness",
     "source.kimi": "Kimi",
     "source.antigravity": "Antigravity",
+    "source.magpie": "Magpie",
     "source.cursor": "Cursor",
 
     // Desktop - Renderer supplement

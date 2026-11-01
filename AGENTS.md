@@ -47,6 +47,7 @@ Core behavior:
 | `dsh_local` | Supported | Scans local DeepSeek Harness session logs (multi-frame zstd JSONL). |
 | `kimi_local` | Supported | Scans local Kimi desktop client agent session logs (daimon kernel `wire.jsonl` usage records). Web-style chats are server-only and not covered. |
 | `antigravity_local` | Supported | Scans local Antigravity conversation databases (SQLite + protobuf blobs in `gen_metadata`/`steps`); workdir attribution from the `trajectory_metadata_blob` field-7 workspace URI, virtual bucket fallback. Requires ccusage >= 20.0.30 for verification. |
+| `magpie_local` | Supported when the Magpie plugin runs | Fed by the third-party `magpie-plugin/` (Magpie's unified usage: gateway ledger + local session scans via `magpie usage --csv`); attribution by `agent` (zcode/codex/claude/opencode map to their own `_local` sources, Magpie's own and unknown agents land here). See `doc/magpie-plugin.md`. |
 
 Token total rule:
 
@@ -63,6 +64,7 @@ src/backend/      Node.js backend, API, JSON/MySQL stores, OpenRouter pricing
 collector-core/   Rust collector core: config, providers, scan/sync, diagnostics
 atl-collector/    Rust CLI and Tauri sidecar binary
 cpa-plugin/       Standalone cdylib crate: compute-sharing plugin for CLIProxyAPI (atl-share)
+magpie-plugin/    Magpie gateway-ledger sync plugin (Bun; feeds magpie_local, see doc/magpie-plugin.md)
 src/desktop/      Tauri desktop renderer and bridge
 src/shared/       Shared schema, pricing, crypto, dates, display helpers
 src/web/          Public and admin Web UI (index.html, admin.html, app.js, admin.js, styles.css)
@@ -234,6 +236,7 @@ All scripts are run from the project root unless noted. Reflect new scripts here
 | `scripts/publish-module.js` | Publish a plugin payload (manifest + entry) to the OSS module catalog for online-plugin distribution. | `node scripts/publish-module.js --module-dir plugins/compute-sharing --env env.local` |
 | `scripts/publish-module.js` prune | Rewrite the OSS module catalog keeping only the listed `id@version` entries (retired plugin / stale version cleanup; versioned objects stay on OSS). | `node scripts/publish-module.js --prune-keep zhipu-plan@1.1.0,compute-sharing@0.1.0 --env env.local` |
 | `scripts/install-cpa-plugin.sh` | Build and install the compute-sharing `atl-share` cdylib into a local CLIProxyAPI plugin dir and print the CPA config snippet. | `scripts/install-cpa-plugin.sh --api https://atl.example.com` |
+| `scripts/publish-magpie-plugin.sh` | Rebuild the `magpie-plugin-dist` orphan branch from `magpie-plugin/` (root layout) for GitHub-based Magpie plugin distribution; `PUSH=1` pushes via SSH. | `scripts/publish-magpie-plugin.sh` |
 | `scripts/prepare-github-release.js` | GitHub Actions helper: create or reuse one draft release, delete stale duplicate drafts, clear old assets, and output the canonical `release_id`. | Called by `.github/workflows/release.yml` |
 | `scripts/upload-github-release-asset.js` | GitHub Actions helper: upload a generated release asset such as `latest.json` by `release_id`, with optional clobber. | Called by `.github/workflows/release.yml` |
 | `scripts/build-release-body.js` | GitHub Actions helper: render the GitHub release notes body from `CHANGELOG.md` / `CHANGELOG.zh-CN.md` for a version. | Called by `.github/workflows/release.yml` |
@@ -454,6 +457,8 @@ node scripts/build-preset.js --env env.local
 ## Plugin Development
 
 The desktop plugin standard (manifest + `mount(el, ctx)` + OSS distribution), the sidecar plugin trait, and the CPA native plugin contract are documented in `doc/plugin-development.md` — capability boundaries and the v1 trust-model gaps are listed there.
+
+The Magpie gateway-ledger sync plugin (`magpie-plugin/`, protocol-compatible upstream feeder for `magpie_local`) is documented in `doc/magpie-plugin.md`.
 
 ## Operations Manual
 

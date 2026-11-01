@@ -1913,7 +1913,8 @@ const providerDisplayNames = {
   workbuddy_local: "WorkBuddy",
   dsh_local: "DeepSeek Harness",
   kimi_local: "Kimi",
-  antigravity_local: "Antigravity"
+  antigravity_local: "Antigravity",
+  magpie_local: "Magpie"
 };
 
 function renderPrimarySource(items = []) {

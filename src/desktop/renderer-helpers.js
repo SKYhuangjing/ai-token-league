@@ -467,7 +467,8 @@ const UI_PROVIDER_ORDER = [
   "workbuddy_local",
   "dsh_local",
   "kimi_local",
-  "antigravity_local"
+  "antigravity_local",
+  "magpie_local"
 ];
 
 export function sortProviderHealth(health = []) {
