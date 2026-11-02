@@ -89,9 +89,6 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 .bs-id .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--magpie-green); flex: none; }
 .bs-id b { font-size: 13.5px; font-weight: 600; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bs-sep { width: 1px; height: 14px; background: var(--line-2); flex: none; }
-.bs-rank { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
-.bs-rank b { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.bs-rank b.stale { color: var(--magpie-muted); }
 .bs-days { font-size: 11px; color: var(--magpie-muted); white-space: nowrap; }
 /* the anonymous alias chip speaks Magpie's own pm-chip language: a small
    5px-radius badge, soft tint + same-hue text + 5px dot, the hue being the

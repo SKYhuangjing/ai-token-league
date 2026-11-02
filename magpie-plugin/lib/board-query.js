@@ -6,11 +6,11 @@ import { sha256Hex } from "./atl.js";
 const AVATAR_COLORS = ["#1c7c54", "#ba3b46", "#006d77", "#8f5f00", "#3d5a80", "#7b2cbf"];
 
 // One board query the page's strip rides on: after a sync, ask the server
-// for this participant's standing profile — all-time rank + persistence
-// stats (streak / active days / peak day). One call replaces the old
-// analytics fetch and carries richer data. The page sandbox has no network,
-// so the answer travels through status.js as a snapshot; failures must
-// never fail the sync itself (doc/page-content-design.md §3.3).
+// for this participant's standing profile — persistence stats (streak /
+// active days / peak day). One call replaces the old analytics fetch and
+// carries richer data. The page sandbox has no network, so the answer
+// travels through status.js as a snapshot; failures must never fail the
+// sync itself (doc/page-content-design.md §3.3).
 export async function fetchBoardProfile({ apiBaseUrl, displayId, timeoutMs = 5000 } = {}) {
   if (!apiBaseUrl || !displayId) throw new Error("fetchBoardProfile requires apiBaseUrl and displayId");
   const base = apiBaseUrl.replace(/\/+$/, "");
@@ -34,12 +34,11 @@ export async function fetchBoardProfile({ apiBaseUrl, displayId, timeoutMs = 500
   } catch {
     throw new Error("board answered non-JSON");
   }
-  if (!body || typeof body !== "object" || !Number.isFinite(Number(body.rank))) {
-    throw new Error("board answer has no rank");
+  if (!body || typeof body !== "object" || !Number.isFinite(Number(body.currentStreak))) {
+    throw new Error("board answer has no profile fields");
   }
   const peak = body.peakDay && Number.isFinite(Number(body.peakDay.totalTokens)) ? body.peakDay : null;
   return {
-    rank: Number(body.rank),
     currentStreak: Number(body.currentStreak) || 0,
     activeDays: Number(body.activeDays) || 0,
     peakDay: peak ? { day: String(peak.day || ""), totalTokens: Number(peak.totalTokens) } : null,

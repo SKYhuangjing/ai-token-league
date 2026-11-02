@@ -1,6 +1,6 @@
 {
   "name": "magpie-atl-sync",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "在 magpie 窗口里加一个「AI Token League」用量页：把 magpie 看得见的全部用量（网关账本 + 全部本地 agent 会话，request id 去重）签名同步到 AI Token League 榜单。A usage page in magpie's window: syncs everything magpie sees — gateway ledger plus all local agent sessions, request-id deduped — to an AI Token League board with Ed25519-signed hourly buckets.",
   "type": "module",
   "license": "MIT",

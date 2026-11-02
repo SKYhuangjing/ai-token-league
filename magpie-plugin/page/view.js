@@ -842,8 +842,8 @@
     }
   };
 
-  // the board card: identity · rank · cloud-vs-local, with its degrade
-  // matrix — hidden whole when no server is configured
+  // the board strip: identity · alias · streak · board link — hidden whole
+  // when no server is configured
   ATLView.renderBoard = function (status, T, locale) {
     const board = document.getElementById("board");
     if (!board) return;
@@ -880,25 +880,11 @@
       }
     }
 
-    // the standing snapshot: all-time rank + persistence stats from the
-    // server profile. Offline keeps the last snapshot (stale style past 24h),
-    // never-synced reads 未上榜 — the strip never blocks on the network.
+    // the standing snapshot: persistence stats from the server profile.
+    // Offline keeps the last snapshot — the strip never blocks on the
+    // network; sync failures surface in the sync card instead.
     const profile = status.serverProfile;
-    const rankEl = document.getElementById("bd-rank");
-    const stale = !!(profile && profile.fetchedAt && Date.now() - new Date(profile.fetchedAt).getTime() > 86400_000);
-    if (rankEl) {
-      if (!profile || !Number.isFinite(Number(profile.rank))) {
-        rankEl.textContent = T.rankNone;
-        rankEl.title = profile && profile.error && profile.fetchedAt
-          ? T.rankStaleTip.replace("{time}", ATLView.relTime(profile.fetchedAt, T))
-          : T.rankNeverTip;
-      } else {
-        rankEl.textContent = "#" + profile.rank;
-        rankEl.classList.toggle("stale", stale);
-        rankEl.title = stale ? T.rankStaleTip.replace("{time}", ATLView.relTime(profile.fetchedAt, T)) : "";
-      }
-    }
-    // streak beside the rank; the tooltip carries the depth stats
+    // streak beside the identity; the tooltip carries the depth stats
     const streakEl = document.getElementById("bd-streak");
     if (streakEl) {
       const n = profile ? Number(profile.currentStreak) : 0;

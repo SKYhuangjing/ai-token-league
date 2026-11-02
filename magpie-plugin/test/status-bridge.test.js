@@ -1,6 +1,8 @@
 // P0 design implementation tests (doc/page-content-design.md §3.3/§3.5/§7):
 // failures must reach status.js, successes must carry identity fields and
-// the board standing snapshot (serverProfile: rank + persistence stats).
+// the board standing snapshot (serverProfile: persistence stats only —
+// rank was removed with the strip's #N, and an extraneous server-side rank
+// field must be dropped, not stored).
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -80,7 +82,7 @@ describe("fetchBoardProfile", () => {
   test("parses the standing and normalizes the snapshot", async () => {
     const { server } = mockAtl();
     const profile = await fetchBoardProfile({ apiBaseUrl: `http://127.0.0.1:${server.port}`, displayId: "pub_x" });
-    expect(profile.rank).toBe(3);
+    expect(profile.rank).toBeUndefined(); // rank dropped with the strip's #N
     expect(profile.currentStreak).toBe(42);
     expect(profile.activeDays).toBe(220);
     expect(profile.peakDay).toEqual({ day: "2026-08-22", totalTokens: 1109649487 });
@@ -130,7 +132,7 @@ describe("status bridge (P0)", () => {
     expect(st.participantId).toMatch(/^p_/);
     expect(st.sourceChannel).toBe("api");
     expect(st.firstSyncStart).toBeTruthy();
-    expect(st.serverProfile.rank).toBe(3);
+    expect(st.serverProfile.rank).toBeUndefined(); // dropped: strip no longer shows #N
     expect(st.serverProfile.currentStreak).toBe(42);
     expect(st.serverIdentity.identityMode).toBe("anonymous");
     expect(st.serverIdentity.displayName).toBe("Anonymous-Test-Name");
@@ -186,7 +188,7 @@ describe("board standing snapshot", () => {
     });
     expect(exit).toBe(0);
     const st = readBack();
-    expect(st.serverProfile.rank).toBe(3);
+    expect(st.serverProfile.rank).toBeUndefined(); // dropped: strip no longer shows #N
     expect(st.serverIdentity).toBeUndefined(); // public board: no alias slot
     const profilePath = atl.paths.find((p) => p.startsWith("/api/board/profile/"));
     expect(profilePath).toMatch(/\/api\/board\/profile\/p_/); // participantId fallback
@@ -216,7 +218,7 @@ describe("board standing snapshot", () => {
     );
     expect(exit).toBe(0);
     const st = readBack();
-    expect(st.serverProfile.rank).toBe(3);
+    expect(st.serverProfile.rank).toBeUndefined(); // dropped: strip no longer shows #N
     expect(st.serverRank).toBeUndefined(); // the old shape never reaches the page
     atl.server.stop(true);
     gw.stop(true);
