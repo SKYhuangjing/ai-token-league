@@ -58,7 +58,7 @@
 
 ## 6. 用量总览页(page 双页签)
 
-「用量」为默认页签,对齐 ATL 桌面总览:范围切换(今日/近 7/近 30/全部)、总量+四分项 KPI、构成条、逐时(今日)/逐日趋势 SVG 柱图、来源占比、模型 Top5、同步状态页脚。数据链路:`summarizeRows`(lib/usage-summary.js,全量账本日级+今日逐小时聚合,不受 magpie_local 上传开关影响——展示即全部网关用量)→ `page/usage-data.js` 脚本注入桥(与 status.js 同机制,绕开页面 CSP 无网络限制);每次同步运行时刷新。页面桥文件仅真实安装写入(`MAGPIE_ATL_DIR` 沙箱运行不写,防测试数据污染真实页面——实测踩过并已修复)。零图表依赖(手绘 SVG)。
+「用量」为默认页签,视觉与交互对齐 Magpie 自带用量页(v3.2 + 趋势对齐轮):范围切换(今日/近 7/近 30/全部)、KPI 四格(总量+昨日参照/缓存读取命中率/请求失败红字/≈费用)、**趋势卡**(指标 Token/请求/费用 × 拆分 模型/Agent × 图表形态 柱状/折线,折线为官方同款堆叠单调曲线+14% 平色带,三组选择 localStorage 持忆;图例副行=官方 Requests 页格式「N 个请求 · ≈$ · 命中率 N% · N% · N 次失败」,图例行兼做聚焦过滤器)、53 周热力图、榜单状态条。数据链路:`summarizeRows`(lib/usage-summary.js,日级+今日逐小时双维度聚合,sources/models 各带 t/c/cost/input/output/cacheRead/cacheWrite/errors 八指标;不受 magpie_local 上传开关影响)→ `page/usage-data.js` 脚本注入桥(与 status.js 同机制,绕开页面 CSP 无网络限制);每次同步运行时刷新。页面桥文件仅真实安装写入(`MAGPIE_ATL_DIR` 沙箱运行不写,防测试数据污染真实页面——实测踩过并已修复)。零图表依赖(手绘 SVG)。
 
 ## 7. 隐私边界
 

@@ -23,8 +23,10 @@
       kReqOk: "全部成功", kReqFail: "失败 {n}", kReqTip: "失败：本口径下请求未成功返回",
       kCostSub: "按当前单价估算", kCostTip: "按最新生效的模型牌价估算的费用，仅展示用，不参与排名",
       trend: "趋势", mTokens: "Token", mCalls: "请求", mCost: "费用",
-      splitBy: "按", splitSource: "来源", splitModel: "模型",
-      grainHour: "按小时 · 来源", grainDay: "按日", timesUnit: "次", tokensUnit: "tokens",
+      chartBar: "柱状图", chartLine: "折线图",
+      splitBy: "按", splitSource: "来源", splitModel: "模型", splitAgent: "Agent",
+      grainHour: "按小时", grainDay: "按日", timesUnit: "次", tokensUnit: "tokens",
+      hitRate: "命中率", reqUnit: "个请求", failCount: "{n} 次失败",
       heat: "活跃热力图", heatSub: "53 周 · 按日", less: "少", more: "多",
       heatNone: "无用量",
       scopeNote: "口径:Magpie 统一读数(网关 + 本地会话)· 本页数据本地生成",
@@ -75,8 +77,10 @@
       kReqOk: "none failed", kReqFail: "{n} failed", kReqTip: "Failed: requests that did not return successfully",
       kCostSub: "at current prices", kCostTip: "Estimated with the latest effective model prices; display only, never ranked",
       trend: "Trend", mTokens: "Tokens", mCalls: "Requests", mCost: "Cost",
-      splitBy: "by", splitSource: "Source", splitModel: "Model",
-      grainHour: "hourly · by source", grainDay: "daily", timesUnit: "calls", tokensUnit: "tokens",
+      chartBar: "Bar", chartLine: "Line",
+      splitBy: "by", splitSource: "Source", splitModel: "Model", splitAgent: "Agent",
+      grainHour: "hourly", grainDay: "daily", timesUnit: "calls", tokensUnit: "tokens",
+      hitRate: "hit rate", reqUnit: "requests", failCount: "{n} failed",
       heat: "Activity heatmap", heatSub: "53 weeks · daily", less: "Less", more: "More",
       heatNone: "no usage",
       scopeNote: "Scope: Magpie's unified readings (gateway + local sessions) · computed locally",
@@ -123,6 +127,10 @@
     for (const el of document.querySelectorAll("[data-t]")) {
       const key = el.getAttribute("data-t");
       if (t[key]) el.textContent = t[key];
+    }
+    for (const el of document.querySelectorAll("[data-t-title]")) {
+      const key = el.getAttribute("data-t-title");
+      if (t[key]) el.title = t[key];
     }
     const board = document.getElementById("board");
     if (board) board.setAttribute("aria-label", t.boardLabel);
@@ -181,11 +189,40 @@
     requestAnimationFrame(() => moveThumb(seg));
   }
 
-  // ── views / periods / metric / split ──
+  // ── views / periods / metric / chart / split ──
+  // the trend choices persist across panel opens, as the built-in usage
+  // page keeps its own (magpie.ledMetric/ledChart/ledSplit); the sandbox
+  // may deny storage, so every access is best-effort
+  const pick = (key, valid, fallback) => {
+    try {
+      const v = localStorage.getItem("atl." + key);
+      return valid.includes(v) ? v : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  const keep = (key, value) => {
+    try { localStorage.setItem("atl." + key, value); } catch { /* denied */ }
+  };
+  const METRICS = ["tokens", "calls", "cost"];
+  const CHARTS = ["bar", "line"];
+  const SPLITS = ["model", "source"];
   let currentView = "usage";
   let currentRange = 1;
-  let currentMetric = "tokens";
-  let currentSplit = "source";
+  let currentMetric = pick("ledMetric", METRICS, "tokens");
+  let currentChart = pick("ledChart", CHARTS, "bar");
+  let currentSplit = pick("ledSplit", SPLITS, "model");
+  // the segs bind their initial .on state from aria-selected — sync the DOM
+  // to the restored picks before they bind
+  const restoreSeg = (segId, attr, value) => {
+    const seg = $(segId);
+    if (!seg) return;
+    for (const b of seg.querySelectorAll(".opt")) {
+      const on = b.dataset[attr] === value;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", String(on));
+    }
+  };
 
   // An optimistic identity (import submit / nickname save) must SURVIVE the
   // 4s bridge poll: status.js still carries the old identity until the sync
@@ -221,7 +258,7 @@
       // skeleton until the first bridge payload lands (never "—" numbers)
       ATLView.renderSkeleton();
     } else {
-      ATLView.render(usage, currentRange, t, locale(), { metric: currentMetric, split: currentSplit });
+      ATLView.render(usage, currentRange, t, locale(), { metric: currentMetric, split: currentSplit, chart: currentChart });
     }
     ATLView.renderBoard(status, t, locale());
     ATLView.renderStatus(status, t, locale());
@@ -237,14 +274,14 @@
   window.__ATLRepaint = render;
 
   function applyRangeVisibility() {
-    // today has no hourly-by-model series: the split segs hide, #grain says so
+    // splitby is supported across all ranges (today has hourly-by-model and hourly-by-agent)
     const split = $("splitby");
-    if (split) {
-      if (currentRange === 1) split.setAttribute("data-off", "");
-      else split.removeAttribute("data-off");
-    }
+    if (split) split.removeAttribute("data-off");
   }
 
+  restoreSeg("metric", "metric", currentMetric);
+  restoreSeg("chart-type", "chart", currentChart);
+  restoreSeg("splitby", "split", currentSplit);
   segInit($("views"), (btn) => {
     currentView = btn.dataset.view;
     $("view-usage").hidden = currentView !== "usage";
@@ -263,11 +300,19 @@
   });
   segInit($("metric"), (btn) => {
     currentMetric = btn.dataset.metric;
+    keep("ledMetric", currentMetric);
+    ATLView.invalidate();
+    render();
+  });
+  segInit($("chart-type"), (btn) => {
+    currentChart = btn.dataset.chart;
+    keep("ledChart", currentChart);
     ATLView.invalidate();
     render();
   });
   segInit($("splitby"), (btn) => {
     currentSplit = btn.dataset.split;
+    keep("ledSplit", currentSplit);
     ATLView.invalidate();
     render();
   });
@@ -282,6 +327,7 @@
     moveThumb($("views"));
     moveThumb($("periods"));
     moveThumb($("metric"));
+    moveThumb($("chart-type"));
     moveThumb($("splitby"));
     // the chart is measured-then-drawn: a resize must re-measure it, and the
     // render signature alone would skip that (same data, new width)
@@ -313,6 +359,7 @@
     const script = document.createElement("script");
     script.id = "bridge-" + file;
     script.src = "./" + encoded;
+    script.onload = () => { render(); };
     script.onerror = () => { /* not written yet */ };
     document.head.appendChild(script);
   }

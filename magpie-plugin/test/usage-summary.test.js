@@ -26,7 +26,10 @@ describe("summarizeRows", () => {
     expect(d31.output).toBe(250);
     expect(d31.cacheRead).toBe(300);
     expect(d31.cacheWrite).toBe(50);
-    expect(d31.sources).toEqual({ zcode_local: { t: 1500, c: 1, cost: 0.5 }, codex_local: { t: 200, c: 1, cost: 0.1 } });
+    expect(d31.sources).toEqual({
+      zcode_local: { t: 1500, c: 1, cost: 0.5, input: 1000, output: 200, cacheRead: 300, cacheWrite: 0, errors: 0 },
+      codex_local: { t: 200, c: 1, cost: 0.1, input: 100, output: 50, cacheRead: 0, cacheWrite: 50, errors: 0 }
+    });
     expect(d31.calls).toBe(2);
     expect(d31.errors).toBe(0);
     expect(d31.cost).toBeCloseTo(0.6);
@@ -35,8 +38,13 @@ describe("summarizeRows", () => {
     expect(d01.calls).toBe(2); // 1 token call + 1 token-less failure
     expect(d01.errors).toBe(1);
     expect(d01.cost).toBeCloseTo(0.2);
-    expect(d01.sources).toEqual({ magpie_local: { t: 460, c: 1, cost: 0.2 } });
-    expect(d01.models["zhipu/glm"]).toEqual({ t: 460, c: 1, cost: 0.2 });
+    expect(d01.sources).toEqual({
+      codex_local: { t: 0, c: 1, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 1 },
+      magpie_local: { t: 460, c: 1, cost: 0.2, input: 400, output: 60, cacheRead: 0, cacheWrite: 0, errors: 0 }
+    });
+    expect(d01.models["zhipu/glm"]).toEqual({
+      t: 460, c: 1, cost: 0.2, input: 400, output: 60, cacheRead: 0, cacheWrite: 0, errors: 0
+    });
   });
 
   test("excludes probes, 0-token failures and future rows", () => {
@@ -51,6 +59,11 @@ describe("summarizeRows", () => {
   test("todayHoursBySource splits today by client source", () => {
     expect(summary.todayHoursBySource[9]).toEqual({ magpie_local: 460 });
     expect(summary.todayHoursBySource[0]).toEqual({});
+  });
+
+  test("todayHoursByModel splits today by model", () => {
+    expect(summary.todayHoursByModel[9]).toEqual({ "zhipu/glm": 460 });
+    expect(summary.todayHoursByModel[0]).toEqual({});
   });
 
   test("todayHours buckets today's rows by local hour", () => {
@@ -70,7 +83,10 @@ describe("rangeView", () => {
   test("today view", () => {
     const view = rangeView(summary, 1);
     expect(view.totals.total).toBe(460);
-    expect(view.sources).toEqual({ magpie_local: { t: 460, c: 1, cost: 0.2 } });
+    expect(view.sources).toEqual({
+      codex_local: { t: 0, c: 1, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 1 },
+      magpie_local: { t: 460, c: 1, cost: 0.2, input: 400, output: 60, cacheRead: 0, cacheWrite: 0, errors: 0 }
+    });
   });
 
   test("7d view includes 10-31", () => {

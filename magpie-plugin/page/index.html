@@ -54,18 +54,23 @@
   <section class="card" id="trend-card">
     <div class="c-head">
       <b data-t="trend">趋势</b>
-      <div class="segs small" id="metric">
+      <div class="segs" id="metric">
         <span class="thumb"></span>
         <button type="button" class="opt" data-metric="tokens" aria-selected="true" data-t="mTokens">Token</button>
         <button type="button" class="opt" data-metric="calls" aria-selected="false" data-t="mCalls">请求</button>
         <button type="button" class="opt" data-metric="cost" aria-selected="false" data-t="mCost">费用</button>
       </div>
+      <div class="segs icon-segs" id="chart-type">
+        <span class="thumb"></span>
+        <button type="button" class="opt" data-chart="bar" aria-selected="true" data-t-title="chartBar" title="柱状图"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 13V8.5M8 13V3.5M12.5 13V6.5"/></svg></button>
+        <button type="button" class="opt" data-chart="line" aria-selected="false" data-t-title="chartLine" title="折线图"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 11.5 6 7.5l3 2.5 4.5-6"/></svg></button>
+      </div>
       <span class="grow"></span>
       <span class="led-by" data-t="splitBy">按</span>
-      <div class="segs small" id="splitby">
+      <div class="segs" id="splitby">
         <span class="thumb"></span>
-        <button type="button" class="opt" data-split="source" aria-selected="true" data-t="splitSource">来源</button>
-        <button type="button" class="opt" data-split="model" aria-selected="false" data-t="splitModel">模型</button>
+        <button type="button" class="opt" data-split="model" aria-selected="true" data-t="splitModel">模型</button>
+        <button type="button" class="opt" data-split="source" aria-selected="false" data-t="splitAgent">Agent</button>
       </div>
       <span class="grain" id="grain">按日</span>
     </div>

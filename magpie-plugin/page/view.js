@@ -72,12 +72,28 @@
     const totals = { total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0, errors: 0, cost: 0 };
     const sources = {};
     const models = {};
-    const asAgg = (v) => (v && typeof v === "object" ? { t: num(v.t), c: num(v.c), cost: num(v.cost) } : { t: num(v), c: 0, cost: 0 });
+    const asAgg = (v) => (v && typeof v === "object" ? {
+      t: num(v.t),
+      c: num(v.c),
+      cost: num(v.cost),
+      input: num(v.input),
+      output: num(v.output),
+      cacheRead: num(v.cacheRead),
+      cacheWrite: num(v.cacheWrite),
+      errors: num(v.errors)
+    } : { t: num(v), c: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 0 });
     const mergeAgg = (into, key, value) => {
-      const agg = into[key] || (into[key] = { t: 0, c: 0, cost: 0 });
+      const agg = into[key] || (into[key] = {
+        t: 0, c: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 0
+      });
       agg.t += value.t;
       agg.c += value.c;
       agg.cost += value.cost;
+      agg.input += value.input;
+      agg.output += value.output;
+      agg.cacheRead += value.cacheRead;
+      agg.cacheWrite += value.cacheWrite;
+      agg.errors += value.errors;
     };
     for (const day of days) {
       totals.total += num(day.total);
@@ -114,7 +130,7 @@
   const SERIES_VARS = ["--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c7"];
   const OTHER_LABEL = { zh: "其他", en: "Other" };
 
-  function buildSeries(points, lang) {
+  function buildSeries(points, lang, metaMap = {}) {
     const order = [];
     const totalsBySource = {};
     for (const p of points) {
@@ -138,18 +154,32 @@
       label: sourceLabel(src),
       color: `var(${SERIES_VARS[i]})`,
       total: totalsBySource[src],
-      calls: callsBySource[src] || 0,
+      calls: (metaMap[src] && metaMap[src].c) || callsBySource[src] || 0,
+      meta: metaMap[src] || {},
       values: points.map((p) => p.stacks[src] || 0)
     }));
     const rest = order.slice(7);
     if (rest.length) {
       const values = points.map((p) => rest.reduce((sum, src) => sum + (p.stacks[src] || 0), 0));
+      const restMeta = { t: 0, c: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 0 };
+      for (const src of rest) {
+        const m = metaMap[src] || {};
+        restMeta.t += m.t || 0;
+        restMeta.c += m.c || 0;
+        restMeta.cost += m.cost || 0;
+        restMeta.input += m.input || 0;
+        restMeta.output += m.output || 0;
+        restMeta.cacheRead += m.cacheRead || 0;
+        restMeta.cacheWrite += m.cacheWrite || 0;
+        restMeta.errors += m.errors || 0;
+      }
       shown.push({
         key: "__other__",
-        label: OTHER_LABEL[lang] || "Other",
+        label: `${OTHER_LABEL[lang] || "Other"} (${rest.length})`,
         color: "var(--magpie-faint, var(--magpie-muted))",
         total: values.reduce((a, b) => a + b, 0),
-        calls: rest.reduce((sum, src) => sum + (callsBySource[src] || 0), 0),
+        calls: restMeta.c || rest.reduce((sum, src) => sum + (callsBySource[src] || 0), 0),
+        meta: restMeta,
         values
       });
     }
@@ -158,7 +188,7 @@
 
   // ---- trend chart (measured first, then drawn 1:1 — drawLedColumns) -----
 
-  function renderChart(points, fmt, focusKey) {
+  function renderChart(points, fmt, focusKey, chartType = "bar", seriesInput = null) {
     const plot = document.getElementById("chart");
     plot.innerHTML = "";
     const tip = document.createElement("div");
@@ -168,11 +198,12 @@
       plot.appendChild(tip);
       return;
     }
-    const series = buildSeries(points);
+    const series = seriesInput || buildSeries(points);
     const W = Math.max(280, Math.floor(plot.clientWidth || 640));
     const H = 236;
 
-    // y max: a friendly step over 4 gridlines
+    // y max: a friendly step over 4 gridlines — the SAME axis for bars and
+    // lines (official lines stack, so the top line is the column's top)
     const max = Math.max(...points.map((p) => p.total), 1);
     const rawStep = max / 4;
     const pow = 10 ** Math.floor(Math.log10(rawStep));
@@ -224,8 +255,7 @@
       svg.appendChild(label);
     }
 
-    // column highlights live UNDER the bars (a soft band behind them, the
-    // built-in page's rect.hot) — on top they would paint the column away
+    // column highlights live UNDER the bars / lines
     const hots = points.map((_, i) => {
       const hot = document.createElementNS(ns, "rect");
       hot.setAttribute("x", (l + i * slot).toFixed(1));
@@ -240,29 +270,87 @@
       return hot;
     });
 
-    // each source's segments share one <g class="bar"> so a legend click can
-    // dim every other source at once (rank-as-filter)
     const groups = new Map(series.map((s) => [s.key, document.createElementNS(ns, "g")]));
-    for (const g of groups.values()) g.setAttribute("class", "bar");
-    points.forEach((point, i) => {
-      let acc = 0;
+
+    if (chartType === "line") {
+      // official ledLines (app.js:1546): stacked cumulative lines over the
+      // same axis as the bars — the top line is the total, as the column's
+      // top was. A smooth line through points as d3's curveMonotoneX draws
+      // it (Fritsch–Carlson): it bends between points but never past one,
+      // so a quiet hour isn't drawn dipping under zero or a peak over its
+      // value. Each series' band is softly filled between its line and the
+      // one under it (flat 14%, no gradient), and the under line paints on
+      // top, so a band never covers the line under it.
+      const curve = (ps, from = "M") => {
+        const n = ps.length, f = (v) => v.toFixed(1);
+        if (!n) return "";
+        let d = from + f(ps[0][0]) + " " + f(ps[0][1]);
+        if (n === 1) return d;
+        const s = [], m = [];
+        for (let i = 0; i < n - 1; i += 1) s.push((ps[i + 1][1] - ps[i][1]) / (ps[i + 1][0] - ps[i][0]));
+        for (let i = 1; i < n - 1; i += 1) {
+          const h0 = ps[i][0] - ps[i - 1][0], h1 = ps[i + 1][0] - ps[i][0], p = (s[i - 1] * h1 + s[i] * h0) / (h0 + h1);
+          m[i] = s[i - 1] * s[i] <= 0 ? 0 : (Math.sign(s[i - 1]) + Math.sign(s[i])) * Math.min(Math.abs(s[i - 1]), Math.abs(s[i]), Math.abs(p) / 2);
+        }
+        m[0] = n > 2 ? (3 * s[0] - m[1]) / 2 : s[0];
+        m[n - 1] = n > 2 ? (3 * s[n - 2] - m[n - 2]) / 2 : s[0];
+        for (let i = 0; i < n - 1; i += 1) {
+          const [xa, ya] = ps[i], [xb, yb] = ps[i + 1], dx = (xb - xa) / 3;
+          d += "C" + f(xa + dx) + " " + f(ya + dx * m[i]) + " " + f(xb - dx) + " " + f(yb - dx * m[i + 1]) + " " + f(xb) + " " + f(yb);
+        }
+        return d;
+      };
+      const X = (i) => l + slot * i;
+      const Y = (v) => t + ph - (v / yMax) * ph;
+      // from the bottom up, largest first (as the bars stack); DOM in reverse
+      // so every under line paints over the bands above it
+      let under = points.map(() => 0);
+      const layers = [];
       for (const s of series) {
-        const v = s.values[i];
-        if (!v) continue;
-        const hTop = (v / yMax) * ph;
-        const hBottom = (acc / yMax) * ph;
-        const rect = document.createElementNS(ns, "rect");
-        rect.setAttribute("x", (l + i * slot + (slot - bw) / 2).toFixed(1));
-        rect.setAttribute("y", (t + ph - hTop - hBottom).toFixed(1));
-        rect.setAttribute("width", bw.toFixed(1));
-        rect.setAttribute("height", Math.max(1, hTop).toFixed(1));
-        rect.setAttribute("fill", s.color);
-        rect.setAttribute("rx", "1");
-        groups.get(s.key).appendChild(rect);
-        acc += v;
+        const over = under.map((u, i) => u + (s.values[i] || 0));
+        if (over.some((v) => v > 0)) layers.push({ s, over, base: under });
+        under = over;
       }
-    });
-    for (const s of series) if (groups.get(s.key).childNodes.length) svg.appendChild(groups.get(s.key));
+      for (const { s, over, base } of layers) {
+        const g = groups.get(s.key);
+        g.setAttribute("class", "ln");
+        g.setAttribute("stroke", s.color);
+        const up = curve(over.map((v, i) => [X(i), Y(v)]));
+        const down = curve(base.map((v, i) => [X(i), Y(v)]).reverse(), "L");
+        const band = document.createElementNS(ns, "path");
+        band.setAttribute("class", "band");
+        band.setAttribute("d", up + down + "Z");
+        band.setAttribute("fill", s.color);
+        const line = document.createElementNS(ns, "path");
+        line.setAttribute("class", "line");
+        line.setAttribute("d", up);
+        g.append(band, line);
+      }
+      for (const { s } of layers.reverse()) svg.appendChild(groups.get(s.key));
+    } else {
+      // bar chart
+      for (const g of groups.values()) g.setAttribute("class", "bar");
+      points.forEach((point, i) => {
+        let acc = 0;
+        for (const s of series) {
+          const v = s.values[i];
+          if (!v) continue;
+          const hTop = (v / yMax) * ph;
+          const hBottom = (acc / yMax) * ph;
+          const rect = document.createElementNS(ns, "rect");
+          rect.setAttribute("x", (l + i * slot + (slot - bw) / 2).toFixed(1));
+          rect.setAttribute("y", (t + ph - hTop - hBottom).toFixed(1));
+          rect.setAttribute("width", bw.toFixed(1));
+          rect.setAttribute("height", Math.max(1, hTop).toFixed(1));
+          rect.setAttribute("fill", s.color);
+          rect.setAttribute("rx", "1");
+          groups.get(s.key).appendChild(rect);
+          acc += v;
+        }
+      });
+      for (const s of series) if (groups.get(s.key).childNodes.length) svg.appendChild(groups.get(s.key));
+    }
+
     if (focusKey && groups.has(focusKey)) {
       plot.classList.add("has-focus");
       groups.get(focusKey).classList.add("focus");
@@ -337,14 +425,21 @@
   // the rank legend is also the split view AND a focus filter: clicking a row
   // dims every other series in the chart (Magpie's rank rows are click
   // targets too — we have no request list, so focus is the mapping)
-  function renderRank(series, fmt, T, focusKey) {
+  function renderRank(series, fmt, T, focusKey, metaMap = {}, grandTotal = 0, locale = "en", metric = "tokens") {
     const legend = document.getElementById("chart-legend");
     legend.innerHTML = "";
-    const grand = series.reduce((sum, s) => sum + s.total, 0) || 1;
+    const sum = grandTotal || series.reduce((a, s) => a + s.total, 0) || 1;
+    // official drawLedRank (app.js:18817): the bar tracks the LEADER (the top
+    // row reads full width), the share beneath still divides by the sum
+    const leader = Math.max(1, ...series.map((s) => s.total));
+    // ledFormatLong (app.js:18611): rank values are exact grouped numbers,
+    // cost apart — never compact
+    const long = (v) => (metric === "cost" ? (ATLView.fmtCost(v) || "—") : grouped(locale).format(Math.round(v)));
     for (const s of series) {
+      const plain = s.key === "__other__";
       const row = document.createElement("button");
       row.type = "button";
-      row.className = "rk" + (focusKey === s.key ? " focus" : "");
+      row.className = "rk" + (plain ? " plain" : "") + (!plain && focusKey === s.key ? " focus" : "");
       const a = document.createElement("div");
       a.className = "rk-a";
       const dot = document.createElement("i");
@@ -353,22 +448,50 @@
       name.textContent = s.label;
       name.title = s.label;
       const val = document.createElement("b");
-      val.textContent = fmt(s.total);
+      val.textContent = long(s.total);
       a.append(dot, name, val);
       const bar = document.createElement("div");
       bar.className = "rk-bar";
       const fill = document.createElement("i");
-      fill.style.width = Math.max(2, (s.total / grand) * 100).toFixed(1) + "%";
+      fill.style.width = Math.max(1.5, (100 * s.total) / leader).toFixed(1) + "%";
       fill.style.background = s.color;
       bar.appendChild(fill);
       const sub = document.createElement("div");
       sub.className = "rk-b";
-      const sharePct = (s.total / grand) * 100;
-      sub.textContent = `${s.calls ? s.calls + " " + T.timesUnit + " · " : ""}${sharePct > 0 && sharePct < 1 ? "<1%" : Math.round(sharePct) + "%"}`;
+
+      const meta = metaMap[s.key] || s.meta || {};
+      const calls = meta.c || s.calls || 0;
+      const cost = meta.cost || 0;
+      const tokens = meta.t || s.total;
+      const input = meta.input || 0;
+      const cacheRead = meta.cacheRead || 0;
+      const cacheWrite = meta.cacheWrite || 0;
+      const denom = cacheRead + input + cacheWrite;
+      const hitRate = denom > 0 ? cacheRead / denom : null;
+      const errors = meta.errors || 0;
+
+      // official item order: requests · tokens · ≈cost · hit rate · share —
+      // each one hidden when it IS the metric shown above (a row never
+      // repeats its own headline number in the subline)
+      const parts = [];
+      if (metric !== "calls" && calls > 0) parts.push(`${grouped(locale).format(calls)} ${T.reqUnit || "个请求"}`);
+      if (metric !== "tokens" && tokens > 0) parts.push(`${ATLView.fmtTokens(tokens, locale)} ${T.tokensUnit || "tokens"}`);
+      if (metric !== "cost" && cost > 0) parts.push(`≈${ATLView.fmtCost(cost)}`);
+      if (hitRate !== null) parts.push(`${T.hitRate || "命中率"} ${Math.round(100 * hitRate)}%`);
+      parts.push(`${Math.round((100 * s.total) / sum)}%`);
+
+      let content = parts.join(" · ");
+      if (errors > 0) {
+        const failStr = T.failCount ? T.failCount.replace("{n}", grouped(locale).format(errors)) : `${errors} 次失败`;
+        content += ` · <span class="err">${failStr}</span>`;
+      }
+      sub.innerHTML = content;
       row.append(a, bar, sub);
-      row.addEventListener("click", () => {
-        ATLView.setFocus(focusKey === s.key ? null : s.key);
-      });
+      if (!plain) {
+        row.addEventListener("click", () => {
+          ATLView.setFocus(focusKey === s.key ? null : s.key);
+        });
+      }
       legend.appendChild(row);
     }
   }
@@ -508,11 +631,13 @@
 
   ATLView.render = function (summary, range, T, locale, dims = {}) {
     const metric = METRIC_KEYS[dims.metric] ? dims.metric : "tokens";
-    // today has no hourly-by-model series in the data: today is pinned to
-    // hourly·by-source (the split segs hide, #grain says so)
-    const split = range === 1 ? "source" : (dims.split === "model" ? "model" : "source");
+    const hasTodayModel = !!(summary && summary.todayHoursByModel && summary.todayHoursByModel.length);
+    const split = (range === 1 && !hasTodayModel && dims.split === "model")
+      ? "source"
+      : (dims.split === "source" ? "source" : "model");
+    const chartType = dims.chart === "line" ? "line" : "bar";
     const lang = locale && String(locale).toLowerCase().startsWith("zh") ? "zh" : "en";
-    const signature = `${locale}|${range}|${metric}|${split}|${focusKey}|${summary ? summary.generatedAt + "|" + summary.days.length + "|" + summary.days.map((d) => d.day + ":" + d.total).join(",") : ""}`;
+    const signature = `${locale}|${range}|${metric}|${split}|${chartType}|${focusKey}|${summary ? summary.generatedAt + "|" + summary.days.length + "|" + summary.days.map((d) => d.day + ":" + d.total).join(",") : ""}`;
     if (signature === lastSignature) return; // a refresh that changed nothing moves nothing
     lastSignature = signature;
 
@@ -529,13 +654,34 @@
     };
     let points;
     if (range === 1) {
-      const hours = summary.todayHours || [];
       const bySource = summary.todayHoursBySource || [];
-      points = hours.map((value, hour) => ({
-        label: String(hour).padStart(2, "0"),
-        total: Number(value) || 0,
-        stacks: bySource[hour] || {}
-      }));
+      const byModel = summary.todayHoursByModel || [];
+      const metaHours = summary.todayHoursMeta || [];
+      points = Array.from({ length: 24 }, (_, hour) => {
+        const stacks = {};
+        let total = 0;
+        if (metaHours[hour]) {
+          const agg = split === "model" ? metaHours[hour].models : metaHours[hour].sources;
+          for (const [k, v] of Object.entries(agg || {})) {
+            const val = pick(v);
+            stacks[k] = val;
+            total += val;
+          }
+        } else {
+          const byMap = (split === "model" ? byModel[hour] : bySource[hour]) || {};
+          for (const [k, v] of Object.entries(byMap)) {
+            const val = Number(v) || 0;
+            stacks[k] = val;
+            total += val;
+          }
+        }
+        return {
+          label: String(hour).padStart(2, "0"),
+          total,
+          stacks,
+          meta: metaHours[hour] ? (split === "model" ? metaHours[hour].models : metaHours[hour].sources) : {}
+        };
+      });
     } else {
       const days = range > 0
         ? summary.days.filter((d) => d.day > ATLView.shiftDay(summary.today, -range))
@@ -650,8 +796,11 @@
     }
 
     const fmtValue = metricFmt(metric, locale);
-    renderChart(points, fmtValue, focusKey);
-    renderRank(buildSeries(points, lang), fmtValue, T, focusKey);
+    const activeMeta = split === "model" ? view.models : view.sources;
+    const series = buildSeries(points, lang, activeMeta);
+    renderChart(points, fmtValue, focusKey, chartType, series);
+    const grandMetricVal = t[metric === "calls" ? "calls" : (metric === "cost" ? "cost" : "total")] || 1;
+    renderRank(series, fmtValue, T, focusKey, activeMeta, grandMetricVal, locale, metric);
     renderHeat(summary, lang, locale, T);
   };
 

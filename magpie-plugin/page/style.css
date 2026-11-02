@@ -108,6 +108,9 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 .segs .opt.on { color: var(--magpie-fg); }
 .segs .opt:hover:not(.on) { color: var(--magpie-fg-2, var(--magpie-fg)); }
 .segs.small .opt { height: 20px; padding: 0 8px; font-size: 11px; }
+/* icon segs (app.css .led-style): icons sit inline like text, 14px stroke art */
+.segs.icon-segs .opt { display: inline-flex; align-items: center; padding: 0 6px; }
+.segs.icon-segs .opt svg { display: block; }
 .segs .thumb { position: absolute; top: 2px; bottom: 2px; border-radius: 5px; background: var(--magpie-card); box-shadow: 0 1px 2px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .06); transition: left .28s var(--ease), width .28s var(--ease); }
 .segs[data-off] { visibility: hidden; }
 
@@ -152,10 +155,21 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 .plot svg g.bar { transition: opacity .18s var(--ease); }
 .plot.has-focus g.bar { opacity: .25; }
 .plot.has-focus g.bar.focus { opacity: 1; }
+/* the chart as lines (app.css g.ln): stroke art with a soft flat band under
+   each stacked series */
+.plot svg g.ln { fill: none; stroke-linecap: round; stroke-linejoin: round; transition: opacity .12s var(--ease); }
+.plot svg g.ln .line { stroke-width: 1.8; }
+.plot svg g.ln .band { stroke: none; fill-opacity: .14; }
+.plot.has-focus g.ln { opacity: .18; }
+.plot.has-focus g.ln.focus { opacity: 1; }
 .rank { align-self: start; max-height: 244px; overflow-y: auto; scrollbar-width: thin; mask-image: linear-gradient(180deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
 .rk { display: block; width: 100%; padding: 6px 8px 7px; border: 0; border-radius: 8px; background: transparent; text-align: left; font: inherit; color: inherit; cursor: default; }
 .rk:hover { background: var(--pill); }
-.rk.focus { background: var(--pill); }
+.rk:focus-visible { outline: 1px solid var(--magpie-accent); }
+/* the picked row reads accent-soft (app.css .rk.on), not the hover pill */
+.rk.focus { background: var(--magpie-accent-soft); }
+.rk.plain { cursor: default; }
+.rk.plain:hover { background: transparent; }
 .rk-a { display: flex; align-items: center; gap: 7px; font-size: 12px; }
 .rk-a i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .rk-a span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
@@ -163,6 +177,7 @@ body { padding: 16px 24px 28px; font: 13px/1.45 var(--magpie-font, -apple-system
 .rk-bar { height: 4px; margin: 5px 0 4px 15px; border-radius: 2px; background: var(--pill); overflow: hidden; }
 .rk-bar i { display: block; height: 100%; border-radius: 2px; }
 .rk-b { margin-left: 15px; font-size: 10.5px; line-height: 1.45; color: var(--magpie-muted); font-variant-numeric: tabular-nums; }
+.rk-b .err { color: var(--magpie-red); font-weight: 500; }
 
 /* ---- tooltip (app.css .tip) ---------------------------------------------- */
 .tip { position: absolute; z-index: 5; min-width: 150px; max-width: 260px; padding: 8px 10px 7px; background: var(--pop); border-radius: 9px; box-shadow: var(--shadow); font-size: 11.5px; pointer-events: none; }

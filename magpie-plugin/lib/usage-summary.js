@@ -30,6 +30,8 @@ export function summarizeRows(rows, { timeZone, now = new Date(), maxDays = 90 }
   const todayDay = localDayAndHour(now, timeZone).day;
   const todayHours = new Array(24).fill(0);
   const todayHoursBySource = Array.from({ length: 24 }, () => ({}));
+  const todayHoursByModel = Array.from({ length: 24 }, () => ({}));
+  const todayHoursMeta = Array.from({ length: 24 }, () => ({ sources: {}, models: {} }));
   for (const row of rows) {
     const date = new Date(row.t);
     if (Number.isNaN(date.getTime())) continue;
@@ -53,10 +55,44 @@ export function summarizeRows(rows, { timeZone, now = new Date(), maxDays = 90 }
       };
       byDay.set(day, entry);
     }
+    const providerId = mapAgent(row.agent).providerId;
+    const model = String(row.req || row.model || row.served || `${row.provider || "unknown"}/other`).toLowerCase();
+
+    const srcAgg = entry.sources[providerId] || (entry.sources[providerId] = {
+      t: 0, c: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 0
+    });
+    const modelAgg = entry.models[model] || (entry.models[model] = {
+      t: 0, c: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 0
+    });
+
+    const failed = isFailure(row);
+    const countable = isCountable(row);
     // every real call counts toward 请求/失败, token-less failures included
-    if (isCountable(row) || isFailure(row)) entry.calls += 1;
-    if (isFailure(row)) entry.errors += 1;
-    if (!isCountable(row)) continue;
+    if (countable || failed) {
+      entry.calls += 1;
+      srcAgg.c += 1;
+      modelAgg.c += 1;
+    }
+    if (failed) {
+      entry.errors += 1;
+      srcAgg.errors += 1;
+      modelAgg.errors += 1;
+    }
+
+    if (day === todayDay) {
+      const hSrc = todayHoursMeta[hour].sources[providerId] || (todayHoursMeta[hour].sources[providerId] = { t: 0, c: 0, cost: 0, errors: 0 });
+      const hMdl = todayHoursMeta[hour].models[model] || (todayHoursMeta[hour].models[model] = { t: 0, c: 0, cost: 0, errors: 0 });
+      if (countable || failed) {
+        hSrc.c += 1;
+        hMdl.c += 1;
+      }
+      if (failed) {
+        hSrc.errors += 1;
+        hMdl.errors += 1;
+      }
+    }
+
+    if (!countable) continue;
     const inT = Number(row.in) || 0;
     const outT = Number(row.out) || 0;
     const crT = Number(row.cache_read) || 0;
@@ -70,24 +106,33 @@ export function summarizeRows(rows, { timeZone, now = new Date(), maxDays = 90 }
     entry.cacheWrite += cwT;
     entry.reasoning += Number(row.reasoning) || 0;
     entry.cost += costT;
-    const providerId = mapAgent(row.agent).providerId;
+
     if (day === todayDay) {
       todayHours[hour] += rowTotal;
       todayHoursBySource[hour][providerId] = (todayHoursBySource[hour][providerId] || 0) + rowTotal;
+      todayHoursByModel[hour][model] = (todayHoursByModel[hour][model] || 0) + rowTotal;
+      todayHoursMeta[hour].sources[providerId].t += rowTotal;
+      todayHoursMeta[hour].sources[providerId].cost += costT;
+      todayHoursMeta[hour].models[model].t += rowTotal;
+      todayHoursMeta[hour].models[model].cost += costT;
     }
-    // split dimensions carry all three metrics: t tokens / c calls / cost
-    const srcAgg = entry.sources[providerId] || (entry.sources[providerId] = { t: 0, c: 0, cost: 0 });
+
     srcAgg.t += rowTotal;
-    srcAgg.c += 1;
+    srcAgg.input += inT;
+    srcAgg.output += outT;
+    srcAgg.cacheRead += crT;
+    srcAgg.cacheWrite += cwT;
     srcAgg.cost += costT;
-    const model = String(row.req || row.model || row.served || `${row.provider || "unknown"}/other`).toLowerCase();
-    const modelAgg = entry.models[model] || (entry.models[model] = { t: 0, c: 0, cost: 0 });
+
     modelAgg.t += rowTotal;
-    modelAgg.c += 1;
+    modelAgg.input += inT;
+    modelAgg.output += outT;
+    modelAgg.cacheRead += crT;
+    modelAgg.cacheWrite += cwT;
     modelAgg.cost += costT;
   }
   const days = [...byDay.values()].sort((a, b) => (a.day < b.day ? -1 : 1)).slice(-maxDays);
-  return { generatedAt: now.toISOString(), today: todayDay, todayHours, todayHoursBySource, days };
+  return { generatedAt: now.toISOString(), today: todayDay, todayHours, todayHoursBySource, todayHoursByModel, todayHoursMeta, days };
 }
 
 /** Range view over the summary: last `count` calendar days ending today (0 = all). */
@@ -97,10 +142,17 @@ export function rangeView(summary, count = 0, today = summary.today) {
   const sources = {};
   const models = {};
   const mergeAgg = (into, key, value) => {
-    const agg = into[key] || (into[key] = { t: 0, c: 0, cost: 0 });
+    const agg = into[key] || (into[key] = {
+      t: 0, c: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 0
+    });
     agg.t += value.t;
     agg.c += value.c;
     agg.cost += value.cost;
+    agg.input += (value.input || 0);
+    agg.output += (value.output || 0);
+    agg.cacheRead += (value.cacheRead || 0);
+    agg.cacheWrite += (value.cacheWrite || 0);
+    agg.errors += (value.errors || 0);
   };
   for (const day of days) {
     // a bridge file written before calls/cost existed must not paint NaN
@@ -115,7 +167,16 @@ export function rangeView(summary, count = 0, today = summary.today) {
     totals.errors += num(day.errors);
     totals.cost += num(day.cost);
     // flat numeric maps (pre-multi-dimension payload) merge as tokens-only
-    const asAgg = (v) => (v && typeof v === "object" ? v : { t: num(v), c: 0, cost: 0 });
+    const asAgg = (v) => (v && typeof v === "object" ? {
+      t: num(v.t),
+      c: num(v.c),
+      cost: num(v.cost),
+      input: num(v.input),
+      output: num(v.output),
+      cacheRead: num(v.cacheRead),
+      cacheWrite: num(v.cacheWrite),
+      errors: num(v.errors)
+    } : { t: num(v), c: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, errors: 0 });
     for (const [key, value] of Object.entries(day.sources)) mergeAgg(sources, key, asAgg(value));
     for (const [key, value] of Object.entries(day.models)) mergeAgg(models, key, asAgg(value));
   }

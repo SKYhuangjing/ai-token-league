@@ -43,7 +43,8 @@ const scenarios = [
   { name: "usage-zh-dark", locale: "zh-CN", colorScheme: "dark", tab: "usage" },
   { name: "settings-zh-light", locale: "zh-CN", colorScheme: "light", tab: "settings" },
   { name: "settings-en-dark", locale: "en-US", colorScheme: "dark", tab: "settings" },
-  { name: "usage-today-zh", locale: "zh-CN", colorScheme: "light", tab: "usage-today" }
+  { name: "usage-today-zh", locale: "zh-CN", colorScheme: "light", tab: "usage-today" },
+  { name: "usage-today-line-zh", locale: "zh-CN", colorScheme: "light", tab: "usage-today", chart: "line" }
 ];
 
 mkdirSync(OUT, { recursive: true });
@@ -62,6 +63,9 @@ try {
       await page.click('#views button[data-view="settings"]');
     } else if (scenario.tab === "usage-today") {
       await page.click('#periods button[data-range="1"]');
+    }
+    if (scenario.chart === "line") {
+      await page.click('#chart-type button[data-chart="line"]');
     }
     // wait until the KPI cells are painted from the bridge data (usage tabs)
     if (scenario.tab.startsWith("usage")) {
