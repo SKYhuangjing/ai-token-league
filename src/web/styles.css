@@ -9993,41 +9993,6 @@ small.pct {
     0 8px 18px rgba(32, 34, 31, 0.08);
 }
 
-.profile-crest-badge {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #ffffff;
-  border: 1.5px solid #ffffff;
-  box-shadow: 0 2px 6px rgba(22, 21, 18, 0.15);
-}
-
-.profile-crest-badge.crest-gold {
-  color: #b67810;
-  background: #fff8e8;
-}
-
-.profile-crest-badge.crest-silver {
-  color: #6a7282;
-  background: #f1f3f5;
-}
-
-.profile-crest-badge.crest-bronze {
-  color: #96552a;
-  background: #fdf3ea;
-}
-
-.crest-svg {
-  width: 15px;
-  height: 15px;
-}
-
 .profile-id-nameblock {
   min-width: 0;
 }
@@ -10051,25 +10016,6 @@ small.pct {
   margin-top: 8px;
 }
 
-.profile-rank-chip {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: rgba(197, 163, 89, 0.16);
-  color: var(--data-cost, #92631c);
-  border: 1px solid rgba(197, 163, 89, 0.42);
-}
-
-.profile-percentile-pill {
-  font-size: 11px;
-  padding: 3px 9px;
-  background: rgba(44, 121, 108, 0.08);
-  color: var(--green);
-  border: 1px solid rgba(44, 121, 108, 0.22);
-  border-radius: 999px;
-}
-
 .profile-alias-pill {
   font-size: 11px;
   padding: 3px 9px;
@@ -10077,36 +10023,6 @@ small.pct {
   color: var(--muted);
   border: 1px dashed var(--line);
   border-radius: 999px;
-}
-
-/* 客户端风格排位金句评语卡 */
-.profile-quote-card {
-  position: relative;
-  z-index: 1;
-  padding: 12px 14px 12px 36px;
-  background: linear-gradient(90deg, rgba(197, 163, 89, 0.1), rgba(255, 255, 255, 0.35));
-  border: 1px solid rgba(197, 163, 89, 0.28);
-  border-left: 3px solid var(--gold, var(--gold));
-  border-radius: 0 10px 10px 0;
-}
-
-.quote-mark {
-  position: absolute;
-  left: 10px;
-  top: 2px;
-  font-family: var(--font-display);
-  font-size: 28px;
-  color: rgba(146, 99, 28, 0.38);
-  line-height: 1;
-}
-
-.quote-body {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 13.5px;
-  font-style: italic;
-  line-height: 1.5;
-  color: #5a4620;
 }
 
 .profile-id-meta {
@@ -10322,10 +10238,6 @@ small.pct {
 /* Limited accents: orange / gold / teal — values stay ink */
 .profile-stat-tile.metric-peak {
   --stat-meter: var(--green);
-}
-
-.profile-stat-tile.metric-rank {
-  --stat-meter: var(--rank-gold, var(--gold));
 }
 
 .profile-stat-tile.metric-leverage {
@@ -12815,7 +12727,7 @@ button.panel-action {
 
 /* ── Profile / analytics residual quieting (console pass) ── */
 
-.public-shell .pill:not(.profile-percentile-pill):not(.profile-alias-pill) {
+.public-shell .pill:not(.profile-alias-pill) {
   border-color: var(--line);
   background: var(--paper-2);
   color: var(--muted);
@@ -12830,37 +12742,6 @@ button.panel-action {
     radial-gradient(120% 80% at 100% 0%, rgba(197, 163, 89, 0.14), transparent 55%),
     linear-gradient(165deg, #fffef9 0%, #ffffff 42%, #faf7f0 100%) !important;
   box-shadow: var(--card-shadow) !important;
-}
-
-.profile-rank-chip {
-  background: rgba(197, 163, 89, 0.16) !important;
-  color: var(--data-cost, #92631c) !important;
-  border-color: rgba(197, 163, 89, 0.42) !important;
-}
-
-.profile-percentile-pill,
-.public-shell .pill.profile-percentile-pill {
-  background: rgba(44, 121, 108, 0.08) !important;
-  color: var(--green) !important;
-  border-color: rgba(44, 121, 108, 0.22) !important;
-}
-
-.profile-quote-card {
-  padding: 12px 14px 12px 36px;
-  background: linear-gradient(90deg, rgba(197, 163, 89, 0.1), rgba(255, 255, 255, 0.35));
-  border: 1px solid rgba(197, 163, 89, 0.28);
-  border-left: 3px solid var(--gold, var(--gold));
-  border-radius: 0 10px 10px 0;
-}
-
-.quote-mark {
-  color: rgba(146, 99, 28, 0.38);
-}
-
-.quote-body {
-  color: #5a4620;
-  font-family: var(--font-display);
-  font-style: italic;
 }
 
 .profile-live-status.active-today {

@@ -19,9 +19,6 @@ import {
 // 初始化多语言
 initI18n();
 
-const TROPHY_SVG = `<svg class="crest-svg gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a1 1 0 0 1 0-5H6"/><path d="M18 9h1.5a1 1 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 22"/><path d="M14 14.66V17a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>`;
-const MEDAL_SVG = `<svg class="crest-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
-
 const TREND_BUCKET_CAP = 365;
 const RECENT_RANGE = "last30";
 
@@ -198,16 +195,6 @@ function renderNotFound({ status = 0 } = {}) {
   if (statusEl) statusEl.textContent = "";
 }
 
-function getRankQuote(rank) {
-  if (!rank || rank > 100) return t("desktop.share.rankQuote.top50.0") || "每一次坚持都在缩小你和前方的距离。";
-  if (rank === 1) return t("desktop.share.rankQuote.1.0");
-  if (rank === 2) return t("desktop.share.rankQuote.2.0");
-  if (rank === 3) return t("desktop.share.rankQuote.3.0");
-  if (rank <= 10) return t("desktop.share.rankQuote.top10.0");
-  if (rank <= 30) return t("desktop.share.rankQuote.top30.0");
-  return t("desktop.share.rankQuote.top50.0");
-}
-
 function renderLiveStatus(profile) {
   const liveStatusEl = document.querySelector("#profile-live-status");
   const liveTextEl = document.querySelector("#profile-live-status-text");
@@ -282,28 +269,6 @@ function renderHero(profile) {
   const adminPill = document.querySelector("#profile-admin-pill");
   if (adminPill) adminPill.hidden = state.mode !== "admin";
 
-  // Rank Chip & Percentile
-  const rankChip = document.querySelector("#profile-rank-chip");
-  if (rankChip) {
-    if (profile.rank) {
-      rankChip.textContent = `#${profile.rank}`;
-      rankChip.hidden = false;
-    } else {
-      rankChip.hidden = true;
-    }
-  }
-
-  const percentilePill = document.querySelector("#profile-percentile-pill");
-  if (percentilePill) {
-    const beatPct = profile.percentile !== null && profile.percentile !== undefined ? profile.percentile : null;
-    if (beatPct !== null) {
-      percentilePill.textContent = t("web.profile.beatPctText", { pct: beatPct });
-      percentilePill.hidden = false;
-    } else {
-      percentilePill.hidden = true;
-    }
-  }
-
   // Avatar and Crest
   const avatarEl = document.querySelector("#profile-avatar");
   if (avatarEl) {
@@ -317,39 +282,6 @@ function renderHero(profile) {
     }
     avatarEl.textContent = displayName.trim().charAt(0).toUpperCase() || "·";
     avatarEl.hidden = false;
-  }
-
-  // Crest Medal
-  const crestBadge = document.querySelector("#profile-crest-badge");
-  if (crestBadge) {
-    if (profile.rank === 1) {
-      crestBadge.innerHTML = TROPHY_SVG;
-      crestBadge.className = "profile-crest-badge crest-gold";
-      crestBadge.hidden = false;
-    } else if (profile.rank === 2) {
-      crestBadge.innerHTML = MEDAL_SVG;
-      crestBadge.className = "profile-crest-badge crest-silver";
-      crestBadge.hidden = false;
-    } else if (profile.rank === 3) {
-      crestBadge.innerHTML = MEDAL_SVG;
-      crestBadge.className = "profile-crest-badge crest-bronze";
-      crestBadge.hidden = false;
-    } else {
-      crestBadge.hidden = true;
-    }
-  }
-
-  // Rank Quote
-  const quoteCard = document.querySelector("#profile-quote-card");
-  const quoteText = document.querySelector("#profile-quote-text");
-  if (quoteCard && quoteText) {
-    const quote = getRankQuote(profile.rank);
-    if (quote) {
-      quoteText.textContent = quote;
-      quoteCard.hidden = false;
-    } else {
-      quoteCard.hidden = true;
-    }
   }
 
   // Metadata
@@ -376,9 +308,6 @@ function renderBentoStats(profile) {
   const peakValue = peakDay ? localeTokenCompact(peakDay.totalTokens) : localeTokenCompact(0);
   const peakDate = peakDay?.day ? String(peakDay.day).slice(5) : "-";
   const peakHint = peakDay ? `${peakDay.day} · ${formatTokenRaw(peakDay.totalTokens)}` : "";
-
-  const beatPct = profile.percentile !== null && profile.percentile !== undefined ? profile.percentile : 0;
-  const beatText = t("web.profile.beatPctText", { pct: beatPct });
 
   const inputTokens = Number(profile.inputTokens || profile.summary?.inputTokens || 0);
   const outputTokens = Number(profile.outputTokens || profile.summary?.outputTokens || 0);
@@ -426,14 +355,6 @@ function renderBentoStats(profile) {
       monoSub: true
     },
     {
-      cls: "metric-rank",
-      label: t("web.profile.rank"),
-      val: profile.rank ? `#${profile.rank}` : "-",
-      sub: beatText,
-      hint: profile.rank && profile.participantCount ? t("web.profile.rankHint", { rank: profile.rank, count: profile.participantCount }) : "",
-      meter: beatPct
-    },
-    {
       cls: "metric-leverage",
       label: t("web.profile.cacheLeverage"),
       val: `${leverage} <small class="stat-unit">x</small>`,
@@ -450,7 +371,7 @@ function renderBentoStats(profile) {
       meter: consistencyRate || null
     },
     {
-      cls: "metric-avg",
+      cls: "metric-avg bento-span-2",
       label: t("web.profile.dailyAverage"),
       val: localeTokenCompact(avgDaily),
       sub: t("web.profile.perActiveDay"),

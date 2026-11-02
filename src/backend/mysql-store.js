@@ -679,31 +679,22 @@ export class MySqlStore extends Store {
     };
   }
 
-  async withScopedUsageRows(rows, fn, { useInheritedPublicLeaderboard = false } = {}) {
+  async withScopedUsageRows(rows, fn) {
     const previousUsageDaily = this.db.usageDaily;
     const previousAggregateCache = this.aggregateCache;
     const previousDbAggregateCache = this.db.aggregateCache;
-    const hadOwnPublicLeaderboard = Object.hasOwn(this, "publicLeaderboard");
-    const previousPublicLeaderboard = this.publicLeaderboard;
     this.db.usageDaily = Object.fromEntries(rows.map((row, index) => [
       row.usageKey || [row.day, row.participantId, row.deviceId, row.toolCode, row.providerId, row.workdirHash, row.model, index].join("|"),
       row
     ]));
     this.aggregateCache = {};
     this.db.aggregateCache = {};
-    if (useInheritedPublicLeaderboard) {
-      this.publicLeaderboard = Store.prototype.publicLeaderboard.bind(this);
-    }
     try {
       return fn();
     } finally {
       this.db.usageDaily = previousUsageDaily;
       this.aggregateCache = previousAggregateCache;
       this.db.aggregateCache = previousDbAggregateCache;
-      if (useInheritedPublicLeaderboard) {
-        if (hadOwnPublicLeaderboard) this.publicLeaderboard = previousPublicLeaderboard;
-        else delete this.publicLeaderboard;
-      }
     }
   }
 
@@ -995,8 +986,7 @@ export class MySqlStore extends Store {
     const rows = await this.usageRowsForQuery({ ...args, participantId });
     return this.withScopedUsageRows(
       rows,
-      () => Store.prototype.participantDetail.call(this, participantId, args),
-      { useInheritedPublicLeaderboard: true }
+      () => Store.prototype.participantDetail.call(this, participantId, args)
     );
   }
 

@@ -193,7 +193,7 @@ function testBackendUpload(identity, items) {
   );
   const detail = store.participantDetail(identity.participantId, { period: "today", includeCost: true });
   assert.equal(detail.selectedPeriod, "today");
-  assert.equal(detail.rank, 1);
+  assert.equal("rank" in detail, false, "participantDetail no longer exposes a rank");
   assert.equal(detail.isSingleDay, true);
   assert.ok(detail.models.length >= 1);
   assert.ok(detail.workdirs.length >= 1);
@@ -4925,9 +4925,11 @@ function testPublicLeaderboardSourceFilterAggregation() {
     "unfiltered result must stay intact after filtered queries"
   );
 
-  // Participant detail keeps the unfiltered overall rank even when the board is filtered.
+  // Participant detail no longer carries a rank field (it was only computable
+  // against a one-participant row scope on the MySQL path); the profile page
+  // now shows no per-period rank either.
   const detail = store.participantDetail(alpha.participantId, { period: "today" });
-  assert.equal(detail.rank, 2);
+  assert.equal("rank" in detail, false);
   assert.equal(detail.totalTokens, 140);
   console.log("  testPublicLeaderboardSourceFilterAggregation passed");
 }
@@ -4995,7 +4997,7 @@ async function testBoardLeaderboardSourceFilter() {
     const detailRes = await fetch(`${baseUrl}/api/board/participants/${alpha.participantId}?period=today&source=codex_local`);
     assert.equal(detailRes.status, 200);
     const detail = await detailRes.json();
-    assert.equal(detail.rank, 2, "detail rank stays the overall board rank");
+    assert.equal("rank" in detail, false, "detail rank field removed");
     assert.equal(detail.totalTokens, 140, "detail totals stay whole-participant");
     console.log("  testBoardLeaderboardSourceFilter passed");
   } finally { await cleanup(); }
@@ -5738,7 +5740,7 @@ async function testBoardParticipantDetailAndTrend() {
     const detailRes = await fetch(`${baseUrl}/api/board/participants/${identity.participantId}?period=today`);
     assert.equal(detailRes.status, 200);
     const detail = await detailRes.json();
-    assert.equal(detail.rank, 1);
+    assert.equal("rank" in detail, false);
     assert.ok(detail.models.length >= 1);
 
     const trendRes = await fetch(`${baseUrl}/api/board/participants/${identity.participantId}/trend?grain=week&range=last30`);

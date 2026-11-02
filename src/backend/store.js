@@ -1497,7 +1497,6 @@ export class Store {
     const daySet = daySetForRange(days);
     const rows = Object.values(this.db.usageDaily).filter((item) => item.participantId === participantId && matchesDaySet(item.day, daySet));
     const selectedPeriod = period || range;
-    const rankRow = this.publicLeaderboard({ period, range, startDay, endDay, includeCost }).find((item) => item.participantId === participantId);
     const bounds = rangeBounds(days, rows);
     const detail = {
       participantId,
@@ -1506,7 +1505,6 @@ export class Store {
       from: bounds.from,
       to: bounds.to,
       isSingleDay: bounds.from && bounds.from === bounds.to,
-      rank: rankRow?.rank || null,
       totalTokens: 0,
       inputTokens: 0,
       outputTokens: 0,
