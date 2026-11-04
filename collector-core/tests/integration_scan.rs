@@ -326,11 +326,30 @@ fn scenario_workbuddy_scan() {
     //   trace_cccc3333  modelInfo fallback 800+200+100                    = 1100
     //   trace_dddd4444  error status → skipped; trace_eeee5555 bad json → skipped
     //   trace_ffff6666 (jsonl) span1 1000+500+300 = 1800; span2 500+300+200 = 1000
+    //   projects/sess-10001.jsonl  2000(500 cached)+400 = 2400; 900+100  = 1000
+    // Session-level source exclusivity: sess-10001 has a project transcript,
+    // so its trace files (aaaa1111 1800 + bbbb2222 2600 = 4400) are
+    // suppressed and only the project transcript counts for that session:
+    //   1100 (sess-10002 traces) + 2800 (jsonl, workerPid session) + 3400 (project) = 7300
     let workbuddy_total: i64 = workbuddy
         .iter()
         .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
         .sum();
-    assert_eq!(workbuddy_total, 8300, "workbuddy sample total should match");
+    assert_eq!(workbuddy_total, 7300, "workbuddy sample total should match");
+    // The exclusivity itself: no aggregated item may carry the suppressed
+    // trace sessions' rawSourceRef (trace_aaaa1111 / trace_bbbb2222).
+    assert!(workbuddy.iter().all(|i| {
+        let r = i["rawSourceRef"].as_str().unwrap_or("");
+        !(r.contains("trace_aaaa1111") || r.contains("trace_bbbb2222"))
+    }));
+    // ...while the project transcript's own items are present (aggregated
+    // items carry no sessionId; identify by model + total).
+    assert!(workbuddy
+        .iter()
+        .any(|i| i["model"] == "glm-5.3-flash" && i["totalTokens"] == 2400));
+    assert!(workbuddy
+        .iter()
+        .any(|i| i["model"] == "deepseek-v4.1-flash" && i["totalTokens"] == 1000));
 
     // No provider errors surfaced for workbuddy
     assert!(!result.provider_errors.contains_key("workbuddy_local"));

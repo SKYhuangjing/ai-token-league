@@ -1,0 +1,7 @@
+{"type":"session-meta","id":"sess-10001","sessionId":"sess-10001","timestamp":1780920000000}
+{"type":"message","role":"user","messageId":"m1","sessionId":"sess-10001","timestamp":1780920000100,"content":"question"}
+{"type":"message","role":"assistant","messageId":"m2","sessionId":"sess-10001","timestamp":1780920060000,"providerData":{"conversationRequestId":"req-p1","model":"glm-5.3-flash","rawUsage":{"prompt_tokens":2000,"completion_tokens":400,"total_tokens":2400,"prompt_tokens_details":{"cached_tokens":500},"completion_tokens_details":{"reasoning_tokens":80}}}}
+{"type":"message","role":"user","messageId":"m3","sessionId":"sess-10001","timestamp":1780923600000,"content":"follow-up"}
+{"type":"function_call","name":"grep","callId":"c1","sessionId":"sess-10001","timestamp":1780923600500,"providerData":{"conversationRequestId":"req-p2","model":"deepseek-v4.1-flash","rawUsage":{"prompt_tokens":900,"completion_tokens":100,"total_tokens":1000}}}
+{"type":"function_call_result","callId":"c1","sessionId":"sess-10001","timestamp":1780923601000}
+{"type":"message","role":"assistant","messageId":"m4","sessionId":"sess-10001","providerData":{"conversationRequestId":"req-p3","model":"glm-5.3-flash","rawUsage":{"prompt_tokens":777,"completion_tokens":111,"total_tokens":888}}}

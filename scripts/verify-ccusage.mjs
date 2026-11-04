@@ -415,6 +415,32 @@ function expectedMiMo() {
   return verified("mimocode", expected);
 }
 
+function workbuddySessionRows(root) {
+  // Sessions table for suppression window matching. Mirrors the collector's
+  // suppression probe: time window only — deleted_at and cwd are irrelevant.
+  const dbPath = join(root, "workbuddy.db");
+  if (!existsSync(dbPath)) return [];
+  requireCommand("sqlite3");
+  const raw = run("sqlite3", [dbPath, "-json",
+    "SELECT id, created_at, updated_at, last_activity_at FROM sessions"
+  ]);
+  return JSON.parse(raw || "[]").map((row) => ({
+    id: String(row.id || ""),
+    createdAt: Number(row.created_at || 0),
+    activityEnd: Number(row.last_activity_at || row.updated_at || 0),
+  })).filter((s) => s.id && s.createdAt > 0);
+}
+
+function workbuddyWindowMatchedSession(sessions, startedMs) {
+  let best = null;
+  for (const s of sessions) {
+    if (s.createdAt <= startedMs + 5000 && startedMs <= s.activityEnd) {
+      if (!best || s.createdAt > best.createdAt) best = s;
+    }
+  }
+  return best ? best.id : null;
+}
+
 function expectedWorkbuddy() {
   if (!providerEnabled("workbuddy_local")) return skipped("workbuddy", "provider disabled");
   const autoRoots = [];
@@ -424,48 +450,122 @@ function expectedWorkbuddy() {
   const roots = configuredRoots("workbuddy_local", autoRoots);
   if (roots.length === 0) return skipped("workbuddy", "no configured directory found");
   const expected = new Map();
+  const usageTotalFromOpenAi = (usage) => {
+    if (!usage || typeof usage !== "object") return 0;
+    const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.inputTokens ?? 0);
+    const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? usage.outputTokens ?? 0);
+    const cacheRead = Number(usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0);
+    const input = Math.max(prompt - cacheRead, 0);
+    const outputTokens = Math.max(completion, 0);
+    return input + outputTokens + cacheRead;
+  };
+  const spanTotal = (span) => {
+    if (span.type !== "generation" || typeof span.toolOutput !== "string" || !span.toolOutput.trim()) return 0;
+    let output;
+    try { output = JSON.parse(span.toolOutput); } catch { return 0; }
+    const response = Array.isArray(output) ? output[0] : (output && typeof output === "object" ? output : null);
+    return usageTotalFromOpenAi(response && response.usage);
+  };
   for (const root of roots) {
+    const sessions = workbuddySessionRows(root);
+
+    // 1) Per-session project transcripts (projects/<slug>/<sessionId>.jsonl):
+    //    authoritative — rawUsage on message AND function_call records,
+    //    timestamp-less records skipped. Their session ids suppress traces.
+    const transcriptSessions = new Set();
+    const projectsDir = join(root, "projects");
+    if (existsSync(projectsDir)) {
+      for (const slug of readdirSync(projectsDir, { withFileTypes: true })) {
+        if (!slug.isDirectory()) continue;
+        for (const name of readdirSync(join(projectsDir, slug.name))) {
+          if (!name.endsWith(".jsonl") || name.startsWith("trace_")) continue;
+          const sid = name.replace(/\.jsonl$/, "");
+          transcriptSessions.add(sid);
+          for (const line of readFileSync(join(projectsDir, slug.name, name), "utf8").split("\n")) {
+            if (!line.trim()) continue;
+            let rec;
+            try { rec = JSON.parse(line); } catch { continue; }
+            const ts = Number(rec.timestamp);
+            if (!Number.isFinite(ts) || ts <= 0) continue;
+            const total = usageTotalFromOpenAi(rec.providerData && rec.providerData.rawUsage);
+            if (total > 0) addTotal(expected, localDay(new Date(ts)), total);
+          }
+        }
+      }
+    }
+
+    // 2) Traces: legacy .json single documents + streaming .jsonl. A trace
+    //    whose session has a transcript emits nothing.
     const tracesDir = join(root, "traces");
     if (!existsSync(tracesDir)) continue;
     for (const pid of readdirSync(tracesDir, { withFileTypes: true })) {
       if (!pid.isDirectory()) continue;
       const pidDir = join(tracesDir, pid.name);
       for (const name of readdirSync(pidDir)) {
-        if (!name.startsWith("trace_") || !name.endsWith(".json")) continue;
+        if (!name.startsWith("trace_")) continue;
+        if (!name.endsWith(".json") && !name.endsWith(".jsonl")) continue;
         const file = join(pidDir, name);
-        let data;
-        try { data = JSON.parse(readFileSync(file, "utf8")); } catch { continue; }
-        const trace = data.trace;
-        if (!trace || typeof trace !== "object") continue;
-        if (trace.status !== "ok") continue;
-        const startedMs = Date.parse(trace.startedAt || "");
-        const day = Number.isFinite(startedMs)
-          ? localDay(new Date(startedMs))
-          : localDay(statSync(file).mtime);
-        let emitted = false;
-        for (const span of Array.isArray(data.spans) ? data.spans : []) {
-          if (span.type !== "generation" || typeof span.toolOutput !== "string" || !span.toolOutput.trim()) continue;
-          let output;
-          try { output = JSON.parse(span.toolOutput); } catch { continue; }
-          const response = Array.isArray(output) ? output[0] : (output && typeof output === "object" ? output : null);
-          const usage = response && response.usage;
-          if (!usage || typeof usage !== "object") continue;
-          const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.inputTokens ?? 0);
-          const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? usage.outputTokens ?? 0);
-          const cacheRead = Number(usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0);
-          const input = Math.max(prompt - cacheRead, 0);
-          const outputTokens = Math.max(completion, 0);
-          const total = input + outputTokens + cacheRead;
-          if (total <= 0) continue;
-          addTotal(expected, day, total);
-          emitted = true;
-        }
-        if (!emitted && trace.modelInfo && typeof trace.modelInfo === "object") {
-          const input = Number(trace.modelInfo.totalInputTokens || 0);
-          const outputTokens = Number(trace.modelInfo.totalOutputTokens || 0);
-          const cacheRead = Number(trace.modelInfo.totalCachedTokens || 0);
-          const total = input + outputTokens + cacheRead;
-          if (total > 0) addTotal(expected, day, total);
+        if (name.endsWith(".jsonl")) {
+          // Streaming format (2026-10 WorkBuddy migration).
+          let traceStart = null, traceEnd = null;
+          const spans = [];
+          for (const line of readFileSync(file, "utf8").split("\n")) {
+            if (!line.trim()) continue;
+            let rec;
+            try { rec = JSON.parse(line); } catch { continue; }
+            if (rec.type === "trace_start" && rec.trace) traceStart = rec.trace;
+            else if (rec.type === "trace_end" && rec.trace) traceEnd = rec.trace;
+            else if (rec.type === "span_end" && rec.span && rec.span.type === "generation") spans.push(rec.span);
+          }
+          if (!traceStart && !traceEnd) continue;   // empty/partial: skip
+          if (!traceEnd) continue;                  // still running
+          if (traceEnd.status !== "ok") continue;
+          const startedMs = Date.parse((traceStart && traceStart.startedAt) || traceEnd.startedAt || "");
+          if (!Number.isFinite(startedMs)) continue;
+          // Suppression mirrors the collector: window-matched id (deleted_at
+          // and cwd ignored) — the emitted id may have degraded to workerPid.
+          const windowId = workbuddyWindowMatchedSession(sessions, startedMs);
+          if (windowId && transcriptSessions.has(windowId)) continue;
+          const day = localDay(new Date(startedMs));
+          for (const span of spans) {
+            const total = spanTotal(span);
+            if (total > 0) addTotal(expected, day, total);
+          }
+        } else {
+          // Legacy single document.
+          let data;
+          try { data = JSON.parse(readFileSync(file, "utf8")); } catch { continue; }
+          const trace = data.trace;
+          if (!trace || typeof trace !== "object") continue;
+          if (trace.status !== "ok") continue;
+          const startedMs = Date.parse(trace.startedAt || "");
+          const day = Number.isFinite(startedMs)
+            ? localDay(new Date(startedMs))
+            : localDay(statSync(file).mtime);
+          // Suppression mirrors the collector's legacy path: emitted
+          // sessionId (trace-level → sessions/<pid>.json → workerPid).
+          let sessionId = typeof trace.sessionId === "string" && trace.sessionId.trim() ? trace.sessionId : "";
+          if (!sessionId) {
+            const sessionsFile = join(root, "sessions", `${pid.name}.json`);
+            if (existsSync(sessionsFile)) {
+              try { sessionId = JSON.parse(readFileSync(sessionsFile, "utf8")).sessionId || ""; } catch { /* degrade */ }
+            }
+          }
+          if (sessionId && transcriptSessions.has(sessionId)) continue;
+          let emitted = false;
+          for (const span of Array.isArray(data.spans) ? data.spans : []) {
+            const total = spanTotal(span);
+            if (total <= 0) continue;
+            addTotal(expected, day, total);
+            emitted = true;
+          }
+          if (!emitted && trace.modelInfo && typeof trace.modelInfo === "object") {
+            const input = Number(trace.modelInfo.totalInputTokens || 0);
+            const outputTokens = Number(trace.modelInfo.totalOutputTokens || 0);
+            const cacheRead = Number(trace.modelInfo.totalCachedTokens || 0);
+            const total = input + outputTokens + cacheRead;
+            if (total > 0) addTotal(expected, day, total);
+          }
         }
       }
     }

@@ -10,7 +10,7 @@ use std::sync::{Mutex, OnceLock};
 
 pub const PROVIDER_ID: &str = "workbuddy_local";
 pub const TOOL_CODE: &str = "workbuddy";
-pub const VERSION: &str = "0.2.0";
+pub const VERSION: &str = "0.3.0";
 
 /// WorkBuddy (Electron, OpenClaw-lineage kernel) writes one trace per logical
 /// request under `<config-dir>/traces/<pid>/`. Two generations of the format:
@@ -114,7 +114,8 @@ impl WorkBuddyLocalProvider {
 
         let mut files = Vec::new();
         for root in auto.iter().chain(manual.iter()) {
-            let found = walk_files(root, |f| is_workbuddy_trace(f), 5000);
+            let found =
+                walk_files(root, |f| is_workbuddy_trace(f) || is_project_file(f), 5000);
             files.extend(found);
         }
         files
@@ -137,11 +138,105 @@ impl WorkBuddyLocalProvider {
         file: &str,
         store: &mut WorkdirSnapshotStore,
     ) -> Result<Vec<Value>, String> {
-        if file.ends_with(".jsonl") {
+        if is_project_file(file) {
+            self.try_parse_usage_project(file, store)
+        } else if file.ends_with(".jsonl") {
+            // Streaming traces handle session-level suppression internally
+            // (window-matched id, not just the emitted sessionId — see
+            // try_parse_usage_jsonl).
             self.try_parse_usage_jsonl(file, store)
         } else {
-            self.try_parse_usage_legacy_json(file, store)
+            let events = self.try_parse_usage_legacy_json(file, store)?;
+            // Session-level source exclusivity for legacy traces: a
+            // per-session project transcript (projects/<slug>/<sessionId>
+            // .jsonl) is authoritative and covers the Claw/IM channel
+            // traffic that never reaches traces — same-session trace files
+            // emit nothing. Re-evaluated on every parse; the scanner's
+            // combined fingerprint invalidates the cache whenever any
+            // WorkBuddy file changes, so project-file cleanup automatically
+            // re-admits the traces.
+            if let Some(sid) = events
+                .first()
+                .and_then(|e| e.get("sessionId"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty())
+            {
+                if project_file_for_session(file, &sid).is_some() {
+                    return Ok(vec![]);
+                }
+            }
+            Ok(events)
         }
+    }
+
+    /// Per-session project transcript: `<root>/projects/<workdir-slug>/
+    /// <sessionId>.jsonl`, one JSON record per line (session-meta / message /
+    /// reasoning / function_call / ...). Model calls carry an OpenAI-style
+    /// usage object at `providerData.rawUsage` — on assistant `message`
+    /// records AND on `function_call` records (agent tool-loop steps; the
+    /// Claw/IM channel traffic lives only here, never in `traces/`).
+    /// Records without `timestamp` cannot be placed in a day/hour bucket and
+    /// are skipped. Attribution: sessionId = file stem, workdir from the
+    /// read-only `workbuddy.db` sessions table by exact id (no cwd exists in
+    /// the file itself), pinned via the snapshot cache.
+    fn try_parse_usage_project(
+        &self,
+        file: &str,
+        store: &mut WorkdirSnapshotStore,
+    ) -> Result<Vec<Value>, String> {
+        let session_id = project_session_id(file).unwrap_or_default();
+        let (session_id, workdir_candidate) = if session_id.is_empty() {
+            (String::new(), String::new())
+        } else {
+            let sid = session_id.clone();
+            resolve_pinned(file, store, || {
+                resolve_project_session_and_workdir(file, &sid)
+            })
+        };
+
+        let source = source_metadata(file, PROVIDER_ID, VERSION);
+        let mut events = Vec::new();
+        for rec in read_json_lines(file) {
+            let started_ms = match rec.get("timestamp").and_then(|t| t.as_i64()) {
+                Some(ms) if ms > 0 => ms,
+                _ => continue,
+            };
+            let day = crate::date::local_day_from_timestamp_ms(started_ms);
+            let hour = crate::date::local_hour_from_timestamp_ms(started_ms);
+            let provider_data = match rec.get("providerData").filter(|p| p.is_object()) {
+                Some(p) => p,
+                None => continue,
+            };
+            let usage = match provider_data.get("rawUsage").filter(|u| u.is_object()) {
+                Some(u) => u,
+                None => continue,
+            };
+            let model = provider_data
+                .get("model")
+                .and_then(|m| m.as_str())
+                .filter(|m| !m.trim().is_empty())
+                .or_else(|| {
+                    provider_data
+                        .get("requestModelId")
+                        .and_then(|m| m.as_str())
+                        .filter(|m| !m.trim().is_empty())
+                })
+                .unwrap_or("unknown")
+                .to_string();
+            if let Some(event) = openai_usage_event(
+                usage,
+                &model,
+                &session_id,
+                &workdir_candidate,
+                &day,
+                hour,
+                &source,
+            ) {
+                events.push(event);
+            }
+        }
+        Ok(events)
     }
 
     /// Streaming JSONL format (2026-10 WorkBuddy migration): one record per
@@ -220,6 +315,24 @@ impl WorkBuddyLocalProvider {
                 ) {
                     events.push(event);
                 }
+            }
+        }
+
+        // Session-level source exclusivity (see try_parse_usage_with_store).
+        // The emitted sessionId may have degraded to workerPid (db row
+        // soft-deleted, matched row with empty cwd, db unopenable), so also
+        // probe with the raw time-window match ignoring deleted_at and cwd —
+        // a soft-deleted session's transcript still suppresses its traces.
+        if !events.is_empty() {
+            let root = root_and_pid(file).0;
+            let window_id = window_matched_session_id(root.as_deref(), started_ms);
+            let suppress = [&Some(session_id.clone()), &window_id].into_iter().flatten().any(
+                |sid| {
+                    !sid.is_empty() && project_file_for_session(file, sid).is_some()
+                },
+            );
+            if suppress {
+                return Ok(vec![]);
             }
         }
 
@@ -380,7 +493,33 @@ fn event_from_generation_span(
     };
 
     let usage = response.get("usage").filter(|u| u.is_object())?;
+    let model = response
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let model = if model.is_empty() {
+        "unknown".to_string()
+    } else {
+        model
+    };
 
+    openai_usage_event(usage, &model, session_id, workdir_candidate, day, hour, source)
+}
+
+/// OpenAI-style usage object (prompt/completion + *_details.cached/reasoning)
+/// → provider event. Shared by trace generation spans and project-file
+/// `rawUsage` records — identical shapes, identical math.
+fn openai_usage_event(
+    usage: &Value,
+    model: &str,
+    session_id: &str,
+    workdir_candidate: &str,
+    day: &str,
+    hour: u32,
+    source: &SourceMetadata,
+) -> Option<Value> {
     let prompt_tokens = usage_field_i64(usage, &["prompt_tokens", "input_tokens", "inputTokens"]);
     let completion_tokens =
         usage_field_i64(usage, &["completion_tokens", "output_tokens", "outputTokens"]);
@@ -407,18 +546,6 @@ fn event_from_generation_span(
         return None;
     }
 
-    let model = response
-        .get("model")
-        .and_then(|m| m.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let model = if model.is_empty() {
-        "unknown".to_string()
-    } else {
-        model
-    };
-
     Some(json!({
         "providerId": PROVIDER_ID,
         "providerVersion": VERSION,
@@ -440,6 +567,112 @@ fn event_from_generation_span(
         "sourceFingerprint": source.source_fingerprint,
         "parserVersion": source.parser_version,
     }))
+}
+
+/// Per-session project transcript under `<root>/projects/<workdir-slug>/
+/// <sessionId>.jsonl` (2026-10 WorkBuddy sqlite migration; Claw/IM-channel
+/// traffic lives only here). Must not match the `.file-rollback.ndjson`
+/// sidecars or `trace_*` files.
+fn is_project_file(path: &str) -> bool {
+    let p = Path::new(path);
+    let name = match p.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n,
+        None => return false,
+    };
+    if !name.ends_with(".jsonl") || name.starts_with("trace_") {
+        return false;
+    }
+    p.ancestors()
+        .skip(1)
+        .any(|a| a.file_name().map(|n| n == "projects").unwrap_or(false))
+}
+
+/// Session id = project file stem (WorkBuddy session uuid).
+fn project_session_id(file: &str) -> Option<String> {
+    let stem = Path::new(file)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())?;
+    if stem.is_empty() {
+        None
+    } else {
+        Some(stem)
+    }
+}
+
+/// Suppression-oriented time-window match: same window as
+/// `resolve_session_and_workdir_jsonl` but ignores `deleted_at` and cwd —
+/// used only to decide whether the session's project transcript replaces
+/// this trace. A soft-deleted session row must not defeat exclusivity.
+fn window_matched_session_id(root: Option<&Path>, started_ms: i64) -> Option<String> {
+    let root = root?;
+    let db_path = root.join("workbuddy.db");
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.query_row(
+        "SELECT id FROM sessions \
+         WHERE created_at <= ?1 AND ?2 <= COALESCE(last_activity_at, updated_at) \
+         ORDER BY created_at DESC LIMIT 1",
+        rusqlite::params![started_ms + 5000, started_ms],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Probe `<root>/projects/*/<sessionId>.jsonl` for the provider root of the
+/// given trace file (`<root>/traces/<pid>/...`). Returns the project file
+/// path when the session has a transcript.
+fn project_file_for_session(trace_file: &str, session_id: &str) -> Option<PathBuf> {
+    let root = root_and_pid(trace_file).0?;
+    let projects = root.join("projects");
+    let slug_dirs = fs::read_dir(&projects).ok()?;
+    for entry in slug_dirs.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let candidate = entry.path().join(format!("{}.jsonl", session_id));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Attribution for project files: exact `workbuddy.db` sessions lookup by id
+/// (the transcript itself carries no cwd and the dir slug is lossy-encoded).
+/// Degrades silently to an empty workdir.
+fn resolve_project_session_and_workdir(file: &str, session_id: &str) -> (String, String) {
+    let root = Path::new(file)
+        .ancestors()
+        .skip(1)
+        .find(|a| a.file_name().map(|n| n == "projects").unwrap_or(false))
+        .and_then(|projects_dir| projects_dir.parent());
+    if let Some(root) = root {
+        let db_path = root.join("workbuddy.db");
+        if db_path.exists() {
+            let conn = Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            );
+            if let Ok(conn) = conn {
+                if let Ok(cwd) = conn.query_row(
+                    "SELECT cwd FROM sessions WHERE id = ?1",
+                    [session_id],
+                    |row| row.get::<_, String>(0),
+                ) {
+                    if !cwd.is_empty() {
+                        return (session_id.to_string(), cwd);
+                    }
+                }
+            }
+        }
+    }
+    (session_id.to_string(), String::new())
 }
 
 fn usage_field_i64(obj: &Value, aliases: &[&str]) -> i64 {
@@ -838,7 +1071,7 @@ mod tests {
     fn test_provider_constants() {
         assert_eq!(PROVIDER_ID, "workbuddy_local");
         assert_eq!(TOOL_CODE, "workbuddy");
-        assert_eq!(VERSION, "0.2.0");
+        assert_eq!(VERSION, "0.3.0");
     }
 
     #[test]
@@ -853,9 +1086,18 @@ mod tests {
         assert!(!is_workbuddy_trace("/tmp/root/logs/10001/trace_abc.json"));
     }
 
+    /// Parse a legacy trace bypassing session-level project-transcript
+    /// suppression (the sample root ships a transcript for sess-10001):
+    /// these tests pin the parser math, not the exclusivity policy.
+    fn legacy_parse(file: &str) -> Vec<Value> {
+        let mut store = WorkdirSnapshotStore::load(PathBuf::from("/nonexistent-snap.json"));
+        WorkBuddyLocalProvider
+            .try_parse_usage_legacy_json(file, &mut store)
+            .unwrap_or_default()
+    }
+
     #[test]
     fn test_parse_usage_sample_counts() {
-        let provider = WorkBuddyLocalProvider;
         for (pid, name, expected) in [
             ("10001", "trace_aaaa1111", 1),
             ("10001", "trace_bbbb2222", 2),
@@ -867,7 +1109,7 @@ mod tests {
                 Some(f) if Path::new(&f).exists() => f,
                 _ => return, // samples missing → skip silently
             };
-            let events = provider.parse_usage(&file);
+            let events = legacy_parse(&file);
             assert_eq!(
                 events.len(),
                 expected,
@@ -884,7 +1126,7 @@ mod tests {
             Some(f) if Path::new(&f).exists() => f,
             _ => return,
         };
-        let events = WorkBuddyLocalProvider.parse_usage(&file);
+        let events = legacy_parse(&file);
         let event = events.first().expect("aaaa1111 should emit one event");
 
         // prompt=1500 (cached=500), completion=300 → input=1000, total=1800.
@@ -934,7 +1176,7 @@ mod tests {
             Some(f) if Path::new(&f).exists() => f,
             _ => return,
         };
-        let events = WorkBuddyLocalProvider.parse_usage(&file);
+        let events = legacy_parse(&file);
         assert_eq!(events.len(), 2, "two generation spans → two events");
 
         // Span 1: prompt=1200, completion=400, no cache.
@@ -1283,13 +1525,248 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    // -----------------------------------------------------------------
+    // Per-session project transcripts (projects/<slug>/<sessionId>.jsonl)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_is_workbuddy_project_file() {
+        assert!(is_project_file(
+            "/tmp/root/projects/Users-x-y/sess-abc.jsonl"
+        ));
+        // Rollback sidecars and trace files must not match.
+        assert!(!is_project_file(
+            "/tmp/root/projects/Users-x-y/sess-abc.file-rollback.ndjson"
+        ));
+        assert!(!is_project_file("/tmp/root/projects/Users-x-y/trace_abc.jsonl"));
+        assert!(!is_project_file("/tmp/root/traces/10001/sess-abc.jsonl"));
+        assert!(!is_project_file("/tmp/root/projects/Users-x-y/sess-abc.json"));
+    }
+
+    #[test]
+    fn test_parse_usage_project_file_counts_and_math() {
+        let file = match sample_dir() {
+            Some(d) => d
+                .join("projects")
+                .join("Users-tmp-wb-sample-project-one")
+                .join("sess-10001.jsonl")
+                .to_string_lossy()
+                .to_string(),
+            _ => return,
+        };
+        if !Path::new(&file).exists() {
+            return;
+        }
+        let mut store = WorkdirSnapshotStore::load(PathBuf::from("/nonexistent-snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        // The rawUsage record without a timestamp must be skipped.
+        assert_eq!(events.len(), 2, "two timestamped rawUsage records");
+
+        let glm = events
+            .iter()
+            .find(|e| e["model"] == "glm-5.3-flash")
+            .expect("assistant message record");
+        assert_eq!(glm["inputTokens"], 1500);
+        assert_eq!(glm["outputTokens"], 400);
+        assert_eq!(glm["cacheReadTokens"], 500);
+        assert_eq!(glm["reasoningTokens"], 80);
+        assert_eq!(glm["totalTokens"], 2400);
+        assert_eq!(glm["sessionId"], "sess-10001");
+        // Samples carry no workbuddy.db → workdir stays empty, no decode of
+        // the lossy dir slug.
+        assert_eq!(glm["workdirCandidate"], "");
+
+        let ds = events
+            .iter()
+            .find(|e| e["model"] == "deepseek-v4.1-flash")
+            .expect("function_call record");
+        assert_eq!(ds["inputTokens"], 900);
+        assert_eq!(ds["outputTokens"], 100);
+        assert_eq!(ds["totalTokens"], 1000);
+
+        // The timestamp-less rawUsage (777+111=888) must not appear anywhere.
+        assert!(events.iter().all(|e| e["totalTokens"] != 888));
+    }
+
+    #[test]
+    fn test_parse_usage_project_db_attribution() {
+        let root = temp_fixture_dir("proj-db");
+        let dir = root.join("projects").join("Users-proj-db");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sess-proj1.jsonl");
+        fs::write(
+            &file,
+            json!({
+                "type": "message", "role": "assistant", "timestamp": 1780920000000i64,
+                "providerData": {"model": "glm-5.3-flash",
+                    "rawUsage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        write_workbuddy_db(
+            &root,
+            &[(
+                "sess-proj1",
+                "/proj/from-db",
+                1780910000000,
+                1780930000000,
+                Some(1780930000000i64),
+                None,
+            )],
+        );
+        let file = file.to_string_lossy().to_string();
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        // Exact id lookup (not a time window): workdir comes from sessions.cwd.
+        assert_eq!(events[0]["sessionId"], "sess-proj1");
+        assert_eq!(events[0]["workdirCandidate"], "/proj/from-db");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_usage_project_unknown_session_empty_workdir() {
+        let root = temp_fixture_dir("proj-nodb");
+        let dir = root.join("projects").join("Users-proj-x");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sess-gone.jsonl");
+        fs::write(
+            &file,
+            json!({
+                "type": "function_call", "timestamp": 1780920000000i64,
+                "providerData": {"model": "m", "rawUsage": {"prompt_tokens": 10, "completion_tokens": 5}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let file = file.to_string_lossy().to_string();
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["sessionId"], "sess-gone");
+        assert_eq!(events[0]["workdirCandidate"], "");
+        assert_eq!(events[0]["totalTokens"], 15);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_trace_suppressed_by_session_project_transcript() {
+        // Same-session project transcript suppresses the trace files; the
+        // check is per-parse, so deleting the transcript re-admits the trace.
+        let root = temp_fixture_dir("proj-suppress");
+        let file = write_fixture_trace_jsonl(&root, "10001", "trace_jsup0009", Some("ok"));
+        let started_ms = parse_iso8601_to_ms("2026-08-21T08:29:00Z").unwrap();
+        write_workbuddy_db(
+            &root,
+            &[(
+                "sess-sup",
+                "/proj/sup",
+                started_ms - 3_000,
+                started_ms + 60_000,
+                Some(started_ms + 60_000),
+                None,
+            )],
+        );
+
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        assert_eq!(events.len(), 1, "trace counts while no transcript exists");
+
+        // The session gains a project transcript → trace emits nothing.
+        let proj_dir = root.join("projects").join("Users-proj-sup");
+        fs::create_dir_all(&proj_dir).unwrap();
+        let proj_file = proj_dir.join("sess-sup.jsonl");
+        fs::write(
+            &proj_file,
+            json!({
+                "type": "message", "role": "assistant", "timestamp": started_ms,
+                "providerData": {"model": "m", "rawUsage": {"prompt_tokens": 5, "completion_tokens": 5}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut store2 = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events2 = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store2)
+            .unwrap();
+        assert!(
+            events2.is_empty(),
+            "session with a project transcript must suppress the trace file"
+        );
+
+        // Transcript cleaned up → trace re-admitted.
+        let _ = fs::remove_file(&proj_file);
+        let mut store3 = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events3 = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store3)
+            .unwrap();
+        assert_eq!(events3.len(), 1, "transcript cleanup re-admits the trace");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_trace_suppressed_via_window_match_despite_soft_deleted_row() {
+        // Review-found regression guard: when the session row is soft-deleted
+        // (or matched with an empty cwd) the emitted sessionId degrades to
+        // workerPid, but the raw time-window match must still drive
+        // suppression — otherwise transcript + trace double count the
+        // session.
+        let root = temp_fixture_dir("proj-del-sup");
+        let file = write_fixture_trace_jsonl(&root, "10001", "trace_jdel0010", Some("ok"));
+        let started_ms = parse_iso8601_to_ms("2026-08-21T08:29:00Z").unwrap();
+        // Soft-deleted row with an EMPTY cwd: both attribution degradations
+        // at once.
+        write_workbuddy_db(
+            &root,
+            &[(
+                "sess-del",
+                "",
+                started_ms - 3_000,
+                started_ms + 60_000,
+                Some(started_ms + 60_000),
+                Some(started_ms + 120_000),
+            )],
+        );
+        let proj_dir = root.join("projects").join("Users-proj-del");
+        fs::create_dir_all(&proj_dir).unwrap();
+        fs::write(
+            proj_dir.join("sess-del.jsonl"),
+            json!({
+                "type": "message", "role": "assistant", "timestamp": started_ms,
+                "providerData": {"model": "m", "rawUsage": {"prompt_tokens": 5, "completion_tokens": 5}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        assert!(
+            events.is_empty(),
+            "soft-deleted row with transcript must still suppress the trace"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn test_parse_usage_day_hour_and_session_from_sessions_file() {
         let file = match sample_trace("10001", "trace_aaaa1111") {
             Some(f) if Path::new(&f).exists() => f,
             _ => return,
         };
-        let events = WorkBuddyLocalProvider.parse_usage(&file);
+        let events = legacy_parse(&file);
         let event = events.first().unwrap();
 
         // UTC noon sample keeps the day stable in most timezones.
@@ -1372,11 +1849,17 @@ mod tests {
         assert!(sessions.iter().any(|s| s.contains("samples/workbuddy")
             && s.contains("trace_ffff6666")
             && s.ends_with(".jsonl")));
-        // Path separators differ by OS: walk_files joins the traces component
-        // with `\` on Windows and `/` elsewhere.
+        // Path separators differ by OS: walk_files joins the traces/projects
+        // components with `\` on Windows and `/` elsewhere.
         assert!(sessions
             .iter()
-            .all(|s| s.contains("/traces/") || s.contains("\\traces\\")));
+            .all(|s| s.contains("/traces/") || s.contains("\\traces\\")
+                || s.contains("/projects/") || s.contains("\\projects\\")));
+        // Per-session project transcripts must be discovered too — the
+        // Claw/IM channel traffic lives only there.
+        assert!(sessions.iter().any(|s| s.contains("samples/workbuddy")
+            && s.contains("projects")
+            && s.ends_with("sess-10001.jsonl")));
     }
 
     #[test]

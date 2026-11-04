@@ -445,37 +445,47 @@ pub fn scan_usage_with_source_cache<C: SourceCache>(
         true,
     ));
 
-    // WorkBuddy
+    // WorkBuddy — combined fingerprint over all files (traces + project
+    // transcripts): session-level source exclusivity (a session's project
+    // transcript suppresses its trace files, evaluated inside the provider on
+    // every parse) depends on cross-file state, so any WorkBuddy file
+    // changing — including a project transcript appearing or being cleaned
+    // up — must re-key the whole provider, never a stale per-file cache.
     let workbuddy = WorkBuddyLocalProvider;
     let workbuddy_files = workbuddy.scan_sessions(config);
-    let mut workbuddy_errors: Vec<String> = Vec::new();
-    for file in &workbuddy_files {
-        let source_meta =
-            crate::provider::common::source_metadata(file, workbuddy.id(), workbuddy.version());
-        if let Some(cached) = source_cache
-            .take_cached_source(&source_meta.source_fingerprint)
+    {
+        let mut source_fingerprints = workbuddy_files
+            .iter()
+            .map(|file| {
+                crate::provider::common::source_metadata(file, workbuddy.id(), workbuddy.version())
+                    .source_fingerprint
+            })
+            .collect::<Vec<_>>();
+        source_fingerprints.sort();
+        let combined_fp = sha256_hex(&source_fingerprints.join("|"));
+        let items = if let Some(cached) = source_cache
+            .take_cached_source(&combined_fp)
             .filter(|items| cached_items_have_hour(items))
         {
-            source_index.insert(source_meta.source_fingerprint, cached);
-            continue;
-        }
-        match workbuddy.try_parse_usage(file) {
-            Ok(events) => {
-                source_index.insert(
-                    source_meta.source_fingerprint,
-                    events
-                        .into_iter()
-                        .map(|event| finalize_event(event, config))
-                        .collect::<Vec<_>>(),
-                );
+            cached
+        } else {
+            let mut events = Vec::new();
+            let mut workbuddy_errors: Vec<String> = Vec::new();
+            for file in &workbuddy_files {
+                match workbuddy.try_parse_usage(file) {
+                    Ok(mut parsed) => events.append(&mut parsed),
+                    Err(error) => workbuddy_errors.push(format!("{}: {}", file, error)),
+                }
             }
-            Err(error) => {
-                workbuddy_errors.push(format!("{}: {}", file, error));
+            if !workbuddy_errors.is_empty() {
+                provider_errors.insert(workbuddy.id().to_string(), workbuddy_errors.join("; "));
             }
-        }
-    }
-    if !workbuddy_errors.is_empty() {
-        provider_errors.insert(workbuddy.id().to_string(), workbuddy_errors.join("; "));
+            events
+                .into_iter()
+                .map(|event| finalize_event(event, config))
+                .collect()
+        };
+        source_index.insert(combined_fp, items);
     }
     // Persist workdir attribution snapshots pinned during this scan so later
     // rescans (including after source-cache resets) reuse the original cwd

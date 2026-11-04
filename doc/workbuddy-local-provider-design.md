@@ -76,6 +76,12 @@ getWorkbuddyConfigDir() {
 - 文件逐行追加:运行中 trace 无 `trace_end`,解析跳过(非错误),文件增长改变 size/mtime fingerprint 后由下次 scan 重扫补收;
 - 空文件/半行是正常瞬态,宽容跳过(返回 Err 会阻塞整个 scan 落库)。
 
+**主数据源(三):会话转录 projects/<workdir-slug>/<sessionId>.jsonl(v0.3.0,权威源)**
+
+Claw/IM 外部会话(企微机器人等)的逐请求 usage **只落这里、从不写 traces**(2026-11-04 实测:CSV agent=workbuddy 22.56M/日 中 16.1M 仅存在于 projects)。一行一条记录(session-meta/message/reasoning/function_call/...),模型调用的 usage 在 `providerData.rawUsage`(assistant `message` 与 `function_call` 记录都带,OpenAI 风格,与 trace 同拆分数学),记录级 `timestamp`(epoch ms)定 day/hour;无 timestamp 的记录跳过。归因:sessionId=文件名(uuid),workdir 走 `workbuddy.db` sessions 表按 id 精确查(目录 slug 有损不可逆,不反解)。`providerData.model` 缺失回退 `requestModelId`。
+
+**会话级源互斥(v0.3.0)**:同一 session 有转录文件时,它的 traces 一律不出事件(转录是超集,双计防护)。压制探测用的 session id 取"时间窗原始匹配"(忽略 `deleted_at` 与空 cwd)——归因降级到 workerPid(软删行/空 cwd/db 打不开)时压制依然成立;只有 db 整体缺失时无法压制(WorkBuddy 重置场景,projects/ 也会同时清空,实际不可达)。scanner 对 workbuddy 用**全文件组合指纹**(同 codex 模式):任一文件(含转录)增删改都重键整个 provider,压制决策永不卡在陈旧缓存。
+
 **辅助数据源 1:sessions/<pid>.json(进程心跳,JSON;仅旧格式数据)**
 
 ```jsonc
@@ -159,7 +165,7 @@ manual_roots:
   config.provider_roots["workbuddy_local"]
 ```
 
-`scan_sessions` 返回 `<root>/traces/*/trace_*.json` 与 `trace_*.jsonl` 全部文件(`walk_files`,matcher:文件名以 `trace_` 开头且 `.json`/`.jsonl` 结尾)。遵循 guide §2.1 固定逻辑(enabled=false → 空;ignored auto root 跳过;manual 去重追加)。⚠️ 2026-10 WorkBuddy 迁移为 jsonl 后若 matcher 漏掉 `.jsonl` 会**静默断采**(无报错、零文件)——这是 v0.2.0 修的实际事故,新增回归断言守住。
+`scan_sessions` 返回 `<root>/traces/*/trace_*.json`、`trace_*.jsonl` 与 `<root>/projects/*/<sessionId>.jsonl` 全部文件(`walk_files`;projects matcher:`.jsonl` 结尾、非 `trace_` 前缀、有 `projects` 祖先目录,`.file-rollback.ndjson` 排除)。遵循 guide §2.1 固定逻辑(enabled=false → 空;ignored auto root 跳过;manual 去重追加)。⚠️ 2026-10 WorkBuddy 迁移为 jsonl 后若 matcher 漏掉 `.jsonl` 会**静默断采**(无报错、零文件)——这是 v0.2.0 修的实际事故,新增回归断言守住。scanner 缓存走**全文件组合指纹**(codex 同款):互斥决策依赖跨文件状态,任一文件变化必须重键整个 provider。
 
 ### 2.3 解析(try_parse_usage)
 
@@ -226,14 +232,16 @@ samples/workbuddy/
 ├── traces/10002/trace_dddd4444.json   # status=error + usage 缺失
 ├── traces/10003/trace_eeee5555.json   # toolOutput 非法 JSON(容错)
 ├── traces/10004/trace_ffff6666.jsonl  # 流式格式:2 generation span_end + tool span + trace_end(v0.2.0)
+├── projects/Users-tmp-wb-sample-project-one/sess-10001.jsonl  # 转录:双事件 + 无 timestamp 跳过用例;
+│                                      #   sess-10001 同名压制 aaaa/bbbb traces(集成互斥证明,总额 7300)
 └── sessions/10001.json, 10002.json, 10003.json  # cwd 映射(含一个 sessionId 不匹配的孤儿用例)
 ```
 
-时间戳取 UTC 正午(如 `2026-06-08T12:00:00Z`)保证时区稳定断言。纯 JSON/JSONL 样例,**不受 `*.db` gitignore 影响,直接入库**;`workbuddy.db` 兜底路径不在样例内覆盖,由单测的临时 sqlite fixture 覆盖(时间窗命中/删除排除/钉住防漂移)。
+时间戳取 UTC 正午(如 `2026-06-08T12:00:00Z`)保证时区稳定断言。纯 JSON/JSONL 样例,**不受 `*.db` gitignore 影响,直接入库**;`workbuddy.db` 兜底路径不在样例内覆盖,由单测的临时 sqlite fixture 覆盖(时间窗命中/删除排除/钉住防漂移/软删行压制)。
 
 ### 2.7 验证器(scripts/verify-ccusage.mjs)
 
-新增 `expectedWorkbuddy()`:纯 Node 重算 `~/.workbuddy/traces/*/trace_*.json` 与 `trace_*.jsonl`(与 Rust 解析同口径:generation span → usage → OpenAI 拆分 → 按日聚合;jsonl 需跳过无 `trace_end` 的运行中 trace 与 `status != "ok"`),与 collector scan 输出逐日对总。注册 5 处:`byProvider` map、parse 过滤、whitelist、dispatch、默认 provider 集合(与 openclaw 同性质,加默认)。本机已有真实数据(33601 tokens),立即有对账效力。⚠️ 未随 v0.2.0 落地实现(设计规划项);jsonl 时代的对账由 Rust 单测 + 隔离 ATL_HOME 真库对拍覆盖,若后续实现 verify 脚本须同时覆盖两种格式。
+新增 `expectedWorkbuddy()`:纯 Node 重算,与 Rust 采集器同口径(2026-11-04 v0.3.0 起完整建模):projects 转录(rawUsage 求和)+ traces(legacy `.json` 与流式 `.jsonl`)+ 会话级互斥(jsonl trace 用时间窗匹配 id 判压制,忽略 deleted_at/cwd;legacy 用解析出的 sessionId)→ 按日聚合,与 collector scan 输出逐日对总。`workbuddy.db` 经 `sqlite3` CLI 只读取 sessions 四列做窗口匹配。注册 5 处:`byProvider` map、parse 过滤、whitelist、dispatch、默认 provider 集合(与 openclaw 同性质,加默认)。已实测:本机 10-31 完成日 matched。
 
 ## 3. 明确不做的事(本期边界)
 

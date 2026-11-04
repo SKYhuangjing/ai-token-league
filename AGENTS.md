@@ -43,7 +43,7 @@ Core behavior:
 | `hermes_local` | Supported | Scans local Hermes SQLite database. |
 | `openclaw_local` | Supported | Scans local OpenClaw JSONL logs. |
 | `zcode_local` | Supported | Scans local ZCode SQLite database. |
-| `workbuddy_local` | Supported | Scans local WorkBuddy traces under `~/.workbuddy/traces/` (per-request tokens from generation spans). Supports both the legacy single-document `trace_*.json` and the streaming `trace_*.jsonl` format (2026-10 WorkBuddy sqlite migration); jsonl workdir attribution matches the read-only `workbuddy.db` sessions table by time window. |
+| `workbuddy_local` | Supported | Scans local WorkBuddy usage under `~/.workbuddy/`: per-session project transcripts `projects/<slug>/<sessionId>.jsonl` (authoritative; `providerData.rawUsage` on message/function_call records — the only place Claw/IM-channel traffic lands) plus `traces/<pid>/trace_*.json[l]` (legacy `.json` and streaming `.jsonl`). A session with a transcript suppresses its traces (no double count); jsonl attribution matches the read-only `workbuddy.db` sessions table by time window. |
 | `dsh_local` | Supported | Scans local DeepSeek Harness session logs (multi-frame zstd JSONL). |
 | `kimi_local` | Supported | Scans local Kimi desktop client agent session logs (daimon kernel `wire.jsonl` usage records). Web-style chats are server-only and not covered. |
 | `antigravity_local` | Supported | Scans local Antigravity conversation databases (SQLite + protobuf blobs in `gen_metadata`/`steps`); workdir attribution from the `trajectory_metadata_blob` field-7 workspace URI, virtual bucket fallback. Requires ccusage >= 20.0.30 for verification. |
