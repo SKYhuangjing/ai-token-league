@@ -19,7 +19,7 @@ Before changing behavior, identify the real source of truth in code and docs. Do
 
 AI Token League is a local-first AI coding token usage collector plus public leaderboard for Codex, Claude Code, MiMoCode, OpenCode, and Cursor.
 
-Current product baseline: `0.7`; client version: `0.7.20` (released 2026-11-01).
+Current product baseline: `0.7`; client version: `0.7.21` (released 2026-11-03).
 Frozen product baseline: `0.6`, tracked by `doc/0.6-baseline.md` and `doc/0.6-development-tasks.md`.
 Active product baseline: `0.7`, tracked by `doc/0.7-baseline.md` and `doc/0.7-development-tasks.md`.
 
@@ -35,7 +35,7 @@ Core behavior:
 
 | Provider | Status | Notes |
 | --- | --- | --- |
-| `codex_local` | Supported | Scans local Codex session JSONL logs. |
+| `codex_local` | Supported | Scans local Codex session JSONL logs, including compressed `.jsonl.zst` sessions under `sessions/` and `archived_sessions/` (Codex compresses rolled-out sessions; without archive support a cold rebuild loses those months). |
 | `claude_code_local` | Supported | Scans local Claude Code project logs. |
 | `cursor_dashboard_usage` | Supported when enabled | Uses Cursor dashboard usage API; real project paths are not available. |
 | `mimocode_local` | Supported | Scans local MiMoCode SQLite database. |
