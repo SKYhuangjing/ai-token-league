@@ -534,3 +534,4 @@ During a version, every temporary or opportunistic code feature must be recorded
 - No hook-based live collection yet.
 - Cost is optional display, not primary ranking.
 - Cursor dashboard usage does not provide local workdir attribution.
+- ZCode `project_memory_extract` background calls are never written to `model_usage` (upstream gap, tracked as zai-org/feedback#1391); `zcode_local` therefore undercounts by that traffic until ZCode records it — the provider reads all `query_source` rows unfiltered, so the fix needs zero ATL changes. Logs cannot substitute: usage fields are redacted.
