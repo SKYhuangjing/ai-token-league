@@ -131,7 +131,8 @@ export function apiRowsToRows(apiRows) {
       reasoning: num(r.reasoning),
       status: num(r.status),
       cost: num(r.cost),
-      source: String(r.source || "")
+      source: String(r.source || ""),
+      callerKeyId: String(r.callerKeyId || r.callerKey || r.caller_key_id || "")
     });
   }
   return rows;

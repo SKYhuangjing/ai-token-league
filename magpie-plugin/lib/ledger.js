@@ -25,20 +25,41 @@ export const AGENT_PROVIDER_MAP = {
 export const MAGPIE_FALLBACK = { providerId: "magpie_local", toolCode: "magpie" };
 
 /**
- * For gateway-API rows (every local agent Magpie scans, not just gateway
- * clients): keep mapped agents plus magpie's own, and count the rest out
- * instead of folding them into magpie_local — an agent ATL has no source
- * for must be skipped visibly, not misattributed.
+ * A row belongs to this computer's local usage if:
+ * 1. It is from a local session log scan (source === 'log'), OR
+ * 2. It is a gateway request without a caller key (callerKeyId is empty or 'none';
+ *    loopback 127.0.0.1 requests made by local agents carry no key).
+ * Requests carrying a gateway caller key (LAN callers, external API consumers)
+ * belong to other callers using this gateway and are filtered out.
+ */
+export function isLocalUsage(row) {
+  if (!row || typeof row !== "object") return false;
+  const source = String(row.source ?? "").trim();
+  if (source === "log") return true;
+  const callerKey = String(row.callerKeyId || row.caller_key_id || row.callerKey || "").trim();
+  return callerKey === "" || callerKey === "none";
+}
+
+/**
+ * Filters rows to local callers only and partitions into supported vs skipped agents:
+ * - Drops external caller rows (carrying a gateway caller key);
+ * - Keeps mapped agents plus magpie's own;
+ * - Counts unmapped agents out instead of folding them into magpie_local.
  */
 export function partitionUploadRows(rows) {
   const keep = [];
   const skippedAgents = new Map();
+  let skippedExternal = 0;
   for (const row of rows) {
+    if (!isLocalUsage(row)) {
+      skippedExternal += 1;
+      continue;
+    }
     const agent = String(row.agent ?? "").trim();
     if (AGENT_PROVIDER_MAP[agent] || agent === "magpie") keep.push(row);
     else skippedAgents.set(agent, (skippedAgents.get(agent) || 0) + 1);
   }
-  return { rows: keep, skippedAgents };
+  return { rows: keep, skippedAgents, skippedExternal };
 }
 
 export const WORKDIR_NAME = "magpie";

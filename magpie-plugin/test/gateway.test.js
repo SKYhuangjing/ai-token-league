@@ -133,7 +133,8 @@ describe("apiRowsToRows", () => {
       reasoning: 1,
       cost: 0,
       status: 0,
-      source: "log"
+      source: "log",
+      callerKeyId: ""
     });
     expect("session" in row).toBe(false);
     expect("providerAccount" in row).toBe(false);
@@ -170,7 +171,7 @@ describe("windowPeriod", () => {
 
 describe("partitionUploadRows", () => {
   test("keeps mapped agents and magpie, counts unknown agents out", () => {
-    const { rows: keep, skippedAgents } = partitionUploadRows([
+    const { rows: keep, skippedAgents, skippedExternal } = partitionUploadRows([
       { agent: "zcode", t: "2026-11-01T00:00:00+08:00", in: 1 },
       { agent: "kimi", t: "2026-11-01T00:00:00+08:00", in: 1 },
       { agent: "magpie", t: "2026-11-01T00:00:00+08:00", in: 1 },
@@ -180,6 +181,23 @@ describe("partitionUploadRows", () => {
     ]);
     expect(keep.map((r) => r.agent).sort()).toEqual(["kimi", "magpie", "zcode"]);
     expect(Object.fromEntries(skippedAgents)).toEqual({ minimax: 1, qoder: 2 });
+    expect(skippedExternal).toBe(0);
+  });
+
+  test("filters out gateway calls carrying an external caller key", () => {
+    const { rows: keep, skippedExternal } = partitionUploadRows([
+      // local log: kept
+      { agent: "zcode", source: "log", in: 10 },
+      // gateway call from local loopback (no caller key): kept
+      { agent: "zcode", source: "", callerKeyId: "", in: 20 },
+      { agent: "zcode", source: "gateway", callerKeyId: "none", in: 30 },
+      // gateway call from LAN / external caller (has callerKeyId): DROPPED
+      { agent: "zcode", source: "gateway", callerKeyId: "key_lan_colleague", in: 40 },
+      { agent: "magpie", source: "", callerKeyId: "key_magpie_share", in: 50 }
+    ]);
+    expect(keep.length).toBe(3);
+    expect(keep.map((r) => r.in)).toEqual([10, 20, 30]);
+    expect(skippedExternal).toBe(2);
   });
 });
 

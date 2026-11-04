@@ -5,6 +5,7 @@ import {
   integrityCheck,
   mapAgent,
   firstRouteId,
+  isLocalUsage,
   MAGPIE_FALLBACK,
   AGENT_PROVIDER_MAP
 } from "../lib/ledger.js";
@@ -179,5 +180,29 @@ describe("firstRouteId", () => {
   test("returns the first numeric route id", () => {
     expect(firstRouteId(parseLedger(ledgerText).rows)).toBe(1);
     expect(firstRouteId([])).toBe(null);
+  });
+});
+
+describe("isLocalUsage", () => {
+  test("session log scan is always local", () => {
+    expect(isLocalUsage({ source: "log" })).toBe(true);
+    expect(isLocalUsage({ source: "log", callerKeyId: "some_key" })).toBe(true);
+  });
+
+  test("gateway call without caller key is local (loopback)", () => {
+    expect(isLocalUsage({ source: "" })).toBe(true);
+    expect(isLocalUsage({ source: "gateway", callerKeyId: "" })).toBe(true);
+    expect(isLocalUsage({ source: "gateway", callerKeyId: "none" })).toBe(true);
+  });
+
+  test("gateway call with a caller key is treated as external", () => {
+    expect(isLocalUsage({ source: "", callerKeyId: "key_abc" })).toBe(false);
+    expect(isLocalUsage({ source: "gateway", caller_key_id: "035540ab" })).toBe(false);
+    expect(isLocalUsage({ source: "through", callerKey: "key_xyz" })).toBe(false);
+  });
+
+  test("non-object input returns false", () => {
+    expect(isLocalUsage(null)).toBe(false);
+    expect(isLocalUsage("junk")).toBe(false);
   });
 });

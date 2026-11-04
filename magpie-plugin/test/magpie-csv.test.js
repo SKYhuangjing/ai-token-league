@@ -33,13 +33,26 @@ describe("parseUsageCsv", () => {
       reasoning: 1,
       cost: 0,
       status: 200,
-      source: "log"
+      source: "log",
+      callerKeyId: ""
     });
     expect(rows[1].model).toBe("gpt"); // falls back to model, then served
     for (const row of rows) {
       expect("session" in row).toBe(false);
       expect("providerAccount" in row).toBe(false);
     }
+  });
+
+  test("extracts caller_key_id when present in the header", () => {
+    const customHeader = `${HEADER},caller_key_id`;
+    const { rows } = parseUsageCsv(
+      [
+        customHeader,
+        "2026-11-01T09:00:00+08:00,zcode,m,p,h,m,s,false,,1,1,0,0,0,0,200,s1,,acc,gateway,false,key_123"
+      ].join("\n") + "\n"
+    );
+    expect(rows[0].callerKeyId).toBe("key_123");
+    expect(rows[0].source).toBe("gateway");
   });
 
   test("quoted fields with commas, doubled quotes and CRLF parse intact", () => {

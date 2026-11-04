@@ -145,7 +145,7 @@ export function parseUsageCsv(text) {
   if (missing.length) {
     throw new CsvError(`usage CSV shape drift: missing columns ${missing.join(", ")}`);
   }
-  const at = (row, name) => row[index.get(name)] ?? "";
+  const at = (row, name) => (index.has(name) ? (row[index.get(name)] ?? "") : "");
   const rows = [];
   let rejected = 0;
   for (const row of records) {
@@ -165,7 +165,8 @@ export function parseUsageCsv(text) {
       reasoning: num(at(row, "reasoning_tokens")),
       cost: num(at(row, "cost_usd")),
       status: num(at(row, "status")),
-      source: at(row, "source")
+      source: at(row, "source"),
+      callerKeyId: at(row, "caller_key_id")
     });
   }
   return { rows, rejected };

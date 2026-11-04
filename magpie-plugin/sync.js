@@ -476,14 +476,17 @@ async function main() {
       }
     }
     if (unified) {
-      const { rows: uploadRows, skippedAgents } = partitionUploadRows(unified.rows);
-      const counted = unified.rows.filter((row) => row.in || row.out || row.cache_read || row.cache_write);
+      const { rows: uploadRows, skippedAgents, skippedExternal } = partitionUploadRows(unified.rows);
+      const counted = uploadRows.filter((row) => row.in || row.out || row.cache_read || row.cache_write);
       const integrity = gatewayIntegrity(counted);
       if (!integrity.ok) {
         appendLog(`INTEGRITY REFUSAL (gateway source): ${integrity.issues.slice(0, 3).join("; ")}`);
         console.error(`atl-sync: gateway source integrity check failed, refusing to sync:\n  ${integrity.issues.join("\n  ")}`);
         writeFailStatus(config, `integrity check failed: ${integrity.issues[0] || "gateway source"}`, { dryRun: args.dryRun });
         return 3;
+      }
+      if (skippedExternal > 0) {
+        appendLog(`gateway source: filtered ${skippedExternal} external caller rows (carried gateway key)`);
       }
       if (skippedAgents.size) {
         const skipped = [...skippedAgents.entries()].map(([agent, n]) => `${agent}=${n}`).join(", ");
@@ -492,14 +495,14 @@ async function main() {
       const meta = unified.meta;
       loaded = {
         rows: uploadRows,
-        pageRows: unified.rows,
+        pageRows: uploadRows,
         sentinel: null,
         sourceInfo: {
           kind: "gateway",
           channel: unified.channel,
           baseUrl: unified.channel === "csv" ? (binary || "") : resolveGatewayBaseUrl(),
           period: unified.channel === "csv" ? (unified.windowDays === 0 ? "all" : `${unified.windowDays}d`) : windowPeriod(windowDays),
-          total: meta ? meta.total : unified.rows.length,
+          total: meta ? meta.total : uploadRows.length,
           through: meta ? meta.through : null,
           direct: meta ? meta.direct : null
         }
@@ -537,7 +540,8 @@ async function main() {
       return 3;
     }
     const { rows, malformed, total } = parsed;
-    const counted = rows.filter((row) => row.in || row.out || row.cache_read || row.cache_write);
+    const { rows: uploadRows, skippedAgents, skippedExternal } = partitionUploadRows(rows);
+    const counted = uploadRows.filter((row) => row.in || row.out || row.cache_read || row.cache_write);
     const integrity = integrityCheck(counted);
     if (!integrity.ok) {
       appendLog(`INTEGRITY REFUSAL: ${integrity.issues.slice(0, 3).join("; ")}`);
@@ -545,10 +549,17 @@ async function main() {
       writeFailStatus(config, `integrity check failed: ${integrity.issues[0] || "ledger"}`, { dryRun: args.dryRun });
       return 3;
     }
+    if (skippedExternal > 0) {
+      appendLog(`ledger source: filtered ${skippedExternal} external caller rows (carried gateway key)`);
+    }
+    if (skippedAgents.size) {
+      const skipped = [...skippedAgents.entries()].map(([agent, n]) => `${agent}=${n}`).join(", ");
+      appendLog(`ledger source: skipped ${[...skippedAgents.values()].reduce((a, b) => a + b, 0)} rows of agents ATL has no source for (${skipped})`);
+    }
     loaded = {
-      rows,
-      pageRows: rows,
-      sentinel: firstRouteId(rows),
+      rows: uploadRows,
+      pageRows: uploadRows,
+      sentinel: firstRouteId(uploadRows),
       sourceInfo: { kind: "ledger", channel: "ledger", path: ledgerPath, total, malformed, counted: counted.length }
     };
   }
