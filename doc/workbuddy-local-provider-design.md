@@ -62,16 +62,30 @@ getWorkbuddyConfigDir() {
 }
 ```
 
-**辅助数据源 1:sessions/<pid>.json(进程心跳,JSON)**
+**主数据源(二):流式 JSONL(2026-10 WorkBuddy sqlite 迁移后的现行格式)**
+
+```
+~/.workbuddy/traces/<pid>/trace_<uuid>.jsonl
+```
+
+一行一条事件记录(`trace_start` / `span_start` / `span_end` / `trace_end`);usage 在 `type=="span_end"` 且 `span.type=="generation"` 的记录里,`toolOutput` 结构与旧格式完全一致(OpenAI 风格 JSON 字符串,数组取 `[0]`)。实测坑:
+
+- `trace_end.totalTokens` 仍恒 0(旧陷阱延续);
+- `span_end` 记录带 `toolInput` 明文(隐私红线同旧格式,只读 `toolOutput` 的 `usage`/`model`);
+- 记录**不含 sessionId**,`sessions/<pid>.json` 心跳文件已停写(目录清空);
+- 文件逐行追加:运行中 trace 无 `trace_end`,解析跳过(非错误),文件增长改变 size/mtime fingerprint 后由下次 scan 重扫补收;
+- 空文件/半行是正常瞬态,宽容跳过(返回 Err 会阻塞整个 scan 落库)。
+
+**辅助数据源 1:sessions/<pid>.json(进程心跳,JSON;仅旧格式数据)**
 
 ```jsonc
 { "pid": 98437, "sessionId": "0569c71e-...", "cwd": "/Users/sky/WorkBuddy/...",
   "startedAt": 1787327371127, "kind": "interactive", "version": "2.115.0", ... }
 ```
 
-提供 pid → (sessionId, cwd) 映射,用于 workdir 归属。
+提供 pid → (sessionId, cwd) 映射,用于 legacy `.json` trace 的 workdir 归属。**2026-10 迁移后停写**,新格式归因走 `workbuddy.db` 时间窗(§2.3)。
 
-**辅助数据源 2:workbuddy.db(SQLite,WAL 模式)**
+****辅助数据源 2:workbuddy.db(SQLite,WAL 模式)****
 
 - `sessions` 表:`id, cwd, title, custom_title, status, created_at, updated_at, model, project_id, ...`
 - `session_usage` 表:`session_id, used, size, updated_at, credit_json`(积分汇总,如 `{"60aed...":4.69}`)
@@ -130,7 +144,7 @@ total = input + output + cacheRead + cacheWrite     = 33048 == total_tokens ✓
 ```rust
 pub const PROVIDER_ID: &str = "workbuddy_local";
 pub const TOOL_CODE: &str = "workbuddy";
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.2.0";   // 0.2.0: jsonl 流式格式 + db 时间窗归因
 ```
 
 显示名 `WorkBuddy`。事件 `sourceKind = "local_log"`(主源是 JSON 日志文件)、`sourceQuality = "exact"`。
@@ -145,9 +159,15 @@ manual_roots:
   config.provider_roots["workbuddy_local"]
 ```
 
-`scan_sessions` 返回 `<root>/traces/*/trace_*.json` 全部文件(`walk_files`,matcher:文件名以 `trace_` 开头且 `.json` 结尾)。遵循 guide §2.1 固定逻辑(enabled=false → 空;ignored auto root 跳过;manual 去重追加)。
+`scan_sessions` 返回 `<root>/traces/*/trace_*.json` 与 `trace_*.jsonl` 全部文件(`walk_files`,matcher:文件名以 `trace_` 开头且 `.json`/`.jsonl` 结尾)。遵循 guide §2.1 固定逻辑(enabled=false → 空;ignored auto root 跳过;manual 去重追加)。⚠️ 2026-10 WorkBuddy 迁移为 jsonl 后若 matcher 漏掉 `.jsonl` 会**静默断采**(无报错、零文件)——这是 v0.2.0 修的实际事故,新增回归断言守住。
 
 ### 2.3 解析(try_parse_usage)
+
+按扩展名分流:`.jsonl` → 流式解析(v0.2.0);`.json` → legacy 单文档解析。两格式共享 generation span → 事件的提取函数(usage 拆分数学、model、`toolInput` 禁读完全一致)。
+
+**流式 `.jsonl`**:逐行解析(read_json_lines,坏行跳过);`trace_end`(或 `trace_start`)取 trace 级元数据;无 `trace_end`(运行中)或 `status != "ok"` → 跳过;day/hour 取 `trace_start.startedAt`(回退 mtime);遍历 `type=="span_end"` 且 `span.type=="generation"` 的记录出事件。空文件/无有效记录宽容跳过(非 Err,原因见 §1.2)。modelInfo 兜底在新格式不存在(trace_end 无该字段),不适用。
+
+**legacy `.json`**:原单文档流程不变(data.trace → spans → modelInfo 兜底)。
 
 对单个 trace 文件:
 
@@ -164,9 +184,9 @@ manual_roots:
    - `model` 取响应对象 `model`,空则 `"unknown"`;
    - `sessionId` 取 trace 级 `sessionId`(实测 trace 顶层无 sessionId 时回退 `workerPid` 字符串)。
 4. **modelInfo 兜底**(版本漂移容错):若无任何 generation span 产出 usage,且 trace 顶层 `modelInfo` 存在且 `totalInput+totalOutput+totalCached > 0`(社区解析器的旧格式),按 `input=totalInput, output=totalOutput, cacheRead=totalCached, cacheWrite=0` 出一条事件。
-5. workdir 归属(在 provider 内、事件 finalize 前填充 `workdirCandidate`):
-   - 首选:同根目录 `sessions/<pid>.json`(pid = trace 文件父目录名)的 `cwd`,且其 `sessionId` 与 trace 匹配;
-   - 兜底:`workbuddy.db` 只读打开(`SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX`,guide §2.2,WAL 安全),`SELECT cwd FROM sessions WHERE id = ?`;
+5. workdir 归属(在 provider 内、事件 finalize 前填充 `workdirCandidate`;首个非空结果按文件路径钉进快照缓存,防 pid 复用/db 改写造成再归因漂移):
+   - legacy `.json`:首选同根目录 `sessions/<pid>.json` 的 `cwd`(且其 `sessionId` 与 trace 匹配);兜底 `workbuddy.db` 只读打开(`SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX`,guide §2.2,WAL 安全)`SELECT cwd FROM sessions WHERE id = ?`;
+   - 流式 `.jsonl`(v0.2.0):记录无 sessionId、`sessions/<pid>.json` 已停写 → 用 trace `startedAt` 对 `workbuddy.db` `sessions` 表做**时间窗匹配**:`created_at <= start(+5s 容差) <= COALESCE(last_activity_at, updated_at)`,排除 `deleted_at > 0`,`ORDER BY created_at DESC LIMIT 1` 取最新创建的命中行,sessionId 取命中行 `id`(回退 `workerPid`)。本机 12 个真实 trace 实测全部唯一命中正确 cwd,零歧义;并发会话重叠时取最新创建者(启发式,快照钉住保证稳定);
    - 都失败:留空(由 finalize_event 管线降级),不用 `current_dir()` 噪声兜底。
 6. 事件 JSON 按 guide §2.3 契约输出全部字段。
 
@@ -200,19 +220,20 @@ manual_roots:
 
 ```
 samples/workbuddy/
-├── traces/10001/trace_aaaa1111.json   # 正常行:1 generation,cache 拆分,UTC 正午
-├── traces/10001/trace_bbbb2222.json   # 多 generation span(2 条 usage)
+├── traces/10001/trace_aaaa1111.json   # 正常行:1 generation,cache 拆分,UTC 正午(legacy)
+├── traces/10001/trace_bbbb2222.json   # 多 generation span(2 条 usage)(legacy)
 ├── traces/10002/trace_cccc3333.json   # 零 token generation(跳过)+ modelInfo 兜底行(旧格式)
 ├── traces/10002/trace_dddd4444.json   # status=error + usage 缺失
 ├── traces/10003/trace_eeee5555.json   # toolOutput 非法 JSON(容错)
+├── traces/10004/trace_ffff6666.jsonl  # 流式格式:2 generation span_end + tool span + trace_end(v0.2.0)
 └── sessions/10001.json, 10002.json, 10003.json  # cwd 映射(含一个 sessionId 不匹配的孤儿用例)
 ```
 
-时间戳取 UTC 正午(如 `2026-06-08T12:00:00Z`)保证时区稳定断言。纯 JSON 样例,**不受 `*.db` gitignore 影响,直接入库**;`workbuddy.db` 兜底路径不在样例内覆盖(真实库对账覆盖)。
+时间戳取 UTC 正午(如 `2026-06-08T12:00:00Z`)保证时区稳定断言。纯 JSON/JSONL 样例,**不受 `*.db` gitignore 影响,直接入库**;`workbuddy.db` 兜底路径不在样例内覆盖,由单测的临时 sqlite fixture 覆盖(时间窗命中/删除排除/钉住防漂移)。
 
 ### 2.7 验证器(scripts/verify-ccusage.mjs)
 
-新增 `expectedWorkbuddy()`:纯 Node 重算 `~/.workbuddy/traces/*/trace_*.json`(与 Rust 解析同口径:generation span → usage → OpenAI 拆分 → 按日聚合),与 collector scan 输出逐日对总。注册 5 处:`byProvider` map、parse 过滤、whitelist、dispatch、默认 provider 集合(与 openclaw 同性质,加默认)。本机已有真实数据(33601 tokens),立即有对账效力。
+新增 `expectedWorkbuddy()`:纯 Node 重算 `~/.workbuddy/traces/*/trace_*.json` 与 `trace_*.jsonl`(与 Rust 解析同口径:generation span → usage → OpenAI 拆分 → 按日聚合;jsonl 需跳过无 `trace_end` 的运行中 trace 与 `status != "ok"`),与 collector scan 输出逐日对总。注册 5 处:`byProvider` map、parse 过滤、whitelist、dispatch、默认 provider 集合(与 openclaw 同性质,加默认)。本机已有真实数据(33601 tokens),立即有对账效力。⚠️ 未随 v0.2.0 落地实现(设计规划项);jsonl 时代的对账由 Rust 单测 + 隔离 ATL_HOME 真库对拍覆盖,若后续实现 verify 脚本须同时覆盖两种格式。
 
 ## 3. 明确不做的事(本期边界)
 

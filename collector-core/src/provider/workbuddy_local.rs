@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::provider::common::{source_metadata, walk_files};
+use crate::provider::common::{read_json_lines, source_metadata, walk_files, SourceMetadata};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -10,22 +10,32 @@ use std::sync::{Mutex, OnceLock};
 
 pub const PROVIDER_ID: &str = "workbuddy_local";
 pub const TOOL_CODE: &str = "workbuddy";
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.2.0";
 
-/// WorkBuddy (Electron, OpenClaw-lineage kernel) writes one JSON trace per
-/// logical request under `<config-dir>/traces/<pid>/trace_<uuid>.json`.
-/// `spans[].toolOutput` of `type == "generation"` spans carries an OpenAI-style
-/// usage object as a JSON string. `toolInput` contains full conversation
-/// plaintext and is never read (privacy red line).
+/// WorkBuddy (Electron, OpenClaw-lineage kernel) writes one trace per logical
+/// request under `<config-dir>/traces/<pid>/`. Two generations of the format:
 ///
-/// Workdir attribution stability: traces do not embed a cwd (verified against
-/// real traces — `trace.metadata` is `{}` and the only cwd occurrences live in
-/// `toolInput`, which is privacy-forbidden). Attribution therefore reads
-/// `sessions/<pid>.json`, but WorkBuddy reuses pid directories and rewrites
-/// that file for the *current* session, so rescanning an old trace after pid
-/// reuse would silently re-attribute it to a different cwd (cloud double
-/// count: same tokens, two workdirHash values). The first non-empty
-/// attribution per trace file is therefore pinned into a provider-private
+/// * Legacy (≤ 2026-10): `trace_<uuid>.json`, a single JSON document with
+///   `trace` + `spans[]`. `spans[].toolOutput` of `type == "generation"`
+///   spans carries an OpenAI-style usage object as a JSON string.
+/// * Streaming (2026-10 migration, sqlite-migrations marker): `trace_<uuid>
+///   .jsonl`, one record per line — `{"type":"trace_start"|"span_start"|
+///   "span_end"|"trace_end", ...}`. Usage lives in `span_end` records of
+///   generation spans (`trace_end.totalTokens` stays 0 — known trap).
+///
+/// In both formats `toolInput` contains full conversation plaintext and is
+/// never read (privacy red line).
+///
+/// Workdir attribution stability: traces embed no cwd (verified against real
+/// traces of both formats). Legacy attribution read `sessions/<pid>.json`,
+/// but WorkBuddy reuses pid directories and rewrites that file for the
+/// *current* session, so rescanning an old trace after pid reuse would
+/// silently re-attribute it to a different cwd (cloud double count: same
+/// tokens, two workdirHash values). The streaming format dropped both the
+/// trace-level sessionId and `sessions/<pid>.json` entirely, so jsonl traces
+/// attribute via a time-window match against the read-only `workbuddy.db`
+/// `sessions` table (activity window containing the trace start). The first
+/// non-empty attribution per trace file is pinned into a provider-private
 /// snapshot cache under the ATL home and replayed on every later parse.
 pub struct WorkBuddyLocalProvider;
 
@@ -127,6 +137,101 @@ impl WorkBuddyLocalProvider {
         file: &str,
         store: &mut WorkdirSnapshotStore,
     ) -> Result<Vec<Value>, String> {
+        if file.ends_with(".jsonl") {
+            self.try_parse_usage_jsonl(file, store)
+        } else {
+            self.try_parse_usage_legacy_json(file, store)
+        }
+    }
+
+    /// Streaming JSONL format (2026-10 WorkBuddy migration): one record per
+    /// line — `trace_start` / `span_start` / `span_end` / `trace_end`. Only
+    /// `span_end` records of generation spans carry final usage. A trace with
+    /// no `trace_end` yet is still being written: skip it (Ok, empty) — the
+    /// file's size/mtime fingerprint changes when the record is appended, so
+    /// the next scan reparses it. Records carry no sessionId and the legacy
+    /// `sessions/<pid>.json` sidecar is gone, so attribution goes through
+    /// `resolve_session_and_workdir_jsonl` (workbuddy.db time window).
+    fn try_parse_usage_jsonl(
+        &self,
+        file: &str,
+        store: &mut WorkdirSnapshotStore,
+    ) -> Result<Vec<Value>, String> {
+        let records = read_json_lines(file);
+        let record_trace = |kind: &str| {
+            records.iter().find(|r| r.get("type").and_then(|t| t.as_str()) == Some(kind))
+        };
+        let trace_start = record_trace("trace_start")
+            .and_then(|r| r.get("trace"))
+            .filter(|t| t.is_object());
+        let trace_end = record_trace("trace_end")
+            .and_then(|r| r.get("trace"))
+            .filter(|t| t.is_object());
+
+        let trace = match trace_end.or(trace_start) {
+            Some(t) => t,
+            // Empty/partial file is a normal transient while WorkBuddy
+            // streams records line by line: skip (not an error — a provider
+            // parse error would block the whole scan's persist) and let the
+            // next scan reparse once the file grows.
+            None => return Ok(vec![]),
+        };
+        if trace_end.is_none() {
+            // Still running; no final status to trust yet.
+            return Ok(vec![]);
+        }
+
+        // Error traces carry no usage worth counting; skip without an error.
+        let status = trace.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        if status != "ok" {
+            return Ok(vec![]);
+        }
+
+        // Day/hour come from the trace-level ISO 8601 startedAt; fall back to
+        // the file mtime when the timestamp cannot be parsed.
+        let mtime_ms = file_mtime_ms(file);
+        let started_ms = trace_start
+            .and_then(|t| t.get("startedAt").and_then(|s| s.as_str()))
+            .or_else(|| trace.get("startedAt").and_then(|s| s.as_str()))
+            .and_then(parse_iso8601_to_ms)
+            .unwrap_or(mtime_ms);
+        let day = crate::date::local_day_from_timestamp_ms(started_ms);
+        let hour = crate::date::local_hour_from_timestamp_ms(started_ms);
+
+        let source = source_metadata(file, PROVIDER_ID, VERSION);
+        let (session_id, workdir_candidate) =
+            resolve_pinned(file, store, || {
+                resolve_session_and_workdir_jsonl(file, trace, started_ms)
+            });
+
+        let mut events = Vec::new();
+        for rec in &records {
+            if rec.get("type").and_then(|t| t.as_str()) != Some("span_end") {
+                continue;
+            }
+            if let Some(span) = rec.get("span") {
+                if let Some(event) = event_from_generation_span(
+                    span,
+                    &session_id,
+                    &workdir_candidate,
+                    &day,
+                    hour,
+                    &source,
+                ) {
+                    events.push(event);
+                }
+            }
+        }
+
+        Ok(events)
+    }
+
+    /// Legacy single-document format: `{"trace": {...}, "spans": [...]}`.
+    fn try_parse_usage_legacy_json(
+        &self,
+        file: &str,
+        store: &mut WorkdirSnapshotStore,
+    ) -> Result<Vec<Value>, String> {
         let content = fs::read_to_string(file).map_err(|e| format!("read failed: {}", e))?;
         let data: Value =
             serde_json::from_str(&content).map_err(|e| format!("invalid json: {}", e))?;
@@ -159,99 +264,16 @@ impl WorkBuddyLocalProvider {
         let mut events = Vec::new();
         if let Some(spans) = data.get("spans").and_then(|s| s.as_array()) {
             for span in spans {
-                if span.get("type").and_then(|t| t.as_str()) != Some("generation") {
-                    continue;
+                if let Some(event) = event_from_generation_span(
+                    span,
+                    &session_id,
+                    &workdir_candidate,
+                    &day,
+                    hour,
+                    &source,
+                ) {
+                    events.push(event);
                 }
-                let tool_output = match span.get("toolOutput").and_then(|v| v.as_str()) {
-                    Some(s) if !s.trim().is_empty() => s,
-                    _ => continue,
-                };
-
-                // Privacy: only toolOutput is deserialized, and only the
-                // `usage` and `model` fields are read. toolInput contains
-                // full conversation plaintext and must never be accessed.
-                let output: Value = match serde_json::from_str(tool_output) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                let response = if output.is_array() {
-                    match output.as_array().and_then(|arr| arr.first()) {
-                        Some(v) => v,
-                        None => continue,
-                    }
-                } else if output.is_object() {
-                    &output
-                } else {
-                    continue;
-                };
-
-                let usage = match response.get("usage").filter(|u| u.is_object()) {
-                    Some(u) => u,
-                    None => continue,
-                };
-
-                let prompt_tokens =
-                    usage_field_i64(usage, &["prompt_tokens", "input_tokens", "inputTokens"]);
-                let completion_tokens = usage_field_i64(
-                    usage,
-                    &["completion_tokens", "output_tokens", "outputTokens"],
-                );
-                let cache_read = match usage.get("prompt_tokens_details") {
-                    Some(details) if details.get("cached_tokens").is_some() => {
-                        usage_field_i64(details, &["cached_tokens"])
-                    }
-                    _ => usage_field_i64(usage, &["cached_tokens"]),
-                };
-                let reasoning = match usage.get("completion_tokens_details") {
-                    Some(details) if details.get("reasoning_tokens").is_some() => {
-                        usage_field_i64(details, &["reasoning_tokens"])
-                    }
-                    _ => usage_field_i64(usage, &["reasoning_tokens"]),
-                };
-
-                // OpenAI semantics: prompt_tokens already includes cached
-                // tokens, so split before re-assembling the total.
-                let cache_write = 0i64;
-                let output_tokens = completion_tokens.max(0);
-                let input = (prompt_tokens - cache_read).max(0);
-                let total = input + output_tokens + cache_read + cache_write;
-                if total == 0 {
-                    continue;
-                }
-
-                let model = response
-                    .get("model")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                let model = if model.is_empty() {
-                    "unknown".to_string()
-                } else {
-                    model
-                };
-
-                events.push(json!({
-                    "providerId": PROVIDER_ID,
-                    "providerVersion": VERSION,
-                    "toolCode": TOOL_CODE,
-                    "sourceKind": "local_log",
-                    "sourceQuality": "exact",
-                    "sessionId": session_id,
-                    "day": day,
-                    "hour": hour,
-                    "workdirCandidate": workdir_candidate,
-                    "model": model,
-                    "inputTokens": input,
-                    "outputTokens": output_tokens,
-                    "cacheReadTokens": cache_read,
-                    "cacheWriteTokens": cache_write,
-                    "reasoningTokens": reasoning,
-                    "totalTokens": total,
-                    "rawSourceRef": source.raw_source_ref,
-                    "sourceFingerprint": source.source_fingerprint,
-                    "parserVersion": source.parser_version,
-                }));
             }
         }
 
@@ -307,19 +329,117 @@ impl WorkBuddyLocalProvider {
     }
 }
 
-/// Trace files live under `<root>/traces/<pid>/trace_<uuid>.json`.
+/// Trace files live under `<root>/traces/<pid>/`: legacy `trace_<uuid>.json`
+/// single documents and streaming `trace_<uuid>.jsonl` event logs (2026-10
+/// WorkBuddy migration).
 fn is_workbuddy_trace(path: &str) -> bool {
     let p = Path::new(path);
     let name = match p.file_name().and_then(|n| n.to_str()) {
         Some(n) => n,
         None => return false,
     };
-    if !name.starts_with("trace_") || !name.ends_with(".json") {
+    if !name.starts_with("trace_") {
+        return false;
+    }
+    if !name.ends_with(".json") && !name.ends_with(".jsonl") {
         return false;
     }
     p.ancestors()
         .skip(1)
         .any(|a| a.file_name().map(|n| n == "traces").unwrap_or(false))
+}
+
+/// Shared generation-span → event extraction for both trace formats. Skips
+/// spans that carry no usable usage (returns None). Privacy: whole records
+/// are JSON-parsed, but only `toolOutput`'s `usage` and `model` fields are
+/// ever read — `toolInput` contains full conversation plaintext and must
+/// never be accessed or emitted.
+fn event_from_generation_span(
+    span: &Value,
+    session_id: &str,
+    workdir_candidate: &str,
+    day: &str,
+    hour: u32,
+    source: &SourceMetadata,
+) -> Option<Value> {
+    if span.get("type").and_then(|t| t.as_str()) != Some("generation") {
+        return None;
+    }
+    let tool_output = span.get("toolOutput").and_then(|v| v.as_str())?;
+    if tool_output.trim().is_empty() {
+        return None;
+    }
+
+    let output: Value = serde_json::from_str(tool_output).ok()?;
+    let response = if output.is_array() {
+        output.as_array()?.first()?
+    } else if output.is_object() {
+        &output
+    } else {
+        return None;
+    };
+
+    let usage = response.get("usage").filter(|u| u.is_object())?;
+
+    let prompt_tokens = usage_field_i64(usage, &["prompt_tokens", "input_tokens", "inputTokens"]);
+    let completion_tokens =
+        usage_field_i64(usage, &["completion_tokens", "output_tokens", "outputTokens"]);
+    let cache_read = match usage.get("prompt_tokens_details") {
+        Some(details) if details.get("cached_tokens").is_some() => {
+            usage_field_i64(details, &["cached_tokens"])
+        }
+        _ => usage_field_i64(usage, &["cached_tokens"]),
+    };
+    let reasoning = match usage.get("completion_tokens_details") {
+        Some(details) if details.get("reasoning_tokens").is_some() => {
+            usage_field_i64(details, &["reasoning_tokens"])
+        }
+        _ => usage_field_i64(usage, &["reasoning_tokens"]),
+    };
+
+    // OpenAI semantics: prompt_tokens already includes cached tokens, so
+    // split before re-assembling the total.
+    let cache_write = 0i64;
+    let output_tokens = completion_tokens.max(0);
+    let input = (prompt_tokens - cache_read).max(0);
+    let total = input + output_tokens + cache_read + cache_write;
+    if total == 0 {
+        return None;
+    }
+
+    let model = response
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let model = if model.is_empty() {
+        "unknown".to_string()
+    } else {
+        model
+    };
+
+    Some(json!({
+        "providerId": PROVIDER_ID,
+        "providerVersion": VERSION,
+        "toolCode": TOOL_CODE,
+        "sourceKind": "local_log",
+        "sourceQuality": "exact",
+        "sessionId": session_id,
+        "day": day,
+        "hour": hour,
+        "workdirCandidate": workdir_candidate,
+        "model": model,
+        "inputTokens": input,
+        "outputTokens": output_tokens,
+        "cacheReadTokens": cache_read,
+        "cacheWriteTokens": cache_write,
+        "reasoningTokens": reasoning,
+        "totalTokens": total,
+        "rawSourceRef": source.raw_source_ref,
+        "sourceFingerprint": source.source_fingerprint,
+        "parserVersion": source.parser_version,
+    }))
 }
 
 fn usage_field_i64(obj: &Value, aliases: &[&str]) -> i64 {
@@ -360,29 +480,80 @@ fn worker_pid_string(trace: &Value) -> String {
     }
 }
 
-/// Resolve (sessionId, workdirCandidate) for a trace file:
-/// 1. sessionId: trace-level `sessionId` → sibling `sessions/<pid>.json`
-///    `sessionId` → `workerPid` as string.
-/// 2. workdir: sibling `sessions/<pid>.json` `cwd` when its `sessionId`
-///    matches → read-only `workbuddy.db` `SELECT cwd FROM sessions` → empty.
-///    The db fallback degrades silently; no `current_dir()` noise fallback.
-fn resolve_session_and_workdir(file: &str, trace: &Value) -> (String, String) {
+/// Layout is `<root>/traces/<pid>/trace_*.json[l]`: the provider root is the
+/// parent of the `traces` directory (the nearest such ancestor).
+fn root_and_pid(file: &str) -> (Option<PathBuf>, String) {
     let file_path = Path::new(file);
     let pid_dir = file_path.parent();
     let pid = pid_dir
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    // Layout is `<root>/traces/<pid>/trace_*.json`: the provider root is the
-    // parent of the `traces` directory (the nearest such ancestor).
     let root = pid_dir
         .and_then(|p| p.parent())
         .filter(|p| p.file_name().map(|n| n == "traces").unwrap_or(false))
-        .and_then(|traces_dir| traces_dir.parent());
+        .and_then(|traces_dir| traces_dir.parent())
+        .map(|p| p.to_path_buf());
+    (root, pid)
+}
+
+/// Attribution for streaming jsonl traces: records carry no sessionId and the
+/// legacy `sessions/<pid>.json` sidecar no longer exists, so match the trace
+/// start against `workbuddy.db` session activity windows (created_at ≤ start
+/// ≤ last activity; newest created session wins). A 5s slack on created_at
+/// absorbs title-generation spans that start milliseconds before the session
+/// row commits. sessionId falls back to `workerPid`. The db read degrades
+/// silently; no `current_dir()` noise fallback.
+fn resolve_session_and_workdir_jsonl(
+    file: &str,
+    trace: &Value,
+    started_ms: i64,
+) -> (String, String) {
+    let (root, _pid) = root_and_pid(file);
+    let worker_pid = worker_pid_string(trace);
+
+    if let Some(root) = root {
+        let db_path = root.join("workbuddy.db");
+        if db_path.exists() {
+            // Read-only: WAL-safe for the live WorkBuddy database.
+            let conn = Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            );
+            if let Ok(conn) = conn {
+                let matched = conn.query_row(
+                    "SELECT id, cwd FROM sessions \
+                     WHERE (deleted_at IS NULL OR deleted_at <= 0) \
+                       AND created_at <= ?1 \
+                       AND ?2 <= COALESCE(last_activity_at, updated_at) \
+                     ORDER BY created_at DESC LIMIT 1",
+                    rusqlite::params![started_ms + 5000, started_ms],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                );
+                if let Ok((id, cwd)) = matched {
+                    if !id.is_empty() && !cwd.is_empty() {
+                        return (id, cwd);
+                    }
+                }
+            }
+        }
+    }
+
+    (worker_pid, String::new())
+}
+
+/// Resolve (sessionId, workdirCandidate) for a legacy trace file:
+/// 1. sessionId: trace-level `sessionId` → sibling `sessions/<pid>.json`
+///    `sessionId` → `workerPid` as string.
+/// 2. workdir: sibling `sessions/<pid>.json` `cwd` when its `sessionId`
+///    matches → read-only `workbuddy.db` `SELECT cwd FROM sessions` → empty.
+///    The db fallback degrades silently; no `current_dir()` noise fallback.
+fn resolve_session_and_workdir(file: &str, trace: &Value) -> (String, String) {
+    let (root, pid) = root_and_pid(file);
 
     let mut session_file_id = String::new();
     let mut session_file_cwd = String::new();
-    if let (Some(root), true) = (root, !pid.is_empty()) {
+    if let (Some(root), true) = (root.as_deref(), !pid.is_empty()) {
         let sessions_path = root.join("sessions").join(format!("{}.json", pid));
         if let Ok(content) = fs::read_to_string(&sessions_path) {
             if let Ok(sess) = serde_json::from_str::<Value>(&content) {
@@ -419,7 +590,7 @@ fn resolve_session_and_workdir(file: &str, trace: &Value) -> (String, String) {
         return (session_id, session_file_cwd);
     }
 
-    if let Some(root) = root {
+    if let Some(root) = root.as_deref() {
         if !session_id.is_empty() {
             let db_path = root.join("workbuddy.db");
             if db_path.exists() {
@@ -605,19 +776,26 @@ pub fn flush_workdir_snapshot_cache() {
 /// otherwise resolve from live state and pin any non-empty workdir. Empty
 /// results are never pinned, so late-appearing session files can still fill
 /// attribution in (one-time upgrade, not drift).
+fn resolve_pinned<F>(file: &str, store: &mut WorkdirSnapshotStore, resolve: F) -> (String, String)
+where
+    F: FnOnce() -> (String, String),
+{
+    if let Some(pinned) = store.lookup(file) {
+        return pinned;
+    }
+    let resolved = resolve();
+    if !resolved.1.is_empty() {
+        store.record(file, &resolved.0, &resolved.1);
+    }
+    resolved
+}
+
 fn resolve_session_and_workdir_snapshot(
     file: &str,
     trace: &Value,
     store: &mut WorkdirSnapshotStore,
 ) -> (String, String) {
-    if let Some(pinned) = store.lookup(file) {
-        return pinned;
-    }
-    let resolved = resolve_session_and_workdir(file, trace);
-    if !resolved.1.is_empty() {
-        store.record(file, &resolved.0, &resolved.1);
-    }
-    resolved
+    resolve_pinned(file, store, || resolve_session_and_workdir(file, trace))
 }
 
 #[cfg(test)]
@@ -660,16 +838,18 @@ mod tests {
     fn test_provider_constants() {
         assert_eq!(PROVIDER_ID, "workbuddy_local");
         assert_eq!(TOOL_CODE, "workbuddy");
-        assert_eq!(VERSION, "0.1.0");
+        assert_eq!(VERSION, "0.2.0");
     }
 
     #[test]
     fn test_is_workbuddy_trace() {
         assert!(is_workbuddy_trace("/tmp/root/traces/10001/trace_abc.json"));
-        assert!(!is_workbuddy_trace("/tmp/root/traces/10001/session.json"));
-        assert!(!is_workbuddy_trace(
+        // Streaming format (2026-10 WorkBuddy migration).
+        assert!(is_workbuddy_trace(
             "/tmp/root/traces/10001/trace_abc.jsonl"
         ));
+        assert!(!is_workbuddy_trace("/tmp/root/traces/10001/session.json"));
+        assert!(!is_workbuddy_trace("/tmp/root/traces/10001/trace_abc.jsonlz"));
         assert!(!is_workbuddy_trace("/tmp/root/logs/10001/trace_abc.json"));
     }
 
@@ -825,6 +1005,284 @@ mod tests {
         assert!(result.unwrap().is_empty());
     }
 
+    // -----------------------------------------------------------------
+    // Streaming JSONL format (2026-10 WorkBuddy migration)
+    // -----------------------------------------------------------------
+
+    /// Minimal jsonl fixture writer. `trace_end_status: None` omits the
+    /// trace_end record (still-running trace).
+    fn write_fixture_trace_jsonl(
+        root: &Path,
+        pid: &str,
+        name: &str,
+        trace_end_status: Option<&str>,
+    ) -> String {
+        let dir = root.join("traces").join(pid);
+        fs::create_dir_all(&dir).unwrap();
+        let started = "2026-08-21T08:29:00Z";
+        let mut lines = vec![json!({
+            "type": "trace_start",
+            "trace": {
+                "traceId": name, "name": "Agent workflow",
+                "workerPid": pid.parse::<i64>().unwrap(),
+                "startedAt": started, "status": "running",
+                "spanCount": 0, "totalTokens": 0, "metadata": {},
+            }
+        })
+        .to_string()];
+        if let Some(status) = trace_end_status {
+            lines.push(
+                json!({
+                    "type": "trace_end",
+                    "trace": {
+                        "traceId": name, "name": "Agent workflow",
+                        "workerPid": pid.parse::<i64>().unwrap(),
+                        "startedAt": started, "endedAt": "2026-08-21T08:29:05Z",
+                        "status": status, "spanCount": 1, "totalTokens": 0,
+                        "metadata": {},
+                    }
+                })
+                .to_string(),
+            );
+        }
+        lines.push(
+            json!({
+                "type": "span_end",
+                "span": {
+                    "traceId": name, "spanId": "span_g1", "type": "generation",
+                    "status": "ok",
+                    "toolInput": "PRIVACY-PLAINTEXT-NEVER-READ",
+                    "toolOutput": "[{\"model\":\"auto\",\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":200,\"total_tokens\":1200}}]",
+                }
+            })
+            .to_string(),
+        );
+        let path = dir.join(format!("{}.jsonl", name));
+        fs::write(&path, lines.join("\n")).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    /// Minimal `workbuddy.db` sessions table fixture:
+    /// (id, cwd, created_at_ms, updated_at_ms, last_activity_ms, deleted_at_ms).
+    fn write_workbuddy_db(root: &Path, rows: &[(&str, &str, i64, i64, Option<i64>, Option<i64>)]) {
+        let conn = Connection::open(root.join("workbuddy.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (\
+                 id TEXT PRIMARY KEY, cwd TEXT NOT NULL, \
+                 created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, \
+                 last_activity_at INTEGER, deleted_at INTEGER);",
+        )
+        .unwrap();
+        for (id, cwd, ca, ua, laa, dela) in rows {
+            conn.execute(
+                "INSERT INTO sessions (id, cwd, created_at, updated_at, last_activity_at, deleted_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![id, cwd, ca, ua, laa, dela],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_parse_usage_jsonl_sample_counts_and_math() {
+        let file = match sample_dir() {
+            Some(d) => d
+                .join("traces")
+                .join("10004")
+                .join("trace_ffff6666.jsonl")
+                .to_string_lossy()
+                .to_string(),
+            _ => return,
+        };
+        if !Path::new(&file).exists() {
+            return;
+        }
+        let mut store = WorkdirSnapshotStore::load(PathBuf::from("/nonexistent-snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        assert_eq!(events.len(), 2, "two generation span_end records");
+
+        let first = events
+            .iter()
+            .find(|e| e["model"] == "auto")
+            .expect("span 1 uses model auto");
+        assert_eq!(first["inputTokens"], 1000);
+        assert_eq!(first["outputTokens"], 300);
+        assert_eq!(first["cacheReadTokens"], 500);
+        assert_eq!(first["reasoningTokens"], 50);
+        assert_eq!(first["totalTokens"], 1800);
+        // Samples carry no sessions/<pid>.json and no workbuddy.db → the
+        // workerPid fallback identifies the session, workdir stays empty.
+        assert_eq!(first["sessionId"], "10004");
+        assert_eq!(first["workdirCandidate"], "");
+        assert_eq!(first["parserVersion"], VERSION);
+
+        let second = events
+            .iter()
+            .find(|e| e["model"] == "test-model-b")
+            .expect("span 2 uses test-model-b");
+        assert_eq!(second["inputTokens"], 500);
+        assert_eq!(second["outputTokens"], 200);
+        assert_eq!(second["cacheReadTokens"], 300);
+        assert_eq!(second["totalTokens"], 1000);
+    }
+
+    #[test]
+    fn test_parse_usage_jsonl_running_trace_skipped() {
+        let root = temp_fixture_dir("jsonl-running");
+        let file = write_fixture_trace_jsonl(&root, "10001", "trace_jrun0001", None);
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let result = WorkBuddyLocalProvider.try_parse_usage_with_store(&file, &mut store);
+        assert!(result.is_ok(), "running trace must not be an Err");
+        assert!(
+            result.unwrap().is_empty(),
+            "trace without trace_end must emit nothing yet"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_usage_jsonl_error_status_skipped() {
+        let root = temp_fixture_dir("jsonl-error");
+        let file = write_fixture_trace_jsonl(&root, "10001", "trace_jerr0002", Some("error"));
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let result = WorkBuddyLocalProvider.try_parse_usage_with_store(&file, &mut store);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_usage_jsonl_partial_file_tolerated() {
+        // WorkBuddy streams records line by line; a scan can race between
+        // file creation and the first flush. Such files must be skipped
+        // without an error (a provider error would block the whole scan's
+        // persist), then reparsed once the file grows.
+        let root = temp_fixture_dir("jsonl-partial");
+        let dir = root.join("traces").join("10001");
+        fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("trace_jempty003.jsonl");
+        fs::write(&empty, "").unwrap();
+        let garbage = dir.join("trace_jgarbage4.jsonl");
+        fs::write(&garbage, "not-json\nalso-not-json\n").unwrap();
+        let spans_only = dir.join("trace_jspans005.jsonl");
+        fs::write(
+            &spans_only,
+            "{\"type\":\"span_start\",\"span\":{\"type\":\"generation\"}}\n",
+        )
+        .unwrap();
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        for f in [&empty, &garbage, &spans_only] {
+            let result =
+                WorkBuddyLocalProvider.try_parse_usage_with_store(&f.to_string_lossy(), &mut store);
+            assert!(result.is_ok(), "{:?} must not be an Err", f);
+            assert!(result.unwrap().is_empty(), "{:?} must emit nothing", f);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_usage_jsonl_workdir_time_window_db() {
+        let root = temp_fixture_dir("jsonl-window");
+        let file = write_fixture_trace_jsonl(&root, "10001", "trace_jwin0006", Some("ok"));
+        let started_ms = parse_iso8601_to_ms("2026-08-21T08:29:00Z").unwrap();
+        write_workbuddy_db(
+            &root,
+            &[
+                // Window closed before the trace started → no match.
+                ("sess-early", "/proj/early", started_ms - 3_600_000, started_ms - 3_000_000, Some(started_ms - 3_000_000), None),
+                // Activity window contains the trace start → match.
+                ("sess-window", "/proj/window", started_ms - 3_000, started_ms + 60_000, Some(started_ms + 60_000), None),
+            ],
+        );
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["sessionId"], "sess-window");
+        assert_eq!(events[0]["workdirCandidate"], "/proj/window");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_usage_jsonl_deleted_session_excluded() {
+        let root = temp_fixture_dir("jsonl-deleted");
+        let file = write_fixture_trace_jsonl(&root, "10001", "trace_jdel0007", Some("ok"));
+        let started_ms = parse_iso8601_to_ms("2026-08-21T08:29:00Z").unwrap();
+        // The only in-window session was deleted after the fact → attribution
+        // falls back to workerPid with an empty workdir.
+        write_workbuddy_db(
+            &root,
+            &[(
+                "sess-gone",
+                "/proj/gone",
+                started_ms - 3_000,
+                started_ms + 60_000,
+                Some(started_ms + 60_000),
+                Some(started_ms + 120_000),
+            )],
+        );
+        let mut store = WorkdirSnapshotStore::load(root.join("snap.json"));
+        let events = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["sessionId"], "10001");
+        assert_eq!(events[0]["workdirCandidate"], "");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_usage_jsonl_attribution_pinned_across_rescans() {
+        // Same drift protection as the legacy format: once pinned, a later
+        // changed db must not re-attribute an immutable trace file.
+        let root = temp_fixture_dir("jsonl-pin");
+        let file = write_fixture_trace_jsonl(&root, "10001", "trace_jpin0008", Some("ok"));
+        let started_ms = parse_iso8601_to_ms("2026-08-21T08:29:00Z").unwrap();
+        let cache_path = root.join("snap.json");
+
+        write_workbuddy_db(
+            &root,
+            &[(
+                "sess-A",
+                "/proj/alpha",
+                started_ms - 3_000,
+                started_ms + 60_000,
+                Some(started_ms + 60_000),
+                None,
+            )],
+        );
+        let mut store1 = WorkdirSnapshotStore::load(cache_path.clone());
+        let events1 = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store1)
+            .unwrap();
+        store1.save_if_dirty();
+        assert_eq!(events1[0]["workdirCandidate"], "/proj/alpha");
+
+        // The db is rewritten to point elsewhere (session replaced).
+        let _ = fs::remove_file(root.join("workbuddy.db"));
+        write_workbuddy_db(
+            &root,
+            &[(
+                "sess-B",
+                "/proj/beta",
+                started_ms - 3_000,
+                started_ms + 60_000,
+                Some(started_ms + 60_000),
+                None,
+            )],
+        );
+        let mut store2 = WorkdirSnapshotStore::load(cache_path);
+        let events2 = WorkBuddyLocalProvider
+            .try_parse_usage_with_store(&file, &mut store2)
+            .unwrap();
+        assert_eq!(events2[0]["sessionId"], "sess-A");
+        assert_eq!(events2[0]["workdirCandidate"], "/proj/alpha");
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn test_parse_usage_day_hour_and_session_from_sessions_file() {
         let file = match sample_trace("10001", "trace_aaaa1111") {
@@ -909,6 +1367,11 @@ mod tests {
         assert!(sessions
             .iter()
             .any(|s| s.contains("samples/workbuddy") && s.contains("trace_aaaa1111")));
+        // Streaming jsonl traces (2026-10 WorkBuddy migration) must be
+        // discovered too — missing this filter was a silent collection outage.
+        assert!(sessions.iter().any(|s| s.contains("samples/workbuddy")
+            && s.contains("trace_ffff6666")
+            && s.ends_with(".jsonl")));
         // Path separators differ by OS: walk_files joins the traces component
         // with `\` on Windows and `/` elsewhere.
         assert!(sessions

@@ -325,11 +325,12 @@ fn scenario_workbuddy_scan() {
     //   trace_bbbb2222  span1 1200+400 = 1600; span2 500+200+300 = 1000  = 2600
     //   trace_cccc3333  modelInfo fallback 800+200+100                    = 1100
     //   trace_dddd4444  error status → skipped; trace_eeee5555 bad json → skipped
+    //   trace_ffff6666 (jsonl) span1 1000+500+300 = 1800; span2 500+300+200 = 1000
     let workbuddy_total: i64 = workbuddy
         .iter()
         .map(|i| i["totalTokens"].as_i64().unwrap_or(0))
         .sum();
-    assert_eq!(workbuddy_total, 5500, "workbuddy sample total should match");
+    assert_eq!(workbuddy_total, 8300, "workbuddy sample total should match");
 
     // No provider errors surfaced for workbuddy
     assert!(!result.provider_errors.contains_key("workbuddy_local"));
