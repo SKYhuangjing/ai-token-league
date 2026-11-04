@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 const TIMEZONE = process.argv
   .filter((arg) => arg.startsWith("--timezone="))
@@ -174,7 +175,102 @@ function expectedCodex() {
     const dateValue = row.period || row.date;
     if (total > 0 && dateValue) expected.set(normalizeDay(dateValue), total);
   }
-  return verified("codex", expected);
+  const result = verified("codex", expected);
+  try {
+    result.plainPerDay = codexPlainSubsetPerDay();
+  } catch (error) {
+    console.error(`codex: plain-subset oracle unavailable (${error.message}); falling back to direct ccusage comparison`);
+  }
+  return result;
+}
+
+// ccusage cannot read Codex's compressed session archives (`.jsonl.zst`,
+// found both under `sessions/YYYY/MM/DD/` and in `archived_sessions/`), so
+// exact parity is judged on the plain `.jsonl` subset it can see: link those
+// files into a temporary codex home and run the repo's codex layout harness
+// (`codex_repro_layout_dump`) over it for the collector's own per-day totals.
+function codexPlainSubsetPerDay() {
+  const subdirs = (dir) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    } catch {
+      return [];
+    }
+  };
+  const files = (dir) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile());
+    } catch {
+      return [];
+    }
+  };
+  const homes = (process.env.CODEX_HOME || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (homes.length === 0 && home) homes.push(join(home, ".codex"));
+
+  const tempHome = join(tmpdir(), `atl-verify-codex-plain-${Date.now()}`);
+  let linked = 0;
+  try {
+    for (const codexHome of homes) {
+      const sessions = join(codexHome, "sessions");
+      for (const year of subdirs(sessions)) {
+        for (const month of subdirs(join(sessions, year.name))) {
+          for (const day of subdirs(join(sessions, year.name, month.name))) {
+            for (const entry of files(join(sessions, year.name, month.name, day.name))) {
+              if (!entry.name.endsWith(".jsonl")) continue;
+              const relative = join(year.name, month.name, day.name, entry.name);
+              const target = join(tempHome, "sessions", relative);
+              mkdirSync(dirname(target), { recursive: true });
+              symlinkSync(join(sessions, relative), target);
+              linked += 1;
+            }
+          }
+        }
+      }
+      const archived = join(codexHome, "archived_sessions");
+      for (const entry of files(archived)) {
+        if (!entry.name.endsWith(".jsonl")) continue;
+        const target = join(tempHome, "archived_sessions", entry.name);
+        mkdirSync(dirname(target), { recursive: true });
+        symlinkSync(join(archived, entry.name), target);
+        linked += 1;
+      }
+    }
+    if (linked === 0) return new Map();
+
+    const outPath = join(tmpdir(), `atl-verify-codex-plain-out-${Date.now()}.json`);
+    try {
+      run(
+        "cargo",
+        ["test", "--release", "-q", "-p", "collector-core", "codex_repro_layout_dump", "--", "--ignored", "--nocapture"],
+        {
+          // CODEX_HOME must point at the plain subset too: the harness's
+          // scan_sessions walks its auto roots (real ~/.codex) in addition
+          // to the provided root, which would smuggle the archives back in.
+          env: {
+            ...process.env,
+            CODEX_HOME: tempHome,
+            ATL_CODEX_REPRO_ROOTS: tempHome,
+            ATL_CODEX_REPRO_OUT: outPath
+          }
+        }
+      );
+      const report = JSON.parse(readFileSync(outPath, "utf8"));
+      const perDay = new Map();
+      for (const root of Object.keys(report)) {
+        for (const [day, total] of Object.entries(report[root].perDay || {})) {
+          addTotal(perDay, day, Number(total) || 0);
+        }
+      }
+      return perDay;
+    } finally {
+      rmSync(outPath, { force: true });
+    }
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true });
+  }
 }
 
 function expectedOpenCode() {
@@ -502,6 +598,86 @@ function compareProvider(name, actual, expected) {
   return true;
 }
 
+/// Codex oracle split: ccusage cannot read Codex's compressed session
+/// archives (`.jsonl.zst`, the bulk of a long-lived machine's corpus), so its
+/// daily totals only cover the surviving plain files. Exact parity is
+/// therefore checked against the collector's own accounting of that plain
+/// subset (via the repo's codex layout harness), while the stored totals are
+/// required to be a per-day superset of ccusage — the compressed archives'
+/// contribution shows up as a reported surplus, never silently.
+function compareCodexSubset(name, actual, expected, plainPerDay) {
+  const mismatches = [];
+  let matchedDays = 0;
+  let preservedDays = 0;
+  let preservedTokens = 0;
+  let archiveDays = 0;
+  let archiveTokens = 0;
+  const today = localDay();
+  const days = [...new Set([...actual.keys(), ...expected.keys(), ...plainPerDay.keys()])]
+    .filter((day) => includeToday || day < today)
+    .sort();
+  for (const day of days) {
+    const storeTotal = actual.get(day) || 0;
+    const ccusageTotal = expected.get(day) || 0;
+    const plainTotal = plainPerDay.get(day) || 0;
+    if (ccusageTotal === 0 && plainTotal === 0) {
+      if (storeTotal > 0) {
+        preservedDays += 1;
+        preservedTokens += storeTotal;
+      }
+      continue;
+    }
+    if (plainTotal !== ccusageTotal) {
+      mismatches.push({
+        day,
+        actual: plainTotal,
+        expected: ccusageTotal,
+        delta: plainTotal - ccusageTotal,
+        kind: "plain-subset parity"
+      });
+      continue;
+    }
+    if (storeTotal < ccusageTotal) {
+      mismatches.push({
+        day,
+        actual: storeTotal,
+        expected: ccusageTotal,
+        delta: storeTotal - ccusageTotal,
+        kind: "store below ccusage"
+      });
+      continue;
+    }
+    if (storeTotal === ccusageTotal) {
+      matchedDays += 1;
+    } else {
+      archiveDays += 1;
+      archiveTokens += storeTotal - ccusageTotal;
+    }
+  }
+
+  if (mismatches.length > 0) {
+    console.error(`\n${name} mismatch:`);
+    for (const row of mismatches.slice(0, 20)) {
+      console.error(
+        `  ${row.day} [${row.kind}] collector=${row.actual} ccusage=${row.expected} delta=${row.delta}`
+      );
+    }
+    if (mismatches.length > 20) {
+      console.error(`  ... ${mismatches.length - 20} more mismatches`);
+    }
+    return false;
+  }
+
+  const preservedNote = preservedDays > 0
+    ? ` (+${preservedDays} preserved day(s), ${preservedTokens} tokens, no longer visible to the external reference — tolerated)`
+    : "";
+  const archiveNote = archiveDays > 0
+    ? ` (+${archiveDays} compressed-archive day(s), ${archiveTokens} tokens invisible to ccusage — tolerated)`
+    : "";
+  console.log(`${name}: matched ${matchedDays} completed day(s) on the plain-file subset${preservedNote}${archiveNote}`);
+  return true;
+}
+
 function compareExpected(name, actual, result) {
   if (!result.verified) {
     const message = `${name}: SKIPPED (${result.reason})`;
@@ -511,6 +687,9 @@ function compareExpected(name, actual, result) {
     }
     console.log(message);
     return true;
+  }
+  if (result.plainPerDay) {
+    return compareCodexSubset(name, actual, result.expected, result.plainPerDay);
   }
   return compareProvider(name, actual, result.expected);
 }

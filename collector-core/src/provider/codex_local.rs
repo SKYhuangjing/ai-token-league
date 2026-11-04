@@ -1,5 +1,6 @@
 use crate::config::AppConfig;
 use crate::provider::common::*;
+use ruzstd::decoding::StreamingDecoder;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -8,7 +9,7 @@ use std::path::Path;
 
 pub const PROVIDER_ID: &str = "codex_local";
 pub const TOOL_CODE: &str = "codex";
-pub const VERSION: &str = "0.4.0";
+pub const VERSION: &str = "0.5.0";
 
 pub struct CodexProvider;
 
@@ -166,7 +167,7 @@ impl CodexProvider {
 
         let mut files = Vec::new();
         for root in auto.iter().chain(manual.iter()) {
-            let found = walk_files(root, |f| f.ends_with(".jsonl"), 10_000);
+            let found = walk_files(root, is_codex_session_file, 10_000);
             files.extend(found);
         }
         dedupe_active_and_archived_files(files)
@@ -193,7 +194,7 @@ impl CodexProvider {
             .unwrap_or(0.0);
 
         let source = codex_source_metadata(file);
-        let rows = read_json_lines(file);
+        let rows = read_codex_json_lines(file);
         let mut events = Vec::new();
         let replay_fallback = replay_prefix.is_some() || is_codex_subagent_session(file);
         let replay_start_ms = detect_replay_burst_start_ms(&rows, replay_fallback);
@@ -202,10 +203,7 @@ impl CodexProvider {
             .unwrap_or(ReplayState::Done);
 
         let mut session_cwd = String::new();
-        let mut session_id = Path::new(file)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let mut session_id = codex_stable_key(file);
 
         // First pass: extract session metadata
         for row in &rows {
@@ -428,33 +426,49 @@ fn add_codex_usage_roots(home_or_usage_dir: &Path, roots: &mut Vec<String>) {
 /// Codex rollout filenames embed a session UUID, so the basename alone is a
 /// stable identity for a session file regardless of which directory holds it.
 /// The fingerprint must survive Codex relocating files between `sessions/`
-/// and `archived_sessions/`, otherwise every relocation invalidates the scan
-/// cache and re-uploads history with a re-derived (order-sensitive) total.
+/// and `archived_sessions/` and compressing them to `.jsonl.zst`, otherwise
+/// every such change invalidates the scan cache and re-uploads history with
+/// a re-derived (order-sensitive) total.
 fn codex_stable_key(file: &str) -> String {
     Path::new(file)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
+        .map(|name| {
+            match name.strip_suffix(".zst") {
+                Some(stripped) => stripped.to_string(),
+                None => name,
+            }
+        })
         .unwrap_or_default()
 }
 
 fn codex_source_metadata(file: &str) -> crate::provider::common::SourceMetadata {
-    crate::provider::common::source_metadata_with_stable_key(
+    let mut meta = crate::provider::common::source_metadata_with_stable_key(
         file,
         &codex_stable_key(file),
         PROVIDER_ID,
         VERSION,
-    )
+    );
+    meta.raw_source_ref = codex_stable_key(file);
+    meta
 }
 
 /// Collapse duplicate copies of the same session (same basename under one
-/// codex home, e.g. present in both `sessions/` and `archived_sessions/`)
-/// preferring the active `sessions/` copy, then order the result by basename
-/// so parse order — and therefore replay-prefix matching and keep-first
-/// global dedup — is a pure function of the file set, not of directory
-/// layout or readdir order.
+/// codex home, e.g. present in both `sessions/` and `archived_sessions/`,
+/// or as both `x.jsonl` and its compressed `x.jsonl.zst`) preferring the
+/// active `sessions/` copy and the plain file over its `.zst` twin, then
+/// order the result by basename so parse order — and therefore
+/// replay-prefix matching and keep-first global dedup — is a pure function
+/// of the file set, not of directory layout or readdir order.
 fn dedupe_active_and_archived_files(files: Vec<String>) -> Vec<String> {
     let mut sorted = files;
-    sorted.sort_by_key(|file| (file.contains("/archived_sessions/"), codex_file_key(file)));
+    sorted.sort_by_key(|file| {
+        (
+            file.contains("/archived_sessions/"),
+            file.ends_with(".zst"),
+            codex_file_key(file),
+        )
+    });
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<String> = sorted
         .into_iter()
@@ -470,9 +484,8 @@ fn dedupe_active_and_archived_files(files: Vec<String>) -> Vec<String> {
 
 fn codex_file_key(file: &str) -> String {
     for marker in ["/sessions/", "/archived_sessions/"] {
-        if let Some((home, relative)) = file.split_once(marker) {
-            let basename = relative.rsplit('/').next().unwrap_or(relative);
-            return format!("{}|{}", home, basename);
+        if let Some((home, _relative)) = file.split_once(marker) {
+            return format!("{}|{}", home, codex_stable_key(file));
         }
     }
     file.to_string()
@@ -530,11 +543,83 @@ fn accept_replay_event(
     }
 }
 
+fn is_zst_archive(file: &str) -> bool {
+    file.ends_with(".zst")
+}
+
+/// Codex session files are `rollout-*.jsonl` until Codex compresses them
+/// (`.jsonl.zst`, both under `sessions/` and `archived_sessions/`).
+fn is_codex_session_file(path: &str) -> bool {
+    path.ends_with(".jsonl") || path.ends_with(".jsonl.zst")
+}
+
+/// Codex compresses rolled-out sessions in place (`sessions/**.jsonl.zst`)
+/// and archives old ones flat under `archived_sessions/*.jsonl.zst`; this
+/// reader makes those archives transparent to every read path. Streaming
+/// keeps bounded head reads (session metadata, subagent marker) cheap: the
+/// decoder only pulls the blocks actually asked for.
+fn open_codex_reader(file: &str) -> Option<Box<dyn BufRead>> {
+    let raw = fs::File::open(file).ok()?;
+    if is_zst_archive(file) {
+        let decoder = StreamingDecoder::new(BufReader::new(raw)).ok()?;
+        Some(Box::new(BufReader::new(decoder)))
+    } else {
+        Some(Box::new(BufReader::new(raw)))
+    }
+}
+
+/// [read_json_lines] for codex session files, decompressing `.jsonl.zst`
+/// archives on the fly. A torn archive tail keeps the rows decoded so far,
+/// matching the skip-invalid-line tolerance of the plain path.
+fn read_codex_json_lines(file: &str) -> Vec<Value> {
+    if !is_zst_archive(file) {
+        return read_json_lines(file);
+    }
+    let Some(mut reader) = open_codex_reader(file) else {
+        return vec![];
+    };
+    let mut rows = Vec::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    if let Ok(row) = serde_json::from_str(trimmed) {
+                        rows.push(row);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    rows
+}
+
+/// First up-to-`max_bytes` decompressed bytes of a session file.
+fn read_codex_head(file: &str, max_bytes: usize) -> Vec<u8> {
+    let Some(mut reader) = open_codex_reader(file) else {
+        return vec![];
+    };
+    let mut head = vec![0u8; max_bytes];
+    let mut filled = 0;
+    while filled < max_bytes {
+        match reader.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => break,
+        }
+    }
+    head.truncate(filled);
+    head
+}
+
 fn read_session_metadata(file: &str) -> SessionMetadata {
-    let Ok(file) = fs::File::open(file) else {
+    let Some(mut reader) = open_codex_reader(file) else {
         return SessionMetadata::default();
     };
-    let mut reader = BufReader::new(file);
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {
         return SessionMetadata::default();
@@ -569,7 +654,7 @@ fn read_session_metadata(file: &str) -> SessionMetadata {
 }
 
 fn replay_usage_events(file: &str) -> Vec<(Option<i64>, ReplayUsage)> {
-    let rows = read_json_lines(file);
+    let rows = read_codex_json_lines(file);
     let mut previous_cumulative_usage = None;
     let mut events = Vec::new();
     for row in rows {
@@ -599,15 +684,8 @@ fn timestamp_ms(row: &Value) -> Option<i64> {
 }
 
 fn is_codex_subagent_session(file: &str) -> bool {
-    let Ok(mut file) = fs::File::open(file) else {
-        return false;
-    };
-    let mut buffer = [0u8; 16 * 1024];
-    let Ok(bytes_read) = file.read(&mut buffer) else {
-        return false;
-    };
-    buffer[..bytes_read]
-        .windows(b"thread_spawn".len())
+    let head = read_codex_head(file, 16 * 1024);
+    head.windows(b"thread_spawn".len())
         .any(|window| window == b"thread_spawn")
 }
 
@@ -1410,6 +1488,144 @@ mod tests {
             before.source_fingerprint, after.source_fingerprint,
             "moving a rollout between sessions/ and archived_sessions/ must not change its fingerprint"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Wrap bytes as a zstd frame of Raw blocks. Raw blocks store content
+    /// verbatim, so tests build real archives the decoder accepts without a
+    /// compressor dependency (ruzstd is decode-only).
+    fn zstd_raw_frame(data: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x28, 0xB5, 0x2F, 0xFD];
+        // Frame_Header_Descriptor 0x00: no content size, no checksum, no
+        // dictionary; Window_Descriptor 0x40: 256 KB window (>= block max).
+        out.push(0x00);
+        out.push(0x40);
+        const BLOCK_MAX: usize = 128 * 1024;
+        let chunks: Vec<&[u8]> = data.chunks(BLOCK_MAX).collect();
+        for (index, chunk) in chunks.iter().enumerate() {
+            let last_block = if index + 1 == chunks.len() { 1u32 } else { 0 };
+            // Block header: size << 3 | type << 1 | last; Raw block type = 0.
+            let header = ((chunk.len() as u32) << 3) | last_block;
+            out.extend_from_slice(&header.to_le_bytes()[..3]);
+            out.extend_from_slice(chunk);
+        }
+        out
+    }
+
+    fn write_rollout_zst(path: &std::path::Path, rows: &[Value]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let content = rows
+            .iter()
+            .map(|row| serde_json::to_string(row).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(path, zstd_raw_frame(content.as_bytes())).unwrap();
+    }
+
+    #[test]
+    fn test_is_codex_session_file_matches_zst_archives() {
+        assert!(is_codex_session_file(
+            "/home/u/.codex/sessions/2026/07/01/rollout-x.jsonl"
+        ));
+        assert!(is_codex_session_file(
+            "/home/u/.codex/sessions/2026/07/01/rollout-x.jsonl.zst"
+        ));
+        assert!(is_codex_session_file(
+            "/home/u/.codex/archived_sessions/rollout-x.jsonl.zst"
+        ));
+        assert!(!is_codex_session_file("/home/u/.codex/history.jsonl.bak"));
+        assert!(!is_codex_session_file("/home/u/.codex/queue.zst"));
+    }
+
+    #[test]
+    fn codex_stable_key_ignores_zst_suffix() {
+        assert_eq!(
+            codex_stable_key("/tmp/codex/sessions/a/session.jsonl.zst"),
+            codex_stable_key("/tmp/codex/archived_sessions/session.jsonl")
+        );
+        // rawSourceRef keeps the pre-compression name so store rows and
+        // uploads do not churn when Codex compresses a session in place.
+        let meta = codex_source_metadata("/tmp/codex/sessions/a/session.jsonl.zst");
+        assert_eq!(meta.raw_source_ref, "session.jsonl");
+    }
+
+    #[test]
+    fn plain_file_wins_over_its_zst_twin() {
+        let files = vec![
+            "/tmp/codex/sessions/a/session.jsonl.zst".to_string(),
+            "/tmp/codex/sessions/a/session.jsonl".to_string(),
+            "/tmp/codex/archived_sessions/session.jsonl.zst".to_string(),
+        ];
+        let result = dedupe_active_and_archived_files(files);
+        assert_eq!(result.len(), 1, "one session must remain");
+        assert_eq!(
+            result[0], "/tmp/codex/sessions/a/session.jsonl",
+            "the active plain copy wins over the zst twins"
+        );
+    }
+
+    /// Codex compresses rolled-out sessions in place (`sessions/**.jsonl.zst`)
+    /// and archives old ones under `archived_sessions/*.jsonl.zst`; without
+    /// archive support a cold rebuild or a new machine silently loses every
+    /// compressed month (found 2026-11-03: only 9 of 1108 files were plain).
+    #[test]
+    fn zst_archives_scan_parse_and_replay_like_plain_files() {
+        let root = unique_temp_dir("zst-e2e");
+        let parent_name = "rollout-2026-07-01T10-00-00-019d0a2b-721d-7ee0-87fa-3d841c771ed0.jsonl";
+        let child_name = "rollout-2026-07-01T11-00-00-019d0f2d-f9c0-7111-8222-333444555666.jsonl";
+        let archived_parent = root
+            .join("archived_sessions")
+            .join(format!("{}.zst", parent_name));
+        let active_child = root
+            .join("sessions/2026/07/01")
+            .join(format!("{}.zst", child_name));
+        write_rollout_zst(
+            &archived_parent,
+            &[
+                json!({"timestamp":"2026-07-01T10:00:00Z","type":"session_meta","payload":{"id":"parent"}}),
+                json!({"timestamp":"2026-07-01T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}),
+            ],
+        );
+        write_rollout_zst(
+            &active_child,
+            &[
+                json!({"timestamp":"2026-07-01T11:00:00Z","type":"session_meta","payload":{"id":"child","forked_from_id":"parent","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}),
+                json!({"timestamp":"2026-07-01T11:00:00.100Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}),
+                json!({"timestamp":"2026-07-01T11:00:05Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}}}),
+            ],
+        );
+
+        let discovered = walk_files(
+            &root.to_string_lossy(),
+            is_codex_session_file,
+            10_000,
+        );
+        let files = dedupe_active_and_archived_files(discovered);
+        assert_eq!(files.len(), 2, "both archives must be discovered");
+
+        let parent_file = files
+            .iter()
+            .find(|file| file.contains(parent_name))
+            .unwrap()
+            .clone();
+        assert_eq!(read_session_metadata(&parent_file).session_id, "parent");
+
+        let plan = CodexReplayPlan::new(&files);
+        let child_events = CodexProvider.parse_usage_with_replay(
+            &active_child.to_string_lossy(),
+            plan.replay_prefix(&active_child.to_string_lossy()),
+        );
+        assert_eq!(
+            child_events.len(),
+            1,
+            "the copied parent prefix is replay, not the child's usage"
+        );
+        assert_eq!(child_events[0]["totalTokens"], 10);
+        assert_eq!(child_events[0]["sessionId"], "child");
+        assert!(is_codex_subagent_session(&active_child.to_string_lossy()));
         let _ = std::fs::remove_dir_all(root);
     }
 
