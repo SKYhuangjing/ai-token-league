@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.21] - 2026-11-05
+
+### Fixed
+
+- [Desktop] Codex compressed archive sessions (`.jsonl.zst`) are now collected: Codex compresses rolled-out sessions in place and archives them (1,108 sessions on the dev machine, only 9 left as plaintext), so a cold rebuild (reinstall, new machine, cache reset) previously saw only the plaintext subset and lost months of history. Compressed and plaintext sessions are now collected equally, and compression no longer changes a session's fingerprint identity.
+- [Desktop] WorkBuddy streaming traces (`trace_*.jsonl`) collection fix: WorkBuddy migrated its trace format around 2026-10-26; the previous version silently stopped collecting (no errors, zero data). Both formats are now supported and the outage window is backfilled automatically.
+- [Desktop] WorkBuddy per-session project transcripts (`projects/<workdir>/<session>.jsonl`) are now collected: Claw/IM external-session usage exists only in these transcripts and never reaches traces, so the whole channel was invisible before. Transcripts are the authoritative per-session source; same-session traces yield to them (no double counting), and workdir attribution is preserved.
+- [Web] Removed the misleading rank display on the personal profile page (always #1 under the MySQL caliber — no information value).
+
+### Changed
+
+- Magpie plugin `magpie-atl-sync` (npm channel) 0.2.1 → 0.2.4: leaderboard entry redesign (profile snapshot); trend card aligned with the native Requests page (model/agent split, bar/line toggle, legend detail rows); status bar no longer shows the #rank; sync now uploads only local usage, filtering external-caller-key traffic that passed through the gateway.
+- Server-side dual-writer arbitration and `usage_daily` zombie-derived-row fix: when the ATL client and the Magpie plugin share one identity, hour buckets are arbitrated (client first, plugin fills blind-spot hours), eliminating leaderboard double counting.
+
 ## [0.7.20] - 2026-11-01
 
 ### Added
